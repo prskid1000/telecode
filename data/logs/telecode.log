@@ -7691,3 +7691,1250 @@ Read1 file(ctrl+otoe
 2026-03-21 17:39:24,930 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
 2026-03-21 17:39:25,368 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
 2026-03-21 17:39:25,554 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:39:30,683 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:39:33,857 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:39:35,819 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:39:40,953 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:39:44,065 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:39:46,097 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:39:51,220 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:39:54,275 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:39:56,347 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:40:01,515 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:40:04,486 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:40:06,628 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:40:11,737 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:40:14,717 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:40:16,873 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:40:22,016 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:40:24,736 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 17:40:24,947 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:40:27,149 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:40:32,298 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:40:35,166 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:40:37,412 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:40:42,522 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:40:45,376 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:40:47,647 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:40:52,761 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:40:55,586 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:40:57,862 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:41:02,999 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:41:05,807 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:41:08,116 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:41:13,211 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:41:16,018 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:41:18,330 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:41:23,456 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:41:26,226 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:41:26,792 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 17:41:28,575 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:41:33,699 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:41:36,437 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:41:38,823 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:41:43,934 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:41:46,665 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:41:49,031 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:41:54,148 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:41:56,910 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:41:59,232 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:42:04,352 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:42:07,149 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:42:09,474 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:42:14,604 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:42:14,718 [INFO] telecode.process: Sending output (211 chars): 317 +                    this.canCancelInvoiced$.next(settings['invoice-cancelInvoiced-toggle']);
+ 318 +                }
+ 319 +            });
+  ⎿  Took a screenshot of the current page's viewport.
+  ⎿  [Image]
+2026-03-21 17:42:16,765 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:42:17,190 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:42:17,400 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:42:19,717 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:42:22,519 [INFO] telecode.process: Sending output (913 chars): 316 +                if (settings && settings['invoice-cancelInvoiced-toggle'] != null) {
+ 317 +                    this.canCancelInvoiced$.next(settings['invoice-cancelInvoiced-toggle']);
+ 318 +                }
+ 319 +            });
+ 320 +
+ 321 this._settingService.getTenantSetting(DISABLE_MARK_AS
+2026-03-21 17:42:24,368 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:42:24,816 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:42:24,847 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:42:27,645 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:42:28,918 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 17:42:29,959 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:42:30,071 [INFO] telecode.process: Sending output (1418 chars): 311 this.headerParams.helpLink= 'https://datainsightshelp.freshdesk.com/support/solutions/articles/65000178431-invoice';
+ 312
+ 313 +        this._store
+ 314 +            .select((state) => state.common[ROLE_SETTINGS])
+ 315 +            .subscribe((settings) => {
+ 316 +                if (settings &&
+2026-03-21 17:42:31,974 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:42:32,528 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:42:35,084 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:42:37,894 [INFO] telecode.process: Sending output (577 chars): ⎿ Found10 newdiagnosticissuesin1file(ctrl+otoexpand)
+●NowIneedtoupdatecancelInvoice()tochecktherolesetting.ThecurrentflowvalidatesviagetValidInvoiceForOperationwithPRE_INVOICEwhichgoestobackendcanBeCancelled().Wealreadyupdated
+thebackendtoallowINVOICED(unpaid)invoicesthrough.Nowthefrontendjustneedst
+2026-03-21 17:42:37,898 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:42:39,735 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:42:40,162 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:42:40,211 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:42:40,348 [INFO] telecode.process: Sending output (29 chars): (ctrl+b to run in background)
+2026-03-21 17:42:41,778 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:42:42,207 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:42:45,355 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:42:45,466 [INFO] telecode.process: Sending output (172 chars): oldbehavior).
+Thesimplestapproach:ifcanCancelInvoiced$isfalse,keeptheoldvalidationerror.Iftrue,letthebackendhandleit(whichnowallowsINVOICEDunpaidinvoices).
+  ⎿  (No output)
+2026-03-21 17:42:46,904 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:42:48,150 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:42:50,481 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:42:50,603 [INFO] telecode.process: Sending output (391 chars): oldbehavior).
+Thesimplestapproach:ifcanCancelInvoiced$isfalse,keeptheoldvalidationerror.Iftrue,letthebackendhandleit(whichnowallowsINVOICEDunpaidinvoices).
+●Update(~\projects\cursor\web-code\hauliermagic\web-ui\src\app\main\private\setup\invoice\list\invoice-list.component.ts)
+ ⎿ Added30lines,remove
+2026-03-21 17:42:52,066 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:42:55,614 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:42:58,374 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:43:00,739 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:43:05,836 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:43:08,614 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:43:10,951 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:43:16,082 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:43:18,854 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:43:21,196 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:43:26,310 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:43:29,071 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:43:30,963 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 17:43:31,430 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:43:36,550 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:43:39,315 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:43:41,701 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:43:46,824 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:43:49,577 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:43:51,941 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:43:57,061 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:43:59,832 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:44:02,182 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:44:07,287 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:44:10,060 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:44:12,416 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:44:17,543 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:44:20,312 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:44:22,661 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:44:27,774 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:44:30,566 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:44:32,891 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:44:33,048 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 17:44:37,998 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:44:40,816 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:44:43,124 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:44:48,254 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:44:48,354 [INFO] telecode.process: Sending output (104 chars): ⎿ Added30lines,removed20lines
+ 885 }
+  ⎿  Took a screenshot of the current page's viewport.
+  ⎿  [Image]
+2026-03-21 17:44:50,252 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:44:51,026 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:44:53,370 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:44:56,115 [INFO] telecode.process: Sending output (355 chars): 886
+ 887 cancelInvoice(): void {
+ 888 +        const canCancelInvoiced = this.canCancelInvoiced$.getValue();
+● I can see the ROLE_ADMIN edit page with sections like PLANNING, INVOICING, TRACKING, etc. I need to scroll down to find the FEATURES section where the toggle settings are. Let me scroll dow
+2026-03-21 17:44:57,988 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:44:58,477 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:45:01,227 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:45:03,586 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:45:03,687 [INFO] telecode.process: Sending output (722 chars): 885 }
+ 886
+ 887 cancelInvoice(): void {
+ 888 +        const canCancelInvoiced = this.canCancelInvoiced$.getValue();
+ 889 this._invoiceService.getValidInvoiceForOperation(this.getAllPageSelectedIds().toString(),'PRE_INVOICE').then((response: any)=> {
+ 890 this._groupActionSubject.next(false);
+ 891 co
+2026-03-21 17:45:05,805 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:45:06,369 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:45:08,697 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:45:11,480 [INFO] telecode.process: Sending output (745 chars): 887 cancelInvoice(): void {
+ 888 +        const canCancelInvoiced = this.canCancelInvoiced$.getValue();
+ 889 this._invoiceService.getValidInvoiceForOperation(this.getAllPageSelectedIds().toString(),'PRE_INVOICE').then((response: any)=> {
+ 890 this._groupActionSubject.next(false);
+ 891 const selected
+2026-03-21 17:45:11,482 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:45:13,375 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:45:13,816 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:45:13,938 [INFO] telecode.process: Sending output (29 chars): (ctrl+b to run in background)
+2026-03-21 17:45:15,375 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:45:16,622 [INFO] telecode.process: Sending output (349 chars): 893 -                this._dialogService.showMessage({
+ 894 -                    message: `${this.resource.name}.messages.notAllInvoicesPreInvoiced.message`,
+ 895 -                    title: `${this.resource.name}.common.error`,
+ 896 -                    confirmText: `${this.resource.name}.common.ok
+2026-03-21 17:45:18,065 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:45:18,943 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:45:19,062 [INFO] telecode.process: Sending output (15049 chars): ●plugin:chrome-devtools-mcp:chrome-devtools-take_screenshot(MCP)
+ ⎿  Took a screenshot of the current page'sviewport.
+ ⎿ [Image]
+● Invoice list is loaded. I can see invoices with INVOICED status. Most are UNPAID — perfect for testing cancellation. Notice invoice 898 is PAID — our code should block c
+2026-03-21 17:45:20,514 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:45:20,946 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:45:24,107 [INFO] telecode.process: Sending output (14520 chars): 889 this._invoiceService.getValidInvoiceForOperation(this.getAllPageSelectedIds().toString(),'PRE_INVOICE').then((response: any)=> {
+ 890 this._groupActionSubject.next(false);
+ 891 const selectedInvoices: number[]= response.body;
+ 892
+ 893 if (selectedInvoices.length!= this.getAllPageSelectedIds().l
+2026-03-21 17:45:24,119 [INFO] telecode.process: Streaming idle — flushing output
+2026-03-21 17:45:24,236 [INFO] telecode.process: Streaming started
+2026-03-21 17:45:24,237 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:45:25,537 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:45:25,969 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:45:29,228 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:45:34,364 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:45:34,485 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:45:35,061 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 17:45:39,486 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:45:44,607 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:45:44,723 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:45:49,726 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:45:54,828 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:45:55,436 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:45:59,948 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:46:05,074 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:46:05,666 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:46:10,213 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:46:15,343 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:46:15,896 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:46:20,468 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:46:25,590 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:46:26,126 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:46:30,720 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:46:35,848 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:46:36,356 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:46:37,117 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 17:46:40,950 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:46:46,086 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:46:46,586 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:46:51,223 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:46:56,340 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:46:56,826 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:47:01,458 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:47:06,578 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:47:07,056 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:47:11,687 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:47:16,815 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:47:17,278 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:47:21,934 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:47:27,029 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:47:27,498 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:47:32,141 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:47:37,274 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:47:37,726 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:47:39,158 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 17:47:42,391 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:47:47,510 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:47:47,956 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:47:52,640 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:47:57,771 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:47:58,195 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:48:02,889 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:48:08,013 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:48:08,466 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:48:13,144 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:48:18,287 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:48:18,698 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:48:23,392 [INFO] telecode.process: Sending output (316 chars): 896 -                    confirmText: `${this.resource.name}.common.ok`
+ 897 -                });
+ 898 -                return;
+ 894 +                if (!canCancelInvoiced) {
+  ⎿  Error: Page.captureScreenshot timed out. Increase the 'protocolTimeout' setting in launch/connect calls for a higher ti
+2026-03-21 17:48:23,405 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:48:25,526 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:48:25,975 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:48:28,517 [INFO] telecode.process: Sending output (731 chars): 897 -                });
+ 898 -                return;
+ 894 +                if (!canCancelInvoiced) {
+ 895 +                    this._dialogService.showMessage({
+ 896 +                        message: `${this.resource.name}.messages.notAllInvoicesPreInvoiced.message`,
+ 897 +                        
+2026-03-21 17:48:28,518 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:48:28,926 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:48:29,938 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:48:30,346 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:48:33,633 [INFO] telecode.process: Sending output (1376 chars): 892
+ 893 if (selectedInvoices.length!= this.getAllPageSelectedIds().length){
+ 893 -                this._dialogService.showMessage({
+ 894 -                    message: `${this.resource.name}.messages.notAllInvoicesPreInvoiced.message`,
+ 895 -                    title: `${this.resource.name}.common.e
+2026-03-21 17:48:33,635 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:48:35,086 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:48:35,536 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:48:38,775 [INFO] telecode.process: Sending output (529 chars): 902 +                // User has permission to cancel invoiced invoices — use all selected ids
+ 903 +                const allIds = this.getAllPageSelectedIds();
+ 904 +                this._executeCancelInvoices(allIds);
+ 905 +            } else {
+ 906 +                this._executeCancelInvoices(se
+2026-03-21 17:48:38,776 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:48:39,158 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:48:40,178 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:48:40,600 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:48:41,196 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 17:48:43,922 [INFO] telecode.process: Sending output (2094 chars): 893 if (selectedInvoices.length!= this.getAllPageSelectedIds().length){
+ 893 -                this._dialogService.showMessage({
+ 894 -                    message: `${this.resource.name}.messages.notAllInvoicesPreInvoiced.message`,
+ 895 -                    title: `${this.resource.name}.common.error`
+2026-03-21 17:48:43,924 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:48:45,325 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:48:45,736 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:48:49,064 [INFO] telecode.process: Sending output (1252 chars): 899 +                    });
+ 900 +                    return;
+ 901 +                }
+ 902 +                // User has permission to cancel invoiced invoices — use all selected ids
+ 903 +                const allIds = this.getAllPageSelectedIds();
+ 904 +                this._executeCancelInvoices(
+2026-03-21 17:48:49,065 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:48:49,380 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:48:50,479 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:48:50,892 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:48:54,196 [INFO] telecode.process: Sending output (29 chars): (ctrl+b to run in background)
+2026-03-21 17:48:54,197 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:48:55,610 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:48:56,012 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:48:59,334 [INFO] telecode.process: Sending output (532 chars): 904 -                    if (response.status === 200) {
+ 905 -                        this._toastrService.success(`Successfully cancelled invoice id: ${invoiceId}`);
+ 906 -                        this._groupActionSubject.next(false);
+ 907 -                        this.loadEntityList();
+ 908 -       
+2026-03-21 17:48:59,335 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:48:59,602 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:49:00,802 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:49:04,503 [INFO] telecode.process: Sending output (1511 chars): 903 +                const allIds = this.getAllPageSelectedIds();
+ 904 +                this._executeCancelInvoices(allIds);
+ 905 +            } else {
+ 906 +                this._executeCancelInvoices(selectedInvoices);
+ 907 }
+ 908 +        });
+ 909 +    }
+ 910
+ 901 -            selectedInvoices.fo
+2026-03-21 17:49:04,505 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:49:05,899 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:49:06,308 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:49:09,645 [INFO] telecode.process: Sending output (480 chars): 912 -                }).catch((error) => {
+ 913 -                    this._toastrService.error(error?.error?.message || `Error cancelling invoice id: ${invoiceId}`);
+ 911 +    private _executeCancelInvoices(invoiceIds: number[]): void {
+ 912 +        invoiceIds.forEach((invoiceId) => {
+ 913 +       
+2026-03-21 17:49:09,688 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:49:09,859 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:49:11,059 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:49:15,741 [INFO] telecode.process: Sending output (14177 chars): … +182 lines (ctrl+o to expand)
+●I cansee the Invoices link in the sidebar under the Invoicing section.Letmenavigate there.
+●plugin:chrome-devtools-mcp:chrome-devtools -click (MCP)(uid:"5_48")
+ ⎿ Error:Failedtointeractwiththeelementwithuid5_48.Theelementdidnotbecomeinteractivewithintheconfiguredtime
+2026-03-21 17:49:15,745 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:49:17,749 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:49:18,162 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:49:20,078 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:49:21,743 [INFO] telecode.process: Sending output (11903 chars): 917 this._groupActionSubject.next(false);
+      915 -                });
+      918 +                    this.loadEntityList();
+      919 +                } else {
+      920 +                    this._toastrService.error(`There was an error while cancelling invoice id: ${invoiceId}`);
+      921 +    
+2026-03-21 17:49:21,751 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:49:26,332 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:49:26,866 [INFO] telecode.process: Sending output (628 chars): 911 +    private _executeCancelInvoices(invoiceIds: number[]): void {
+ 912 +        invoiceIds.forEach((invoiceId) => {
+ 913 +            this._groupActionSubject.next(true);
+ 914 +            this._invoiceService.cancelInvoice(invoiceId).then((response) => {
+ 915 +                if (response.statu
+2026-03-21 17:49:26,867 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:49:26,997 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:49:28,540 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:49:28,966 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:49:30,316 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:49:31,991 [INFO] telecode.process: Sending output (1867 chars): 905 -                        this._toastrService.success(`Successfully cancelled invoice id: ${invoiceId}`);
+ 906 -                        this._groupActionSubject.next(false);
+ 907 -                        this.loadEntityList();
+ 908 -                    } else {
+ 909 -                        this.
+2026-03-21 17:49:31,993 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:49:33,400 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:49:33,817 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:49:37,119 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:49:40,564 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:49:42,237 [INFO] telecode.process: Sending output (2213 chars): 902 -                this._groupActionSubject.next(true);
+ 903 -                this._invoiceService.cancelInvoice(invoiceId).then((response) => {
+ 904 -                    if (response.status === 200) {
+ 905 -                        this._toastrService.success(`Successfully cancelled invoice id: ${
+2026-03-21 17:49:42,238 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:49:43,272 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 17:49:44,118 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:49:44,559 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:49:47,373 [INFO] telecode.process: Sending output (762 chars): 917 this._groupActionSubject.next(false);
+ 915 -                });
+ 918 +                    this.loadEntityList();
+ 919 +                } else {
+ 920 +                    this._toastrService.error(`There was an error while cancelling invoice id: ${invoiceId}`);
+ 921 +                    this._gro
+2026-03-21 17:49:47,374 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:49:48,809 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:49:49,254 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:49:50,805 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:49:52,518 [INFO] telecode.process: Sending output (133 chars): 927 });
+ 928 }
+●Nowletmealsoaddthebackendrolecheck.LetmecheckhowRoleServiceisusedinservices:
+  ⎿  Successfully clicked on the element
+2026-03-21 17:49:52,520 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:49:53,925 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:49:54,344 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:49:57,689 [INFO] telecode.process: Sending output (293 chars): 925 +                this._groupActionSubject.next(false);
+ 926 });
+ 927 });
+ 928 }
+●Nowletmealsoaddthebackendrolecheck.LetmecheckhowRoleServiceisusedinservices:
+Searchedfor2 patterns,read1 file(ctrl+otoexpand)
+ ⎿ Found2 newdiagnosticissuesin1file(ctrl+otoexpand)
+  Bash(sleep 1)
+  ⎿  Running…
+2026-03-21 17:49:57,691 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:49:59,065 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:49:59,473 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:50:01,168 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:50:02,837 [INFO] telecode.process: Sending output (118 chars): Searchedfor2 patterns,read1 file(ctrl+otoexpand)
+ ⎿ Found2 newdiagnosticissuesin1file(ctrl+otoexpand)
+  ⎿  (No output)
+2026-03-21 17:50:02,838 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:50:04,248 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:50:04,645 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:50:07,998 [INFO] telecode.process: Sending output (320 chars): ● plugin:chrome-devtools-mcp:chrome-devtools - take_snapshot (MCP)
+  ⎿  ⚠ Large MCP response (~10.6k tokens), this can fill up context quickly
+  ⎿  ## Latest page snapshot
+     uid=18_0 RootWebArea "Invoice" url="http://127.0.0.1:4200/setup/invoices"
+       uid=18_1 textbox "Search"
+     … +220 line
+2026-03-21 17:50:07,999 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:50:09,395 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:50:11,452 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:50:13,134 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:50:18,240 [INFO] telecode.process: Sending output (204 chars): ● Invoice 907 is selected. Actions menu is open. Let me click Operations > Cancel Invoices.
+● plugin:chrome-devtools-mcp:chrome-devtools - click (MCP)(uid: "19_2")
+  ⎿  Successfully clicked on the element
+2026-03-21 17:50:18,281 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:50:20,036 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:50:21,696 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:50:23,404 [INFO] telecode.process: Sending output (27 chars): Bash(sleep 1)
+  ⎿  Running…
+2026-03-21 17:50:23,404 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:50:24,814 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:50:28,543 [INFO] telecode.process: Sending output (149 chars): ●Update(~\projects\cursor\java-code\hauliermagic\api\src\main\java\ae\datainsights\hm\service\InvoiceService.java)
+     (ctrl+b to run in background)
+2026-03-21 17:50:28,568 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:50:29,959 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:50:31,955 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:50:33,676 [INFO] telecode.process: Sending output (132 chars): ● Update(~\projects\cursor\java-code\hauliermagic\api\src\main\java\ae\datainsights\hm\service\InvoiceService.java)
+  ⎿  (No output)
+2026-03-21 17:50:33,712 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:50:35,154 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:50:38,791 [INFO] telecode.process: Sending output (320 chars): ● plugin:chrome-devtools-mcp:chrome-devtools - take_snapshot (MCP)
+  ⎿  ⚠ Large MCP response (~10.6k tokens), this can fill up context quickly
+  ⎿  ## Latest page snapshot
+     uid=18_0 RootWebArea "Invoice" url="http://127.0.0.1:4200/setup/invoices"
+       uid=18_1 textbox "Search"
+     … +221 line
+2026-03-21 17:50:38,862 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:50:40,190 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:50:42,175 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:50:44,294 [INFO] telecode.process: Sending output (4296 chars): ╭─── Claude Code v2.1.81 ───────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                             │
+│             Welcome back Datainsights!             │ Ask Claude to create a ne
+2026-03-21 17:50:44,297 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:50:45,335 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 17:50:46,292 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:50:46,734 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:50:49,809 [INFO] telecode.process: Sending output (13053 chars): ● Now update cancelInvoice() to check the role setting for INVOICED invoices:
+● Update(~\projects\cursor\java-code\hauliermagic\api\src\main\java\ae\datainsights\hm\service\InvoiceService.java)
+  ⎿  Added 5 lines
+      1271
+      1272          // If invoice was already sent to customer, reverse the 
+2026-03-21 17:50:49,818 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:50:51,291 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:50:51,753 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:50:52,427 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:50:54,977 [INFO] telecode.process: Sending output (27 chars): Bash(sleep 5)
+  ⎿  Running…
+2026-03-21 17:50:54,978 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:50:56,385 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:50:56,826 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:51:00,130 [INFO] telecode.process: Sending output (29 chars): (ctrl+b to run in background)
+2026-03-21 17:51:00,130 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:51:01,550 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:51:01,962 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:51:02,681 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:51:05,289 [INFO] telecode.process: Sending output (33 chars): ⎿  Added 5 lines
+  ⎿  (No output)
+2026-03-21 17:51:05,290 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:51:06,688 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:51:07,092 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:51:10,432 [INFO] telecode.process: Sending output (155 chars): 1271
+ 1272 //Ifinvoicewasalreadysenttocustomer,reversethefinancialimpact
+● plugin:chrome-devtools-mcp:chrome-devtools - take_screenshot (MCP)
+  ⎿  Running…
+2026-03-21 17:51:10,432 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:51:11,856 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:51:12,898 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:51:15,584 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:51:20,715 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:51:23,126 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:51:25,839 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:51:30,965 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:51:33,356 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:51:36,073 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:51:41,213 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:51:43,578 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:51:46,355 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:51:47,359 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 17:51:51,492 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:51:53,806 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:51:56,611 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:52:01,744 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:52:04,027 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:52:06,868 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:52:11,980 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:52:14,255 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:52:17,109 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:52:22,233 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:52:24,506 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:52:27,360 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:52:32,480 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:52:34,736 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:52:37,621 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:52:42,731 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:52:44,968 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:52:47,874 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:52:49,394 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 17:52:52,996 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:52:55,194 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:52:58,106 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:53:03,247 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:53:05,426 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:53:08,400 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:53:13,522 [INFO] telecode.process: Sending output (130 chars): 1273 if (invoice.getInvoiceStatus()== InvoiceStatus.INVOICED){
+  ⎿  Took a screenshot of the current page's viewport.
+  ⎿  [Image]
+2026-03-21 17:53:13,546 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:53:15,375 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:53:15,649 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:53:18,652 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:53:23,298 [INFO] telecode.process: Streaming idle — flushing output
+2026-03-21 17:53:23,430 [INFO] telecode.process: Sending output (1447 chars): Read1 file(ctrl+otoexpand)
+●UIrebuiltsuccessfully.Nowwaitingforbackend:
+●Bash(sleep120&&grep-i"Backupcreationofmastertenant\|BUILDFAILURE\|Compilationfailure""C:\Users\prith\AppData\Local\Temp\claude\C--Users-prith--telecode-da…)
+● Invoice 907 is now CANCELLED!
+  Both invoices 908 and 907 show CANCE
+2026-03-21 17:53:25,169 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:53:25,865 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:53:36,087 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:53:46,314 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:53:51,519 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 17:53:56,531 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:54:06,747 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:54:16,962 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:54:27,178 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:54:37,402 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:54:47,619 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:54:53,561 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 17:54:57,846 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:55:08,064 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:55:18,280 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:55:28,497 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:55:38,733 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:55:48,955 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:55:55,618 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 17:55:59,174 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:56:09,399 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:56:19,615 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:56:29,832 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:56:40,229 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:56:50,526 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:56:57,674 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 17:57:00,742 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:57:10,961 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:57:21,181 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:57:31,399 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:57:35,817 [INFO] telecode.process: Streaming started
+2026-03-21 17:57:38,345 [INFO] telecode.process: Streaming idle — flushing output
+2026-03-21 17:57:41,617 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:57:48,826 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:57:48,828 [INFO] telecode.handlers: Sending to claude:work: Create a Mr in gitlab
+2026-03-21 17:57:48,828 [INFO] telecode.manager: Writing to PTY [claude:work]: Create a Mr in gitlab
+2026-03-21 17:57:48,852 [INFO] telecode.process: Streaming started
+2026-03-21 17:57:49,868 [INFO] telecode.process: Sending output (316 chars): ⎿ ---TAIL---
+2026-03-21T17:24:25.419+05:30WARN4476---[HaulierMagic][restartedMain]a.d.h.s.rate_limiter.RateLimitConfig:Ratelimitingdisabled:couldnotconnecttoRedisatlocalhost:6379
+-Unabletoconnecttolocalhost/<unresolved>:6379.Norate-limitkeyswillbewritten.
+…+5lines(ctrl+otoexpand)
+❯ Create a Mr in gi
+2026-03-21 17:57:51,934 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:57:52,362 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:57:53,861 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:57:58,958 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:57:59,045 [INFO] telecode.process: Sending output (540 chars): Read1 file(ctrl+otoexpand)
+●UIrebuiltsuccessfully.Nowwaitingforbackend:
+●Bash(sleep120&&grep-i"Backupcreationofmastertenant\|BUILDFAILURE\|Compilationfailure""C:\Users\prith\AppData\Local\Temp\claude\C--Users-prith--telecode-da…)
+ ⎿ ---TAIL---
+2026-03-21T17:24:25.419+05:30WARN4476---[HaulierMagic][r
+2026-03-21 17:57:59,047 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:57:59,742 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 17:58:00,101 [INFO] telecode.process: Sending output (163 chars): ● Bash(cd "C:\Users\prith\projects\cursor" && git status && echo "---BRANCH---" && git branch --show-current && echo "---REMOTE---" && git remote -v)
+  ⎿  Running…
+2026-03-21 17:58:00,944 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:58:04,058 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:58:04,146 [INFO] telecode.process: Sending output (194 chars): ⎿  On branch main
+     Your branch is up to date with 'origin/main'.
+     … +22 lines (ctrl+o to expand)
+  ⎿  Shell cwd was reset to C:\Users\prith\.telecode\data\sessions\8401193952\claude\work
+2026-03-21 17:58:05,604 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:58:09,142 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:58:09,263 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:58:10,273 [INFO] telecode.process: Sending output (12291 chars): ● Now I need to add combineLatest and map. Let me make the changes:
+● Update(~\projects\cursor\web-code\hauliermagic\web-ui\src\app\main\private\setup\invoice\list\invoice-list.component.ts)
+  ⎿  Added 1 line, removed 1 line
+      13  import {ToastrService} from 'ngx-toastr';
+      14  import {GetEn
+2026-03-21 17:58:12,351 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:58:12,801 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:58:14,248 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:58:14,358 [INFO] telecode.process: Sending output (10518 chars): ⎿ (Nooutput)
+●Bash(cd"C:\Users\prith\projects\cursor\java-code\hauliermagic\api"&&./mvnwspring-boot:run-Dspring-boot.run.profiles=dev2>&1)
+ ⎿ Runninginthebackground(↓tomanage)
+●Backendrestarting.TheUIshouldauto-rebuildsinceyarnstarthaswatchmode.Letmecheck:
+Read1 file(ctrl+otoexpand)
+●UIrebuiltsucces
+2026-03-21 17:58:15,386 [INFO] telecode.process: Sending output (194 chars): ⎿  On branch main
+     Your branch is up to date with 'origin/main'.
+     … +18 lines (ctrl+o to expand)
+  ⎿  Shell cwd was reset to C:\Users\prith\.telecode\data\sessions\8401193952\claude\work
+2026-03-21 17:58:15,818 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:58:16,264 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:58:19,368 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:58:19,460 [INFO] telecode.process: Sending output (194 chars): ⎿  On branch main
+     Your branch is up to date with 'origin/main'.
+     … +18 lines (ctrl+o to expand)
+  ⎿  Shell cwd was reset to C:\Users\prith\.telecode\data\sessions\8401193952\claude\work
+2026-03-21 17:58:19,504 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:58:24,466 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:58:24,556 [INFO] telecode.process: Sending output (88 chars): ⎿  Tip: Use /btw to ask a quick side question without interrupting Claude's current work
+2026-03-21 17:58:26,407 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:58:26,826 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:58:29,532 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:58:29,621 [INFO] telecode.process: Sending output (119 chars): ● Changes are already staged in both submodules. Let me create feature branches, commit, push, and create MRs for both.
+2026-03-21 17:58:29,748 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:58:31,065 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:58:31,490 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:58:34,622 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:58:34,730 [INFO] telecode.process: Sending output (527 chars): invoice-cancelInvoiced-toggledefaultstofalse.
+●plugin:chrome-devtools-mcp:chrome-devtools-take_snapshot(MCP)
+  Bash(cd "C:\Users\prith\projects\cursor\java-code" && git checkout -b f/invoice-cancel-invoiced && git commit -m "$(cat <<'EOF'
+      feat(invoice): allow cancellation of…)
+  ⎿  Running… (3
+2026-03-21 17:58:35,756 [INFO] telecode.process: Sending output (65 chars): ⎿  Switched to a new branch 'f/invoice-cancel-invoiced'
+     (4s)
+2026-03-21 17:58:36,158 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:58:36,592 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:58:39,752 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:58:39,842 [INFO] telecode.process: Sending output (159 chars): uid=11_1textbox"Search"
+     ---------- Running Pre Commit Hook ----------
+     Executing => npx lint-staged
+     For more details, see hook-lint.log
+     (8s)
+2026-03-21 17:58:39,986 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:58:40,842 [INFO] telecode.process: Sending output (4 chars): (9s)
+2026-03-21 17:58:41,261 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:58:41,661 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:58:44,851 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:58:44,949 [INFO] telecode.process: Sending output (199 chars): ⎿  ---------- Completed Prepare Commit Message Hook ----------
+     Executing => npx --no -- commitlint --edit C:/Users/prith/Projects/cursor/.git/modules/java-code/COMMIT_EDITMSG
+     +6 lines (13s)
+2026-03-21 17:58:45,941 [INFO] telecode.process: Sending output (335 chars): uid=11_0RootWebArea"Invoice"url="http://127.0.0.1:4200/setup/invoices"
+       uid=11_1 textbox "Search"
+  ⎿  Switched to a new branch 'f/invoice-cancel-invoiced'
+     Executing => npx lint-staged
+     … +10 lines (ctrl+o to expand)
+  ⎿  Shell cwd was reset to C:\Users\prith\.telecode\data\sessions\8
+2026-03-21 17:58:46,365 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:58:49,960 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:58:50,059 [INFO] telecode.process: Sending output (100 chars): ⎿  Switched to a new branch 'f/invoice-cancel-invoiced'
+     (4s)
+     (ctrl+b to run in background)
+2026-03-21 17:58:50,202 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:58:51,048 [INFO] telecode.process: Sending output (130 chars): ---------- Running Pre Commit Hook ----------
+     Executing => npx lint-staged
+     For more details, see hook-lint.log
+     (5s)
+2026-03-21 17:58:51,459 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:58:55,081 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:58:55,189 [INFO] telecode.process: Sending output (120 chars): … +10 lines (ctrl+o to expand)
+  ⎿  Shell cwd was reset to C:\Users\prith\.telecode\data\sessions\8401193952\claude\work
+2026-03-21 17:58:56,698 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:59:00,202 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:59:00,418 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:59:01,873 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 17:59:05,292 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:59:05,425 [INFO] telecode.process: Sending output (682 chars): uid=11_1textbox"Search"
+…+218lines(ctrl+otoexpand)
+●Letmeselectinvoice907(INVOICED,UNPAID)andtrytocancelit:
+●plugin:chrome-devtools-mcp:chrome-devtools-click(MCP)(uid:"11_355")
+ ⎿ Successfullyclickedontheelement
+●plugin:chrome-devtools-mcp:chrome-devtools-click(MCP)(uid:"11_307")
+ ⎿ Successfullyclic
+2026-03-21 17:59:07,456 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:59:07,847 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:59:10,408 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:59:12,871 [INFO] telecode.process: Sending output (9036 chars): ╭─── Claude Code v2.1.81 ───────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                             │
+│             Welcome back Datainsights!             │ Ask Claude to create a ne
+2026-03-21 17:59:12,883 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:59:12,994 [INFO] telecode.process: Sending output (1011 chars): 896 +                        message: `${this.resource.name}.messages.notAllInvoicesPreInvoiced.message`,
+      897 +                        title: `${this.resource.name}.common.error`,
+      898 +                        confirmText: `${this.resource.name}.common.ok`
+      899 +                    }
+2026-03-21 17:59:14,698 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:59:15,123 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:59:17,855 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:59:19,742 [INFO] telecode.process: Sending output (12122 chars): ⎿ ##Latestpagesnapshot
+     uid=11_0 RootWebArea "Invoice" url="http://127.0.0.1:4200/setup/invoices"
+       uid=11_1 textbox "Search"
+● Invoice 907 is selected (checkbox checked). The Actions dropdown is open. Let me click Operations > Cancel Invoices:
+● plugin:chrome-devtools-mcp:chrome-devtools -
+2026-03-21 17:59:21,526 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:59:21,932 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:59:21,996 [INFO] telecode.process: Streaming idle — flushing output
+2026-03-21 17:59:22,086 [INFO] telecode.process: Sending output (555 chars): ⎿ ⚠LargeMCPresponse(~10.6ktokens),thiscanfillupcontextquickly
+ ⎿ ##Latestpagesnapshot
+uid=11_0RootWebArea"Invoice"url="http://127.0.0.1:4200/setup/invoices"
+uid=11_1textbox"Search"
+…+220lines(ctrl+otoexpand)
+  ⎿  remote:
+     remote: To create a merge request for f/invoice-cancel-invoiced, visit:
+  
+2026-03-21 17:59:23,236 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:59:23,493 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:59:23,795 [INFO] telecode.process: Streaming started
+2026-03-21 17:59:23,913 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:59:28,810 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:59:28,899 [INFO] telecode.process: Sending output (395 chars): uid=11_0RootWebArea"Invoice"url="http://127.0.0.1:4200/setup/invoices"
+uid=11_1textbox"Search"
+…+220lines(ctrl+otoexpand)
+●Invoice907isselected(checkboxchecked).TheActionsdropdownisopen.LetmeclickOperations>CancelInvoices:
+  ├��─────────────────────────────────────────────────┼──────────────────────
+2026-03-21 17:59:30,740 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:59:31,232 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:59:33,456 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:59:33,908 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:59:38,984 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:59:43,673 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:59:44,078 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:59:44,187 [INFO] telecode.process: Sending output (671 chars): ⎿ (Nooutput)
+●plugin:chrome-devtools-mcp:chrome-devtools-take_snapshot(MCP)
+ ⎿ ⚠LargeMCPresponse(~10.6ktokens),thiscanfillupcontextquickly
+ ⎿ ##Latestpagesnapshot
+uid=11_0RootWebArea"Invoice"url="http://127.0.0.1:4200/setup/invoices"
+uid=11_1textbox"Search"
+…+220lines(ctrl+otoexpand)
+●Invoice907isse
+2026-03-21 17:59:45,272 [INFO] telecode.process: Sending output (29 chars): (ctrl+b to run in background)
+2026-03-21 17:59:46,201 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:59:46,679 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:59:49,200 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:59:49,290 [INFO] telecode.process: Sending output (807 chars): ⎿ Successfullyclickedontheelement
+●Bash(sleep1)
+ ⎿ (Nooutput)
+●plugin:chrome-devtools-mcp:chrome-devtools-take_snapshot(MCP)
+ ⎿ ⚠LargeMCPresponse(~10.6ktokens),thiscanfillupcontextquickly
+ ⎿ ##Latestpagesnapshot
+uid=11_0RootWebArea"Invoice"url="http://127.0.0.1:4200/setup/invoices"
+uid=11_1textbox"S
+2026-03-21 17:59:50,796 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:59:51,282 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:59:53,890 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 17:59:54,291 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 17:59:54,380 [INFO] telecode.process: Sending output (502 chars): ●plugin:chrome-devtools-mcp:chrome-devtools-take_snapshot(MCP)
+ ⎿ ⚠LargeMCPresponse(~10.6ktokens),thiscanfillupcontextquickly
+ ⎿ ##Latestpagesnapshot
+uid=11_0RootWebArea"Invoice"url="http://127.0.0.1:4200/setup/invoices"
+uid=11_1textbox"Search"
+…+220lines(ctrl+otoexpand)
+●Invoice907isselected(checkb
+2026-03-21 17:59:55,901 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 17:59:56,343 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 17:59:59,388 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:00:03,364 [INFO] telecode.process: Sending output (10057 chars): ╭─── Claude Code v2.1.81 ───────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                             │
+│             Welcome back Datainsights!             │ Ask Claude to create a ne
+2026-03-21 18:00:03,367 [INFO] telecode.process: Streaming idle — flushing output
+2026-03-21 18:00:03,502 [INFO] telecode.process: Streaming started
+2026-03-21 18:00:04,108 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:00:05,243 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 18:00:05,561 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:00:05,684 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 18:00:10,361 [INFO] telecode.process: Sending output (13367 chars): uid=11_0RootWebArea"Invoice"url="http://127.0.0.1:4200/setup/invoices"
+uid=11_1textbox"Search"
+…+218lines(ctrl+otoexpand)
+●Letmeselectinvoice907(INVOICED,UNPAID)andtrytocancelit:
+●plugin:chrome-devtools-mcp:chrome-devtools-click(MCP)(uid:"11_355")
+ ⎿ Successfullyclickedontheelement
+●plugin:chrome-de
+2026-03-21 18:00:10,368 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:00:10,462 [INFO] telecode.process: Streaming idle — flushing output
+2026-03-21 18:00:10,561 [INFO] telecode.process: Streaming started
+2026-03-21 18:00:12,299 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 18:00:12,702 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 18:00:14,333 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:00:15,472 [INFO] telecode.process: Sending output (723 chars): ●Bash(sleep1)
+ ⎿ (Nooutput)
+●plugin:chrome-devtools-mcp:chrome-devtools-take_snapshot(MCP)
+ ⎿ ⚠LargeMCPresponse(~10.6ktokens),thiscanfillupcontextquickly
+ ⎿ ##Latestpagesnapshot
+uid=11_0RootWebArea"Invoice"url="http://127.0.0.1:4200/setup/invoices"
+uid=11_1textbox"Search"
+…+221lines(ctrl+otoexpand)
+
+2026-03-21 18:00:15,570 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:00:15,884 [INFO] telecode.process: Streaming idle — flushing output
+2026-03-21 18:00:16,860 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 18:00:17,277 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 18:00:24,552 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:00:34,767 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:00:44,997 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:00:55,216 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:01:05,432 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:01:07,620 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:01:15,647 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:01:25,863 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:01:36,086 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:01:46,302 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:01:56,519 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:02:06,744 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:02:09,685 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:02:16,965 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:02:27,181 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:02:37,404 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:02:47,620 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:02:58,314 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:03:08,539 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:03:11,732 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:03:18,762 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:03:28,987 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:03:39,213 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:03:49,442 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:03:59,664 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:04:09,888 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:04:13,787 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:04:20,116 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:04:30,341 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:04:40,567 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:04:50,791 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:05:01,019 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:05:03,637 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:05:04,689 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 18:05:05,118 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 18:05:05,120 [INFO] telecode.handlers: Sending to claude:work: Add those link to clickup and add clickup link to mrs
+2026-03-21 18:05:05,121 [INFO] telecode.manager: Writing to PTY [claude:work]: Add those link to clickup and add clickup link to mrs
+2026-03-21 18:05:05,148 [INFO] telecode.process: Streaming started
+2026-03-21 18:05:06,760 [INFO] telecode.process: Sending output (475 chars): ●plugin:chrome-devtools-mcp:chrome-devtools-take_snapshot(MCP)
+ ⎿ ⚠LargeMCPresponse(~10.6ktokens),thiscanfillupcontextquickly
+ ⎿ ##Latestpagesnapshot
+uid=11_0RootWebArea"Invoice"url="http://127.0.0.1:4200/setup/invoices"
+uid=11_1textbox"Search"
+…+221lines(ctrl+otoexpand)
+●plugin:chrome-devtools-mcp:
+2026-03-21 18:05:08,220 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 18:05:08,679 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 18:05:10,155 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:05:11,879 [INFO] telecode.process: Sending output (427 chars): ●plugin:chrome-devtools-mcp:chrome-devtools-take_snapshot(MCP)
+ ⎿ ⚠LargeMCPresponse(~10.6ktokens),thiscanfillupcontextquickly
+ ⎿ ##Latestpagesnapshot
+uid=11_0RootWebArea"Invoice"url="http://127.0.0.1:4200/setup/invoices"
+uid=11_1textbox"Search"
+     … +221 lines (ctrl+o to expand)
+● plugin:chrome-de
+2026-03-21 18:05:13,390 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 18:05:13,863 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:05:15,270 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:05:15,381 [INFO] telecode.process: Sending output (220 chars): ●plugin:chrome-devtools-mcp:chrome-devtools-click(MCP)(uid:"13_0")
+ ⎿ Successfullyclickedontheelement
+●Bash(sleep3)
+ ⎿ (Nooutput)
+✢ Topsy-turvying…
+❯
+  3 shells · ⏵⏵ bypass permissions on · esc to interrupt · ↓ to manage
+2026-03-21 18:05:15,843 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:05:16,807 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 18:05:20,391 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:05:20,509 [INFO] telecode.process: Sending output (159 chars): ⎿ Error:Page.captureScreenshottimedout.Increasethe'protocolTimeout'settinginlaunch/connectcallsforahighertimeoutifneeded.
+● clickup - Create Task Comment (MCP)
+2026-03-21 18:05:22,124 [INFO] telecode.process: Sending output (955 chars): ⎿ Error:Page.captureScreenshottimedout.Increasethe'protocolTimeout'settinginlaunch/connectcallsforahighertimeoutifneeded.
+●plugin:chrome-devtools-mcp:chrome-devtools-take_snapshot(MCP)
+ ⎿ ⚠LargeMCPresponse(~10.6ktokens),thiscanfillupcontextquickly
+ ⎿ ##Latestpagesnapshot
+● clickup - Create Task Comm
+2026-03-21 18:05:22,127 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 18:05:23,569 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 18:05:24,091 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:05:25,524 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:05:25,639 [INFO] telecode.process: Sending output (126 chars): uid=11_1textbox"Search"
+…+220lines(ctrl+otoexpand)
+  ⎿  {
+       "success": true,
+       "comment_id": "90160174325919"
+     }
+2026-03-21 18:05:27,078 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 18:05:30,654 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:05:34,315 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:05:35,776 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:05:35,890 [INFO] telecode.process: Sending output (90 chars): ● Now update both MRs to add the ClickUp task link:
+✻ Topsy-turvying… (30s · ↓ 163 tokens)
+2026-03-21 18:05:37,730 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 18:05:40,886 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:05:44,540 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:05:46,014 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:05:46,141 [INFO] telecode.process: Sending output (226 chars): Bash(cd "C:\Users\prith\projects\cursor\java-code" && glab mr update 6694 --description "$(cat <<'EOF'
+      ## Summary…)
+  ⎿  Running…
+  ⎿  Tip: Use /btw to ask a quick side question without interrupting Claude's current work
+2026-03-21 18:05:47,989 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 18:05:51,185 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:05:53,105 [INFO] telecode.process: Sending output (6320 chars): ╭─── Claude Code v2.1.81 ───────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                             │
+│             Welcome back Datainsights!             │ Ask Claude to create a ne
+2026-03-21 18:05:53,240 [INFO] telecode.process: Sending output (896 chars): 894 +                if (!canCancelInvoiced) {
+      895 +                    this._dialogService.showMessage({
+      896 +                        message: `${this.resource.name}.messages.notAllInvoicesPreInvoiced.message`,
+      897 +                        title: `${this.resource.name}.common.erro
+2026-03-21 18:05:54,769 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:05:54,870 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 18:05:55,267 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 18:05:58,112 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:05:59,780 [INFO] telecode.process: Sending output (12295 chars): │ Role toggle invoice-cancelInvoiced-toggle defaults to false │ Confirmed                                              │
+  Both the frontend role check and backend role check are working correctly. The feature is complete:
+  1. Without toggle: Users see the error dialog and cancellation is blocked o
+2026-03-21 18:06:01,547 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 18:06:01,932 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 18:06:04,778 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:06:05,033 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:06:07,724 [INFO] telecode.process: Streaming idle — flushing output
+2026-03-21 18:06:07,839 [INFO] telecode.process: Sending output (259 chars): ● Done. Everything is linked:
+  - ClickUp task has a comment with both MR links
+  - Backend MR (!6694) has ClickUp task link + frontend MR reference
+  - Frontend MR (!5061) has ClickUp task link + backend MR reference
+✻ Worked for 60s · 3 shells still running
+2026-03-21 18:06:09,851 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 18:06:10,328 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 18:06:15,290 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:06:17,919 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:06:25,517 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:06:35,742 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:06:45,967 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:06:56,204 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:07:06,459 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:07:16,702 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:07:19,978 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:07:26,978 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:07:37,208 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:07:47,436 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:07:57,693 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:08:07,933 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:08:18,193 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:08:21,995 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:08:28,424 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:08:38,646 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:08:48,869 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:08:59,096 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:09:09,317 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:09:19,542 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:09:24,034 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:09:29,766 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:09:39,991 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:09:50,213 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:10:00,435 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:10:10,672 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:10:20,897 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:10:26,061 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:10:31,125 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:10:41,350 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:10:51,575 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:11:01,803 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:11:12,025 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:11:22,250 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:11:28,109 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:11:32,470 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:11:42,693 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:11:52,918 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:12:03,140 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:12:13,366 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:12:23,590 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:12:30,237 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:12:33,813 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:12:44,038 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:12:54,262 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:13:04,493 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:13:14,718 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:13:24,940 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:13:32,310 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:13:35,166 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:13:45,388 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:13:55,611 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:14:05,836 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:14:16,060 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:14:26,285 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:14:34,370 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:14:36,511 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:14:46,739 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:14:56,963 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:15:07,187 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:15:17,410 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:15:27,641 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:15:36,425 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:15:37,872 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:15:48,097 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:15:58,321 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:16:08,546 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:16:18,774 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:16:29,000 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:16:38,473 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:16:39,221 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:16:49,455 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:16:59,677 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:17:09,903 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:17:20,143 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:17:30,366 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:17:40,525 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:17:40,596 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:17:50,821 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:18:01,048 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:18:11,278 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:18:21,502 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:18:24,161 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:18:25,184 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 18:18:25,644 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 18:18:25,645 [INFO] telecode.handlers: Sending to claude:work: Create a skill hauliermagic-sde, so that you know that how add feature and debug bugs, run servers a
+2026-03-21 18:18:25,645 [INFO] telecode.manager: Writing to PTY [claude:work]: Create a skill hauliermagic-sde, so that you know that how add feature and debug bugs, run servers a
+2026-03-21 18:18:25,693 [INFO] telecode.process: Streaming started
+2026-03-21 18:18:30,413 [INFO] telecode.process: Sending output (213 chars): ❯ Create a skill hauliermagic-sde, so that you know that how add feature and debug bugs, run servers and control screen with testing, + create mrs and updating clickup and other things make it
+generic
+✶ Tempering…
+2026-03-21 18:18:30,697 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:18:32,126 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 18:18:32,507 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 18:18:34,389 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:18:35,801 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:18:40,898 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:18:42,662 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:18:44,611 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:18:45,998 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:18:51,103 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:18:54,834 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:18:55,926 [INFO] telecode.process: Sending output (53 chars): ● Skill(skill-creator)
+  ⎿  Successfully loaded skill
+2026-03-21 18:18:56,203 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:18:56,296 [INFO] telecode.process: Sending output (33 chars): ✶ Tempering… (30s · ↑ 512 tokens)
+2026-03-21 18:18:57,680 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 18:19:01,302 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:19:05,057 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:19:06,413 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:19:11,514 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:19:15,283 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:19:16,352 [INFO] telecode.process: Sending output (232 chars): ● I have all the context I need from our session — this is essentially capturing the exact workflow we just executed. Let me write the skill.
+  ⎿  Tip: Use /btw to ask a quick side question without interrupting Claude's current work
+2026-03-21 18:19:16,628 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:19:18,114 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 18:19:21,725 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:19:25,511 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:19:26,821 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:19:31,925 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:19:35,735 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:19:37,028 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:19:42,139 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:19:44,729 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:19:46,374 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:19:47,256 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:19:52,358 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:19:56,592 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:19:57,467 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:20:02,567 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:20:06,810 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:20:07,683 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:20:12,574 [INFO] telecode.process: Sending output (11195 chars): ● Write(~\.claude\commands\hauliermagic-sde.md)
+ Create file
+ ..\..\..\..\..\..\.claude\commands\hauliermagic-sde.md
+    1 ---
+    2 name: hauliermagic-sde
+    3 description: Full-stack software development engineer for the HaulierMagic/RouteMagic ERP system. Use this skill when the user wants to de
+2026-03-21 18:20:12,795 [INFO] telecode.process: Max wait reached — intermediate flush
+2026-03-21 18:20:13,935 [INFO] telecode.process: Streaming idle — flushing output
+2026-03-21 18:20:14,568 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 18:20:14,957 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 18:20:17,025 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:20:27,240 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:20:37,449 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:20:46,802 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:20:47,665 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:20:57,881 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:21:08,099 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:21:18,319 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:21:28,534 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:21:38,750 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:21:48,862 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:21:48,966 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:21:59,185 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:22:09,401 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:22:19,621 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:22:29,853 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:22:40,065 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:22:50,288 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:22:50,918 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:23:00,509 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:23:10,733 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:23:20,953 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:23:31,184 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:23:41,431 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:23:51,671 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:23:52,944 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:24:01,888 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:24:12,131 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:24:22,378 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:24:32,594 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:24:42,810 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:24:53,119 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:24:54,981 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:25:03,346 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:25:13,566 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:25:23,779 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:25:33,992 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:25:44,205 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:25:54,420 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:25:57,058 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:26:04,640 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:26:14,859 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:26:25,070 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:26:35,291 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:26:45,506 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:26:55,726 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:26:59,125 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:27:05,937 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:27:16,149 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:27:26,363 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:27:36,578 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:27:46,789 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:27:57,001 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:28:01,184 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:28:07,223 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:28:17,440 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:28:27,653 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:28:37,869 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:28:48,089 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:28:58,309 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:29:03,243 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:29:08,607 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:29:18,822 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:29:29,033 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:29:39,251 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:29:49,465 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:29:59,677 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:30:05,273 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:30:09,895 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:30:20,110 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:30:30,324 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:30:40,535 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:30:50,755 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:31:00,981 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:31:07,303 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:31:11,195 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:31:21,414 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:31:31,628 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:31:41,845 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:31:52,057 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:32:02,277 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:32:09,323 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:32:12,490 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:32:22,705 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:32:32,939 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:32:43,154 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:32:53,366 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:33:03,581 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:33:11,382 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:33:13,796 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:33:24,018 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:33:34,236 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:33:44,450 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:33:54,665 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:34:04,878 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:34:13,420 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:34:15,105 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:34:25,333 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:34:35,553 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:34:45,767 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:34:55,982 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:35:06,198 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:35:15,484 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:35:16,410 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:35:26,627 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:35:36,839 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:35:47,061 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:35:57,287 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:36:07,504 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:36:17,546 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:36:17,718 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:36:27,935 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:36:38,147 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:36:48,704 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:36:58,888 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:36:59,112 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:36:59,146 [INFO] telecode.process: Streaming started
+2026-03-21 18:37:01,181 [INFO] telecode.process: Streaming idle — flushing output
+2026-03-21 18:37:01,275 [INFO] telecode.process: Sending output (13 chars): Esc to cancel
+2026-03-21 18:37:03,432 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 18:37:03,847 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 18:37:09,295 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:37:19,474 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:37:19,607 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:37:29,654 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:37:39,828 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:37:50,003 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:38:00,180 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:38:10,356 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:38:20,532 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:38:21,654 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:38:30,711 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:38:40,891 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:38:50,095 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:38:51,190 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 18:38:59,527 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:39:00,430 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 18:39:00,869 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/editMessageText "HTTP/1.1 200 OK"
+2026-03-21 18:39:00,870 [INFO] telecode.handlers: Sending to claude:work: 1
+2026-03-21 18:39:00,870 [INFO] telecode.manager: Writing to PTY [claude:work]: 1
+2026-03-21 18:39:09,710 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:39:19,896 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:39:21,787 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:39:22,522 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/sendMessage "HTTP/1.1 200 OK"
+2026-03-21 18:39:22,522 [INFO] telecode.handlers: Sending to claude:work: yess
+2026-03-21 18:39:22,524 [INFO] telecode.manager: Writing to PTY [claude:work]: yess
+2026-03-21 18:39:23,729 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:39:31,969 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:39:42,149 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:39:52,329 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:40:02,517 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:40:12,701 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:40:22,887 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:40:25,800 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:40:33,070 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:40:43,250 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:40:53,430 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:41:03,607 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:41:13,788 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:41:23,977 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:41:27,817 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-21 18:41:34,158 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:41:44,353 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:41:54,529 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-21 18:42:04,713 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"

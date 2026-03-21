@@ -69,6 +69,12 @@
       "flags": [],
       "env": {},
       "session": {}
+    },
+    "screen": {
+      "startup_cmd": [],
+      "flags": [],
+      "env": {},
+      "session": {}
     }
   }
 }
