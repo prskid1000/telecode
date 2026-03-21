@@ -34,6 +34,14 @@ class VoiceStatus:
 
 
 _status = VoiceStatus(stt_configured=False, stt_reachable=False)
+_http_session: aiohttp.ClientSession | None = None
+
+
+def _get_http_session() -> aiohttp.ClientSession:
+    global _http_session
+    if _http_session is None or _http_session.closed:
+        _http_session = aiohttp.ClientSession()
+    return _http_session
 
 
 def get_status() -> VoiceStatus:
@@ -42,12 +50,12 @@ def get_status() -> VoiceStatus:
 
 async def _check(base_url: str, timeout: float = 3.0) -> bool:
     try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(
-                f"{base_url.rstrip('/')}/models",
-                timeout=aiohttp.ClientTimeout(total=timeout),
-            ) as r:
-                return r.status < 500
+        session = _get_http_session()
+        async with session.get(
+            f"{base_url.rstrip('/')}/models",
+            timeout=aiohttp.ClientTimeout(total=timeout),
+        ) as r:
+            return r.status < 500
     except Exception:
         return False
 

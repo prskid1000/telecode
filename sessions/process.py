@@ -52,25 +52,26 @@ _BOX_DRAW_RANGES = (
     range(0x2500, 0x2580),  # box drawing
     range(0x2580, 0x25A0),  # block elements
 )
+_BOX_DRAW_CHARS = frozenset(
+    chr(c) for rng in _BOX_DRAW_RANGES for c in rng
+) | frozenset(" \t")
 
 
 def _is_decoration(line: str) -> bool:
     stripped = line.strip()
     if not stripped:
         return True
-    return all(
-        any(ord(c) in r for r in _BOX_DRAW_RANGES) or c in " \t"
-        for c in stripped
-    )
+    return all(c in _BOX_DRAW_CHARS for c in stripped)
 
 
 def _history_lines(screen: pyte.HistoryScreen) -> list[str]:
     """Extract scrolled-off history lines (stable — never re-rendered by TUI)."""
     lines: list[str] = []
     if hasattr(screen, "history") and screen.history.top:
+        cols = screen.columns
         for hist_line in screen.history.top:
             text = "".join(
-                hist_line[col].data for col in sorted(hist_line)
+                hist_line[col].data for col in range(cols) if col in hist_line
             ).rstrip()
             if text and not _is_decoration(text):
                 lines.append(text)
@@ -128,16 +129,18 @@ def _lis_indices(seq: list[int]) -> list[int]:
     return out
 
 
-def _patience_anchor_indices(prev_k: list[str], curr_k: list[str]) -> list[tuple[int, int]]:
+def _patience_anchor_indices(
+    prev_k: list[str], curr_k: list[str],
+    pc: Counter, cc: Counter,
+) -> list[tuple[int, int]]:
     """Pairs of indices that patience-diff would lock (unique matching lines).
 
     Classic patience diff (Bram Cohen): lines that appear exactly once on each
     side are anchor candidates; LIS on right-hand indices keeps monotonic order
-    so SequenceMatcher does not “cross” stable lines in repetitive TUIs.
+    so SequenceMatcher does not "cross" stable lines in repetitive TUIs.
     """
     if not prev_k or not curr_k:
         return []
-    pc, cc = Counter(prev_k), Counter(curr_k)
     curr_once = {k: j for j, k in enumerate(curr_k) if cc[k] == 1}
     pairs: list[tuple[int, int]] = [
         (i, curr_once[k])
@@ -165,6 +168,8 @@ _HIST_LIS_MAX_J_PER_I = 12
 def _histogram_lis_anchors(
     prev_k: list[str],
     curr_k: list[str],
+    pc: Counter,
+    cc: Counter,
     *,
     max_occ_sum: int = _HIST_LIS_MAX_OCC_SUM,
     max_pairs: int = _HIST_LIS_MAX_PAIRS,
@@ -179,7 +184,6 @@ def _histogram_lis_anchors(
     """
     if not prev_k or not curr_k:
         return []
-    pc, cc = Counter(prev_k), Counter(curr_k)
     curr_by_k: dict[str, list[int]] = defaultdict(list)
     for j, k in enumerate(curr_k):
         curr_by_k[k].append(j)
@@ -207,7 +211,9 @@ def _histogram_lis_anchors(
 
 
 def _histogram_greedy_anchors(
-    prev_k: list[str], curr_k: list[str], max_occ_sum: int = 14
+    prev_k: list[str], curr_k: list[str],
+    pc: Counter, cc: Counter,
+    max_occ_sum: int = 14,
 ) -> list[tuple[int, int]]:
     """Low-frequency keys first, then forward monotone (i, j) pairs.
 
@@ -217,7 +223,6 @@ def _histogram_greedy_anchors(
     """
     if not prev_k or not curr_k:
         return []
-    pc, cc = Counter(prev_k), Counter(curr_k)
     common = set(prev_k) & set(curr_k)
     if not common:
         return []
@@ -248,31 +253,40 @@ def _histogram_greedy_anchors(
 
 def _choose_anchors(prev_k: list[str], curr_k: list[str]) -> list[tuple[int, int]]:
     """Patience → histogram LIS on rare pairs → histogram greedy."""
-    pa = _patience_anchor_indices(prev_k, curr_k)
+    pc, cc = Counter(prev_k), Counter(curr_k)
+    pa = _patience_anchor_indices(prev_k, curr_k, pc, cc)
     if len(pa) >= 2:
         return pa
-    hl = _histogram_lis_anchors(prev_k, curr_k)
+    hl = _histogram_lis_anchors(prev_k, curr_k, pc, cc)
     if len(hl) >= 2:
         return hl
-    hg = _histogram_greedy_anchors(prev_k, curr_k)
+    hg = _histogram_greedy_anchors(prev_k, curr_k, pc, cc)
     if len(hg) >= 2:
         return hg
-    return pa if pa else (hl if hl else hg)
+    # Caller ignores < 2 anchors; no useful result to return
+    return []
+
+
+def _alnum_strip(s: str) -> str:
+    return "".join(c for c in s if c.isalnum() or c == " ").strip()
 
 
 def _similar(a: str, b: str) -> bool:
     """Two lines are 'the same' if their alphanumeric content mostly matches.
 
     Strips ALL non-alphanumeric characters before comparing, so spinner
-    changes (· → * → ✶), arrows, bullets, timer updates etc. are ignored.
-    Pure algorithmic — no hard-coded patterns.
+    changes, arrows, bullets, timer updates etc. are ignored.
     """
-    a_alnum = "".join(c for c in a if c.isalnum() or c == " ").strip()
-    b_alnum = "".join(c for c in b if c.isalnum() or c == " ").strip()
+    a_alnum = _alnum_strip(a)
+    b_alnum = _alnum_strip(b)
     if a_alnum == b_alnum:
         return True
     if not a_alnum or not b_alnum:
         return not a_alnum and not b_alnum
+    # Fast reject: length ratio alone rules out 0.7 similarity
+    la, lb = len(a_alnum), len(b_alnum)
+    if la > 2.5 * lb or lb > 2.5 * la:
+        return False
     return difflib.SequenceMatcher(None, a_alnum, b_alnum).ratio() > 0.7
 
 
@@ -291,7 +305,12 @@ def _diff_segment(
             new.extend(curr[j1:j2])
         elif tag == "replace":
             old_chunk = prev[i1:i2]
+            # Pre-compute alnum set so exact matches skip expensive ratio()
+            old_alnum = {_alnum_strip(o) for o in old_chunk}
             for line in curr[j1:j2]:
+                stripped = _alnum_strip(line)
+                if stripped in old_alnum:
+                    continue
                 if not any(_similar(line, old) for old in old_chunk):
                     new.append(line)
     return new
@@ -367,6 +386,7 @@ class PTYProcess:
         self._idle_handle: asyncio.TimerHandle | None = None
         self._max_wait_handle: asyncio.TimerHandle | None = None
         self._streaming = False
+        self._snapshotting = False
 
         self._pty = None
         self._master_fd: int | None = None
@@ -488,20 +508,26 @@ class PTYProcess:
 
     def _do_snapshot(self) -> None:
         """Diff full terminal text (history + display) as one ordered stream."""
-        curr = _full_snapshot_lines(self._screen)
-        all_new = _extract_new_lines(self._last_full_lines, curr)
-        self._last_full_lines = list(curr)
-
-        if not all_new:
+        if self._snapshotting:
             return
+        self._snapshotting = True
+        try:
+            curr = _full_snapshot_lines(self._screen)
+            all_new = _extract_new_lines(self._last_full_lines, curr)
+            self._last_full_lines = list(curr)
 
-        text = "\n".join(all_new).strip()
-        if not text:
-            return
+            if not all_new:
+                return
 
-        log.info("Sending output (%d chars): %.300s", len(text), text)
-        for cb in self._subscribers:
-            cb(text)
+            text = "\n".join(all_new).strip()
+            if not text:
+                return
+
+            log.info("Sending output (%d chars): %.300s", len(text), text)
+            for cb in self._subscribers:
+                cb(text)
+        finally:
+            self._snapshotting = False
 
     # ── Windows (ConPTY via pywinpty) ─────────────────────────────────────────
 

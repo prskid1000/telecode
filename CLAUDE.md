@@ -27,8 +27,13 @@ pip install -r requirements.txt
 - `telegram.bot_token` — from @BotFather
 - `telegram.group_id` — supergroup id (usually starts with `-100`)
 - `telegram.allowed_user_ids` — list of numeric user ids (empty = anyone can use the bot; avoid in production)
-- `paths.sessions_dir`, `paths.store_path`, `paths.logs_dir` — where sessions and JSON store live
-- `tools.<name>` — `startup_cmd`, `flags`, `env` per CLI
+- `paths.sessions_dir`, `paths.store_path`, `paths.logs_dir` — where per-session sandboxes (if used), JSON store, and logs live
+- PTY always starts in the OS home directory
+- `streaming.*` — `interval_sec`, `max_message_length`, `idle_timeout_sec`
+- `voice.stt.*` — `enabled`, `base_url`, `model`
+- `tools.<name>` — `startup_cmd`, `flags`, `env`, `session` per CLI
+
+**Full field list:** README → [Settings reference](README.md#settings-reference).
 
 **Run**
 
@@ -85,6 +90,11 @@ User message (topic thread)
 - **Session key:** `{backend}:{name}` — colon is the separator; do not use colons in names.
 - **Routing:** only `message_thread_id` → session. No other routing.
 - **Persistence:** `store.py` JSON file — topic id per `(user_id, session_key)`; voice prefs.
+
+**PTY working directory**
+
+- Always uses the OS home directory (`Path.home()`).
+- Resolved in `sessions/manager.py` via `config.pty_cwd()`.
 
 ---
 
@@ -180,3 +190,9 @@ Test: `/new <key> test`.
 ## Dependencies (see `requirements.txt`)
 
 Includes **python-telegram-bot**, **aiohttp**, **pyte**, **pywinpty** (Windows PTY). Install OS build tools if pywinpty fails to build.
+
+---
+
+## Git
+
+`.gitignore` excludes `__pycache__/`, common `*.pyc` patterns, and `data/` (sessions, store, logs — do not commit secrets or local state).
