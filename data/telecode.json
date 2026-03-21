@@ -3,9 +3,10 @@
     "8401193952": {
       "claude:research": 193,
       "claude:glab-research": 215,
-      "claude:default": 248,
       "claude:work": 264,
-      "powershell:default": 303
+      "powershell:default": 303,
+      "screen:default": 564,
+      "claude:default": 596
     }
   },
   "voice_prefs": {}

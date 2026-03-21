@@ -291,6 +291,7 @@ async def cmd_key(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     session = _session_for_thread(update, ctx)
     if not session:
+        await update.message.reply_text("No session here. Use /start to begin.")
         return
     if not session.process.alive:
         await update.message.reply_text("Process stopped. Use /new to restart.")
@@ -324,8 +325,8 @@ async def cmd_key(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await _mgr(ctx).send_raw(
             update.effective_user.id, session.session_key, seq
         )
-    except RuntimeError:
-        pass
+    except RuntimeError as e:
+        await update.message.reply_text(str(e))
 
 
 # ── Callbacks ─────────────────────────────────────────────────────────────────
@@ -345,6 +346,25 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         backend_key = data.split(":", 1)[1]
         backend = get_backend(backend_key)
         name = backend.info.name if backend else backend_key
+
+        # Screen capture: show window picker instead of starting immediately
+        if backend_key == "screen":
+            windows = enumerate_windows()
+            if not windows:
+                await q.edit_message_text("No visible windows found.")
+                return
+            rows = []
+            for hwnd, title in windows[:20]:
+                label = title[:40] + "\u2026" if len(title) > 40 else title
+                cb_data = f"scr:default:{hwnd}"
+                if len(cb_data) <= 64:
+                    rows.append([InlineKeyboardButton(label, callback_data=cb_data)])
+            await q.edit_message_text(
+                "Pick a window to capture:",
+                reply_markup=InlineKeyboardMarkup(rows),
+            )
+            return
+
         await q.edit_message_text(f"Starting {_esc(name)}\u2026", parse_mode=ParseMode.HTML)
         await _start_session_core(ctx, user_id, backend_key, "default")
 
