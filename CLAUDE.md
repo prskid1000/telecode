@@ -1,100 +1,32 @@
 # CLAUDE.md — Telecode developer guide
 
-Telecode is a **Telegram bot** that runs **CLI tools** (Claude Code, Codex, shell) inside a **pseudo-terminal**, reads their screen with **pyte**, and posts text to **forum topic** threads. It does **not** call any AI API itself.
+Telecode is a **Telegram bot** that runs **CLI tools** (Claude Code, Codex, shell) inside a **pseudo-terminal**, reads their screen with **pyte**, and posts text to **forum topic** threads. It also supports **screen capture** of any window via mss. It does **not** call any AI API itself.
+
+User-facing docs (setup, commands, settings reference) are in [README.md](README.md).
 
 ---
 
-## Setup
-
-**Requirements**
-
-- Python **3.11+**
-- **Node.js** if you use Claude Code or Codex CLIs
-- Telegram **group with Topics** enabled; bot must be admin (Manage Topics, send/edit messages)
-
-**Install**
-
-```bash
-cd telecode
-python -m venv .venv
-.venv\Scripts\activate          # Windows
-# source .venv/bin/activate     # Linux/macOS
-pip install -r requirements.txt
-```
-
-**Configure** — edit `settings.json`:
-
-- `telegram.bot_token` — from @BotFather
-- `telegram.group_id` — supergroup id (usually starts with `-100`)
-- `telegram.allowed_user_ids` — list of numeric user ids (empty = anyone can use the bot; avoid in production)
-- `paths.sessions_dir`, `paths.store_path`, `paths.logs_dir` — where per-session sandboxes (if used), JSON store, and logs live
-- PTY always starts in the OS home directory
-- `streaming.*` — `interval_sec`, `max_message_length`, `idle_timeout_sec`
-- `voice.stt.*` — `enabled`, `base_url`, `model`
-- `tools.<name>` — `startup_cmd`, `flags`, `env`, `session` per CLI
-
-**Full field list:** README → [Settings reference](README.md#settings-reference).
-
-**Run**
-
-```bash
-python main.py
-```
-
-Logs: `paths.logs_dir` (default `./data/logs/telecode.log`). Optional env: `TELECODE_SETTINGS` = path to an alternate `settings.json`.
-
-**First use**
-
-In the group: `/start` or `/new claude work`. Reply inside the **topic** thread the bot creates.
-
----
-
-## User-facing commands (bot)
-
-| Command | Purpose |
-|--------|---------|
-| `/start` | Pick a backend; starts a session |
-| `/new <backend> [name]` | e.g. `/new claude work`, `/new shell logs` |
-| `/stop` | Stop all sessions for the user |
-| `/stop <session_key>` | e.g. `/stop claude:work` |
-| `/key …` | Send keys to the PTY (see below) |
-| `/voice` | STT on/off and health |
-| `/settings …` | Edit config (see below) |
-| `/help` | Short command list |
-
-**`/key` examples:** `/key enter`, `/key esc`, `/key ctrl c`, `/key up`, `/key y`
-
-**`/settings` (summary)**
-
-- `/settings` — summary
-- `/settings reload` — reload `settings.json` from disk
-- `/settings validate` — sanity checks
-- `/settings get <dot.path>` / `/settings set <dot.path> <value>`
-- `/settings tool` / `/settings tool <key>` — tool config
-- `/settings tool <key> cmd …`, `flag add|remove …`, `env VAR value`, `env VAR --delete`
-- `/settings voice stt on|off|url …|model …`
-
----
-
-## Architecture (short)
+## Architecture
 
 ```
 User message (topic thread)
-    → handlers.handle_text / voice / document
-    → SessionManager.get_session_by_thread → SessionManager.send()
-    → PTYProcess.send()  (adds \r)
-    → pyte parses output → snapshot → diff vs last snapshot → subscribers
-    → _send_output → _LiveMessage.append → editMessageText (<pre>, HTML)
+    -> handlers.handle_text / voice / document
+    -> SessionManager.get_session_by_thread -> SessionManager.send()
+    -> PTYProcess.send()  (adds \r)
+    -> pyte parses output -> snapshot -> diff vs last snapshot -> subscribers
+    -> _send_output -> _LiveMessage.append -> editMessageText (<pre>, HTML)
+
+Screen capture:
+    /new screen -> window picker (inline keyboard)
+    -> user picks window -> ScreenCapture(hwnd) starts
+    -> mss.grab(window_rect) -> JPEG -> subscribers
+    -> _LivePhoto.set_frame -> editMessageMedia (photo)
 ```
 
-- **Session key:** `{backend}:{name}` — colon is the separator; do not use colons in names.
-- **Routing:** only `message_thread_id` → session. No other routing.
-- **Persistence:** `store.py` JSON file — topic id per `(user_id, session_key)`; voice prefs.
-
-**PTY working directory**
-
-- Always uses the OS home directory (`Path.home()`).
-- Resolved in `sessions/manager.py` via `config.pty_cwd()`.
+- **Session key:** `{backend}:{name}` -- colon is the separator; do not use colons in names.
+- **Routing:** only `message_thread_id` -> session. No other routing.
+- **Persistence:** `store.py` JSON file -- topic id per `(user_id, session_key)`; voice prefs.
+- **PTY working directory:** always `Path.home()`, resolved via `config.pty_cwd()`.
 
 ---
 
@@ -107,11 +39,12 @@ User message (topic thread)
 | `main.py` | App startup, handlers, `set_my_commands`, voice probe loop |
 | `store.py` | Topics + voice prefs JSON |
 | `sessions/process.py` | PTY + pyte + snapshot diff + timers |
-| `sessions/manager.py` | Start/kill sessions, send, send_raw, interrupt |
-| `bot/handlers.py` | Commands, callbacks, `_LiveMessage`, `/key` |
+| `sessions/screen.py` | Screen capture (mss + Pillow), window enumeration (ctypes Win32) |
+| `sessions/manager.py` | Start/kill sessions, send, send_raw, interrupt, pause/resume |
+| `bot/handlers.py` | Commands, callbacks, `_LiveMessage`, `_LivePhoto`, `/key` |
 | `bot/topic_manager.py` | Create/reuse forum topics |
 | `bot/settings_handler.py` | `/settings` parsing |
-| `backends/implementations.py` | Claude, Codex, shell |
+| `backends/implementations.py` | Claude, Codex, Shell, PowerShell, Screen backends |
 | `backends/registry.py` | `get_backend`, `all_backends` |
 | `backends/params.py` | Load tool params from settings |
 | `voice/*` | STT health, prefs, transcribe |
@@ -120,20 +53,20 @@ User message (topic thread)
 
 ## Rules (do not break)
 
-1. **Config** — only `settings.json`; no scattered env vars except `TELECODE_SETTINGS` / what `config.py` reads from that file.
-2. **`config.py`** — always `config.foo()`, never cached module-level constants for values that can change.
-3. **Sessions** — key format `backend:name`; routing by `thread_id` only.
-4. **Processes** — real PTY (Unix `openpty`, Windows ConPTY via pywinpty), not plain pipes.
-5. **Telegram** — `ParseMode.HTML`; escape user/process text with `html.escape()` where needed.
-6. **No** in-bot AI and **no** separate “memory” layer — CLIs own context.
+1. **Config** -- only `settings.json`; no scattered env vars except `TELECODE_SETTINGS`.
+2. **`config.py`** -- always `config.foo()`, never cached module-level constants for values that can change.
+3. **Sessions** -- key format `backend:name`; routing by `thread_id` only.
+4. **Processes** -- real PTY (Unix `openpty`, Windows ConPTY via pywinpty), not plain pipes. Screen capture uses mss, not PTY.
+5. **Telegram** -- `ParseMode.HTML`; escape user/process text with `html.escape()` where needed.
+6. **No** in-bot AI and **no** separate "memory" layer -- CLIs own context.
 
 ---
 
 ## PTY output pipeline (`sessions/process.py`)
 
-1. Raw bytes → **pyte** `HistoryScreen` + `Stream`.
+1. Raw bytes -> **pyte** `HistoryScreen` + `Stream`.
 2. Each snapshot = **history lines** + **display lines** (one top-to-bottom list).
-3. Compare to **previous** full list: find **new** lines only (anchors + segment diff + “similar line” filter so spinners/status lines do not spam).
+3. Compare to **previous** full list: find **new** lines only (patience/histogram anchors + segment diff + "similar line" filter so spinners/status lines do not spam).
 4. Emit chunks to subscribers on **idle** (~2s) or **max wait** (~5s); poll safety net every 5s.
 5. **Input:** `send()` appends `\r` (not `\n`) so TUIs accept the line.
 
@@ -141,10 +74,22 @@ Tunables near top of `process.py`: idle interval, max wait, screen rows/history 
 
 ---
 
-## Live Telegram message (`bot/handlers.py`)
+## Screen capture pipeline (`sessions/screen.py`)
 
-- **`_LiveMessage`:** one message per “turn”, updated by `append()`; debounced edits (~1s) to respect rate limits; overflow opens a new message.
-- **Overlap trim:** new chunks may overlap the tail of what was already sent; a small overlap detector skips duplicate tail.
+1. `enumerate_windows()` via ctypes `EnumWindows` -- lists visible windows with titles.
+2. `ScreenCapture(hwnd)` grabs the window rect via `GetWindowRect`, captures with `mss.grab()`.
+3. Pillow converts to JPEG (quality 80, full resolution).
+4. Frames pushed to subscribers at `capture_interval` (default 0.5s).
+5. `_LivePhoto` in handlers sends first frame via `send_photo`, then edits via `editMessageMedia` (~1.5s interval).
+6. Pause/resume: `ScreenCapture.pause()` / `.resume()` -- capture loop sleeps when paused.
+7. Window gone: detected via `IsWindow()` -- auto-stops and notifies.
+
+---
+
+## Live Telegram messages (`bot/handlers.py`)
+
+- **`_LiveMessage`:** one text message per "turn", updated by `append()`; debounced edits (~1s); overflow opens a new message. Overlap trim skips duplicate tails.
+- **`_LivePhoto`:** one photo message per screen session, updated by `set_frame()`; debounced edits (~1.5s); latest frame wins, older dropped. Inline buttons for pause/resume/stop.
 
 ---
 
@@ -153,7 +98,7 @@ Tunables near top of `process.py`: idle interval, max wait, screen rows/history 
 1. Class in `backends/implementations.py` extending `CLIBackend` (`info`, optional `build_launch_cmd`, `startup_message`).
 2. Register instance in `backends/registry.py`.
 3. Add `tools.<key>` in `settings.json` (`startup_cmd`, `flags`, `env`, `session` if needed).
-4. Keep icon dicts in sync if you duplicate icons in `topic_manager.py`.
+4. Add icon to `BACKEND_ICONS` in `implementations.py`.
 
 Test: `/new <key> test`.
 
@@ -167,32 +112,21 @@ Test: `/new <key> test`.
 
 ---
 
-## Voice
-
-- OpenAI-compatible **STT** URL in `settings.json` → `voice.health` probes `/models` on startup and every 60s.
-- Voice messages in a topic → transcribe → same path as text to the session.
-
----
-
 ## Common problems
 
 | Symptom | What to check |
 |--------|----------------|
 | Bot silent | Token, group id, bot admin, Topics on |
-| “No session for thread” | `/new` again; store may be missing mapping |
+| "No session for thread" | `/new` again; store may be missing mapping |
 | CLI exits at once | Missing API key, wrong `startup_cmd`, binary not on PATH |
 | Stuck on prompt | User sends `/key enter` or `/key y` |
-| Garbled / noisy stream | TUI limitation; tune diff in `process.py` or use a non-interactive CLI mode if the tool supports it |
+| Garbled / noisy stream | TUI limitation; tune diff in `process.py` or use a non-interactive CLI mode |
 | `settings` change ignored | `/settings reload` or restart |
+| Screen capture black | Window may be minimized or on another virtual desktop |
+| Voice not working | Run `/voice`; start STT service, bot detects within 60s |
 
 ---
 
 ## Dependencies (see `requirements.txt`)
 
-Includes **python-telegram-bot**, **aiohttp**, **pyte**, **pywinpty** (Windows PTY). Install OS build tools if pywinpty fails to build.
-
----
-
-## Git
-
-`.gitignore` excludes `__pycache__/`, common `*.pyc` patterns, and `data/` (sessions, store, logs — do not commit secrets or local state).
+**python-telegram-bot**, **aiohttp**, **aiofiles**, **pyte**, **pywinpty** (Windows PTY), **mss** (screen capture), **Pillow** (JPEG encoding).
