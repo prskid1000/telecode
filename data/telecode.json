@@ -2,9 +2,10 @@
   "topics": {
     "8401193952": {
       "claude:research": 193,
-      "claude:default": 199,
-      "claude:work": 204,
-      "claude:glab-research": 215
+      "claude:glab-research": 215,
+      "claude:default": 248,
+      "claude:work": 264,
+      "powershell:default": 303
     }
   },
   "voice_prefs": {}
