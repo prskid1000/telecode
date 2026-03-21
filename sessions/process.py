@@ -291,7 +291,8 @@ def _similar(a: str, b: str) -> bool:
 
 
 def _diff_segment(
-    prev: list[str], curr: list[str], prev_k: list[str], curr_k: list[str]
+    prev: list[str], curr: list[str], prev_k: list[str], curr_k: list[str],
+    *, skip_filter: bool = False,
 ) -> list[str]:
     """SequenceMatcher on keys (Myers-class LCS via CPython); emit original lines."""
     if not prev:
@@ -304,15 +305,17 @@ def _diff_segment(
         if tag == "insert":
             new.extend(curr[j1:j2])
         elif tag == "replace":
-            old_chunk = prev[i1:i2]
-            # Pre-compute alnum set so exact matches skip expensive ratio()
-            old_alnum = {_alnum_strip(o) for o in old_chunk}
-            for line in curr[j1:j2]:
-                stripped = _alnum_strip(line)
-                if stripped in old_alnum:
-                    continue
-                if not any(_similar(line, old) for old in old_chunk):
-                    new.append(line)
+            if skip_filter:
+                new.extend(curr[j1:j2])
+            else:
+                old_chunk = prev[i1:i2]
+                old_alnum = {_alnum_strip(o) for o in old_chunk}
+                for line in curr[j1:j2]:
+                    stripped = _alnum_strip(line)
+                    if stripped in old_alnum:
+                        continue
+                    if not any(_similar(line, old) for old in old_chunk):
+                        new.append(line)
     return new
 
 
@@ -322,6 +325,8 @@ def _extract_new_lines_impl(
     prev_k: list[str],
     curr_k: list[str],
     depth: int,
+    *,
+    skip_filter: bool = False,
 ) -> list[str]:
     """Patience / histogram anchors + recurse + flat diff on small segments."""
     if not prev:
@@ -330,11 +335,11 @@ def _extract_new_lines_impl(
         return []
     total = len(prev) + len(curr)
     if depth >= _MAX_ANCHOR_DEPTH or total < _MIN_RECURSE_TOTAL:
-        return _diff_segment(prev, curr, prev_k, curr_k)
+        return _diff_segment(prev, curr, prev_k, curr_k, skip_filter=skip_filter)
 
     anchors = _choose_anchors(prev_k, curr_k)
     if len(anchors) < 2:
-        return _diff_segment(prev, curr, prev_k, curr_k)
+        return _diff_segment(prev, curr, prev_k, curr_k, skip_filter=skip_filter)
 
     out: list[str] = []
     p_lo, c_lo = 0, 0
@@ -346,6 +351,7 @@ def _extract_new_lines_impl(
                 prev_k[p_lo:p_hi],
                 curr_k[c_lo:c_hi],
                 depth + 1,
+                skip_filter=skip_filter,
             )
         )
         p_lo, c_lo = p_hi + 1, c_hi + 1
@@ -356,12 +362,13 @@ def _extract_new_lines_impl(
             prev_k[p_lo:],
             curr_k[c_lo:],
             depth + 1,
+            skip_filter=skip_filter,
         )
     )
     return out
 
 
-def _extract_new_lines(prev: list[str], curr: list[str]) -> list[str]:
+def _extract_new_lines(prev: list[str], curr: list[str], *, skip_filter: bool = False) -> list[str]:
     """Entry: build keys, run hybrid recursive diff."""
     if not prev:
         return list(curr)
@@ -369,7 +376,7 @@ def _extract_new_lines(prev: list[str], curr: list[str]) -> list[str]:
         return []
     prev_k = [_norm_key(x) for x in prev]
     curr_k = [_norm_key(x) for x in curr]
-    return _extract_new_lines_impl(prev, curr, prev_k, curr_k, depth=0)
+    return _extract_new_lines_impl(prev, curr, prev_k, curr_k, depth=0, skip_filter=skip_filter)
 
 
 class PTYProcess:
@@ -387,6 +394,7 @@ class PTYProcess:
         self._max_wait_handle: asyncio.TimerHandle | None = None
         self._streaming = False
         self._snapshotting = False
+        self._user_input_pending = False
 
         self._pty = None
         self._master_fd: int | None = None
@@ -446,6 +454,7 @@ class PTYProcess:
         """Write raw data to the PTY without appending a newline."""
         if not self.alive:
             raise RuntimeError("Process is not running")
+        self._user_input_pending = True
         if _IS_WIN:
             await self._loop.run_in_executor(None, self._pty.write, data)
         else:
@@ -513,7 +522,9 @@ class PTYProcess:
         self._snapshotting = True
         try:
             curr = _full_snapshot_lines(self._screen)
-            all_new = _extract_new_lines(self._last_full_lines, curr)
+            skip = self._user_input_pending
+            self._user_input_pending = False
+            all_new = _extract_new_lines(self._last_full_lines, curr, skip_filter=skip)
             self._last_full_lines = list(curr)
 
             if not all_new:
