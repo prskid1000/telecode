@@ -26,21 +26,37 @@ def enumerate_windows() -> list[tuple[int, str]]:
     import ctypes
     from ctypes import wintypes
 
+    # Define the callback type for EnumWindows
+    WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    # Set argtypes/restype so ctypes marshals the callback pointer and
+    # LPARAM correctly on 64-bit Windows (without this, the callback
+    # argument may be silently rejected or truncated).
+    user32 = ctypes.windll.user32
+    user32.EnumWindows.argtypes = [WNDENUMPROC, wintypes.LPARAM]
+    user32.EnumWindows.restype = wintypes.BOOL
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.IsWindowVisible.restype = wintypes.BOOL
+    user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+    user32.GetWindowTextLengthW.restype = ctypes.c_int
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetWindowTextW.restype = ctypes.c_int
+
     windows: list[tuple[int, str]] = []
 
-    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    @WNDENUMPROC
     def _cb(hwnd, _lparam):
-        if ctypes.windll.user32.IsWindowVisible(hwnd):
-            length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+        if user32.IsWindowVisible(hwnd):
+            length = user32.GetWindowTextLengthW(hwnd)
             if length > 0:
                 buf = ctypes.create_unicode_buffer(length + 1)
-                ctypes.windll.user32.GetWindowTextW(hwnd, buf, length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
                 title = buf.value.strip()
                 if title:
-                    windows.append((hwnd, title))
+                    windows.append((int(hwnd), title))
         return True
 
-    ctypes.windll.user32.EnumWindows(_cb, 0)
+    user32.EnumWindows(_cb, wintypes.LPARAM(0))
     return windows
 
 
