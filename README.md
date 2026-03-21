@@ -55,9 +55,16 @@ Edit `settings.json`:
     "bot_token": "your-token-here",
     "group_id": -100your-group-id,
     "allowed_user_ids": [your-user-id]
+  },
+  "paths": {
+    "sessions_dir": "./data/sessions",
+    "store_path": "./data/telecode.json",
+    "logs_dir": "./data/logs"
   }
 }
 ```
+
+PTY processes always start in the OS home directory.
 
 API keys can be set later from Telegram:
 
@@ -67,6 +74,8 @@ API keys can be set later from Telegram:
 ```
 
 Or edit `settings.json` directly under each tool's `env` block.
+
+Every key is described in **[Settings reference](#settings-reference)** below.
 
 ### 6. Run
 
@@ -212,6 +221,73 @@ Configure via `/settings voice stt url <url>` or edit `settings.json`.
 
 ---
 
+## Settings reference
+
+All options live in `settings.json`. To use a different file, set the environment variable **`TELECODE_SETTINGS`** to its full path before starting the bot.
+
+Changes from Telegram use `/settings set …` or tool/voice subcommands; they write the same JSON. After hand-editing the file, run **`/settings reload`** or restart the bot.
+
+### `telegram`
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `bot_token` | string | Token from @BotFather. |
+| `group_id` | number | Forum supergroup id (typically starts with `-100`). |
+| `allowed_user_ids` | array of numbers | Telegram user ids allowed to use the bot. If **empty**, any group member can use it (avoid in production). |
+
+### `paths`
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `sessions_dir` | string | Base directory for session data. |
+| `store_path` | string | JSON file for topic-session mapping and voice prefs. |
+| `logs_dir` | string | Directory for `telecode.log`. If omitted, defaults to `./data/logs`. |
+
+Relative paths are resolved from the process current working directory (usually the folder where you run `python main.py`).
+
+### `streaming`
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `interval_sec` | number | How often the live Telegram message is debounced/updated while output streams (seconds). |
+| `max_message_length` | number | Soft limit for a single Telegram message body before the bot continues in a new message (characters). |
+| `idle_timeout_sec` | number | If the user sends nothing for this many seconds, the session is stopped automatically. Set to **`0`** to disable. |
+
+### `voice.stt`
+
+OpenAI-compatible speech-to-text (`POST …/audio/transcriptions`).
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `enabled` | boolean | When true, the bot probes the STT URL and accepts voice messages in topics. |
+| `base_url` | string | API base (e.g. `http://localhost:6600/v1`) — no trailing slash required. |
+| `model` | string | Model name sent in the multipart form (e.g. `whisper-1`). |
+
+### `tools` and `tools.<key>`
+
+Each `<key>` matches `/new <key> …` (e.g. `claude`, `codex`, `shell`, `powershell`). You can add more keys after registering a backend in code.
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `startup_cmd` | array of strings | Command invoked in the PTY (program first, then fixed arguments). Must be non-empty for that tool to start. |
+| `flags` | array of strings | Extra CLI arguments appended after `startup_cmd` (global defaults for that tool). |
+| `env` | object (string → string) | Environment variables merged into the PTY process. Entries with **empty string values are omitted** and are not passed through. |
+| `session` | object (string → string) | Backend-specific options. **`claude` only:** if `resume_id` is non-empty, the launch command includes `--resume <id>`. Other backends ignore unknown keys. |
+
+### Dot paths for `/settings get` and `/settings set`
+
+Use the same nesting as JSON, with dots:
+
+- `telegram.bot_token`, `telegram.group_id`, `telegram.allowed_user_ids`
+- `paths.sessions_dir`, `paths.store_path`, `paths.logs_dir`
+- `streaming.interval_sec`, `streaming.max_message_length`, `streaming.idle_timeout_sec`
+- `voice.stt.enabled`, `voice.stt.base_url`, `voice.stt.model`
+- `tools.claude.startup_cmd`, `tools.claude.flags`, `tools.claude.env.ANTHROPIC_API_KEY`, `tools.claude.session.resume_id`, etc.
+
+Arrays and objects: `/settings set` expects JSON-shaped values where applicable (the bot parses values; complex edits are often easier in the file directly).
+
+---
+
 ## Adding a new CLI tool
 
 1. Add a class in `backends/implementations.py`
@@ -219,6 +295,12 @@ Configure via `/settings voice stt url <url>` or edit `settings.json`.
 3. Add config block in `settings.json` under `tools`
 
 See existing backends for the pattern. Test with `/new <key> test`.
+
+---
+
+## Git
+
+The repo includes a `.gitignore` that skips Python caches (`__pycache__/`, `*.pyc`) and the **`data/`** directory (sessions, `telecode.json` store, logs). Do not commit tokens, API keys, or local session data.
 
 ---
 

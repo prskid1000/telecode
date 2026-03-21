@@ -80,6 +80,11 @@ def store_path() -> str: return _raw["paths"]["store_path"]
 def logs_dir()     -> str: return _raw["paths"].get("logs_dir", "./data/logs")
 
 
+def pty_cwd() -> str:
+    """PTY working directory — always home directory."""
+    return str(Path.home())
+
+
 # ── Streaming ─────────────────────────────────────────────────────────────────
 def stream_interval() -> float: return float(_raw["streaming"]["interval_sec"])
 def max_msg_length()  -> int:   return int(_raw["streaming"]["max_message_length"])

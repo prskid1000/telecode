@@ -56,8 +56,10 @@ async def save_thread_id(user_id: int, session_key: str, thread_id: int) -> None
 async def delete_thread_id(user_id: int, session_key: str) -> None:
     async with _lock:
         data = _load()
-        data["topics"].get(str(user_id), {}).pop(session_key, None)
-        _save(data)
+        user_topics = data["topics"].get(str(user_id), {})
+        if session_key in user_topics:
+            user_topics.pop(session_key)
+            _save(data)
 
 
 async def list_thread_ids(user_id: int) -> list[dict]:

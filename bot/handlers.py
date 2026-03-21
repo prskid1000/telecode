@@ -221,6 +221,10 @@ async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     args = ctx.args or []
     if args:
         key = args[0]
+        # Clean up live message before killing session
+        session = _mgr(ctx).get_session(user_id, key)
+        if session and session.thread_id:
+            await cleanup_live_message(session.thread_id)
         killed = await _mgr(ctx).kill_session(user_id, key)
         if killed:
             await close_topic(ctx.bot, user_id, key)
@@ -228,6 +232,10 @@ async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         else:
             await update.message.reply_text(f"No session {key}.")
     else:
+        # Clean up live messages for all user sessions
+        for s in _mgr(ctx).user_sessions(user_id).values():
+            if s.thread_id:
+                await cleanup_live_message(s.thread_id)
         n = await _mgr(ctx).kill_all_sessions(user_id)
         if n:
             await update.message.reply_text(f"Stopped all {n} session(s).")
@@ -682,6 +690,13 @@ async def _send_output(bot, chat_id: int, thread_id: int, text: str) -> None:
         lm = _LiveMessage(bot, chat_id, thread_id)
         _live_messages[thread_id] = lm
     lm.append(text)
+
+
+async def cleanup_live_message(thread_id: int) -> None:
+    """Finalize and remove a live message for a stopped session."""
+    lm = _live_messages.pop(thread_id, None)
+    if lm:
+        await lm.finalize()
 
 
 def _session_for_thread(update: Update, ctx: ContextTypes.DEFAULT_TYPE):

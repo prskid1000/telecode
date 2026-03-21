@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -69,7 +68,7 @@ class SessionManager:
         async with self._lock:
             await self._kill_one_locked(user_id, session_key)
 
-            workdir = self._ensure_workdir(user_id, session_key)
+            workdir = self._ensure_workdir()
             process = PTYProcess(
                 cmd=backend.build_launch_cmd(params),
                 cwd=workdir,
@@ -143,11 +142,15 @@ class SessionManager:
     # ── Internal ──────────────────────────────────────────────────────────────
 
     async def _kill_one_locked(self, user_id: int, session_key: str) -> bool:
-        session = self._sessions.get(user_id, {}).pop(session_key, None)
+        user_map = self._sessions.get(user_id, {})
+        session = user_map.pop(session_key, None)
         if session:
             if session._idle_task and not session._idle_task.done():
                 session._idle_task.cancel()
             await session.process.stop()
+            # Clean up empty user dict to prevent unbounded growth
+            if not user_map and user_id in self._sessions:
+                del self._sessions[user_id]
             return True
         return False
 
@@ -157,11 +160,8 @@ class SessionManager:
             raise RuntimeError(f"No session '{session_key}'. Use /new to start one.")
         return s
 
-    def _ensure_workdir(self, user_id: int, session_key: str) -> str:
-        sub  = session_key.replace(":", os.sep)
-        path = os.path.join(config.sessions_dir(), str(user_id), sub)
-        os.makedirs(path, exist_ok=True)
-        return path
+    def _ensure_workdir(self) -> str:
+        return config.pty_cwd()
 
     async def _idle_watcher(self, user_id: int, session_key: str) -> None:
         try:
@@ -171,7 +171,10 @@ class SessionManager:
                 if session is None:
                     break
                 if session.is_idle(config.idle_timeout()):
-                    await self.kill_session(user_id, session_key)
+                    # Acquire lock explicitly instead of going through kill_session()
+                    # to avoid fragile re-entrant lock acquisition patterns
+                    async with self._lock:
+                        await self._kill_one_locked(user_id, session_key)
                     break
         except asyncio.CancelledError:
             return
