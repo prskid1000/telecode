@@ -1,0 +1,7 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local sessions, store, logs (see settings.json paths)
+data/
