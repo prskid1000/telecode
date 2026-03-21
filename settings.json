@@ -59,6 +59,16 @@
       "flags": [],
       "env": {},
       "session": {}
+    },
+    "powershell": {
+      "startup_cmd": [
+        "powershell.exe",
+        "-NoProfile",
+        "-NoLogo"
+      ],
+      "flags": [],
+      "env": {},
+      "session": {}
     }
   }
 }

@@ -1,19 +1,21 @@
 """
 Concrete CLI backends — startup_cmd and flags come from settings.json.
 
-Backend  Icon  Tool
-───────  ────  ───────────────────────────────────
-claude   🟣    Anthropic Claude Code
-codex    🟢    OpenAI Codex CLI
-shell    🐚    Raw terminal
+Backend     Icon  Tool
+──────────  ────  ───────────────────────────────────
+claude      🟣    Anthropic Claude Code
+codex       🟢    OpenAI Codex CLI
+shell       🐚    Bash terminal
+powershell  🔷    PowerShell terminal
 """
 from .base import CLIBackend, BackendInfo, BackendParams
 import config
 
 BACKEND_ICONS: dict[str, str] = {
-    "claude": "🟣",
-    "codex":  "🟢",
-    "shell":  "🐚",
+    "claude":     "🟣",
+    "codex":      "🟢",
+    "shell":      "🐚",
+    "powershell": "🔷",
 }
 
 
@@ -64,14 +66,31 @@ class ShellBackend(CLIBackend):
     @property
     def info(self) -> BackendInfo:
         return BackendInfo(
-            key="shell", name="Terminal",
-            description="Direct shell access",
+            key="shell", name="Bash",
+            description="Bash terminal",
             base_cmd=config.tool_startup_cmd("shell"),
             default_flags=[],
         )
 
     def startup_message(self) -> str:
         return (
-            "🐚 <b>Terminal</b> — Ready\n\n"
+            "🐚 <b>Bash</b> — Ready\n\n"
+            "Type any command to run it."
+        )
+
+
+class PowerShellBackend(CLIBackend):
+    @property
+    def info(self) -> BackendInfo:
+        return BackendInfo(
+            key="powershell", name="PowerShell",
+            description="PowerShell terminal",
+            base_cmd=config.tool_startup_cmd("powershell"),
+            default_flags=[],
+        )
+
+    def startup_message(self) -> str:
+        return (
+            "🔷 <b>PowerShell</b> — Ready\n\n"
             "Type any command to run it."
         )

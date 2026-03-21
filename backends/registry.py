@@ -1,5 +1,5 @@
 from .base import CLIBackend
-from .implementations import ClaudeCodeBackend, CodexBackend, ShellBackend
+from .implementations import ClaudeCodeBackend, CodexBackend, ShellBackend, PowerShellBackend
 
 _REGISTRY: dict[str, CLIBackend] = {
     b.info.key: b
@@ -7,6 +7,7 @@ _REGISTRY: dict[str, CLIBackend] = {
         ClaudeCodeBackend(),
         CodexBackend(),
         ShellBackend(),
+        PowerShellBackend(),
     ]
 }
 
