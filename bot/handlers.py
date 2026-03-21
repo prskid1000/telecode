@@ -4,7 +4,9 @@ import asyncio
 import logging
 from html import escape as _esc
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
+import io
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, InputMediaPhoto
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, TelegramError
 from telegram.ext import ContextTypes
@@ -13,6 +15,7 @@ import config
 from backends.registry import get_backend, all_backends
 from backends.params import load_params
 from sessions.manager import SessionManager
+from sessions.screen import ScreenCapture, enumerate_windows
 from bot.topic_manager import get_or_create_topic, invalidate_topic, close_topic
 from bot.settings_handler import handle_settings
 from voice.health import get_status as voice_status, probe
@@ -130,6 +133,8 @@ BOT_COMMANDS = [
     BotCommand("new", "Start a named session"),
     BotCommand("stop", "Stop a session"),
     BotCommand("key", "Send key (e.g. /key enter, /key ctrl c)"),
+    BotCommand("pause", "Pause screen capture"),
+    BotCommand("resume", "Resume screen capture"),
     BotCommand("voice", "Voice settings"),
     BotCommand("settings", "Configuration"),
     BotCommand("help", "List commands"),
@@ -193,6 +198,10 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "/key ctrl c, /key alt x, /key f5\n"
         "/key home, /key end, /key pgup, /key pgdn\n"
         "/key space, /key backspace, /key delete\n\n"
+        "<b>Screen capture</b>\n"
+        "/new screen [name] - Capture a window\n"
+        "/pause - Pause screen capture\n"
+        "/resume - Resume screen capture\n\n"
         "<b>Other</b>\n"
         "/voice - Voice settings\n"
         "/settings - Configuration\n"
@@ -361,6 +370,32 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         except Exception:
             pass
 
+    elif data.startswith("scr:"):
+        # Window picker callback: scr:{session_name}:{hwnd}
+        parts = data.split(":", 2)
+        if len(parts) == 3:
+            session_name, hwnd_str = parts[1], parts[2]
+            try:
+                hwnd = int(hwnd_str)
+            except ValueError:
+                return
+            await q.edit_message_text("Starting screen capture\u2026")
+            await _start_screen_session(ctx, user_id, session_name, hwnd)
+
+    elif data.startswith("scr_pause:"):
+        session_key = data.split(":", 1)[1]
+        if _mgr(ctx).pause_session(user_id, session_key):
+            await q.edit_message_reply_markup(
+                _screen_controls_kb(session_key, paused=True)
+            )
+
+    elif data.startswith("scr_resume:"):
+        session_key = data.split(":", 1)[1]
+        if _mgr(ctx).resume_session(user_id, session_key):
+            await q.edit_message_reply_markup(
+                _screen_controls_kb(session_key, paused=False)
+            )
+
     elif data.startswith("toggle:"):
         side  = data.split(":", 1)[1]
         if side != "stt":
@@ -395,6 +430,11 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     if not session.process.alive:
         await update.message.reply_text("Process stopped. Use /new to restart.")
+        return
+
+    # Screen sessions are view-only
+    if isinstance(session.process, ScreenCapture):
+        await update.message.reply_text("Screen sessions are view-only. Use /pause or /resume.")
         return
 
     thread_id = update.message.message_thread_id
@@ -489,6 +529,12 @@ async def _start_session(update, ctx, backend_key: str, session_name: str) -> No
         keys = ", ".join(b.info.key for b in all_backends())
         await update.message.reply_text(f"Unknown: {backend_key}. Available: {keys}")
         return
+
+    # Screen capture: show window picker instead of starting immediately
+    if backend_key == "screen":
+        await _show_window_picker(update, session_name)
+        return
+
     await update.message.reply_text(f"Starting {backend.info.name}\u2026")
     await _start_session_core(ctx, update.effective_user.id, backend_key, session_name)
 
@@ -697,6 +743,194 @@ async def cleanup_live_message(thread_id: int) -> None:
     lm = _live_messages.pop(thread_id, None)
     if lm:
         await lm.finalize()
+
+
+# ── Screen capture — window picker, live photo, pause/resume ──────────────────
+
+_PHOTO_SEND_INTERVAL = 1.5  # seconds between editMessageMedia calls
+
+
+def _screen_controls_kb(session_key: str, paused: bool) -> InlineKeyboardMarkup:
+    if paused:
+        return InlineKeyboardMarkup([[
+            InlineKeyboardButton("\u25b6 Resume", callback_data=f"scr_resume:{session_key}"),
+            InlineKeyboardButton("\u23f9 Stop", callback_data=f"stop:{session_key}"),
+        ]])
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("\u23f8 Pause", callback_data=f"scr_pause:{session_key}"),
+        InlineKeyboardButton("\u23f9 Stop", callback_data=f"stop:{session_key}"),
+    ]])
+
+
+async def _show_window_picker(update: Update, session_name: str) -> None:
+    """Enumerate visible windows and present an inline keyboard for selection."""
+    windows = enumerate_windows()
+    if not windows:
+        await update.message.reply_text("No visible windows found.")
+        return
+
+    rows = []
+    for hwnd, title in windows[:20]:  # top 20 to fit Telegram limits
+        label = title[:40] + "\u2026" if len(title) > 40 else title
+        cb_data = f"scr:{session_name}:{hwnd}"
+        if len(cb_data) <= 64:
+            rows.append([InlineKeyboardButton(label, callback_data=cb_data)])
+
+    await update.message.reply_text(
+        "Pick a window to capture:",
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+
+
+async def _start_screen_session(ctx, user_id: int, session_name: str, hwnd: int) -> None:
+    """Create a topic and start a ScreenCapture session."""
+    backend = get_backend("screen")
+    session_key = f"screen:{session_name}"
+    thread_id = await get_or_create_topic(ctx.bot, user_id, session_key)
+
+    async def _do_start(tid: int) -> None:
+        bot = ctx.bot
+        chat_id = config.telegram_group_id()
+
+        lp = _LivePhoto(bot, chat_id, tid, session_key)
+        _live_photos[tid] = lp
+
+        def on_frame(jpeg_bytes: bytes) -> None:
+            if not jpeg_bytes:
+                # Empty = window gone
+                asyncio.ensure_future(
+                    bot.send_message(
+                        chat_id=chat_id, message_thread_id=tid,
+                        text="Window closed.",
+                    )
+                )
+                return
+            lp.set_frame(jpeg_bytes)
+
+        await _mgr(ctx).start_screen_session(
+            user_id=user_id, session_key=session_key, backend=backend,
+            hwnd=hwnd, output_callback=on_frame, thread_id=tid,
+        )
+        await bot.send_message(
+            chat_id=chat_id, message_thread_id=tid,
+            text="Capturing\u2026 Use /pause, /resume, or /stop.",
+        )
+
+    try:
+        await _do_start(thread_id)
+    except BadRequest as exc:
+        if "thread not found" not in str(exc).lower():
+            raise
+        await invalidate_topic(user_id, session_key)
+        await _mgr(ctx).kill_session(user_id, session_key)
+        thread_id = await get_or_create_topic(ctx.bot, user_id, session_key)
+        await _do_start(thread_id)
+
+
+class _LivePhoto:
+    """Streams JPEG frames as an edited photo message in a topic."""
+
+    def __init__(self, bot, chat_id: int, thread_id: int, session_key: str):
+        self.bot = bot
+        self.chat_id = chat_id
+        self.thread_id = thread_id
+        self.session_key = session_key
+        self.msg_id: int | None = None
+        self._pending_frame: bytes | None = None
+        self._edit_scheduled = False
+        self._edit_handle: asyncio.TimerHandle | None = None
+        self._loop = asyncio.get_event_loop()
+
+    def set_frame(self, jpeg_bytes: bytes) -> None:
+        """Buffer the latest frame; schedule a send if not already pending."""
+        self._pending_frame = jpeg_bytes
+        if not self._edit_scheduled:
+            self._edit_scheduled = True
+            self._edit_handle = self._loop.call_later(
+                _PHOTO_SEND_INTERVAL,
+                lambda: asyncio.ensure_future(self._do_send()),
+            )
+
+    async def _do_send(self) -> None:
+        self._edit_scheduled = False
+        frame = self._pending_frame
+        if not frame:
+            return
+        self._pending_frame = None
+
+        try:
+            if self.msg_id is None:
+                msg = await self.bot.send_photo(
+                    chat_id=self.chat_id,
+                    message_thread_id=self.thread_id,
+                    photo=io.BytesIO(frame),
+                    reply_markup=_screen_controls_kb(self.session_key, paused=False),
+                )
+                self.msg_id = msg.message_id
+            else:
+                await self.bot.edit_message_media(
+                    chat_id=self.chat_id,
+                    message_id=self.msg_id,
+                    media=InputMediaPhoto(media=io.BytesIO(frame)),
+                    reply_markup=_screen_controls_kb(self.session_key, paused=False),
+                )
+        except BadRequest as e:
+            if "message to edit not found" in str(e).lower():
+                self.msg_id = None  # will re-send next frame
+            else:
+                log.warning("LivePhoto send failed: %s", e)
+        except TelegramError as e:
+            log.warning("LivePhoto send failed: %s", e)
+
+    async def finalize(self) -> None:
+        if self._edit_handle:
+            self._edit_handle.cancel()
+        self._edit_scheduled = False
+
+
+# One LivePhoto per screen-capture thread
+_live_photos: dict[int, _LivePhoto] = {}
+
+
+async def cmd_pause(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _auth(update, ctx):
+        return
+    session = _session_for_thread(update, ctx)
+    if not session or not isinstance(session.process, ScreenCapture):
+        await update.message.reply_text("No screen capture in this thread.")
+        return
+    _mgr(ctx).pause_session(update.effective_user.id, session.session_key)
+    await update.message.reply_text("\u23f8 Paused. /resume to continue.")
+    # Update button state on the photo
+    lp = _live_photos.get(update.message.message_thread_id)
+    if lp and lp.msg_id:
+        try:
+            await ctx.bot.edit_message_reply_markup(
+                chat_id=lp.chat_id, message_id=lp.msg_id,
+                reply_markup=_screen_controls_kb(session.session_key, paused=True),
+            )
+        except TelegramError:
+            pass
+
+
+async def cmd_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _auth(update, ctx):
+        return
+    session = _session_for_thread(update, ctx)
+    if not session or not isinstance(session.process, ScreenCapture):
+        await update.message.reply_text("No screen capture in this thread.")
+        return
+    _mgr(ctx).resume_session(update.effective_user.id, session.session_key)
+    await update.message.reply_text("\u25b6 Resumed.")
+    lp = _live_photos.get(update.message.message_thread_id)
+    if lp and lp.msg_id:
+        try:
+            await ctx.bot.edit_message_reply_markup(
+                chat_id=lp.chat_id, message_id=lp.msg_id,
+                reply_markup=_screen_controls_kb(session.session_key, paused=False),
+            )
+        except TelegramError:
+            pass
 
 
 def _session_for_thread(update: Update, ctx: ContextTypes.DEFAULT_TYPE):

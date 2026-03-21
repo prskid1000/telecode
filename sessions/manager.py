@@ -1,8 +1,8 @@
 """
-Multi-session manager — one PTYProcess per (user_id, session_key).
+Multi-session manager — one process per (user_id, session_key).
 
 session_key format:  "{backend_key}:{name}"
-  e.g.  "claude:work", "codex:research", "shell:logs"
+  e.g.  "claude:work", "codex:research", "shell:logs", "screen:myapp"
 
 _sessions[user_id][session_key] = Session
 """
@@ -12,13 +12,14 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable
 
 import config
 
 log = logging.getLogger("telecode.manager")
 from backends.base import CLIBackend, BackendParams
 from sessions.process import PTYProcess
+from sessions.screen import ScreenCapture
 
 
 @dataclass
@@ -27,7 +28,7 @@ class Session:
     session_key: str
     backend:     CLIBackend
     params:      BackendParams
-    process:     PTYProcess
+    process:     Any  # PTYProcess | ScreenCapture (duck-typed: alive, start, stop, subscribe)
     workdir:     str
     thread_id:   int | None   = None
     turn_count:  int           = 0
@@ -94,6 +95,57 @@ class SessionManager:
                 )
 
             return session
+
+    async def start_screen_session(
+        self,
+        user_id:          int,
+        session_key:      str,
+        backend:          CLIBackend,
+        hwnd:             int,
+        output_callback:  Callable[[bytes], None],
+        thread_id:        int | None = None,
+        capture_interval: float = 0.5,
+    ) -> Session:
+        async with self._lock:
+            await self._kill_one_locked(user_id, session_key)
+
+            process = ScreenCapture(hwnd=hwnd, capture_interval=capture_interval)
+            process.subscribe(output_callback)
+            await process.start()
+
+            session = Session(
+                user_id=user_id,
+                session_key=session_key,
+                backend=backend,
+                params=BackendParams(),
+                process=process,
+                workdir=config.pty_cwd(),
+                thread_id=thread_id,
+            )
+            self._sessions.setdefault(user_id, {})[session_key] = session
+
+            if config.idle_timeout() > 0:
+                session._idle_task = asyncio.ensure_future(
+                    self._idle_watcher(user_id, session_key)
+                )
+
+            return session
+
+    def pause_session(self, user_id: int, session_key: str) -> bool:
+        session = self._sessions.get(user_id, {}).get(session_key)
+        if session and isinstance(session.process, ScreenCapture):
+            session.process.pause()
+            session.touch()
+            return True
+        return False
+
+    def resume_session(self, user_id: int, session_key: str) -> bool:
+        session = self._sessions.get(user_id, {}).get(session_key)
+        if session and isinstance(session.process, ScreenCapture):
+            session.process.resume()
+            session.touch()
+            return True
+        return False
 
     async def kill_session(self, user_id: int, session_key: str) -> bool:
         async with self._lock:
