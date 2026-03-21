@@ -22,8 +22,9 @@ from bot.handlers import (
 
 def _setup_logging() -> None:
     os.makedirs(config.logs_dir(), exist_ok=True)
-    stream_handler = logging.StreamHandler(sys.stdout)
-    stream_handler.setStream(open(sys.stdout.fileno(), mode='w', encoding='utf-8', closefd=False))
+    # Wrap stdout with UTF-8 encoding without closing the underlying fd
+    _utf8_stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', closefd=False)
+    stream_handler = logging.StreamHandler(_utf8_stdout)
     file_handler = logging.FileHandler(
         os.path.join(config.logs_dir(), "telecode.log"), encoding="utf-8"
     )
