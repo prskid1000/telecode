@@ -1,0 +1,64 @@
+{
+  "telegram": {
+    "bot_token": "....",
+    "group_id": -10037453455,
+    "allowed_user_ids": [
+      84011933342
+    ]
+  },
+  "paths": {
+    "sessions_dir": "./data/sessions",
+    "store_path": "./data/telecode.json",
+    "logs_dir": "./data/logs"
+  },
+  "streaming": {
+    "interval_sec": 0.8,
+    "max_message_length": 3800,
+    "idle_timeout_sec": 1800
+  },
+  "voice": {
+    "stt": {
+      "enabled": true,
+      "base_url": "http://localhost:6600/v1",
+      "model": "whisper-1"
+    }
+  },
+  "tools": {
+    "claude": {
+      "startup_cmd": [
+        "claude"
+      ],
+      "flags": [
+        "--dangerously-skip-permissions"
+      ],
+      "env": {
+        "ANTHROPIC_API_KEY": "",
+        "ANTHROPIC_BASE_URL": ""
+      },
+      "session": {
+        "resume_id": ""
+      }
+    },
+    "codex": {
+      "startup_cmd": [
+        "codex"
+      ],
+      "flags": [],
+      "env": {
+        "OPENAI_API_KEY": "",
+        "OPENAI_BASE_URL": ""
+      },
+      "session": {}
+    },
+    "shell": {
+      "startup_cmd": [
+        "bash",
+        "--norc",
+        "--noprofile"
+      ],
+      "flags": [],
+      "env": {},
+      "session": {}
+    }
+  }
+}
