@@ -1,25 +1,41 @@
 """Async PTY process — cross-platform (Unix openpty / Windows ConPTY via pywinpty).
 
-Uses pyte virtual terminal for proper screen rendering.  Output diffing uses
-two layers:
+Uses pyte virtual terminal for proper screen rendering.  Each snapshot is one
+ordered list: **history + display** (same idea as tmux ``capture-pane -S -`` /
+WezTerm ``get_lines_as_text`` — one scrollback document, not two independent
+streams).
 
-  1. **History** (scrolled-off content) is always stable — we simply track
-     how many lines we've already emitted.
-  2. **Display** (visible screen) is diffed line-by-line with
-     `difflib.SequenceMatcher`.  'insert' = new lines → emit.
-     'replace' = modified lines → emit only if NOT similar to the old line
-     (similarity is measured by stripping non-alphanumeric chars and comparing
-     with SequenceMatcher ratio, so spinner/timer changes are ignored).
-     'equal' and 'delete' → skip.
+Rendering pipeline (**hybrid diff**, informed by patience / histogram / Heckel
+ideas and terminal scrollback-as-document practice — see ``docs/terminal-rendering-research.md``):
 
-This avoids the old character-level prefix-match problem where a single
-spinner-character change caused the entire screen to be re-sent.
+1. **Unified snapshot** — one list ``history + display`` (tmux / WezTerm model).
+2. **Patience anchors** — keys unique on *both* sides (Bram Cohen); LIS on right
+   indices = non-crossing backbone (Git ``--patience``).
+3. **Histogram LIS** — if patience yields ``< 2`` anchors, collect ``(i, j)``
+   pairs whose key is *rare* (low ``occ(prev)+occ(curr)``), capped per line;
+   sort by ``(i, -j)`` then **LIS on ``j``** so at most one anchor per ``i`` and
+   no crossing matches.
+4. **Histogram greedy** — last resort if LIS still finds ``< 2`` anchors.
+5. **Recursive refinement** — split at anchors, recurse into each segment (max
+   depth) so locally-unique lines inside a hunk also anchor (local patience).
+6. **Segment diff** — ``difflib.SequenceMatcher`` on normalized keys (Myers-class
+   LCS used inside CPython’s matcher); emit originals; ``_similar`` skips TUI-only
+   replaces.
+
+AST diff (GumTree) / OT / CRDT are **not** used here — they apply to structured
+documents, not raw terminal lines.  Rabin–Karp / bsdiff are optional future
+optimizations for speed or binary transcripts.
+
+For Claude Code, best fidelity remains **``--print`` / ``stream-json``** (no TUI).
 """
 import asyncio
+import bisect
 import difflib
 import logging
 import os
 import sys
+import unicodedata
+from collections import Counter, defaultdict
 from typing import Callable
 
 import pyte
@@ -71,6 +87,179 @@ def _display_lines(screen: pyte.HistoryScreen) -> list[str]:
     return lines
 
 
+def _full_snapshot_lines(screen: pyte.HistoryScreen) -> list[str]:
+    """Ordered terminal content: scrollback first, then visible screen (no gap)."""
+    return _history_lines(screen) + _display_lines(screen)
+
+
+def _norm_key(line: str) -> str:
+    """Stable key for *alignment only* (WezTerm-style plain-text extraction idea).
+
+    NFKC normalizes compatibility glyphs (full-width digits, ligatures).
+    Whitespace collapse avoids spurious diffs when the TUI reflows padding.
+    Original strings are still emitted to Telegram.
+    """
+    s = unicodedata.normalize("NFKC", line)
+    return " ".join(s.split())
+
+
+def _lis_indices(seq: list[int]) -> list[int]:
+    """Indices into *seq* forming one longest strictly increasing subsequence."""
+    if not seq:
+        return []
+    tails: list[int] = []
+    tail_at: list[int] = []  # index in seq for value at tails[k]
+    prev: list[int] = [-1] * len(seq)
+    for idx, x in enumerate(seq):
+        pos = bisect.bisect_left(tails, x)
+        if pos == len(tails):
+            tails.append(x)
+            tail_at.append(idx)
+        else:
+            tails[pos] = x
+            tail_at[pos] = idx
+        prev[idx] = tail_at[pos - 1] if pos > 0 else -1
+    out: list[int] = []
+    cur = tail_at[-1]
+    while cur >= 0:
+        out.append(cur)
+        cur = prev[cur]
+    out.reverse()
+    return out
+
+
+def _patience_anchor_indices(prev_k: list[str], curr_k: list[str]) -> list[tuple[int, int]]:
+    """Pairs of indices that patience-diff would lock (unique matching lines).
+
+    Classic patience diff (Bram Cohen): lines that appear exactly once on each
+    side are anchor candidates; LIS on right-hand indices keeps monotonic order
+    so SequenceMatcher does not “cross” stable lines in repetitive TUIs.
+    """
+    if not prev_k or not curr_k:
+        return []
+    pc, cc = Counter(prev_k), Counter(curr_k)
+    curr_once = {k: j for j, k in enumerate(curr_k) if cc[k] == 1}
+    pairs: list[tuple[int, int]] = [
+        (i, curr_once[k])
+        for i, k in enumerate(prev_k)
+        if pc[k] == 1 and k in curr_once
+    ]
+    pairs.sort(key=lambda t: t[0])
+    if len(pairs) <= 1:
+        return pairs
+    js = [p[1] for p in pairs]
+    keep = _lis_indices(js)
+    return [pairs[k] for k in keep]
+
+
+# Recursive split: local patience inside large hunks (terminal bursts are bursty).
+_MAX_ANCHOR_DEPTH = 4
+_MIN_RECURSE_TOTAL = 96  # prev+curr line count; below this, flat segment diff only
+
+# Histogram LIS: rare keys only; cap work — terminal snapshots can be huge.
+_HIST_LIS_MAX_OCC_SUM = 18
+_HIST_LIS_MAX_PAIRS = 40_000
+_HIST_LIS_MAX_J_PER_I = 12
+
+
+def _histogram_lis_anchors(
+    prev_k: list[str],
+    curr_k: list[str],
+    *,
+    max_occ_sum: int = _HIST_LIS_MAX_OCC_SUM,
+    max_pairs: int = _HIST_LIS_MAX_PAIRS,
+    max_j_per_i: int = _HIST_LIS_MAX_J_PER_I,
+) -> list[tuple[int, int]]:
+    """Rare-key (i, j) pairs, then LIS on j with sort (i, -j).
+
+    Same *i* can match several *j* (duplicate lines on the right).  Sorting by
+    ``i`` ascending and ``j`` descending groups those; LIS on the ``j``
+    sequence then keeps **at most one** pair per ``i`` and enforces a non-crossing
+    increasing match in ``j``.
+    """
+    if not prev_k or not curr_k:
+        return []
+    pc, cc = Counter(prev_k), Counter(curr_k)
+    curr_by_k: dict[str, list[int]] = defaultdict(list)
+    for j, k in enumerate(curr_k):
+        curr_by_k[k].append(j)
+
+    pairs: list[tuple[int, int]] = []
+    for i, k in enumerate(prev_k):
+        if k not in curr_by_k:
+            continue
+        if pc[k] + cc[k] > max_occ_sum:
+            continue
+        for j in curr_by_k[k][:max_j_per_i]:
+            pairs.append((i, j))
+            if len(pairs) >= max_pairs:
+                break
+        if len(pairs) >= max_pairs:
+            break
+
+    if len(pairs) < 2:
+        return []
+
+    pairs.sort(key=lambda t: (t[0], -t[1]))
+    js = [p[1] for p in pairs]
+    keep = _lis_indices(js)
+    return [pairs[idx] for idx in keep]
+
+
+def _histogram_greedy_anchors(
+    prev_k: list[str], curr_k: list[str], max_occ_sum: int = 14
+) -> list[tuple[int, int]]:
+    """Low-frequency keys first, then forward monotone (i, j) pairs.
+
+    Mirrors the *idea* of histogram diff (prefer matches on rare lines) without
+    a full JGit port.  When patience finds no unique lines globally, rare keys
+    still cut the diff into smaller pieces.
+    """
+    if not prev_k or not curr_k:
+        return []
+    pc, cc = Counter(prev_k), Counter(curr_k)
+    common = set(prev_k) & set(curr_k)
+    if not common:
+        return []
+    keys_ranked = sorted(common, key=lambda k: (pc[k] + cc[k], k))
+    anchors: list[tuple[int, int]] = []
+    last_i, last_j = -1, -1
+    for k in keys_ranked:
+        if pc[k] + cc[k] > max_occ_sum:
+            break
+        i_found = None
+        for i in range(last_i + 1, len(prev_k)):
+            if prev_k[i] == k:
+                i_found = i
+                break
+        if i_found is None:
+            continue
+        j_found = None
+        for j in range(last_j + 1, len(curr_k)):
+            if curr_k[j] == k:
+                j_found = j
+                break
+        if j_found is None:
+            continue
+        anchors.append((i_found, j_found))
+        last_i, last_j = i_found, j_found
+    return anchors
+
+
+def _choose_anchors(prev_k: list[str], curr_k: list[str]) -> list[tuple[int, int]]:
+    """Patience → histogram LIS on rare pairs → histogram greedy."""
+    pa = _patience_anchor_indices(prev_k, curr_k)
+    if len(pa) >= 2:
+        return pa
+    hl = _histogram_lis_anchors(prev_k, curr_k)
+    if len(hl) >= 2:
+        return hl
+    hg = _histogram_greedy_anchors(prev_k, curr_k)
+    if len(hg) >= 2:
+        return hg
+    return pa if pa else (hl if hl else hg)
+
+
 def _similar(a: str, b: str) -> bool:
     """Two lines are 'the same' if their alphanumeric content mostly matches.
 
@@ -87,20 +276,15 @@ def _similar(a: str, b: str) -> bool:
     return difflib.SequenceMatcher(None, a_alnum, b_alnum).ratio() > 0.7
 
 
-def _extract_new_lines(prev: list[str], curr: list[str]) -> list[str]:
-    """Line-level diff — return only genuinely new lines in *curr* vs *prev*.
-
-    Uses SequenceMatcher to align the two line-lists, then:
-      'insert'  — brand-new lines               → always emit
-      'replace' — emit only lines NOT similar to any old line they replaced
-      'equal'   — unchanged                      → skip
-      'delete'  — removed from screen            → skip
-    """
+def _diff_segment(
+    prev: list[str], curr: list[str], prev_k: list[str], curr_k: list[str]
+) -> list[str]:
+    """SequenceMatcher on keys (Myers-class LCS via CPython); emit original lines."""
     if not prev:
         return list(curr)
     if not curr:
         return []
-    sm = difflib.SequenceMatcher(None, prev, curr, autojunk=False)
+    sm = difflib.SequenceMatcher(None, prev_k, curr_k, autojunk=False)
     new: list[str] = []
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == "insert":
@@ -113,6 +297,62 @@ def _extract_new_lines(prev: list[str], curr: list[str]) -> list[str]:
     return new
 
 
+def _extract_new_lines_impl(
+    prev: list[str],
+    curr: list[str],
+    prev_k: list[str],
+    curr_k: list[str],
+    depth: int,
+) -> list[str]:
+    """Patience / histogram anchors + recurse + flat diff on small segments."""
+    if not prev:
+        return list(curr)
+    if not curr:
+        return []
+    total = len(prev) + len(curr)
+    if depth >= _MAX_ANCHOR_DEPTH or total < _MIN_RECURSE_TOTAL:
+        return _diff_segment(prev, curr, prev_k, curr_k)
+
+    anchors = _choose_anchors(prev_k, curr_k)
+    if len(anchors) < 2:
+        return _diff_segment(prev, curr, prev_k, curr_k)
+
+    out: list[str] = []
+    p_lo, c_lo = 0, 0
+    for p_hi, c_hi in anchors:
+        out.extend(
+            _extract_new_lines_impl(
+                prev[p_lo:p_hi],
+                curr[c_lo:c_hi],
+                prev_k[p_lo:p_hi],
+                curr_k[c_lo:c_hi],
+                depth + 1,
+            )
+        )
+        p_lo, c_lo = p_hi + 1, c_hi + 1
+    out.extend(
+        _extract_new_lines_impl(
+            prev[p_lo:],
+            curr[c_lo:],
+            prev_k[p_lo:],
+            curr_k[c_lo:],
+            depth + 1,
+        )
+    )
+    return out
+
+
+def _extract_new_lines(prev: list[str], curr: list[str]) -> list[str]:
+    """Entry: build keys, run hybrid recursive diff."""
+    if not prev:
+        return list(curr)
+    if not curr:
+        return []
+    prev_k = [_norm_key(x) for x in prev]
+    curr_k = [_norm_key(x) for x in curr]
+    return _extract_new_lines_impl(prev, curr, prev_k, curr_k, depth=0)
+
+
 class PTYProcess:
     def __init__(self, cmd: list[str], cwd: str, extra_env: dict[str, str] | None = None):
         self.cmd       = cmd
@@ -123,8 +363,7 @@ class PTYProcess:
 
         self._screen = pyte.HistoryScreen(_COLS, _ROWS, _HISTORY)
         self._stream = pyte.Stream(self._screen)
-        self._last_history_len = 0
-        self._last_display: list[str] = []
+        self._last_full_lines: list[str] = []
         self._idle_handle: asyncio.TimerHandle | None = None
         self._max_wait_handle: asyncio.TimerHandle | None = None
         self._streaming = False
@@ -248,18 +487,11 @@ class PTYProcess:
         self._do_snapshot()
 
     def _do_snapshot(self) -> None:
-        """Two-layer snapshot: history (stable) + display (diffed line-by-line)."""
-        # Layer 1 — history: content scrolled off screen is always stable
-        history = _history_lines(self._screen)
-        new_history = history[self._last_history_len:]
-        self._last_history_len = len(history)
+        """Diff full terminal text (history + display) as one ordered stream."""
+        curr = _full_snapshot_lines(self._screen)
+        all_new = _extract_new_lines(self._last_full_lines, curr)
+        self._last_full_lines = list(curr)
 
-        # Layer 2 — display: line-level diff with similarity matching
-        display = _display_lines(self._screen)
-        new_display = _extract_new_lines(self._last_display, display)
-        self._last_display = display
-
-        all_new = new_history + new_display
         if not all_new:
             return
 
