@@ -19,21 +19,33 @@ User message (topic thread)
 Screen image capture:
     /new screen -> window picker (inline keyboard)
     -> user picks window -> ScreenCapture(hwnd) starts
-    -> PrintWindow(hwnd) -> JPEG -> subscribers
-    -> _LivePhoto.set_frame -> send_photo (new message each frame, every 3s)
+    -> capture_window(hwnd) -> JPEG -> subscribers
+    -> _LivePhoto.set_frame -> send_photo (interval = 60/rate_limits.image)
 
 Screen video capture:
     /new video -> window picker (inline keyboard)
     -> user picks window -> VideoCapture(hwnd) starts
-    -> PrintWindow(hwnd) -> JPEG frames saved to temp dir (3fps)
+    -> capture_window(hwnd) -> JPEG frames saved to temp dir (3fps)
     -> every 60s: ffmpeg encodes frames -> MP4 -> send_video
     -> repeats until /stop
 ```
 
 - **Session key:** `{backend}:{name}` -- colon is the separator; do not use colons in names.
+- **Session naming:** auto-numbered (`claude-1`, `claude-2`) when no name given. Screen/video sessions use the window title.
 - **Routing:** only `message_thread_id` -> session. No other routing.
 - **Persistence:** `store.py` JSON file -- topic id per `(user_id, session_key)`; voice prefs.
 - **PTY working directory:** always `Path.home()`, resolved via `config.pty_cwd()`.
+
+---
+
+## Cost-based rate limiting
+
+Every active session has a cost in msgs/min (from `settings.json`):
+- **Tools:** `tools.<key>.rate` (e.g. claude=5, shell=3)
+- **Image:** `rate_limits.image` (e.g. 4 → sends every 15s)
+- **Video:** `rate_limits.video` (e.g. 1 → one chunk/min)
+
+Total cost must stay within `rate_limits.budget_per_min` (Telegram's 20 msgs/min per-chat limit). New sessions are blocked when budget is exhausted. The `/start` picker only shows backends that fit within remaining budget.
 
 ---
 
@@ -46,9 +58,9 @@ Screen video capture:
 | `main.py` | App startup, handlers, `set_my_commands`, voice probe loop |
 | `store.py` | Topics + voice prefs JSON |
 | `sessions/process.py` | PTY + pyte + snapshot diff + timers |
-| `sessions/screen.py` | Image capture (PrintWindow/mss), video recording (ffmpeg), window enumeration |
+| `sessions/screen.py` | Image capture, video recording, window enumeration |
 | `sessions/manager.py` | Start/kill sessions, send, send_raw, interrupt, pause/resume |
-| `bot/handlers.py` | Commands, callbacks, `_LiveMessage`, `_LivePhoto`, `/key` |
+| `bot/handlers.py` | Commands, callbacks, `_LiveMessage`, `_LivePhoto`, cost tracking |
 | `bot/topic_manager.py` | Create/reuse forum topics |
 | `bot/settings_handler.py` | `/settings` parsing |
 | `backends/implementations.py` | `GenericCLIBackend` (data-driven) + Screen, Video (non-PTY) |
@@ -83,17 +95,17 @@ Tunables near top of `process.py`: idle interval, max wait, screen rows/history 
 
 ## Screen image capture pipeline (`sessions/screen.py`)
 
-1. `enumerate_windows()` -- platform-specific: Win32 `EnumWindows`, Linux `wmctrl`/`xdotool`, macOS `CGWindowListCopyWindowInfo`.
+1. `enumerate_windows()` -- platform-specific window enumeration. Windows uses `EnumWindows` + `DwmGetWindowAttribute(DWMWA_CLOAKED)` to list only taskbar windows (no skip lists). Linux uses `wmctrl`/`xdotool`. macOS uses `CGWindowListCopyWindowInfo`.
 2. `ScreenCapture(hwnd)` captures the window via `capture_window(hwnd)`.
-3. `capture_window()` auto-restores minimized windows, then uses platform-specific capture:
+3. `capture_window()` acquires a per-hwnd lock, auto-restores minimized windows, then uses platform-specific capture:
    - **Windows**: `PrintWindow` API (z-order independent, captures even behind other windows).
    - **Linux**: ImageMagick `import -window`, falls back to `mss` region capture.
    - **macOS**: `screencapture -l<wid>`, falls back to `mss` region capture.
 4. Pillow encodes to JPEG (quality 80, full resolution).
-5. Frames pushed to subscribers at `capture_interval` (default 3s).
-6. `_LivePhoto` in handlers sends each frame as a **new photo message** (not editing).
+5. Frames pushed to subscribers at `capture_interval` (`60 / rate_limits.image` seconds).
+6. `_LivePhoto` sends each frame as a **new photo message**. Send interval = `60 / rate_limits.image` seconds.
 7. Pause: drops frames in `set_frame()` and cancels pending send timers.
-8. Window gone: detected via `is_window_valid()` -- auto-stops and notifies.
+8. Window gone: capture returns None → auto-stops and notifies.
 9. **Session 0** (Windows service): spawns helper process in user's session via `WTSQueryUserToken` + `CreateProcessAsUser`.
 
 ---
@@ -114,7 +126,7 @@ Tunables near top of `process.py`: idle interval, max wait, screen rows/history 
 ## Live Telegram messages (`bot/handlers.py`)
 
 - **`_LiveMessage`:** one text message per "turn", updated by `append()`; debounced edits (~1s); overflow opens a new message. Overlap trim skips duplicate tails.
-- **`_LivePhoto`:** sends each frame as a **new photo message** (not editing). Debounced at `SCREEN_CAPTURE_INTERVAL` (3s). Drops frames while paused. Inline buttons for pause/resume/stop.
+- **`_LivePhoto`:** sends each frame as a **new photo message**. Send interval derived from `rate_limits.image` config. Drops frames while paused. Inline buttons for pause/resume/stop.
 
 ---
 
@@ -126,6 +138,7 @@ Just add a `tools.<key>` entry in `settings.json`:
 "my-tool": {
   "name": "My Tool",
   "icon": "🔧",
+  "rate": 5,
   "startup_cmd": ["my-tool"],
   "flags": ["--some-flag"],
   "env": { "API_KEY": "..." },
@@ -134,7 +147,7 @@ Just add a `tools.<key>` entry in `settings.json`:
 ```
 
 The registry auto-creates a `GenericCLIBackend` for any key that isn't a special non-PTY backend (`screen`, `video`).
-`name` and `icon` are optional — defaults to title-cased key and 🔧.
+`name`, `icon`, and `rate` are optional — defaults to title-cased key, 🔧, and 5 msgs/min.
 No code changes needed.
 
 Test: `/settings reload` then `/new <key> test`.
@@ -162,6 +175,7 @@ Test: `/settings reload` then `/new <key> test`.
 | Screen capture blank | Window may be on another virtual desktop; minimized windows are auto-restored |
 | Video encoding fails | Ensure ffmpeg is on PATH; check logs for ffmpeg stderr |
 | Voice not working | Run `/voice`; start STT service, bot detects within 60s |
+| Rate limit hit | Too many sessions — stop some or increase `budget_per_min` |
 
 ---
 
