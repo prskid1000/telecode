@@ -15,7 +15,7 @@ import config
 from backends.registry import get_backend, all_backends
 from backends.params import load_params
 from sessions.manager import SessionManager
-from sessions.screen import ScreenCapture, VideoCapture, enumerate_windows
+from sessions.screen import ScreenCapture, VideoCapture, enumerate_windows, get_window_title
 from bot.topic_manager import get_or_create_topic, invalidate_topic, close_topic
 from bot.settings_handler import handle_settings
 from voice.health import get_status as voice_status, probe
@@ -145,6 +145,21 @@ def _mgr(ctx: ContextTypes.DEFAULT_TYPE) -> SessionManager:
     return ctx.bot_data["session_manager"]
 
 
+def _next_session_name() -> str:
+    """Generate a short unique session id (5 hex chars)."""
+    import secrets
+    return secrets.token_hex(3)[:5]
+
+
+async def _kill_and_cleanup(ctx: ContextTypes.DEFAULT_TYPE, user_id: int, session_key: str) -> bool:
+    """Kill a session and update cost tracking."""
+    session = _mgr(ctx).get_session(user_id, session_key)
+    if session and session.thread_id:
+        _live_photos.pop(session.thread_id, None)
+    _unregister_cost(session_key)
+    return await _mgr(ctx).kill_session(user_id, session_key)
+
+
 def _is_allowed(user_id: int) -> bool:
     allowed = config.allowed_user_ids()
     return not allowed or user_id in allowed
@@ -160,8 +175,13 @@ async def _auth(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
 def _picker_kb() -> InlineKeyboardMarkup:
     rows = []
     for b in all_backends():
+        if _can_afford(b.info.key):
+            rows.append([InlineKeyboardButton(
+                b.info.name, callback_data=f"new_session:{b.info.key}",
+            )])
+    if not rows:
         rows.append([InlineKeyboardButton(
-            b.info.name, callback_data=f"new_session:{b.info.key}",
+            "Stop a session first", callback_data="noop",
         )])
     return InlineKeyboardMarkup(rows)
 
@@ -221,7 +241,9 @@ async def cmd_new(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             reply_markup=_picker_kb(),
         )
         return
-    await _start_session(update, ctx, args[0].lower(), args[1] if len(args) > 1 else "default")
+    backend_key = args[0].lower()
+    session_name = args[1] if len(args) > 1 else _next_session_name()
+    await _start_session(update, ctx, backend_key, session_name)
 
 
 async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -235,17 +257,19 @@ async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         session = _mgr(ctx).get_session(user_id, key)
         if session and session.thread_id:
             await cleanup_live_message(session.thread_id)
-        killed = await _mgr(ctx).kill_session(user_id, key)
+        killed = await _kill_and_cleanup(ctx, user_id, key)
         if killed:
             await close_topic(ctx.bot, user_id, key)
             await update.message.reply_text(f"Stopped {key}.")
         else:
             await update.message.reply_text(f"No session {key}.")
     else:
-        # Clean up live messages for all user sessions
+        # Clean up live messages and cost tracking for all user sessions
         for s in _mgr(ctx).user_sessions(user_id).values():
             if s.thread_id:
                 await cleanup_live_message(s.thread_id)
+                _live_photos.pop(s.thread_id, None)
+            _unregister_cost(s.session_key)
         n = await _mgr(ctx).kill_all_sessions(user_id)
         if n:
             await update.message.reply_text(f"Stopped all {n} session(s).")
@@ -343,10 +367,22 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
 
     await q.answer()
 
+    if data == "noop":
+        return
+
     if data.startswith("new_session:"):
         backend_key = data.split(":", 1)[1]
         backend = get_backend(backend_key)
         name = backend.info.name if backend else backend_key
+
+        if not _can_afford(backend_key):
+            try:
+                await q.edit_message_text(
+                    "Too many active sessions. Stop a session first."
+                )
+            except TelegramError:
+                pass
+            return
 
         # Screen/video capture: show window picker instead of starting immediately
         if backend_key in ("screen", "video"):
@@ -361,7 +397,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
             rows = []
             for hwnd, title in windows[:20]:
                 label = title[:40] + "\u2026" if len(title) > 40 else title
-                cb_data = f"{cb_prefix}:default:{hwnd}"
+                cb_data = f"{cb_prefix}:auto:{hwnd}"
                 if len(cb_data) <= 64:
                     rows.append([InlineKeyboardButton(label, callback_data=cb_data)])
             prompt = ("Pick a window to capture:" if backend_key == "screen"
@@ -375,12 +411,13 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
                 log.warning("Failed to show window picker: %s", e)
             return
 
+        session_name = _next_session_name()
         await q.edit_message_text(f"Starting {_esc(name)}\u2026", parse_mode=ParseMode.HTML)
-        await _start_session_core(ctx, user_id, backend_key, "default")
+        await _start_session_core(ctx, user_id, backend_key, session_name)
 
     elif data.startswith("stop:"):
         session_key = data.split(":", 1)[1]
-        await _mgr(ctx).kill_session(user_id, session_key)
+        await _kill_and_cleanup(ctx, user_id, session_key)
         await close_topic(ctx.bot, user_id, session_key)
         try:
             await q.edit_message_text("Session stopped.")
@@ -578,6 +615,12 @@ async def _start_session(update, ctx, backend_key: str, session_name: str) -> No
         await update.message.reply_text(f"Unknown: {backend_key}. Available: {keys}")
         return
 
+    if not _can_afford(backend_key):
+        await update.message.reply_text(
+            "Too many active sessions. Stop a session first."
+        )
+        return
+
     # Screen/video capture: show window picker instead of starting immediately
     if backend_key in ("screen", "video"):
         cb_prefix = "scr" if backend_key == "screen" else "vid"
@@ -591,6 +634,7 @@ async def _start_session(update, ctx, backend_key: str, session_name: str) -> No
 async def _start_session_core(ctx, user_id: int, backend_key: str, session_name: str) -> None:
     backend     = get_backend(backend_key)
     session_key = f"{backend_key}:{session_name}"
+    _register_cost(session_key)
     thread_id   = await get_or_create_topic(ctx.bot, user_id, session_key)
     params      = load_params(backend_key)
 
@@ -619,7 +663,7 @@ async def _start_session_core(ctx, user_id: int, backend_key: str, session_name:
         if "thread not found" not in str(exc).lower():
             raise
         await invalidate_topic(user_id, session_key)
-        await _mgr(ctx).kill_session(user_id, session_key)
+        await _kill_and_cleanup(ctx, user_id, session_key)
         thread_id = await get_or_create_topic(ctx.bot, user_id, session_key)
         await _do_start(thread_id)
 
@@ -796,7 +840,45 @@ async def cleanup_live_message(thread_id: int) -> None:
 
 # ── Screen capture — window picker, live photo, pause/resume ──────────────────
 
-SCREEN_CAPTURE_INTERVAL = 3.0  # seconds between captures AND photo sends
+# ── Cost-based rate limiting ─────────────────────────────────────────────────
+# Every active session has a cost (msgs/min) from settings.json.
+#   - Tools: tools.<key>.rate  (e.g. claude=5, shell=3)
+#   - Image: rate_limits.image (e.g. 4 → 15s interval)
+#   - Video: rate_limits.video (e.g. 1 → 60s chunks)
+# Total cost must stay within rate_limits.budget_per_min (Telegram limit).
+# New sessions are blocked when budget is exhausted.
+
+_active_costs: dict[str, float] = {}  # session_key -> cost (msgs/min)
+
+
+def _session_cost(session_key: str) -> float:
+    """Look up cost for a session key."""
+    backend_key = session_key.split(":")[0]
+    if backend_key == "screen":
+        return config.rate_cost_image()
+    if backend_key == "video":
+        return config.rate_cost_video()
+    return config.tool_rate(backend_key)
+
+
+def _current_cost() -> float:
+    return sum(_active_costs.values())
+
+
+def _available_budget() -> float:
+    return max(config.rate_budget() - _current_cost(), 0.0)
+
+
+def _can_afford(backend_key: str) -> bool:
+    return _session_cost(f"{backend_key}:x") <= _available_budget()
+
+
+def _register_cost(session_key: str) -> None:
+    _active_costs[session_key] = _session_cost(session_key)
+
+
+def _unregister_cost(session_key: str) -> None:
+    _active_costs.pop(session_key, None)
 
 
 def _screen_controls_kb(session_key: str, paused: bool) -> InlineKeyboardMarkup:
@@ -835,7 +917,17 @@ async def _show_window_picker(update: Update, session_name: str, cb_prefix: str 
 async def _start_screen_session(ctx, user_id: int, session_name: str, hwnd: int) -> None:
     """Create a topic and start a ScreenCapture session."""
     backend = get_backend("screen")
+    # Use window title as session name when user didn't provide one
+    if session_name in ("default", "auto"):
+        win_title = get_window_title(hwnd)
+        if win_title:
+            clean = win_title.strip().replace(":", "-")[:60]
+            if clean:
+                session_name = clean
+        if session_name in ("default", "auto"):
+            session_name = _next_session_name()
     session_key = f"screen:{session_name}"
+    _register_cost(session_key)
     thread_id = await get_or_create_topic(ctx.bot, user_id, session_key)
 
     async def _do_start(tid: int) -> None:
@@ -865,6 +957,7 @@ async def _start_screen_session(ctx, user_id: int, session_name: str, hwnd: int)
         session = await _mgr(ctx).start_screen_session(
             user_id=user_id, session_key=session_key, backend=backend,
             hwnd=hwnd, output_callback=on_frame, thread_id=tid,
+            capture_interval=60.0 / max(config.rate_cost_image(), 0.5),
         )
         lp.process = session.process
         await bot.send_message(
@@ -878,7 +971,7 @@ async def _start_screen_session(ctx, user_id: int, session_name: str, hwnd: int)
         if "thread not found" not in str(exc).lower():
             raise
         await invalidate_topic(user_id, session_key)
-        await _mgr(ctx).kill_session(user_id, session_key)
+        await _kill_and_cleanup(ctx, user_id, session_key)
         thread_id = await get_or_create_topic(ctx.bot, user_id, session_key)
         await _do_start(thread_id)
 
@@ -886,7 +979,17 @@ async def _start_screen_session(ctx, user_id: int, session_name: str, hwnd: int)
 async def _start_video_session(ctx, user_id: int, session_name: str, hwnd: int) -> None:
     """Create a topic and start a VideoCapture (1-min recording)."""
     backend = get_backend("video")
+    # Use window title as session name when user didn't provide one
+    if session_name in ("default", "auto"):
+        win_title = get_window_title(hwnd)
+        if win_title:
+            clean = win_title.strip().replace(":", "-")[:60]
+            if clean:
+                session_name = clean
+        if session_name in ("default", "auto"):
+            session_name = _next_session_name()
     session_key = f"video:{session_name}"
+    _register_cost(session_key)
     thread_id = await get_or_create_topic(ctx.bot, user_id, session_key)
 
     async def _do_start(tid: int) -> None:
@@ -933,7 +1036,7 @@ async def _start_video_session(ctx, user_id: int, session_name: str, hwnd: int) 
         if "thread not found" not in str(exc).lower():
             raise
         await invalidate_topic(user_id, session_key)
-        await _mgr(ctx).kill_session(user_id, session_key)
+        await _kill_and_cleanup(ctx, user_id, session_key)
         thread_id = await get_or_create_topic(ctx.bot, user_id, session_key)
         await _do_start(thread_id)
 
@@ -960,7 +1063,7 @@ class _LivePhoto:
         if not self._send_scheduled:
             self._send_scheduled = True
             self._send_handle = self._loop.call_later(
-                SCREEN_CAPTURE_INTERVAL,
+                60.0 / max(config.rate_cost_image(), 0.5),
                 lambda: asyncio.ensure_future(self._do_send()),
             )
 

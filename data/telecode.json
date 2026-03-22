@@ -5,9 +5,17 @@
       "claude:glab-research": 215,
       "claude:work": 264,
       "powershell:default": 303,
-      "claude:default": 596,
-      "video:default": 679,
-      "screen:default": 723
+      "claude-local:default": 749,
+      "screen:New tab": 875,
+      "screen:\u2733 Claude Code": 883,
+      "screen:default": 949,
+      "screen:New tab - Personal - Microsoft\u200b Edge": 959,
+      "video:auto": 1058,
+      "video:\u2733 Claude Code": 1060,
+      "video:video-1": 1066,
+      "claude:default": 1074,
+      "screen:\u2810 Claude Code": 1079,
+      "codex-local:codex-local-1": 1083
     }
   },
   "voice_prefs": {}

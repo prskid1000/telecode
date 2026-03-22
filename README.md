@@ -90,7 +90,7 @@ Send `/start` in the group, or `/new claude work`.
 
 ### Screen image capture
 
-Capture any window and stream screenshots (one new photo every 3s) to a topic:
+Capture any window and stream screenshots to a topic (interval = `60 / rate_limits.image` seconds):
 
 ```
 /new screen myapp
@@ -201,6 +201,18 @@ PTY processes always start in the OS home directory.
 | `base_url` | string | OpenAI-compatible STT endpoint |
 | `model` | string | Model name (e.g. `whisper-1`) |
 
+### `rate_limits`
+
+Cost-based rate limiting to stay within Telegram's 20 msgs/min per-chat limit.
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `budget_per_min` | number | Max messages/min to the chat (default 20) |
+| `image` | number | Cost (msgs/min) per image capture session |
+| `video` | number | Cost (msgs/min) per video capture session |
+
+Image capture interval = `60 / image` seconds. The `/start` picker hides backends that would exceed the budget.
+
 ### `tools.<key>`
 
 Each key under `tools` becomes a backend available via `/new <key>`. Add any tool — no code changes needed.
@@ -209,6 +221,7 @@ Each key under `tools` becomes a backend available via `/new <key>`. Add any too
 |-----|------|-------------|
 | `name` | string | Display name (optional — defaults to title-cased key) |
 | `icon` | string | Emoji icon (optional — defaults to 🔧) |
+| `rate` | number | Cost in msgs/min for rate limiting (default 5) |
 | `startup_cmd` | array | Command to run in the PTY |
 | `flags` | array | Extra CLI arguments |
 | `env` | object | Environment variables (empty values are omitted) |
