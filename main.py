@@ -19,7 +19,7 @@ from bot.handlers import (
     handle_callback, handle_text, handle_voice_msg, handle_document,
     BOT_COMMANDS,
 )
-from bot.rate import set_session_manager, start_stale_topic_checker
+from bot.rate import set_session_manager
 
 
 def _setup_logging() -> None:
@@ -52,7 +52,6 @@ async def _post_init(app) -> None:
     vs = await probe()
     log.info("Voice: STT=%s", "OK" if vs.stt_available else "unavailable")
     app.bot_data["_probe_task"] = asyncio.ensure_future(probe_loop(60))
-    app.bot_data["_stale_check_task"] = await start_stale_topic_checker(app.bot)
 
 
 async def _post_shutdown(app) -> None:

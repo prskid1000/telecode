@@ -20,13 +20,13 @@ Screen image capture:
     /new screen -> window picker (inline keyboard)
     -> user picks window -> ScreenCapture(hwnd) starts
     -> capture_window(hwnd) -> JPEG -> subscribers
-    -> _FrameSender.set_frame -> send_photo (interval = 60/rate_limits.image)
+    -> _FrameSender.set_frame -> send_photo (interval = capture.image_interval)
 
 Screen video capture:
     /new video -> window picker (inline keyboard)
     -> user picks window -> VideoCapture(hwnd) starts
     -> capture_window(hwnd) -> JPEG frames saved to temp dir (3fps)
-    -> every 60s: ffmpeg encodes frames -> MP4 -> send_video
+    -> every capture.video_interval seconds: ffmpeg encodes frames -> MP4 -> send_video
     -> repeats until /stop
 ```
 
@@ -38,20 +38,20 @@ Screen video capture:
 
 ---
 
-## Cost-based rate limiting
+## Session cleanup
 
-Every active session has a cost in msgs/min (from `settings.json`):
-- **Tools:** `tools.<key>.rate` (e.g. claude=5, shell=3)
-- **Image:** `rate_limits.image` (e.g. 4 → sends every 15s)
-- **Video:** `rate_limits.video` (e.g. 1 → one chunk/min)
+**Two cleanup levels:**
+- **Fast cleanup** (`cleanup_stale_sessions`): runs on every picker click. Checks `process.alive` and removes dead sessions. No API calls.
+- **Full cleanup** (`full_cleanup`): runs on `/start` only. Probes each session's topic via `sendMessage`+`deleteMessage` to detect externally deleted topics. Safe because `/start` is infrequent.
 
-Total cost must stay within `rate_limits.budget_per_min` (Telegram's 20 msgs/min per-chat limit). New sessions are blocked when budget is exhausted. Budget is enforced in **every** session start path:
-- `/start` picker (hides backends that don't fit)
-- `/new` command
-- Window picker callbacks (`scr:`, `vid:`) when user picks a window for screen/video capture
-- `restart:` callback when restarting a stopped session
+**Topic deleted externally:** detected in two ways:
+1. On `/start`: `full_cleanup` probes topics and detects "thread not found".
+2. On output send: `_LiveMessage`, `_FrameSender`, and video callbacks detect "thread not found" and call `handle_topic_gone()`.
 
-**Topic deleted externally:** if a user deletes or closes a topic in Telegram, the next send attempt detects "thread not found", triggers `_handle_topic_gone(thread_id)` which kills the session, frees the budget cost, removes the stale thread_id from the store, and cleans up `_live_messages`/`_frame_senders`. This is handled in `_LiveMessage`, `_FrameSender`, and video/screen send callbacks.
+**`/stop` behavior:**
+- `/stop` in a session topic: stops only that session.
+- `/stop` in General (no args): stops all sessions.
+- `/stop <name>`: stops a specific session by name/key.
 
 ---
 
@@ -61,13 +61,13 @@ Total cost must stay within `rate_limits.budget_per_min` (Telegram's 20 msgs/min
 |------|------|
 | `settings.json` | Only config source |
 | `config.py` | Read/write accessors (must be **functions** for hot-reload) |
-| `main.py` | App startup, handlers, `set_my_commands`, voice probe loop |
+| `main.py` | App startup, handlers, `set_my_commands`, voice probe loop (no background stale checker) |
 | `store.py` | Topics + voice prefs JSON |
 | `sessions/process.py` | PTY + pyte + snapshot diff + timers |
 | `sessions/screen.py` | Image capture, video recording, window enumeration |
 | `sessions/manager.py` | Start/kill sessions, send, send_raw, interrupt, pause/resume |
 | `bot/handlers.py` | Commands, callbacks, `_LiveMessage`, `_FrameSender` |
-| `bot/rate.py` | Cost-based rate limiting, stale topic checker, budget enforcement |
+| `bot/rate.py` | Stale session cleanup, topic probing, topic-gone detection |
 | `bot/topic_manager.py` | Create/reuse forum topics |
 | `bot/settings_handler.py` | `/settings` parsing |
 | `backends/implementations.py` | `GenericCLIBackend` (data-driven) + Screen, Video (non-PTY) |
@@ -109,8 +109,8 @@ Tunables near top of `process.py`: idle interval, max wait, screen rows/history 
    - **Linux**: ImageMagick `import -window`, falls back to `mss` region capture.
    - **macOS**: `screencapture -l<wid>`, falls back to `mss` region capture.
 4. Pillow encodes to JPEG (quality 80, full resolution).
-5. Frames pushed to subscribers at `capture_interval` (`60 / rate_limits.image` seconds).
-6. `_FrameSender` sends each frame as a **new photo message**. Send interval = `60 / rate_limits.image` seconds.
+5. Frames pushed to subscribers at `capture.image_interval` seconds (default 15).
+6. `_FrameSender` sends each frame as a **new photo message**. Send interval = `capture.image_interval` seconds.
 7. Pause: drops frames in `set_frame()` and cancels pending send timers.
 8. Window gone: capture returns None → auto-stops and notifies.
 9. **Session 0** (Windows service): spawns helper process in user's session via `WTSQueryUserToken` + `CreateProcessAsUser`.
@@ -119,9 +119,9 @@ Tunables near top of `process.py`: idle interval, max wait, screen rows/history 
 
 ## Screen video capture pipeline (`sessions/screen.py`)
 
-1. `VideoCapture(hwnd, duration=60, fps=3)` records continuously in 1-minute chunks.
+1. `VideoCapture(hwnd, duration=capture.video_interval, fps=3)` records continuously in chunks.
 2. Each chunk: captures frames via `capture_window()` at 3fps, saves as numbered JPEGs in a temp dir.
-3. After 60s, encodes with ffmpeg: `libx264 -preset ultrafast -crf 32 -pix_fmt yuv420p`.
+3. After `capture.video_interval` seconds (default 60), encodes with ffmpeg: `libx264 -preset ultrafast -crf 32 -pix_fmt yuv420p`.
 4. `scale=trunc(iw/2)*2:trunc(ih/2)*2` filter ensures even dimensions for libx264.
 5. Sends encoded MP4 via `send_video`, then starts the next chunk.
 6. Continues until `/stop`. On stop, encodes and sends any remaining frames.
@@ -133,7 +133,7 @@ Tunables near top of `process.py`: idle interval, max wait, screen rows/history 
 ## Live Telegram messages (`bot/handlers.py`)
 
 - **`_LiveMessage`:** one text message per "turn", updated by `append()`; debounced edits (~1s); overflow opens a new message. Overlap trim skips duplicate tails.
-- **`_FrameSender`:** sends each frame as a **new photo message**. Send interval derived from `rate_limits.image` config. Drops frames while paused. Inline buttons for pause/resume/stop.
+- **`_FrameSender`:** sends each frame as a **new photo message**. Send interval = `capture.image_interval`. Drops frames while paused. Inline buttons for pause/resume/stop.
 
 ---
 
@@ -145,7 +145,6 @@ Just add a `tools.<key>` entry in `settings.json`:
 "my-tool": {
   "name": "My Tool",
   "icon": "🔧",
-  "rate": 5,
   "startup_cmd": ["my-tool"],
   "flags": ["--some-flag"],
   "env": { "API_KEY": "..." },
@@ -154,7 +153,7 @@ Just add a `tools.<key>` entry in `settings.json`:
 ```
 
 The registry auto-creates a `GenericCLIBackend` for any key that isn't a special non-PTY backend (`screen`, `video`).
-`name`, `icon`, and `rate` are optional — defaults to title-cased key, 🔧, and 5 msgs/min.
+`name` and `icon` are optional — defaults to title-cased key and 🔧.
 No code changes needed.
 
 Test: `/settings reload` then `/new <key> test`.
@@ -182,7 +181,6 @@ Test: `/settings reload` then `/new <key> test`.
 | Screen capture blank | Window may be on another virtual desktop; minimized windows are auto-restored |
 | Video encoding fails | Ensure ffmpeg is on PATH; check logs for ffmpeg stderr |
 | Voice not working | Run `/voice`; start STT service, bot detects within 60s |
-| Rate limit hit | Too many sessions — stop some or increase `budget_per_min` |
 
 ---
 

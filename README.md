@@ -100,7 +100,7 @@ Send `/start` in the group, or `/new claude work`.
 |---|---|
 | `/start` | Choose a backend to start |
 | `/new <backend> [name]` | Start a named session (e.g. `/new claude work`) |
-| `/stop [session_key]` | Stop one or all sessions (e.g. `/stop claude:work`) |
+| `/stop [session_key]` | Stop current session, or all from General (e.g. `/stop claude:work`) |
 | `/key <key>` | Send a keyboard key to the terminal |
 | `/pause` | Pause image/video capture |
 | `/resume` | Resume image/video capture |
@@ -110,7 +110,7 @@ Send `/start` in the group, or `/new claude work`.
 
 ### Screen image capture
 
-Capture any window and stream screenshots to a topic (interval = `60 / rate_limits.image` seconds):
+Capture any window and stream screenshots to a topic (interval = `capture.image_interval` seconds, default 15):
 
 ```
 /new screen myapp
@@ -130,13 +130,13 @@ Minimized windows are automatically restored before capture.
 
 ### Screen video capture
 
-Record a window continuously in 1-minute video chunks:
+Record a window continuously in video chunks (length = `capture.video_interval` seconds, default 60):
 
 ```
 /new video myapp
 ```
 
-Pick a window from the list. The bot records at 3fps, encodes each 1-minute chunk with ffmpeg (libx264, ultrafast, lightweight), and sends it as a video message. Recording continues until stopped. Controls:
+Pick a window from the list. The bot records at 3fps, encodes each chunk with ffmpeg (libx264, ultrafast, lightweight), and sends it as a video message. Recording continues until stopped. Controls:
 
 - `/pause` / `/resume` -- pause/resume recording (paused time doesn't count)
 - `/stop video:myapp` -- stop recording (encodes and sends any remaining frames)
@@ -221,19 +221,12 @@ PTY processes always start in the OS home directory.
 | `base_url` | string | OpenAI-compatible STT endpoint |
 | `model` | string | Model name (e.g. `whisper-1`) |
 
-### `rate_limits`
-
-Cost-based rate limiting to stay within Telegram's 20 msgs/min per-chat limit.
+### `capture`
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `budget_per_min` | number | Max messages/min to the chat (default 20) |
-| `image` | number | Cost (msgs/min) per image capture session |
-| `video` | number | Cost (msgs/min) per video capture session |
-
-Image capture interval = `60 / image` seconds. CLI tool cost comes from `tools.<key>.rate`.
-
-Budget is enforced on every session start path: the `/start` picker, `/new` command, window picker callbacks (screen/video), and session restart. If the budget is exhausted, the bot replies "Too many active sessions. Stop a session first."
+| `image_interval` | number | Seconds between image capture sends (default 15) |
+| `video_interval` | number | Seconds per video chunk / recording length per segment (default 60) |
 
 ### `tools.<key>`
 
@@ -243,7 +236,6 @@ Each key under `tools` becomes a backend available via `/new <key>`. Add any too
 |-----|------|-------------|
 | `name` | string | Display name (optional — defaults to title-cased key) |
 | `icon` | string | Emoji icon (optional — defaults to 🔧) |
-| `rate` | number | Cost in msgs/min for rate limiting (default 5) |
 | `startup_cmd` | array | Command to run in the PTY |
 | `flags` | array | Extra CLI arguments |
 | `env` | object | Environment variables (empty values are omitted) |
