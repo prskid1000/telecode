@@ -19,6 +19,7 @@ from bot.handlers import (
     handle_callback, handle_text, handle_voice_msg, handle_document,
     BOT_COMMANDS,
 )
+from bot.rate import set_session_manager, start_stale_topic_checker
 
 
 def _setup_logging() -> None:
@@ -51,16 +52,18 @@ async def _post_init(app) -> None:
     vs = await probe()
     log.info("Voice: STT=%s", "OK" if vs.stt_available else "unavailable")
     app.bot_data["_probe_task"] = asyncio.ensure_future(probe_loop(60))
+    app.bot_data["_stale_check_task"] = await start_stale_topic_checker(app.bot)
 
 
 async def _post_shutdown(app) -> None:
-    task = app.bot_data.get("_probe_task")
-    if task and not task.done():
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+    for key in ("_probe_task", "_stale_check_task"):
+        task = app.bot_data.get(key)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 
 def main() -> None:
@@ -79,7 +82,9 @@ def main() -> None:
            .post_init(_post_init)
            .post_shutdown(_post_shutdown)
            .build())
-    app.bot_data["session_manager"] = SessionManager()
+    mgr = SessionManager()
+    app.bot_data["session_manager"] = mgr
+    set_session_manager(mgr)
 
     app.add_handler(CommandHandler("start",    cmd_start))
     app.add_handler(CommandHandler("help",     cmd_help))
