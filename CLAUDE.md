@@ -1,6 +1,6 @@
 # CLAUDE.md — Telecode developer guide
 
-Telecode is a **Telegram bot** that runs **CLI tools** (Claude Code, Codex, shell) inside a **pseudo-terminal**, reads their screen with **pyte**, and posts text to **forum topic** threads. It also supports **screen capture** of any window via mss. It does **not** call any AI API itself.
+Telecode is a **Telegram bot** that runs **CLI tools** (Claude Code, Codex, shell) inside a **pseudo-terminal**, reads their screen with **pyte**, and posts text to **forum topic** threads. It also supports **screen image capture** and **screen video recording** of any window. It does **not** call any AI API itself.
 
 User-facing docs (setup, commands, settings reference) are in [README.md](README.md).
 
@@ -16,11 +16,18 @@ User message (topic thread)
     -> pyte parses output -> snapshot -> diff vs last snapshot -> subscribers
     -> _send_output -> _LiveMessage.append -> editMessageText (<pre>, HTML)
 
-Screen capture:
+Screen image capture:
     /new screen -> window picker (inline keyboard)
     -> user picks window -> ScreenCapture(hwnd) starts
-    -> mss.grab(window_rect) -> JPEG -> subscribers
-    -> _LivePhoto.set_frame -> editMessageMedia (photo)
+    -> PrintWindow(hwnd) -> JPEG -> subscribers
+    -> _LivePhoto.set_frame -> send_photo (new message each frame, every 3s)
+
+Screen video capture:
+    /new video -> window picker (inline keyboard)
+    -> user picks window -> VideoCapture(hwnd) starts
+    -> PrintWindow(hwnd) -> JPEG frames saved to temp dir (3fps)
+    -> every 60s: ffmpeg encodes frames -> MP4 -> send_video
+    -> repeats until /stop
 ```
 
 - **Session key:** `{backend}:{name}` -- colon is the separator; do not use colons in names.
@@ -39,12 +46,12 @@ Screen capture:
 | `main.py` | App startup, handlers, `set_my_commands`, voice probe loop |
 | `store.py` | Topics + voice prefs JSON |
 | `sessions/process.py` | PTY + pyte + snapshot diff + timers |
-| `sessions/screen.py` | Screen capture (mss + Pillow), window enumeration (ctypes Win32) |
+| `sessions/screen.py` | Image capture (PrintWindow/mss), video recording (ffmpeg), window enumeration |
 | `sessions/manager.py` | Start/kill sessions, send, send_raw, interrupt, pause/resume |
 | `bot/handlers.py` | Commands, callbacks, `_LiveMessage`, `_LivePhoto`, `/key` |
 | `bot/topic_manager.py` | Create/reuse forum topics |
 | `bot/settings_handler.py` | `/settings` parsing |
-| `backends/implementations.py` | Claude, Codex, Shell, PowerShell, Screen backends |
+| `backends/implementations.py` | Claude, Codex, Shell, PowerShell, Screen, Video backends |
 | `backends/registry.py` | `get_backend`, `all_backends` |
 | `backends/params.py` | Load tool params from settings |
 | `voice/*` | STT health, prefs, transcribe |
@@ -56,7 +63,7 @@ Screen capture:
 1. **Config** -- only `settings.json`; no scattered env vars except `TELECODE_SETTINGS`.
 2. **`config.py`** -- always `config.foo()`, never cached module-level constants for values that can change.
 3. **Sessions** -- key format `backend:name`; routing by `thread_id` only.
-4. **Processes** -- real PTY (Unix `openpty`, Windows ConPTY via pywinpty), not plain pipes. Screen capture uses mss, not PTY.
+4. **Processes** -- real PTY (Unix `openpty`, Windows ConPTY via pywinpty), not plain pipes. Screen capture uses PrintWindow (Win) / screencapture (Mac) / import (Linux), not PTY.
 5. **Telegram** -- `ParseMode.HTML`; escape user/process text with `html.escape()` where needed.
 6. **No** in-bot AI and **no** separate "memory" layer -- CLIs own context.
 
@@ -74,22 +81,40 @@ Tunables near top of `process.py`: idle interval, max wait, screen rows/history 
 
 ---
 
-## Screen capture pipeline (`sessions/screen.py`)
+## Screen image capture pipeline (`sessions/screen.py`)
 
-1. `enumerate_windows()` via ctypes `EnumWindows` -- lists visible windows with titles.
-2. `ScreenCapture(hwnd)` grabs the window rect via `GetWindowRect`, captures with `mss.grab()`.
-3. Pillow converts to JPEG (quality 80, full resolution).
-4. Frames pushed to subscribers at `capture_interval` (default 0.5s).
-5. `_LivePhoto` in handlers sends first frame via `send_photo`, then edits via `editMessageMedia` (~1.5s interval).
-6. Pause/resume: `ScreenCapture.pause()` / `.resume()` -- capture loop sleeps when paused.
-7. Window gone: detected via `IsWindow()` -- auto-stops and notifies.
+1. `enumerate_windows()` -- platform-specific: Win32 `EnumWindows`, Linux `wmctrl`/`xdotool`, macOS `CGWindowListCopyWindowInfo`.
+2. `ScreenCapture(hwnd)` captures the window via `capture_window(hwnd)`.
+3. `capture_window()` auto-restores minimized windows, then uses platform-specific capture:
+   - **Windows**: `PrintWindow` API (z-order independent, captures even behind other windows).
+   - **Linux**: ImageMagick `import -window`, falls back to `mss` region capture.
+   - **macOS**: `screencapture -l<wid>`, falls back to `mss` region capture.
+4. Pillow encodes to JPEG (quality 80, full resolution).
+5. Frames pushed to subscribers at `capture_interval` (default 3s).
+6. `_LivePhoto` in handlers sends each frame as a **new photo message** (not editing).
+7. Pause: drops frames in `set_frame()` and cancels pending send timers.
+8. Window gone: detected via `is_window_valid()` -- auto-stops and notifies.
+9. **Session 0** (Windows service): spawns helper process in user's session via `WTSQueryUserToken` + `CreateProcessAsUser`.
+
+---
+
+## Screen video capture pipeline (`sessions/screen.py`)
+
+1. `VideoCapture(hwnd, duration=60, fps=3)` records continuously in 1-minute chunks.
+2. Each chunk: captures frames via `capture_window()` at 3fps, saves as numbered JPEGs in a temp dir.
+3. After 60s, encodes with ffmpeg: `libx264 -preset ultrafast -crf 32 -pix_fmt yuv420p`.
+4. `scale=trunc(iw/2)*2:trunc(ih/2)*2` filter ensures even dimensions for libx264.
+5. Sends encoded MP4 via `send_video`, then starts the next chunk.
+6. Continues until `/stop`. On stop, encodes and sends any remaining frames.
+7. Pause: recording loop sleeps, paused time doesn't count towards chunk duration.
+8. Minimized windows: auto-restored before each frame capture.
 
 ---
 
 ## Live Telegram messages (`bot/handlers.py`)
 
 - **`_LiveMessage`:** one text message per "turn", updated by `append()`; debounced edits (~1s); overflow opens a new message. Overlap trim skips duplicate tails.
-- **`_LivePhoto`:** one photo message per screen session, updated by `set_frame()`; debounced edits (~1.5s); latest frame wins, older dropped. Inline buttons for pause/resume/stop.
+- **`_LivePhoto`:** sends each frame as a **new photo message** (not editing). Debounced at `SCREEN_CAPTURE_INTERVAL` (3s). Drops frames while paused. Inline buttons for pause/resume/stop.
 
 ---
 
@@ -122,11 +147,12 @@ Test: `/new <key> test`.
 | Stuck on prompt | User sends `/key enter` or `/key y` |
 | Garbled / noisy stream | TUI limitation; tune diff in `process.py` or use a non-interactive CLI mode |
 | `settings` change ignored | `/settings reload` or restart |
-| Screen capture black | Window may be minimized or on another virtual desktop |
+| Screen capture blank | Window may be on another virtual desktop; minimized windows are auto-restored |
+| Video encoding fails | Ensure ffmpeg is on PATH; check logs for ffmpeg stderr |
 | Voice not working | Run `/voice`; start STT service, bot detects within 60s |
 
 ---
 
 ## Dependencies (see `requirements.txt`)
 
-**python-telegram-bot**, **aiohttp**, **aiofiles**, **pyte**, **pywinpty** (Windows PTY), **mss** (screen capture), **Pillow** (JPEG encoding).
+**python-telegram-bot**, **aiohttp**, **aiofiles**, **pyte**, **pywinpty** (Windows PTY), **mss** (fallback capture on Linux/Mac), **Pillow** (JPEG encoding), **pywin32** (Windows Session 0 support). ffmpeg must be on PATH for video recording.

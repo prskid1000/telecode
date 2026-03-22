@@ -5,8 +5,9 @@
       "claude:glab-research": 215,
       "claude:work": 264,
       "powershell:default": 303,
-      "screen:default": 564,
-      "claude:default": 596
+      "claude:default": 596,
+      "video:default": 679,
+      "screen:default": 723
     }
   },
   "voice_prefs": {}

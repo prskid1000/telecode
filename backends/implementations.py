@@ -17,6 +17,7 @@ BACKEND_ICONS: dict[str, str] = {
     "shell":      "🐚",
     "powershell": "🔷",
     "screen":     "📸",
+    "video":      "🎬",
 }
 
 
@@ -101,14 +102,31 @@ class ScreenBackend(CLIBackend):
     @property
     def info(self) -> BackendInfo:
         return BackendInfo(
-            key="screen", name="Screen Capture",
-            description="Capture and stream a window",
+            key="screen", name="Screen Image Capture",
+            description="Capture and stream window images",
             base_cmd=[],
             default_flags=[],
         )
 
     def build_launch_cmd(self, params: BackendParams) -> list[str]:
-        return []  # not used — ScreenCapture replaces PTYProcess
+        return []
 
     def startup_message(self) -> str:
-        return "📸 <b>Screen Capture</b> — Streaming"
+        return "📸 <b>Screen Image Capture</b> — Streaming"
+
+
+class VideoBackend(CLIBackend):
+    @property
+    def info(self) -> BackendInfo:
+        return BackendInfo(
+            key="video", name="Screen Video Capture",
+            description="Record a 1-minute video of a window",
+            base_cmd=[],
+            default_flags=[],
+        )
+
+    def build_launch_cmd(self, params: BackendParams) -> list[str]:
+        return []
+
+    def startup_message(self) -> str:
+        return "🎬 <b>Screen Video Capture</b> — Recording"
