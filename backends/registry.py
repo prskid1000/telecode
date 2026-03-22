@@ -1,6 +1,7 @@
 from .base import CLIBackend
 from .implementations import (
-    ClaudeCodeBackend, CodexBackend, ShellBackend, PowerShellBackend, ScreenBackend,
+    ClaudeCodeBackend, CodexBackend, ShellBackend, PowerShellBackend,
+    ScreenBackend, VideoBackend,
 )
 
 _REGISTRY: dict[str, CLIBackend] = {
@@ -11,6 +12,7 @@ _REGISTRY: dict[str, CLIBackend] = {
         ShellBackend(),
         PowerShellBackend(),
         ScreenBackend(),
+        VideoBackend(),
     ]
 }
 

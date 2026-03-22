@@ -6,7 +6,7 @@ from html import escape as _esc
 
 import io
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, InputMediaPhoto
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, TelegramError
 from telegram.ext import ContextTypes
@@ -15,7 +15,7 @@ import config
 from backends.registry import get_backend, all_backends
 from backends.params import load_params
 from sessions.manager import SessionManager
-from sessions.screen import ScreenCapture, enumerate_windows
+from sessions.screen import ScreenCapture, VideoCapture, enumerate_windows
 from bot.topic_manager import get_or_create_topic, invalidate_topic, close_topic
 from bot.settings_handler import handle_settings
 from voice.health import get_status as voice_status, probe
@@ -133,8 +133,8 @@ BOT_COMMANDS = [
     BotCommand("new", "Start a named session"),
     BotCommand("stop", "Stop a session"),
     BotCommand("key", "Send key (e.g. /key enter, /key ctrl c)"),
-    BotCommand("pause", "Pause screen capture"),
-    BotCommand("resume", "Resume screen capture"),
+    BotCommand("pause", "Pause screen image capture"),
+    BotCommand("resume", "Resume screen image capture"),
     BotCommand("voice", "Voice settings"),
     BotCommand("settings", "Configuration"),
     BotCommand("help", "List commands"),
@@ -199,9 +199,10 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "/key home, /key end, /key pgup, /key pgdn\n"
         "/key space, /key backspace, /key delete\n\n"
         "<b>Screen capture</b>\n"
-        "/new screen [name] - Capture a window\n"
-        "/pause - Pause screen capture\n"
-        "/resume - Resume screen capture\n\n"
+        "/new screen [name] - Stream window images\n"
+        "/new video [name] - Record 1-min window video\n"
+        "/pause - Pause image capture\n"
+        "/resume - Resume image capture\n\n"
         "<b>Other</b>\n"
         "/voice - Voice settings\n"
         "/settings - Configuration\n"
@@ -347,22 +348,31 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         backend = get_backend(backend_key)
         name = backend.info.name if backend else backend_key
 
-        # Screen capture: show window picker instead of starting immediately
-        if backend_key == "screen":
+        # Screen/video capture: show window picker instead of starting immediately
+        if backend_key in ("screen", "video"):
+            cb_prefix = "scr" if backend_key == "screen" else "vid"
             windows = enumerate_windows()
             if not windows:
-                await q.edit_message_text("No visible windows found.")
+                try:
+                    await q.edit_message_text("No visible windows found.")
+                except TelegramError:
+                    pass
                 return
             rows = []
             for hwnd, title in windows[:20]:
                 label = title[:40] + "\u2026" if len(title) > 40 else title
-                cb_data = f"scr:default:{hwnd}"
+                cb_data = f"{cb_prefix}:default:{hwnd}"
                 if len(cb_data) <= 64:
                     rows.append([InlineKeyboardButton(label, callback_data=cb_data)])
-            await q.edit_message_text(
-                "Pick a window to capture:",
-                reply_markup=InlineKeyboardMarkup(rows),
-            )
+            prompt = ("Pick a window to capture:" if backend_key == "screen"
+                      else "Pick a window to record:")
+            try:
+                await q.edit_message_text(
+                    prompt,
+                    reply_markup=InlineKeyboardMarkup(rows),
+                )
+            except TelegramError as e:
+                log.warning("Failed to show window picker: %s", e)
             return
 
         await q.edit_message_text(f"Starting {_esc(name)}\u2026", parse_mode=ParseMode.HTML)
@@ -399,8 +409,26 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
                 hwnd = int(hwnd_str)
             except ValueError:
                 return
-            await q.edit_message_text("Starting screen capture\u2026")
+            try:
+                await q.edit_message_text("Starting image capture\u2026")
+            except TelegramError:
+                pass
             await _start_screen_session(ctx, user_id, session_name, hwnd)
+
+    elif data.startswith("vid:"):
+        # Video recording window picker callback: vid:{session_name}:{hwnd}
+        parts = data.split(":", 2)
+        if len(parts) == 3:
+            session_name, hwnd_str = parts[1], parts[2]
+            try:
+                hwnd = int(hwnd_str)
+            except ValueError:
+                return
+            try:
+                await q.edit_message_text("Starting video recording\u2026")
+            except TelegramError:
+                pass
+            await _start_video_session(ctx, user_id, session_name, hwnd)
 
     elif data.startswith("scr_pause:"):
         session_key = data.split(":", 1)[1]
@@ -452,9 +480,9 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Process stopped. Use /new to restart.")
         return
 
-    # Screen sessions are view-only
-    if isinstance(session.process, ScreenCapture):
-        await update.message.reply_text("Screen sessions are view-only. Use /pause or /resume.")
+    # Screen/video sessions are view-only
+    if isinstance(session.process, (ScreenCapture, VideoCapture)):
+        await update.message.reply_text("Capture sessions are view-only.")
         return
 
     thread_id = update.message.message_thread_id
@@ -550,9 +578,10 @@ async def _start_session(update, ctx, backend_key: str, session_name: str) -> No
         await update.message.reply_text(f"Unknown: {backend_key}. Available: {keys}")
         return
 
-    # Screen capture: show window picker instead of starting immediately
-    if backend_key == "screen":
-        await _show_window_picker(update, session_name)
+    # Screen/video capture: show window picker instead of starting immediately
+    if backend_key in ("screen", "video"):
+        cb_prefix = "scr" if backend_key == "screen" else "vid"
+        await _show_window_picker(update, session_name, cb_prefix)
         return
 
     await update.message.reply_text(f"Starting {backend.info.name}\u2026")
@@ -767,7 +796,7 @@ async def cleanup_live_message(thread_id: int) -> None:
 
 # ── Screen capture — window picker, live photo, pause/resume ──────────────────
 
-_PHOTO_SEND_INTERVAL = 1.5  # seconds between editMessageMedia calls
+SCREEN_CAPTURE_INTERVAL = 3.0  # seconds between captures AND photo sends
 
 
 def _screen_controls_kb(session_key: str, paused: bool) -> InlineKeyboardMarkup:
@@ -782,7 +811,7 @@ def _screen_controls_kb(session_key: str, paused: bool) -> InlineKeyboardMarkup:
     ]])
 
 
-async def _show_window_picker(update: Update, session_name: str) -> None:
+async def _show_window_picker(update: Update, session_name: str, cb_prefix: str = "scr") -> None:
     """Enumerate visible windows and present an inline keyboard for selection."""
     windows = enumerate_windows()
     if not windows:
@@ -790,14 +819,15 @@ async def _show_window_picker(update: Update, session_name: str) -> None:
         return
 
     rows = []
-    for hwnd, title in windows[:20]:  # top 20 to fit Telegram limits
+    for hwnd, title in windows[:20]:
         label = title[:40] + "\u2026" if len(title) > 40 else title
-        cb_data = f"scr:{session_name}:{hwnd}"
+        cb_data = f"{cb_prefix}:{session_name}:{hwnd}"
         if len(cb_data) <= 64:
             rows.append([InlineKeyboardButton(label, callback_data=cb_data)])
 
+    prompt = "Pick a window to capture:" if cb_prefix == "scr" else "Pick a window to record:"
     await update.message.reply_text(
-        "Pick a window to capture:",
+        prompt,
         reply_markup=InlineKeyboardMarkup(rows),
     )
 
@@ -811,6 +841,11 @@ async def _start_screen_session(ctx, user_id: int, session_name: str, hwnd: int)
     async def _do_start(tid: int) -> None:
         bot = ctx.bot
         chat_id = config.telegram_group_id()
+
+        # Finalize any existing LivePhoto for this topic
+        old_lp = _live_photos.pop(tid, None)
+        if old_lp:
+            await old_lp.finalize()
 
         lp = _LivePhoto(bot, chat_id, tid, session_key)
         _live_photos[tid] = lp
@@ -827,10 +862,11 @@ async def _start_screen_session(ctx, user_id: int, session_name: str, hwnd: int)
                 return
             lp.set_frame(jpeg_bytes)
 
-        await _mgr(ctx).start_screen_session(
+        session = await _mgr(ctx).start_screen_session(
             user_id=user_id, session_key=session_key, backend=backend,
             hwnd=hwnd, output_callback=on_frame, thread_id=tid,
         )
+        lp.process = session.process
         await bot.send_message(
             chat_id=chat_id, message_thread_id=tid,
             text="Capturing\u2026 Use /pause, /resume, or /stop.",
@@ -847,65 +883,116 @@ async def _start_screen_session(ctx, user_id: int, session_name: str, hwnd: int)
         await _do_start(thread_id)
 
 
+async def _start_video_session(ctx, user_id: int, session_name: str, hwnd: int) -> None:
+    """Create a topic and start a VideoCapture (1-min recording)."""
+    backend = get_backend("video")
+    session_key = f"video:{session_name}"
+    thread_id = await get_or_create_topic(ctx.bot, user_id, session_key)
+
+    async def _do_start(tid: int) -> None:
+        bot = ctx.bot
+        chat_id = config.telegram_group_id()
+
+        vc = VideoCapture(hwnd=hwnd, duration=60, fps=3)
+
+        def on_text(text: str) -> None:
+            asyncio.ensure_future(
+                bot.send_message(chat_id=chat_id, message_thread_id=tid, text=text)
+            )
+
+        def on_video(video_bytes: bytes) -> None:
+            async def _send():
+                try:
+                    video_buf = io.BytesIO(video_bytes)
+                    video_buf.name = "recording.mp4"
+                    await bot.send_video(
+                        chat_id=chat_id, message_thread_id=tid,
+                        video=video_buf,
+                        supports_streaming=True,
+                    )
+                except TelegramError as e:
+                    log.warning("Failed to send video: %s", e)
+            asyncio.ensure_future(_send())
+
+        vc.subscribe_text(on_text)
+        vc.subscribe(on_video)
+
+        await _mgr(ctx).start_video_session(
+            user_id=user_id, session_key=session_key, backend=backend,
+            hwnd=hwnd, video_callback=on_video, text_callback=on_text,
+            thread_id=tid,
+        )
+        await bot.send_message(
+            chat_id=chat_id, message_thread_id=tid,
+            text="🎬 Recording\u2026 Sends a video every 60s. Use /pause, /resume, or /stop.",
+        )
+
+    try:
+        await _do_start(thread_id)
+    except BadRequest as exc:
+        if "thread not found" not in str(exc).lower():
+            raise
+        await invalidate_topic(user_id, session_key)
+        await _mgr(ctx).kill_session(user_id, session_key)
+        thread_id = await get_or_create_topic(ctx.bot, user_id, session_key)
+        await _do_start(thread_id)
+
+
 class _LivePhoto:
-    """Streams JPEG frames as an edited photo message in a topic."""
+    """Sends each JPEG frame as a new photo message in a topic."""
 
     def __init__(self, bot, chat_id: int, thread_id: int, session_key: str):
         self.bot = bot
         self.chat_id = chat_id
         self.thread_id = thread_id
         self.session_key = session_key
-        self.msg_id: int | None = None
+        self.process = None  # set after session starts, used to check paused
         self._pending_frame: bytes | None = None
-        self._edit_scheduled = False
-        self._edit_handle: asyncio.TimerHandle | None = None
+        self._send_scheduled = False
+        self._send_handle: asyncio.TimerHandle | None = None
         self._loop = asyncio.get_event_loop()
 
     def set_frame(self, jpeg_bytes: bytes) -> None:
         """Buffer the latest frame; schedule a send if not already pending."""
+        if self.process and self.process.paused:
+            return  # drop frames while paused
         self._pending_frame = jpeg_bytes
-        if not self._edit_scheduled:
-            self._edit_scheduled = True
-            self._edit_handle = self._loop.call_later(
-                _PHOTO_SEND_INTERVAL,
+        if not self._send_scheduled:
+            self._send_scheduled = True
+            self._send_handle = self._loop.call_later(
+                SCREEN_CAPTURE_INTERVAL,
                 lambda: asyncio.ensure_future(self._do_send()),
             )
 
     async def _do_send(self) -> None:
-        self._edit_scheduled = False
+        self._send_scheduled = False
+        # Check paused again — pause may have happened after scheduling
+        if self.process and self.process.paused:
+            self._pending_frame = None
+            return
         frame = self._pending_frame
         if not frame:
             return
         self._pending_frame = None
 
         try:
-            if self.msg_id is None:
-                msg = await self.bot.send_photo(
-                    chat_id=self.chat_id,
-                    message_thread_id=self.thread_id,
-                    photo=io.BytesIO(frame),
-                    reply_markup=_screen_controls_kb(self.session_key, paused=False),
-                )
-                self.msg_id = msg.message_id
-            else:
-                await self.bot.edit_message_media(
-                    chat_id=self.chat_id,
-                    message_id=self.msg_id,
-                    media=InputMediaPhoto(media=io.BytesIO(frame)),
-                    reply_markup=_screen_controls_kb(self.session_key, paused=False),
-                )
-        except BadRequest as e:
-            if "message to edit not found" in str(e).lower():
-                self.msg_id = None  # will re-send next frame
-            else:
-                log.warning("LivePhoto send failed: %s", e)
+            photo_buf = io.BytesIO(frame)
+            photo_buf.name = "frame.jpg"
+            await self.bot.send_photo(
+                chat_id=self.chat_id,
+                message_thread_id=self.thread_id,
+                photo=photo_buf,
+                reply_markup=_screen_controls_kb(self.session_key, paused=False),
+            )
         except TelegramError as e:
             log.warning("LivePhoto send failed: %s", e)
+        except Exception as e:
+            log.error("LivePhoto unexpected error: %s", e, exc_info=True)
 
     async def finalize(self) -> None:
-        if self._edit_handle:
-            self._edit_handle.cancel()
-        self._edit_scheduled = False
+        if self._send_handle:
+            self._send_handle.cancel()
+        self._send_scheduled = False
 
 
 # One LivePhoto per screen-capture thread
@@ -916,41 +1003,29 @@ async def cmd_pause(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _auth(update, ctx):
         return
     session = _session_for_thread(update, ctx)
-    if not session or not isinstance(session.process, ScreenCapture):
-        await update.message.reply_text("No screen capture in this thread.")
+    if not session or not isinstance(session.process, (ScreenCapture, VideoCapture)):
+        await update.message.reply_text("No capture session in this thread.")
         return
     _mgr(ctx).pause_session(update.effective_user.id, session.session_key)
-    await update.message.reply_text("\u23f8 Paused. /resume to continue.")
-    # Update button state on the photo
+    # Cancel any pending photo send
     lp = _live_photos.get(update.message.message_thread_id)
-    if lp and lp.msg_id:
-        try:
-            await ctx.bot.edit_message_reply_markup(
-                chat_id=lp.chat_id, message_id=lp.msg_id,
-                reply_markup=_screen_controls_kb(session.session_key, paused=True),
-            )
-        except TelegramError:
-            pass
+    if lp:
+        if lp._send_handle:
+            lp._send_handle.cancel()
+        lp._send_scheduled = False
+        lp._pending_frame = None
+    await update.message.reply_text("\u23f8 Paused. /resume to continue.")
 
 
 async def cmd_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _auth(update, ctx):
         return
     session = _session_for_thread(update, ctx)
-    if not session or not isinstance(session.process, ScreenCapture):
-        await update.message.reply_text("No screen capture in this thread.")
+    if not session or not isinstance(session.process, (ScreenCapture, VideoCapture)):
+        await update.message.reply_text("No capture session in this thread.")
         return
     _mgr(ctx).resume_session(update.effective_user.id, session.session_key)
     await update.message.reply_text("\u25b6 Resumed.")
-    lp = _live_photos.get(update.message.message_thread_id)
-    if lp and lp.msg_id:
-        try:
-            await ctx.bot.edit_message_reply_markup(
-                chat_id=lp.chat_id, message_id=lp.msg_id,
-                reply_markup=_screen_controls_kb(session.session_key, paused=False),
-            )
-        except TelegramError:
-            pass
 
 
 def _session_for_thread(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
