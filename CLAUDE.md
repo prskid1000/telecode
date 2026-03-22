@@ -45,7 +45,11 @@ Every active session has a cost in msgs/min (from `settings.json`):
 - **Image:** `rate_limits.image` (e.g. 4 → sends every 15s)
 - **Video:** `rate_limits.video` (e.g. 1 → one chunk/min)
 
-Total cost must stay within `rate_limits.budget_per_min` (Telegram's 20 msgs/min per-chat limit). New sessions are blocked when budget is exhausted. The `/start` picker only shows backends that fit within remaining budget.
+Total cost must stay within `rate_limits.budget_per_min` (Telegram's 20 msgs/min per-chat limit). New sessions are blocked when budget is exhausted. Budget is enforced in **every** session start path:
+- `/start` picker (hides backends that don't fit)
+- `/new` command
+- Window picker callbacks (`scr:`, `vid:`) when user picks a window for screen/video capture
+- `restart:` callback when restarting a stopped session
 
 ---
 
@@ -176,6 +180,12 @@ Test: `/settings reload` then `/new <key> test`.
 | Video encoding fails | Ensure ffmpeg is on PATH; check logs for ffmpeg stderr |
 | Voice not working | Run `/voice`; start STT service, bot detects within 60s |
 | Rate limit hit | Too many sessions — stop some or increase `budget_per_min` |
+
+---
+
+## Running in background (Windows)
+
+Use `pythonw main.py` instead of `python main.py` to run without a console window. For auto-start, create a Windows Scheduled Task with `pythonw.exe` as the executable — this keeps the bot hidden with no terminal window. See README.md for the full PowerShell command.
 
 ---
 
