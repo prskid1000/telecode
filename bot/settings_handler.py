@@ -41,6 +41,8 @@ async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if cmd == "reload":
         config.reload()
+        from backends.registry import refresh as _refresh_registry
+        _refresh_registry()
         await update.message.reply_text("✅ settings.json reloaded from disk.")
         return
 
