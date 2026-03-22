@@ -8,7 +8,7 @@ import io
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.constants import ParseMode
-from telegram.error import BadRequest, TelegramError
+from telegram.error import BadRequest, RetryAfter, TelegramError
 from telegram.ext import ContextTypes
 
 import config
@@ -29,6 +29,21 @@ from voice.stt import transcribe
 log = logging.getLogger("telecode.handlers")
 
 _MAX_TG_LEN = 4000
+
+# ── Flood-control backoff ────────────────────────────────────────────────────
+
+import time as _time
+
+_flood_until: float = 0.0  # monotonic time until which we should back off
+
+
+def _set_flood_backoff(retry_after: float) -> None:
+    global _flood_until
+    _flood_until = _time.monotonic() + retry_after + 1  # +1s safety margin
+
+
+def _flood_active() -> bool:
+    return _time.monotonic() < _flood_until
 
 # ── Generic key map (VT100 / xterm escape sequences) ─────────────────────────
 
@@ -201,7 +216,16 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         text = "\n".join(lines)
     else:
         text = "Choose an AI to start:"
-    await update.message.reply_text(text, reply_markup=_picker_kb())
+    try:
+        await update.message.reply_text(text, reply_markup=_picker_kb())
+    except RetryAfter as e:
+        _set_flood_backoff(e.retry_after)
+        log.warning("/start: flood control — retry in %ds", e.retry_after)
+        await asyncio.sleep(e.retry_after + 1)
+        try:
+            await update.message.reply_text(text, reply_markup=_picker_kb())
+        except TelegramError as e2:
+            log.warning("/start: retry also failed: %s", e2)
 
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -749,6 +773,8 @@ class _LiveMessage:
         """Create the placeholder message if it doesn't exist yet."""
         if self.msg_id is not None:
             return
+        if _flood_active():
+            return
         try:
             msg = await self.bot.send_message(
                 chat_id=self.chat_id,
@@ -757,6 +783,9 @@ class _LiveMessage:
                 parse_mode=ParseMode.HTML,
             )
             self.msg_id = msg.message_id
+        except RetryAfter as e:
+            _set_flood_backoff(e.retry_after)
+            log.warning("LiveMessage flood control — backing off %ds", e.retry_after)
         except BadRequest as e:
             if is_thread_not_found(e):
                 asyncio.ensure_future(handle_topic_gone(self.thread_id))
@@ -813,6 +842,9 @@ class _LiveMessage:
             return
         if text == self._last_sent:
             return
+        if _flood_active():
+            # Skip this edit — will catch up on the next one
+            return
         try:
             await self.bot.edit_message_text(
                 chat_id=self.chat_id,
@@ -821,6 +853,9 @@ class _LiveMessage:
                 parse_mode=ParseMode.HTML,
             )
             self._last_sent = text
+        except RetryAfter as e:
+            _set_flood_backoff(e.retry_after)
+            log.warning("LiveMessage flood control — backing off %ds", e.retry_after)
         except BadRequest as e:
             if is_thread_not_found(e):
                 asyncio.ensure_future(handle_topic_gone(self.thread_id))
@@ -984,8 +1019,13 @@ async def _start_video_session(ctx, user_id: int, session_name: str, hwnd: int) 
 
         def on_text(text: str) -> None:
             async def _send_text():
+                if _flood_active():
+                    return
                 try:
                     await bot.send_message(chat_id=chat_id, message_thread_id=tid, text=text)
+                except RetryAfter as e:
+                    _set_flood_backoff(e.retry_after)
+                    log.warning("Video text flood control — backing off %ds", e.retry_after)
                 except BadRequest as e:
                     if is_thread_not_found(e):
                         await handle_topic_gone(tid)
@@ -997,6 +1037,8 @@ async def _start_video_session(ctx, user_id: int, session_name: str, hwnd: int) 
 
         def on_video(video_bytes: bytes) -> None:
             async def _send():
+                if _flood_active():
+                    return
                 try:
                     video_buf = io.BytesIO(video_bytes)
                     video_buf.name = "recording.mp4"
@@ -1005,6 +1047,9 @@ async def _start_video_session(ctx, user_id: int, session_name: str, hwnd: int) 
                         video=video_buf,
                         supports_streaming=True,
                     )
+                except RetryAfter as e:
+                    _set_flood_backoff(e.retry_after)
+                    log.warning("Video send flood control — backing off %ds", e.retry_after)
                 except BadRequest as e:
                     if is_thread_not_found(e):
                         await handle_topic_gone(tid)
@@ -1075,6 +1120,8 @@ class _FrameSender:
             return
         self._pending_frame = None
 
+        if _flood_active():
+            return
         try:
             photo_buf = io.BytesIO(frame)
             photo_buf.name = "frame.jpg"
@@ -1084,6 +1131,9 @@ class _FrameSender:
                 photo=photo_buf,
                 reply_markup=_screen_controls_kb(self.session_key, paused=False),
             )
+        except RetryAfter as e:
+            _set_flood_backoff(e.retry_after)
+            log.warning("FrameSender flood control — backing off %ds", e.retry_after)
         except BadRequest as e:
             if is_thread_not_found(e):
                 asyncio.ensure_future(handle_topic_gone(self.thread_id))
