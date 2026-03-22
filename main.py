@@ -24,16 +24,22 @@ from bot.rate import set_session_manager
 
 def _setup_logging() -> None:
     os.makedirs(config.logs_dir(), exist_ok=True)
-    # Wrap stdout with UTF-8 encoding without closing the underlying fd
-    _utf8_stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', closefd=False)
-    stream_handler = logging.StreamHandler(_utf8_stdout)
+    handlers = []
+    # Stream handler — only if stdout is available (not pythonw)
+    if sys.stdout is not None:
+        try:
+            _utf8_stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', closefd=False)
+            handlers.append(logging.StreamHandler(_utf8_stdout))
+        except (AttributeError, OSError):
+            pass  # pythonw or no console
     file_handler = logging.FileHandler(
         os.path.join(config.logs_dir(), "telecode.log"), encoding="utf-8"
     )
+    handlers.append(file_handler)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[stream_handler, file_handler],
+        handlers=handlers,
     )
 
 
