@@ -39,6 +39,29 @@
         "resume_id": ""
       }
     },
+    "claude-local": {
+      "startup_cmd": [
+        "claude"
+      ],
+      "flags": [
+        "--dangerously-skip-permissions",
+        "--max-turns", "100"
+      ],
+      "env": {
+        "ANTHROPIC_BASE_URL": "http://localhost:1234",
+        "ANTHROPIC_AUTH_TOKEN": "lmstudio",
+        "ANTHROPIC_MODEL": "qwen3.5-9b",
+        "BASH_DEFAULT_TIMEOUT_MS": "1800000",
+        "BASH_MAX_TIMEOUT_MS": "3600000",
+        "DISABLE_PROMPT_CACHING": "1",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
+        "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
+      },
+      "session": {
+        "resume_id": ""
+      }
+    },
     "codex": {
       "startup_cmd": [
         "codex"
@@ -48,6 +71,17 @@
         "OPENAI_API_KEY": "",
         "OPENAI_BASE_URL": ""
       },
+      "session": {}
+    },
+    "codex-local": {
+      "startup_cmd": [
+        "codex"
+      ],
+      "flags": [
+        "--oss",
+        "-m", "qwen3.5-9b"
+      ],
+      "env": {},
       "session": {}
     },
     "shell": {

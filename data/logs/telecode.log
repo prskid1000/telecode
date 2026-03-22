@@ -18267,3 +18267,236 @@ telegram.error.Conflict: Conflict: terminated by other getUpdates request; make 
 2026-03-22 09:59:27,223 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
 2026-03-22 09:59:37,396 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
 2026-03-22 09:59:47,571 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 09:59:57,746 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:00:07,922 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:00:18,099 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:00:26,451 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:00:28,272 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:00:38,448 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:00:48,621 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:02:06,991 [INFO] telecode.main: Starting Telecode
+2026-03-22 10:02:08,182 [INFO] telecode.main: Bot running. Ctrl+C to stop.
+2026-03-22 10:02:09,356 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getMe "HTTP/1.1 200 OK"
+2026-03-22 10:02:09,372 [INFO] telecode.main: Store path: ./data/telecode.json
+2026-03-22 10:02:09,372 [WARNING] telecode.main: ⚠️  tools.screen.startup_cmd is empty
+2026-03-22 10:02:09,745 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/setMyCommands "HTTP/1.1 200 OK"
+2026-03-22 10:02:09,761 [INFO] telecode.main: Registered 9 commands with Telegram
+2026-03-22 10:02:11,812 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:02:11,812 [INFO] telecode.main: Voice: STT=OK
+2026-03-22 10:02:11,814 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:02:12,016 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/deleteWebhook "HTTP/1.1 200 OK"
+2026-03-22 10:02:12,016 [INFO] telegram.ext.Application: Application started
+2026-03-22 10:02:22,711 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:02:32,937 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:02:43,164 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:02:53,389 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:03:03,613 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:03:13,835 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:03:13,836 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:03:24,059 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:03:34,284 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:03:44,506 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:03:54,728 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:04:04,950 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:04:15,172 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:04:15,876 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:04:25,401 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:04:35,625 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:04:45,847 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:04:56,074 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:05:06,298 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:05:16,519 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:05:17,894 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:05:26,742 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:05:36,968 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:05:47,192 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:05:57,414 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:06:07,638 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:06:17,862 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:06:19,935 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:06:28,089 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:06:38,313 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:06:48,536 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:06:58,760 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:07:08,985 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:07:19,213 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:07:21,968 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:07:29,437 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:07:39,659 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:07:49,881 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:08:00,106 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:08:10,329 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:08:20,554 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:08:24,021 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:08:30,779 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:08:41,001 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:08:51,224 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:09:01,445 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:09:11,666 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:09:21,891 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:09:26,076 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:09:32,116 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:09:42,340 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:09:52,567 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:10:02,789 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:10:13,013 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:10:23,237 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:10:28,117 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:10:33,460 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:10:43,684 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:10:53,909 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:11:04,130 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:11:14,356 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:11:24,578 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:11:30,158 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:11:34,798 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:11:45,023 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:11:55,248 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:12:05,476 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:12:15,698 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:12:25,921 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:12:32,193 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:12:36,147 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:12:46,370 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:12:56,592 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:13:06,817 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:13:17,061 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:13:27,285 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:13:34,254 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:13:37,512 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:13:47,734 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:13:57,957 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:14:08,182 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:14:18,406 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:14:28,631 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:14:36,309 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:14:38,857 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:14:49,083 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:14:59,305 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:15:09,529 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:15:19,753 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:15:29,976 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:15:38,364 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:15:40,202 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:15:50,428 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:16:00,654 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:16:10,877 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:16:21,100 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:16:31,328 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:16:40,425 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:16:41,549 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:16:51,772 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:17:01,998 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:17:12,222 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:17:22,444 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:17:32,670 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:17:42,459 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:17:42,893 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:17:53,118 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:18:03,341 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:18:13,563 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:18:23,788 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:18:34,014 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:18:44,238 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:18:44,508 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:18:54,463 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:19:04,689 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:19:14,911 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:19:25,593 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:19:35,815 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:19:46,035 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:19:46,537 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:19:56,261 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:20:06,482 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:20:16,706 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:20:26,926 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:20:37,149 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:20:47,371 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:20:48,564 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:20:57,590 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:21:07,809 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:21:18,029 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:21:28,251 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:21:38,472 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:21:48,692 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:21:50,603 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:21:58,926 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:22:09,146 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:22:19,367 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:22:29,588 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:22:39,809 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:22:50,031 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:22:52,655 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:23:00,254 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:23:10,474 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:23:20,697 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:23:30,916 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:23:41,138 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:23:51,360 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:23:54,682 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:24:01,582 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:24:11,803 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:24:22,021 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:24:32,245 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:24:42,467 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:24:52,686 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:24:56,722 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:26:07,032 [INFO] telecode.main: Starting Telecode
+2026-03-22 10:26:08,391 [INFO] telecode.main: Bot running. Ctrl+C to stop.
+2026-03-22 10:26:09,141 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getMe "HTTP/1.1 200 OK"
+2026-03-22 10:26:09,158 [INFO] telecode.main: Store path: ./data/telecode.json
+2026-03-22 10:26:09,174 [WARNING] telecode.main: ⚠️  tools.screen.startup_cmd is empty
+2026-03-22 10:26:09,556 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/setMyCommands "HTTP/1.1 200 OK"
+2026-03-22 10:26:09,572 [INFO] telecode.main: Registered 9 commands with Telegram
+2026-03-22 10:26:11,601 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:26:11,601 [INFO] telecode.main: Voice: STT=OK
+2026-03-22 10:26:11,601 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:26:11,809 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/deleteWebhook "HTTP/1.1 200 OK"
+2026-03-22 10:26:11,825 [INFO] telegram.ext.Application: Application started
+2026-03-22 10:26:22,329 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:26:32,497 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:26:42,671 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:26:52,842 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:27:03,018 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:27:13,184 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:27:13,643 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:27:23,351 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:27:33,523 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:27:43,694 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:27:53,860 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:28:04,027 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:28:14,200 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:28:15,707 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:28:24,370 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:28:34,539 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:28:44,708 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:28:54,904 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:29:05,071 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:29:15,238 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:29:17,710 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:29:25,409 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:29:35,579 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:29:45,749 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:29:55,921 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:30:06,089 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:30:16,259 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:30:19,758 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:30:26,431 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:30:36,605 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:30:46,771 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:30:56,941 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:31:07,109 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:31:17,278 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:31:21,805 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:31:27,452 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:31:37,619 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:31:47,790 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:31:57,959 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:32:08,125 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:32:18,294 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:32:23,862 [INFO] telecode.voice.health: STT OK at http://localhost:6600/v1
+2026-03-22 10:32:28,466 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:32:38,644 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:32:48,811 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:32:58,979 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
+2026-03-22 10:33:09,155 [INFO] httpx: HTTP Request: POST https://api.telegram.org/bot8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4/getUpdates "HTTP/1.1 200 OK"
