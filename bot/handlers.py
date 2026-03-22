@@ -18,6 +18,11 @@ from sessions.manager import SessionManager
 from sessions.screen import ScreenCapture, VideoCapture, enumerate_windows, get_window_title
 from bot.topic_manager import get_or_create_topic, invalidate_topic, close_topic
 from bot.settings_handler import handle_settings
+from bot.rate import (
+    set_session_manager, can_afford, register_cost, unregister_cost,
+    is_thread_not_found, handle_topic_gone, init_live_refs,
+    start_stale_topic_checker, cleanup_stale_sessions,
+)
 from voice.health import get_status as voice_status, probe
 from voice.prefs import get_prefs, set_pref, stt_active
 from voice.stt import transcribe
@@ -155,8 +160,8 @@ async def _kill_and_cleanup(ctx: ContextTypes.DEFAULT_TYPE, user_id: int, sessio
     """Kill a session and update cost tracking."""
     session = _mgr(ctx).get_session(user_id, session_key)
     if session and session.thread_id:
-        _live_photos.pop(session.thread_id, None)
-    _unregister_cost(session_key)
+        _frame_senders.pop(session.thread_id, None)
+    unregister_cost(session_key)
     return await _mgr(ctx).kill_session(user_id, session_key)
 
 
@@ -175,7 +180,7 @@ async def _auth(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
 def _picker_kb() -> InlineKeyboardMarkup:
     rows = []
     for b in all_backends():
-        if _can_afford(b.info.key):
+        if can_afford(b.info.key):
             rows.append([InlineKeyboardButton(
                 b.info.name, callback_data=f"new_session:{b.info.key}",
             )])
@@ -191,7 +196,9 @@ def _picker_kb() -> InlineKeyboardMarkup:
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _auth(update, ctx):
         return
-    sessions = _mgr(ctx).user_sessions(update.effective_user.id)
+    user_id = update.effective_user.id
+    await cleanup_stale_sessions(ctx.bot, _mgr(ctx), user_id)
+    sessions = _mgr(ctx).user_sessions(user_id)
     if sessions:
         lines = ["Active sessions:\n"]
         for key, s in sessions.items():
@@ -268,8 +275,8 @@ async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         for s in _mgr(ctx).user_sessions(user_id).values():
             if s.thread_id:
                 await cleanup_live_message(s.thread_id)
-                _live_photos.pop(s.thread_id, None)
-            _unregister_cost(s.session_key)
+                _frame_senders.pop(s.thread_id, None)
+            unregister_cost(s.session_key)
         n = await _mgr(ctx).kill_all_sessions(user_id)
         if n:
             await update.message.reply_text(f"Stopped all {n} session(s).")
@@ -375,7 +382,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         backend = get_backend(backend_key)
         name = backend.info.name if backend else backend_key
 
-        if not _can_afford(backend_key):
+        if not can_afford(backend_key):
             try:
                 await q.edit_message_text(
                     "Too many active sessions. Stop a session first."
@@ -428,7 +435,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         session_key  = data.split(":", 1)[1]
         backend_key  = session_key.split(":")[0]
         session_name = session_key.split(":", 1)[1] if ":" in session_key else "default"
-        if not _can_afford(backend_key):
+        if not can_afford(backend_key):
             try:
                 await q.edit_message_text(
                     "Too many active sessions. Stop a session first."
@@ -454,7 +461,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
                 hwnd = int(hwnd_str)
             except ValueError:
                 return
-            if not _can_afford("screen"):
+            if not can_afford("screen"):
                 try:
                     await q.edit_message_text(
                         "Too many active sessions. Stop a session first."
@@ -477,7 +484,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
                 hwnd = int(hwnd_str)
             except ValueError:
                 return
-            if not _can_afford("video"):
+            if not can_afford("video"):
                 try:
                     await q.edit_message_text(
                         "Too many active sessions. Stop a session first."
@@ -639,7 +646,7 @@ async def _start_session(update, ctx, backend_key: str, session_name: str) -> No
         await update.message.reply_text(f"Unknown: {backend_key}. Available: {keys}")
         return
 
-    if not _can_afford(backend_key):
+    if not can_afford(backend_key):
         await update.message.reply_text(
             "Too many active sessions. Stop a session first."
         )
@@ -658,7 +665,7 @@ async def _start_session(update, ctx, backend_key: str, session_name: str) -> No
 async def _start_session_core(ctx, user_id: int, backend_key: str, session_name: str) -> None:
     backend     = get_backend(backend_key)
     session_key = f"{backend_key}:{session_name}"
-    _register_cost(session_key)
+    register_cost(session_key)
     thread_id   = await get_or_create_topic(ctx.bot, user_id, session_key)
     params      = load_params(backend_key)
 
@@ -769,6 +776,11 @@ class _LiveMessage:
                 parse_mode=ParseMode.HTML,
             )
             self.msg_id = msg.message_id
+        except BadRequest as e:
+            if is_thread_not_found(e):
+                asyncio.ensure_future(handle_topic_gone(self.thread_id))
+                return
+            log.warning("LiveMessage: failed to create message: %s", e)
         except TelegramError as e:
             log.warning("LiveMessage: failed to create message: %s", e)
 
@@ -829,6 +841,9 @@ class _LiveMessage:
             )
             self._last_sent = text
         except BadRequest as e:
+            if is_thread_not_found(e):
+                asyncio.ensure_future(handle_topic_gone(self.thread_id))
+                return
             if "not modified" not in str(e).lower():
                 log.warning("LiveMessage edit failed: %s", e)
         except TelegramError as e:
@@ -863,46 +878,6 @@ async def cleanup_live_message(thread_id: int) -> None:
 
 
 # ── Screen capture — window picker, live photo, pause/resume ──────────────────
-
-# ── Cost-based rate limiting ─────────────────────────────────────────────────
-# Every active session has a cost (msgs/min) from settings.json.
-#   - Tools: tools.<key>.rate  (e.g. claude=5, shell=3)
-#   - Image: rate_limits.image (e.g. 4 → 15s interval)
-#   - Video: rate_limits.video (e.g. 1 → 60s chunks)
-# Total cost must stay within rate_limits.budget_per_min (Telegram limit).
-# New sessions are blocked when budget is exhausted.
-
-_active_costs: dict[str, float] = {}  # session_key -> cost (msgs/min)
-
-
-def _session_cost(session_key: str) -> float:
-    """Look up cost for a session key."""
-    backend_key = session_key.split(":")[0]
-    if backend_key == "screen":
-        return config.rate_cost_image()
-    if backend_key == "video":
-        return config.rate_cost_video()
-    return config.tool_rate(backend_key)
-
-
-def _current_cost() -> float:
-    return sum(_active_costs.values())
-
-
-def _available_budget() -> float:
-    return max(config.rate_budget() - _current_cost(), 0.0)
-
-
-def _can_afford(backend_key: str) -> bool:
-    return _session_cost(f"{backend_key}:x") <= _available_budget()
-
-
-def _register_cost(session_key: str) -> None:
-    _active_costs[session_key] = _session_cost(session_key)
-
-
-def _unregister_cost(session_key: str) -> None:
-    _active_costs.pop(session_key, None)
 
 
 def _screen_controls_kb(session_key: str, paused: bool) -> InlineKeyboardMarkup:
@@ -951,30 +926,36 @@ async def _start_screen_session(ctx, user_id: int, session_name: str, hwnd: int)
         if session_name in ("default", "auto"):
             session_name = _next_session_name()
     session_key = f"screen:{session_name}"
-    _register_cost(session_key)
+    register_cost(session_key)
     thread_id = await get_or_create_topic(ctx.bot, user_id, session_key)
 
     async def _do_start(tid: int) -> None:
         bot = ctx.bot
         chat_id = config.telegram_group_id()
 
-        # Finalize any existing LivePhoto for this topic
-        old_lp = _live_photos.pop(tid, None)
+        # Finalize any existing FrameSender for this topic
+        old_lp = _frame_senders.pop(tid, None)
         if old_lp:
             await old_lp.finalize()
 
-        lp = _LivePhoto(bot, chat_id, tid, session_key)
-        _live_photos[tid] = lp
+        lp = _FrameSender(bot, chat_id, tid, session_key)
+        _frame_senders[tid] = lp
 
         def on_frame(jpeg_bytes: bytes) -> None:
             if not jpeg_bytes:
                 # Empty = window gone
-                asyncio.ensure_future(
-                    bot.send_message(
-                        chat_id=chat_id, message_thread_id=tid,
-                        text="Window closed.",
-                    )
-                )
+                async def _notify_closed():
+                    try:
+                        await bot.send_message(
+                            chat_id=chat_id, message_thread_id=tid,
+                            text="Window closed.",
+                        )
+                    except BadRequest as e:
+                        if is_thread_not_found(e):
+                            await handle_topic_gone(tid)
+                    except TelegramError:
+                        pass
+                asyncio.ensure_future(_notify_closed())
                 return
             lp.set_frame(jpeg_bytes)
 
@@ -1013,7 +994,7 @@ async def _start_video_session(ctx, user_id: int, session_name: str, hwnd: int) 
         if session_name in ("default", "auto"):
             session_name = _next_session_name()
     session_key = f"video:{session_name}"
-    _register_cost(session_key)
+    register_cost(session_key)
     thread_id = await get_or_create_topic(ctx.bot, user_id, session_key)
 
     async def _do_start(tid: int) -> None:
@@ -1023,9 +1004,17 @@ async def _start_video_session(ctx, user_id: int, session_name: str, hwnd: int) 
         vc = VideoCapture(hwnd=hwnd, duration=60, fps=3)
 
         def on_text(text: str) -> None:
-            asyncio.ensure_future(
-                bot.send_message(chat_id=chat_id, message_thread_id=tid, text=text)
-            )
+            async def _send_text():
+                try:
+                    await bot.send_message(chat_id=chat_id, message_thread_id=tid, text=text)
+                except BadRequest as e:
+                    if is_thread_not_found(e):
+                        await handle_topic_gone(tid)
+                        return
+                    log.warning("Video text send failed: %s", e)
+                except TelegramError as e:
+                    log.warning("Video text send failed: %s", e)
+            asyncio.ensure_future(_send_text())
 
         def on_video(video_bytes: bytes) -> None:
             async def _send():
@@ -1037,6 +1026,11 @@ async def _start_video_session(ctx, user_id: int, session_name: str, hwnd: int) 
                         video=video_buf,
                         supports_streaming=True,
                     )
+                except BadRequest as e:
+                    if is_thread_not_found(e):
+                        await handle_topic_gone(tid)
+                        return
+                    log.warning("Failed to send video: %s", e)
                 except TelegramError as e:
                     log.warning("Failed to send video: %s", e)
             asyncio.ensure_future(_send())
@@ -1065,7 +1059,7 @@ async def _start_video_session(ctx, user_id: int, session_name: str, hwnd: int) 
         await _do_start(thread_id)
 
 
-class _LivePhoto:
+class _FrameSender:
     """Sends each JPEG frame as a new photo message in a topic."""
 
     def __init__(self, bot, chat_id: int, thread_id: int, session_key: str):
@@ -1111,10 +1105,15 @@ class _LivePhoto:
                 photo=photo_buf,
                 reply_markup=_screen_controls_kb(self.session_key, paused=False),
             )
+        except BadRequest as e:
+            if is_thread_not_found(e):
+                asyncio.ensure_future(handle_topic_gone(self.thread_id))
+                return
+            log.warning("FrameSender send failed: %s", e)
         except TelegramError as e:
-            log.warning("LivePhoto send failed: %s", e)
+            log.warning("FrameSender send failed: %s", e)
         except Exception as e:
-            log.error("LivePhoto unexpected error: %s", e, exc_info=True)
+            log.error("FrameSender unexpected error: %s", e, exc_info=True)
 
     async def finalize(self) -> None:
         if self._send_handle:
@@ -1122,8 +1121,11 @@ class _LivePhoto:
         self._send_scheduled = False
 
 
-# One LivePhoto per screen-capture thread
-_live_photos: dict[int, _LivePhoto] = {}
+# One FrameSender per screen-capture thread
+_frame_senders: dict[int, _FrameSender] = {}
+
+# Give rate module access to live dicts for cleanup on topic deletion
+init_live_refs(_live_messages, _frame_senders)
 
 
 async def cmd_pause(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1135,7 +1137,7 @@ async def cmd_pause(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     _mgr(ctx).pause_session(update.effective_user.id, session.session_key)
     # Cancel any pending photo send
-    lp = _live_photos.get(update.message.message_thread_id)
+    lp = _frame_senders.get(update.message.message_thread_id)
     if lp:
         if lp._send_handle:
             lp._send_handle.cancel()

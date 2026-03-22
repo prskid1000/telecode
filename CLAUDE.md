@@ -20,7 +20,7 @@ Screen image capture:
     /new screen -> window picker (inline keyboard)
     -> user picks window -> ScreenCapture(hwnd) starts
     -> capture_window(hwnd) -> JPEG -> subscribers
-    -> _LivePhoto.set_frame -> send_photo (interval = 60/rate_limits.image)
+    -> _FrameSender.set_frame -> send_photo (interval = 60/rate_limits.image)
 
 Screen video capture:
     /new video -> window picker (inline keyboard)
@@ -51,6 +51,8 @@ Total cost must stay within `rate_limits.budget_per_min` (Telegram's 20 msgs/min
 - Window picker callbacks (`scr:`, `vid:`) when user picks a window for screen/video capture
 - `restart:` callback when restarting a stopped session
 
+**Topic deleted externally:** if a user deletes or closes a topic in Telegram, the next send attempt detects "thread not found", triggers `_handle_topic_gone(thread_id)` which kills the session, frees the budget cost, removes the stale thread_id from the store, and cleans up `_live_messages`/`_frame_senders`. This is handled in `_LiveMessage`, `_FrameSender`, and video/screen send callbacks.
+
 ---
 
 ## Key files
@@ -64,7 +66,8 @@ Total cost must stay within `rate_limits.budget_per_min` (Telegram's 20 msgs/min
 | `sessions/process.py` | PTY + pyte + snapshot diff + timers |
 | `sessions/screen.py` | Image capture, video recording, window enumeration |
 | `sessions/manager.py` | Start/kill sessions, send, send_raw, interrupt, pause/resume |
-| `bot/handlers.py` | Commands, callbacks, `_LiveMessage`, `_LivePhoto`, cost tracking |
+| `bot/handlers.py` | Commands, callbacks, `_LiveMessage`, `_FrameSender` |
+| `bot/rate.py` | Cost-based rate limiting, stale topic checker, budget enforcement |
 | `bot/topic_manager.py` | Create/reuse forum topics |
 | `bot/settings_handler.py` | `/settings` parsing |
 | `backends/implementations.py` | `GenericCLIBackend` (data-driven) + Screen, Video (non-PTY) |
@@ -107,7 +110,7 @@ Tunables near top of `process.py`: idle interval, max wait, screen rows/history 
    - **macOS**: `screencapture -l<wid>`, falls back to `mss` region capture.
 4. Pillow encodes to JPEG (quality 80, full resolution).
 5. Frames pushed to subscribers at `capture_interval` (`60 / rate_limits.image` seconds).
-6. `_LivePhoto` sends each frame as a **new photo message**. Send interval = `60 / rate_limits.image` seconds.
+6. `_FrameSender` sends each frame as a **new photo message**. Send interval = `60 / rate_limits.image` seconds.
 7. Pause: drops frames in `set_frame()` and cancels pending send timers.
 8. Window gone: capture returns None → auto-stops and notifies.
 9. **Session 0** (Windows service): spawns helper process in user's session via `WTSQueryUserToken` + `CreateProcessAsUser`.
@@ -130,7 +133,7 @@ Tunables near top of `process.py`: idle interval, max wait, screen rows/history 
 ## Live Telegram messages (`bot/handlers.py`)
 
 - **`_LiveMessage`:** one text message per "turn", updated by `append()`; debounced edits (~1s); overflow opens a new message. Overlap trim skips duplicate tails.
-- **`_LivePhoto`:** sends each frame as a **new photo message**. Send interval derived from `rate_limits.image` config. Drops frames while paused. Inline buttons for pause/resume/stop.
+- **`_FrameSender`:** sends each frame as a **new photo message**. Send interval derived from `rate_limits.image` config. Drops frames while paused. Inline buttons for pause/resume/stop.
 
 ---
 
