@@ -20,11 +20,11 @@ import io
 import json
 import logging
 import os
-import platform
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from typing import Callable
 
@@ -35,9 +35,49 @@ _IS_MAC = sys.platform == "darwin"
 _IS_LINUX = sys.platform.startswith("linux")
 
 
+# Per-hwnd lock — PrintWindow/GetWindowDC are not thread-safe for the same window.
+# Serializes concurrent captures (e.g. image + video on the same hwnd).
+_hwnd_locks: dict[int, threading.Lock] = {}
+_hwnd_locks_guard = threading.Lock()
+
+
+def _hwnd_lock(hwnd: int) -> threading.Lock:
+    with _hwnd_locks_guard:
+        if hwnd not in _hwnd_locks:
+            _hwnd_locks[hwnd] = threading.Lock()
+        return _hwnd_locks[hwnd]
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Per-window capture
 # ═══════════════════════════════════════════════════════════════════════════════
+
+def get_window_title(hwnd: int) -> str:
+    """Return the current title of a window, or empty string."""
+    if _IS_WIN:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length > 0:
+            buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buf, length + 1)
+            return buf.value.strip()
+        return ""
+    if _IS_LINUX:
+        try:
+            r = subprocess.run(
+                ["xdotool", "getwindowname", str(hwnd)],
+                capture_output=True, text=True, timeout=2,
+            )
+            return r.stdout.strip() if r.returncode == 0 else ""
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return ""
+    if _IS_MAC:
+        # macOS window IDs don't have a simple title lookup; return empty
+        return ""
+    return ""
+
 
 def restore_if_minimized(wid: int) -> None:
     """Auto-restore a minimized/hidden window before capture.
@@ -78,19 +118,21 @@ def capture_window(hwnd: int) -> bytes | None:
     """Capture a window by its ID.  Returns JPEG bytes or None.
 
     Auto-restores minimized windows before capturing.
+    Thread-safe: serializes concurrent captures on the same hwnd.
     On Windows uses PrintWindow (z-order independent).
     On macOS uses screencapture -l<wid>.
     On Linux uses ImageMagick import -window, falling back to mss region.
     """
-    restore_if_minimized(hwnd)
+    with _hwnd_lock(hwnd):
+        restore_if_minimized(hwnd)
 
-    if _IS_WIN:
-        return _capture_window_win32(hwnd)
-    if _IS_MAC:
-        return _capture_window_mac(hwnd)
-    if _IS_LINUX:
-        return _capture_window_linux(hwnd)
-    return None
+        if _IS_WIN:
+            return _capture_window_win32(hwnd)
+        if _IS_MAC:
+            return _capture_window_mac(hwnd)
+        if _IS_LINUX:
+            return _capture_window_linux(hwnd)
+        return None
 
 
 # ── Windows ──────────────────────────────────────────────────────────────────
@@ -265,11 +307,22 @@ def enumerate_windows() -> list[tuple[int, str]]:
 
 
 def _enumerate_win32() -> list[tuple[int, str]]:
+    """Enumerate taskbar windows using the official Win32 algorithm.
+
+    Uses DwmGetWindowAttribute(DWMWA_CLOAKED) to filter invisible/virtual-desktop
+    windows and the standard taskbar rules (WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    ownership) per Microsoft docs. No hardcoded skip lists.
+
+    Ref: https://devblogs.microsoft.com/oldnewthing/20071008-00/?p=24863
+    Ref: https://learn.microsoft.com/en-us/windows/win32/shell/taskbar
+    """
     import ctypes
     from ctypes import wintypes
 
     WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     user32 = ctypes.windll.user32
+    dwmapi = ctypes.windll.dwmapi
+
     user32.EnumWindows.argtypes = [WNDENUMPROC, wintypes.LPARAM]
     user32.EnumWindows.restype = wintypes.BOOL
     user32.IsWindowVisible.argtypes = [wintypes.HWND]
@@ -278,19 +331,62 @@ def _enumerate_win32() -> list[tuple[int, str]]:
     user32.GetWindowTextLengthW.restype = ctypes.c_int
     user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
     user32.GetWindowTextW.restype = ctypes.c_int
+    user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.GetWindowLongW.restype = ctypes.c_long
+    user32.IsIconic.argtypes = [wintypes.HWND]
+    user32.IsIconic.restype = wintypes.BOOL
+    user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+    user32.GetWindow.restype = wintypes.HWND
+    dwmapi.DwmGetWindowAttribute.argtypes = [
+        wintypes.HWND, wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD), wintypes.DWORD,
+    ]
+    dwmapi.DwmGetWindowAttribute.restype = ctypes.HRESULT
+
+    GWL_EXSTYLE = -20
+    WS_EX_TOOLWINDOW = 0x00000080
+    WS_EX_APPWINDOW = 0x00040000
+    GW_OWNER = 4
+    DWMWA_CLOAKED = 14  # Windows 8+
 
     windows: list[tuple[int, str]] = []
 
     @WNDENUMPROC
     def _cb(hwnd, _lparam):
-        if user32.IsWindowVisible(hwnd):
-            length = user32.GetWindowTextLengthW(hwnd)
-            if length > 0:
-                buf = ctypes.create_unicode_buffer(length + 1)
-                user32.GetWindowTextW(hwnd, buf, length + 1)
-                title = buf.value.strip()
-                if title:
-                    windows.append((int(hwnd), title))
+        # 1. Must be visible (includes minimized windows on Win32)
+        if not user32.IsWindowVisible(hwnd):
+            return True
+
+        # 2. Skip cloaked windows (UWP placeholders, other virtual desktops, etc.)
+        cloaked = wintypes.DWORD(0)
+        dwmapi.DwmGetWindowAttribute(
+            hwnd, DWMWA_CLOAKED,
+            ctypes.byref(cloaked), ctypes.sizeof(cloaked),
+        )
+        if cloaked.value:
+            return True
+
+        # 3. Taskbar rules per Microsoft docs
+        ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        is_app = bool(ex_style & WS_EX_APPWINDOW)
+        is_tool = bool(ex_style & WS_EX_TOOLWINDOW)
+
+        if is_app:
+            pass  # forced onto taskbar
+        elif is_tool:
+            return True  # forced off taskbar
+        elif user32.GetWindow(hwnd, GW_OWNER):
+            return True  # owned window without APPWINDOW → hidden
+
+        # 4. Must have a non-empty title
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length > 0:
+            buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buf, length + 1)
+            title = buf.value.strip()
+            if title:
+                minimized = " (minimized)" if user32.IsIconic(hwnd) else ""
+                windows.append((int(hwnd), title + minimized))
         return True
 
     user32.EnumWindows(_cb, wintypes.LPARAM(0))
@@ -657,8 +753,7 @@ def _run_in_user_session_raw(script_path: str, timeout_ms: int = 15000) -> bool:
 class ScreenCapture:
     """Captures a window and pushes JPEG frames to subscribers."""
 
-    # Default matches SCREEN_CAPTURE_INTERVAL in handlers.py
-    def __init__(self, hwnd: int, capture_interval: float = 3.0):
+    def __init__(self, hwnd: int, capture_interval: float = 15.0):
         self.hwnd = hwnd
         self.capture_interval = capture_interval
         self._subscribers: list[Callable[[bytes], None]] = []

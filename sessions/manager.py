@@ -104,7 +104,7 @@ class SessionManager:
         hwnd:             int,
         output_callback:  Callable[[bytes], None],
         thread_id:        int | None = None,
-        capture_interval: float = 3.0,
+        capture_interval: float = 15.0,
     ) -> Session:
         async with self._lock:
             await self._kill_one_locked(user_id, session_key)
