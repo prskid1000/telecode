@@ -101,6 +101,12 @@ def stt_model()    -> str:  return _raw["voice"]["stt"]["model"]
 def tool_cfg(key: str) -> dict[str, Any]:
     return _raw.get("tools", {}).get(key, {})
 
+def tool_name(key: str) -> str:
+    return tool_cfg(key).get("name", "") or key.replace("-", " ").title()
+
+def tool_icon(key: str) -> str:
+    return tool_cfg(key).get("icon", "") or "🔧"
+
 def tool_startup_cmd(key: str) -> list[str]:
     return list(tool_cfg(key).get("startup_cmd", [key]))
 

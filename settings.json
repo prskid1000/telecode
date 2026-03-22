@@ -25,6 +25,8 @@
   },
   "tools": {
     "claude": {
+      "name": "Claude Code",
+      "icon": "🟣",
       "startup_cmd": [
         "claude"
       ],
@@ -40,6 +42,8 @@
       }
     },
     "claude-local": {
+      "name": "Claude Code (Local)",
+      "icon": "🟤",
       "startup_cmd": [
         "claude"
       ],
@@ -63,6 +67,8 @@
       }
     },
     "codex": {
+      "name": "Codex CLI",
+      "icon": "🟢",
       "startup_cmd": [
         "codex"
       ],
@@ -74,6 +80,8 @@
       "session": {}
     },
     "codex-local": {
+      "name": "Codex CLI (Local)",
+      "icon": "🟠",
       "startup_cmd": [
         "codex"
       ],
@@ -85,6 +93,8 @@
       "session": {}
     },
     "shell": {
+      "name": "Bash",
+      "icon": "🐚",
       "startup_cmd": [
         "bash",
         "--norc",
@@ -95,17 +105,13 @@
       "session": {}
     },
     "powershell": {
+      "name": "PowerShell",
+      "icon": "🔷",
       "startup_cmd": [
         "powershell.exe",
         "-NoProfile",
         "-NoLogo"
       ],
-      "flags": [],
-      "env": {},
-      "session": {}
-    },
-    "screen": {
-      "startup_cmd": [],
       "flags": [],
       "env": {},
       "session": {}
