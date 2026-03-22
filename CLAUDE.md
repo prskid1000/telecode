@@ -51,8 +51,8 @@ Screen video capture:
 | `bot/handlers.py` | Commands, callbacks, `_LiveMessage`, `_LivePhoto`, `/key` |
 | `bot/topic_manager.py` | Create/reuse forum topics |
 | `bot/settings_handler.py` | `/settings` parsing |
-| `backends/implementations.py` | Claude, Codex, Shell, PowerShell, Screen, Video backends |
-| `backends/registry.py` | `get_backend`, `all_backends` |
+| `backends/implementations.py` | `GenericCLIBackend` (data-driven) + Screen, Video (non-PTY) |
+| `backends/registry.py` | Auto-built from `settings.json` tools; `get_backend`, `all_backends`, `refresh` |
 | `backends/params.py` | Load tool params from settings |
 | `voice/*` | STT health, prefs, transcribe |
 
@@ -120,11 +120,22 @@ Tunables near top of `process.py`: idle interval, max wait, screen rows/history 
 
 ## Adding a CLI backend
 
-Just add a `tools.<key>` entry in `settings.json` with `startup_cmd`, `flags`, `env`, `session`.
-The registry auto-creates a `GenericCLIBackend` for any key that isn't a special non-PTY backend.
+Just add a `tools.<key>` entry in `settings.json`:
 
-Optionally add a display name to `BACKEND_NAMES` and icon to `BACKEND_ICONS` in `implementations.py`.
-If not set, the key is title-cased and gets a 🔧 icon.
+```json
+"my-tool": {
+  "name": "My Tool",
+  "icon": "🔧",
+  "startup_cmd": ["my-tool"],
+  "flags": ["--some-flag"],
+  "env": { "API_KEY": "..." },
+  "session": {}
+}
+```
+
+The registry auto-creates a `GenericCLIBackend` for any key that isn't a special non-PTY backend (`screen`, `video`).
+`name` and `icon` are optional — defaults to title-cased key and 🔧.
+No code changes needed.
 
 Test: `/settings reload` then `/new <key> test`.
 

@@ -203,14 +203,19 @@ PTY processes always start in the OS home directory.
 
 ### `tools.<key>`
 
-Each key matches `/new <key>` (e.g. `claude`, `codex`, `shell`, `powershell`, `screen`, `video`).
+Each key under `tools` becomes a backend available via `/new <key>`. Add any tool — no code changes needed.
 
 | Key | Type | Description |
 |-----|------|-------------|
+| `name` | string | Display name (optional — defaults to title-cased key) |
+| `icon` | string | Emoji icon (optional — defaults to 🔧) |
 | `startup_cmd` | array | Command to run in the PTY |
 | `flags` | array | Extra CLI arguments |
 | `env` | object | Environment variables (empty values are omitted) |
-| `session` | object | Backend-specific options (`claude`: `resume_id`) |
+| `session` | object | Backend-specific options (e.g. `resume_id` → `--resume`) |
+
+Built-in backends: `claude`, `claude-local`, `codex`, `codex-local`, `shell`, `powershell`.
+Screen image capture (`screen`) and video recording (`video`) are internal non-PTY backends.
 
 ---
 
@@ -224,8 +229,8 @@ store.py               JSON persistence
 
 backends/
   base.py              CLIBackend base class
-  implementations.py   Claude, Codex, Shell, PowerShell, Screen, Video
-  registry.py          Backend lookup
+  implementations.py   GenericCLIBackend (data-driven) + Screen, Video
+  registry.py          Auto-built from settings.json tools
   params.py            Load params from settings
 
 sessions/

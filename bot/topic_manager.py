@@ -9,7 +9,6 @@ from telegram import Bot
 from telegram.error import TelegramError
 import config
 import store
-from backends.implementations import BACKEND_ICONS
 
 log = logging.getLogger("telecode.topic_manager")
 
@@ -46,7 +45,7 @@ async def list_topics(user_id: int) -> list[dict]:
 
 async def _create_topic(bot: Bot, user_id: int, session_key: str) -> int:
     backend_key = session_key.split(":")[0]
-    icon        = BACKEND_ICONS.get(backend_key, "💻")
+    icon        = config.tool_icon(backend_key)
     topic_name  = f"{icon} {session_key}"
 
     try:
