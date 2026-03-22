@@ -23,16 +23,14 @@
       "model": "whisper-1"
     }
   },
-  "rate_limits": {
-    "budget_per_min": 20,
-    "image": 4,
-    "video": 1
+  "capture": {
+    "image_interval": 15,
+    "video_interval": 60
   },
   "tools": {
     "claude": {
       "name": "Claude Code",
       "icon": "🟣",
-      "rate": 5,
       "startup_cmd": [
         "claude"
       ],
@@ -50,7 +48,6 @@
     "claude-local": {
       "name": "Claude Code (Local)",
       "icon": "🟤",
-      "rate": 5,
       "startup_cmd": [
         "claude"
       ],
@@ -76,7 +73,6 @@
     "codex": {
       "name": "Codex CLI",
       "icon": "🟢",
-      "rate": 5,
       "startup_cmd": [
         "codex"
       ],
@@ -90,7 +86,6 @@
     "codex-local": {
       "name": "Codex CLI (Local)",
       "icon": "🟠",
-      "rate": 5,
       "startup_cmd": [
         "codex"
       ],
@@ -104,7 +99,6 @@
     "shell": {
       "name": "Bash",
       "icon": "🐚",
-      "rate": 3,
       "startup_cmd": [
         "bash",
         "--norc",
@@ -117,7 +111,6 @@
     "powershell": {
       "name": "PowerShell",
       "icon": "🔷",
-      "rate": 3,
       "startup_cmd": [
         "powershell.exe",
         "-NoProfile",

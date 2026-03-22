@@ -19,9 +19,8 @@ from sessions.screen import ScreenCapture, VideoCapture, enumerate_windows, get_
 from bot.topic_manager import get_or_create_topic, invalidate_topic, close_topic
 from bot.settings_handler import handle_settings
 from bot.rate import (
-    set_session_manager, can_afford, register_cost, unregister_cost,
     is_thread_not_found, handle_topic_gone, init_live_refs,
-    start_stale_topic_checker, cleanup_stale_sessions,
+    cleanup_stale_sessions, full_cleanup,
 )
 from voice.health import get_status as voice_status, probe
 from voice.prefs import get_prefs, set_pref, stt_active
@@ -157,11 +156,10 @@ def _next_session_name() -> str:
 
 
 async def _kill_and_cleanup(ctx: ContextTypes.DEFAULT_TYPE, user_id: int, session_key: str) -> bool:
-    """Kill a session and update cost tracking."""
+    """Kill a session and clean up live senders."""
     session = _mgr(ctx).get_session(user_id, session_key)
     if session and session.thread_id:
         _frame_senders.pop(session.thread_id, None)
-    unregister_cost(session_key)
     return await _mgr(ctx).kill_session(user_id, session_key)
 
 
@@ -180,13 +178,8 @@ async def _auth(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
 def _picker_kb() -> InlineKeyboardMarkup:
     rows = []
     for b in all_backends():
-        if can_afford(b.info.key):
-            rows.append([InlineKeyboardButton(
-                b.info.name, callback_data=f"new_session:{b.info.key}",
-            )])
-    if not rows:
         rows.append([InlineKeyboardButton(
-            "Stop a session first", callback_data="noop",
+            b.info.name, callback_data=f"new_session:{b.info.key}",
         )])
     return InlineKeyboardMarkup(rows)
 
@@ -197,7 +190,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _auth(update, ctx):
         return
     user_id = update.effective_user.id
-    await cleanup_stale_sessions(ctx.bot, _mgr(ctx), user_id)
+    await full_cleanup(ctx.bot, _mgr(ctx), user_id)
     sessions = _mgr(ctx).user_sessions(user_id)
     if sessions:
         lines = ["Active sessions:\n"]
@@ -260,8 +253,15 @@ async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     args = ctx.args or []
     if args:
         key = args[0]
-        # Clean up live message before killing session
+        # Try exact key match first, then search by session name
         session = _mgr(ctx).get_session(user_id, key)
+        if not session:
+            # Search by session name across all user sessions
+            for sk, s in _mgr(ctx).user_sessions(user_id).items():
+                if s.session_name == key:
+                    session = s
+                    key = sk
+                    break
         if session and session.thread_id:
             await cleanup_live_message(session.thread_id)
         killed = await _kill_and_cleanup(ctx, user_id, key)
@@ -269,19 +269,32 @@ async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await close_topic(ctx.bot, user_id, key)
             await update.message.reply_text(f"Stopped {key}.")
         else:
-            await update.message.reply_text(f"No session {key}.")
+            await update.message.reply_text(f"No session '{key}'.")
     else:
-        # Clean up live messages and cost tracking for all user sessions
-        for s in _mgr(ctx).user_sessions(user_id).values():
-            if s.thread_id:
-                await cleanup_live_message(s.thread_id)
-                _frame_senders.pop(s.thread_id, None)
-            unregister_cost(s.session_key)
-        n = await _mgr(ctx).kill_all_sessions(user_id)
-        if n:
-            await update.message.reply_text(f"Stopped all {n} session(s).")
+        # No args: stop the session in the current thread, or all if in General
+        session = _session_for_thread(update, ctx)
+        if session:
+            key = session.session_key
+            if session.thread_id:
+                await cleanup_live_message(session.thread_id)
+            killed = await _kill_and_cleanup(ctx, user_id, key)
+            if killed:
+                await close_topic(ctx.bot, user_id, key)
+                await update.message.reply_text(f"Stopped {key}.")
+            else:
+                await update.message.reply_text("Session already stopped.")
         else:
-            await update.message.reply_text("No sessions to stop.")
+            # In General thread (or no matching session): stop all
+            sessions = _mgr(ctx).user_sessions(user_id)
+            if sessions:
+                for s in sessions.values():
+                    if s.thread_id:
+                        await cleanup_live_message(s.thread_id)
+                        _frame_senders.pop(s.thread_id, None)
+                n = await _mgr(ctx).kill_all_sessions(user_id)
+                await update.message.reply_text(f"Stopped all {n} session(s).")
+            else:
+                await update.message.reply_text("No active sessions.")
 
 
 async def cmd_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -326,7 +339,11 @@ async def cmd_key(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("No session here. Use /start to begin.")
         return
     if not session.process.alive:
-        await update.message.reply_text("Process stopped. Use /new to restart.")
+        await _kill_and_cleanup(ctx, update.effective_user.id, session.session_key)
+        await update.message.reply_text(
+            "Session ended. Start a new one:",
+            reply_markup=_picker_kb(),
+        )
         return
 
     args = ctx.args or []
@@ -382,14 +399,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         backend = get_backend(backend_key)
         name = backend.info.name if backend else backend_key
 
-        if not can_afford(backend_key):
-            try:
-                await q.edit_message_text(
-                    "Too many active sessions. Stop a session first."
-                )
-            except TelegramError:
-                pass
-            return
+        await cleanup_stale_sessions(ctx.bot, _mgr(ctx), user_id)
 
         # Screen/video capture: show window picker instead of starting immediately
         if backend_key in ("screen", "video"):
@@ -435,14 +445,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         session_key  = data.split(":", 1)[1]
         backend_key  = session_key.split(":")[0]
         session_name = session_key.split(":", 1)[1] if ":" in session_key else "default"
-        if not can_afford(backend_key):
-            try:
-                await q.edit_message_text(
-                    "Too many active sessions. Stop a session first."
-                )
-            except TelegramError:
-                pass
-            return
+        await cleanup_stale_sessions(ctx.bot, _mgr(ctx), user_id)
         await _start_session_core(ctx, user_id, backend_key, session_name)
 
     elif data.startswith("interrupt:"):
@@ -461,14 +464,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
                 hwnd = int(hwnd_str)
             except ValueError:
                 return
-            if not can_afford("screen"):
-                try:
-                    await q.edit_message_text(
-                        "Too many active sessions. Stop a session first."
-                    )
-                except TelegramError:
-                    pass
-                return
+            await cleanup_stale_sessions(ctx.bot, _mgr(ctx), user_id)
             try:
                 await q.edit_message_text("Starting image capture\u2026")
             except TelegramError:
@@ -484,14 +480,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
                 hwnd = int(hwnd_str)
             except ValueError:
                 return
-            if not can_afford("video"):
-                try:
-                    await q.edit_message_text(
-                        "Too many active sessions. Stop a session first."
-                    )
-                except TelegramError:
-                    pass
-                return
+            await cleanup_stale_sessions(ctx.bot, _mgr(ctx), user_id)
             try:
                 await q.edit_message_text("Starting video recording\u2026")
             except TelegramError:
@@ -538,14 +527,13 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     session = _session_for_thread(update, ctx)
     if not session:
-        await update.message.reply_text(
-            "No session here. Use /start to begin.",
-            reply_markup=_picker_kb(),
-        )
+        await update.message.reply_text("No session here. Use /start to begin.")
         return
 
     if not session.process.alive:
-        await update.message.reply_text("Process stopped. Use /new to restart.")
+        # Auto-cleanup dead session and free budget
+        await _kill_and_cleanup(ctx, update.effective_user.id, session.session_key)
+        await update.message.reply_text("Session ended. Use /start to begin.")
         return
 
     # Screen/video sessions are view-only
@@ -646,12 +634,6 @@ async def _start_session(update, ctx, backend_key: str, session_name: str) -> No
         await update.message.reply_text(f"Unknown: {backend_key}. Available: {keys}")
         return
 
-    if not can_afford(backend_key):
-        await update.message.reply_text(
-            "Too many active sessions. Stop a session first."
-        )
-        return
-
     # Screen/video capture: show window picker instead of starting immediately
     if backend_key in ("screen", "video"):
         cb_prefix = "scr" if backend_key == "screen" else "vid"
@@ -665,7 +647,6 @@ async def _start_session(update, ctx, backend_key: str, session_name: str) -> No
 async def _start_session_core(ctx, user_id: int, backend_key: str, session_name: str) -> None:
     backend     = get_backend(backend_key)
     session_key = f"{backend_key}:{session_name}"
-    register_cost(session_key)
     thread_id   = await get_or_create_topic(ctx.bot, user_id, session_key)
     params      = load_params(backend_key)
 
@@ -926,7 +907,6 @@ async def _start_screen_session(ctx, user_id: int, session_name: str, hwnd: int)
         if session_name in ("default", "auto"):
             session_name = _next_session_name()
     session_key = f"screen:{session_name}"
-    register_cost(session_key)
     thread_id = await get_or_create_topic(ctx.bot, user_id, session_key)
 
     async def _do_start(tid: int) -> None:
@@ -962,7 +942,7 @@ async def _start_screen_session(ctx, user_id: int, session_name: str, hwnd: int)
         session = await _mgr(ctx).start_screen_session(
             user_id=user_id, session_key=session_key, backend=backend,
             hwnd=hwnd, output_callback=on_frame, thread_id=tid,
-            capture_interval=60.0 / max(config.rate_cost_image(), 0.5),
+            capture_interval=config.image_interval(),
         )
         lp.process = session.process
         await bot.send_message(
@@ -994,14 +974,13 @@ async def _start_video_session(ctx, user_id: int, session_name: str, hwnd: int) 
         if session_name in ("default", "auto"):
             session_name = _next_session_name()
     session_key = f"video:{session_name}"
-    register_cost(session_key)
     thread_id = await get_or_create_topic(ctx.bot, user_id, session_key)
 
     async def _do_start(tid: int) -> None:
         bot = ctx.bot
         chat_id = config.telegram_group_id()
 
-        vc = VideoCapture(hwnd=hwnd, duration=60, fps=3)
+        vc = VideoCapture(hwnd=hwnd, duration=config.video_interval(), fps=3)
 
         def on_text(text: str) -> None:
             async def _send_text():
@@ -1045,7 +1024,7 @@ async def _start_video_session(ctx, user_id: int, session_name: str, hwnd: int) 
         )
         await bot.send_message(
             chat_id=chat_id, message_thread_id=tid,
-            text="🎬 Recording\u2026 Sends a video every 60s. Use /pause, /resume, or /stop.",
+            text=f"🎬 Recording\u2026 Sends a video every {config.video_interval()}s. Use /pause, /resume, or /stop.",
         )
 
     try:
@@ -1081,7 +1060,7 @@ class _FrameSender:
         if not self._send_scheduled:
             self._send_scheduled = True
             self._send_handle = self._loop.call_later(
-                60.0 / max(config.rate_cost_image(), 0.5),
+                config.image_interval(),
                 lambda: asyncio.ensure_future(self._do_send()),
             )
 

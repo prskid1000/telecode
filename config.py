@@ -97,22 +97,14 @@ def stt_base_url() -> str:  return _raw["voice"]["stt"]["base_url"]
 def stt_model()    -> str:  return _raw["voice"]["stt"]["model"]
 
 
-# ── Rate limits ──────────────────────────────────────────────────────────────
-def rate_budget() -> float:
-    """Max messages/min to the Telegram chat."""
-    return float(_raw.get("rate_limits", {}).get("budget_per_min", 20))
+# ── Capture intervals ────────────────────────────────────────────────────────
+def image_interval() -> float:
+    """Seconds between image capture sends."""
+    return float(_raw.get("capture", {}).get("image_interval", 15))
 
-def rate_cost_image() -> float:
-    """Base cost (msgs/min) for one image capture session."""
-    return float(_raw.get("rate_limits", {}).get("image", 4))
-
-def rate_cost_video() -> float:
-    """Base cost (msgs/min) for one video capture session."""
-    return float(_raw.get("rate_limits", {}).get("video", 1))
-
-def tool_rate(key: str) -> float:
-    """Cost (msgs/min) for a tool session from tools.<key>.rate."""
-    return float(tool_cfg(key).get("rate", 5))
+def video_interval() -> int:
+    """Seconds per video chunk (= recording length per segment)."""
+    return int(_raw.get("capture", {}).get("video_interval", 60))
 
 
 # ── Tools ─────────────────────────────────────────────────────────────────────
