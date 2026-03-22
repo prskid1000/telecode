@@ -68,6 +68,26 @@ API keys can be set from Telegram:
 python main.py
 ```
 
+To run in the background without a console window (Windows):
+
+```bash
+pythonw main.py
+```
+
+#### Auto-start on login (Windows)
+
+Create a scheduled task (requires admin):
+
+```powershell
+Register-ScheduledTask -TaskName "Telecode" `
+  -Action (New-ScheduledTaskAction -Execute "pythonw.exe" -Argument "main.py" -WorkingDirectory "C:\path\to\telecode") `
+  -Trigger (New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME) `
+  -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)) `
+  -Force
+```
+
+Use `pythonw.exe` (not `python.exe`) to keep the terminal hidden.
+
 ### 7. First session
 
 Send `/start` in the group, or `/new claude work`.
@@ -211,7 +231,9 @@ Cost-based rate limiting to stay within Telegram's 20 msgs/min per-chat limit.
 | `image` | number | Cost (msgs/min) per image capture session |
 | `video` | number | Cost (msgs/min) per video capture session |
 
-Image capture interval = `60 / image` seconds. The `/start` picker hides backends that would exceed the budget.
+Image capture interval = `60 / image` seconds. CLI tool cost comes from `tools.<key>.rate`.
+
+Budget is enforced on every session start path: the `/start` picker, `/new` command, window picker callbacks (screen/video), and session restart. If the budget is exhausted, the bot replies "Too many active sessions. Stop a session first."
 
 ### `tools.<key>`
 

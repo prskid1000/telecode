@@ -428,6 +428,14 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         session_key  = data.split(":", 1)[1]
         backend_key  = session_key.split(":")[0]
         session_name = session_key.split(":", 1)[1] if ":" in session_key else "default"
+        if not _can_afford(backend_key):
+            try:
+                await q.edit_message_text(
+                    "Too many active sessions. Stop a session first."
+                )
+            except TelegramError:
+                pass
+            return
         await _start_session_core(ctx, user_id, backend_key, session_name)
 
     elif data.startswith("interrupt:"):
@@ -446,6 +454,14 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
                 hwnd = int(hwnd_str)
             except ValueError:
                 return
+            if not _can_afford("screen"):
+                try:
+                    await q.edit_message_text(
+                        "Too many active sessions. Stop a session first."
+                    )
+                except TelegramError:
+                    pass
+                return
             try:
                 await q.edit_message_text("Starting image capture\u2026")
             except TelegramError:
@@ -460,6 +476,14 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
             try:
                 hwnd = int(hwnd_str)
             except ValueError:
+                return
+            if not _can_afford("video"):
+                try:
+                    await q.edit_message_text(
+                        "Too many active sessions. Stop a session first."
+                    )
+                except TelegramError:
+                    pass
                 return
             try:
                 await q.edit_message_text("Starting video recording\u2026")
