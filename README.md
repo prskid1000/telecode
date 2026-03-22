@@ -1,6 +1,6 @@
 # Telecode
 
-Telegram bot that connects AI coding CLIs (Claude Code, Codex) and screen capture to a Telegram group. Each session runs in its own forum topic.
+Telegram bot that connects AI coding CLIs (Claude Code, Codex), screen image capture, and screen video recording to a Telegram group. Each session runs in its own forum topic.
 
 Developer docs (architecture, internals, extending) are in [CLAUDE.md](CLAUDE.md).
 
@@ -10,6 +10,7 @@ Developer docs (architecture, internals, extending) are in [CLAUDE.md](CLAUDE.md
 
 - Python 3.11+
 - Node.js 18+ (for Claude Code, Codex)
+- ffmpeg (for video recording)
 
 ### 1. Install CLI tools
 
@@ -81,24 +82,44 @@ Send `/start` in the group, or `/new claude work`.
 | `/new <backend> [name]` | Start a named session (e.g. `/new claude work`) |
 | `/stop [session_key]` | Stop one or all sessions (e.g. `/stop claude:work`) |
 | `/key <key>` | Send a keyboard key to the terminal |
-| `/pause` | Pause screen capture |
-| `/resume` | Resume screen capture |
+| `/pause` | Pause image/video capture |
+| `/resume` | Resume image/video capture |
 | `/voice` | Voice input settings |
 | `/settings` | Configuration |
 | `/help` | List all commands |
 
-### Screen capture
+### Screen image capture
 
-Capture any window and stream full-resolution screenshots to a topic:
+Capture any window and stream screenshots (one new photo every 3s) to a topic:
 
 ```
 /new screen myapp
 ```
 
-Pick a window from the list. The bot streams screenshots (~2fps). Controls:
+Pick a window from the list. Each frame is sent as a new photo message. Controls:
 
-- `/pause` / `/resume` -- or use the inline buttons on the photo
+- `/pause` / `/resume` -- pause/resume streaming
 - `/stop screen:myapp` -- stop capture
+
+**Platform support:**
+- **Windows**: Uses PrintWindow API -- captures the specific window even if behind other windows
+- **Linux**: Uses ImageMagick `import -window`, falls back to mss region capture
+- **macOS**: Uses `screencapture -l<wid>`, falls back to mss region capture
+
+Minimized windows are automatically restored before capture.
+
+### Screen video capture
+
+Record a window continuously in 1-minute video chunks:
+
+```
+/new video myapp
+```
+
+Pick a window from the list. The bot records at 3fps, encodes each 1-minute chunk with ffmpeg (libx264, ultrafast, lightweight), and sends it as a video message. Recording continues until stopped. Controls:
+
+- `/pause` / `/resume` -- pause/resume recording (paused time doesn't count)
+- `/stop video:myapp` -- stop recording (encodes and sends any remaining frames)
 
 ### Terminal keys (`/key`)
 
@@ -182,7 +203,7 @@ PTY processes always start in the OS home directory.
 
 ### `tools.<key>`
 
-Each key matches `/new <key>` (e.g. `claude`, `codex`, `shell`, `powershell`, `screen`).
+Each key matches `/new <key>` (e.g. `claude`, `codex`, `shell`, `powershell`, `screen`, `video`).
 
 | Key | Type | Description |
 |-----|------|-------------|
@@ -203,13 +224,13 @@ store.py               JSON persistence
 
 backends/
   base.py              CLIBackend base class
-  implementations.py   Claude, Codex, Shell, PowerShell, Screen
+  implementations.py   Claude, Codex, Shell, PowerShell, Screen, Video
   registry.py          Backend lookup
   params.py            Load params from settings
 
 sessions/
   process.py           PTY process + pyte screen diffing
-  screen.py            Screen capture (mss + Pillow)
+  screen.py            Screen image capture (PrintWindow/mss) + video recording (ffmpeg)
   manager.py           Session lifecycle manager
 
 bot/
@@ -233,6 +254,8 @@ voice/
 
 **No output** -- Interactive prompt waiting. Send `/key enter` or `/key y`.
 
-**Screen capture black** -- Window may be minimized or on another virtual desktop.
+**Screen capture blank/black** -- Window may be on another virtual desktop. Minimized windows are auto-restored.
 
 **Voice not working** -- Run `/voice`. Start your STT service, detected within 60s.
+
+**Video encoding fails** -- Ensure ffmpeg is installed and on PATH.
