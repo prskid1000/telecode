@@ -120,12 +120,13 @@ Tunables near top of `process.py`: idle interval, max wait, screen rows/history 
 
 ## Adding a CLI backend
 
-1. Class in `backends/implementations.py` extending `CLIBackend` (`info`, optional `build_launch_cmd`, `startup_message`).
-2. Register instance in `backends/registry.py`.
-3. Add `tools.<key>` in `settings.json` (`startup_cmd`, `flags`, `env`, `session` if needed).
-4. Add icon to `BACKEND_ICONS` in `implementations.py`.
+Just add a `tools.<key>` entry in `settings.json` with `startup_cmd`, `flags`, `env`, `session`.
+The registry auto-creates a `GenericCLIBackend` for any key that isn't a special non-PTY backend.
 
-Test: `/new <key> test`.
+Optionally add a display name to `BACKEND_NAMES` and icon to `BACKEND_ICONS` in `implementations.py`.
+If not set, the key is title-cased and gets a 🔧 icon.
+
+Test: `/settings reload` then `/new <key> test`.
 
 ---
 
