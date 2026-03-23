@@ -20,6 +20,7 @@ log = logging.getLogger("telecode.manager")
 from backends.base import CLIBackend, BackendParams
 from sessions.process import PTYProcess
 from sessions.screen import ScreenCapture, VideoCapture
+from sessions.computer import ComputerControl
 
 
 @dataclass
@@ -161,9 +162,45 @@ class SessionManager:
             self._sessions.setdefault(user_id, {})[session_key] = session
             return session
 
+    async def start_computer_session(
+        self,
+        user_id:          int,
+        session_key:      str,
+        backend:          CLIBackend,
+        hwnd:             int,
+        text_callback:    Callable[[str], None],
+        frame_callback:   Callable[[bytes], None],
+        thread_id:        int | None = None,
+    ) -> Session:
+        async with self._lock:
+            await self._kill_one_locked(user_id, session_key)
+
+            process = ComputerControl(hwnd=hwnd)
+            process.subscribe(text_callback)
+            process.subscribe_frame(frame_callback)
+            await process.start()
+
+            session = Session(
+                user_id=user_id,
+                session_key=session_key,
+                backend=backend,
+                params=BackendParams(),
+                process=process,
+                workdir=config.pty_cwd(),
+                thread_id=thread_id,
+            )
+            self._sessions.setdefault(user_id, {})[session_key] = session
+
+            if config.idle_timeout() > 0:
+                session._idle_task = asyncio.ensure_future(
+                    self._idle_watcher(user_id, session_key)
+                )
+
+            return session
+
     def pause_session(self, user_id: int, session_key: str) -> bool:
         session = self._sessions.get(user_id, {}).get(session_key)
-        if session and isinstance(session.process, (ScreenCapture, VideoCapture)):
+        if session and isinstance(session.process, (ScreenCapture, VideoCapture, ComputerControl)):
             session.process.pause()
             session.touch()
             return True
@@ -171,7 +208,7 @@ class SessionManager:
 
     def resume_session(self, user_id: int, session_key: str) -> bool:
         session = self._sessions.get(user_id, {}).get(session_key)
-        if session and isinstance(session.process, (ScreenCapture, VideoCapture)):
+        if session and isinstance(session.process, (ScreenCapture, VideoCapture, ComputerControl)):
             session.process.resume()
             session.touch()
             return True
