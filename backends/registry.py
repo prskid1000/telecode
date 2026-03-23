@@ -5,13 +5,14 @@ PTY-based backends are GenericCLIBackend instances created from config.
 Screen and Video are special non-PTY backends with their own classes.
 """
 from .base import CLIBackend
-from .implementations import GenericCLIBackend, ScreenBackend, VideoBackend, NON_PTY_KEYS
+from .implementations import GenericCLIBackend, ScreenBackend, VideoBackend, ComputerBackend, NON_PTY_KEYS
 import config
 
 # Special non-PTY backends
 _SPECIAL: dict[str, CLIBackend] = {
-    "screen": ScreenBackend(),
-    "video":  VideoBackend(),
+    "screen":   ScreenBackend(),
+    "video":    VideoBackend(),
+    "computer": ComputerBackend(),
 }
 
 

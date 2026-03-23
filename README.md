@@ -128,6 +128,46 @@ Pick a window from the list. Each frame is sent as a new photo message. Controls
 
 Minimized windows are automatically restored before capture.
 
+### Computer control (vision LLM)
+
+Control any window or the entire screen using a vision-capable LLM. The bot captures screenshots, sends them to the LLM, and executes the LLM's actions (click, type, key, scroll):
+
+```
+/new computer
+```
+
+Pick a window or "Full Screen" from the list. Then send natural language instructions:
+
+- "Navigate to google.com"
+- "Click on the search box and type hello"
+- "Scroll down and click the blue button"
+
+The LLM performs one action at a time, verifying the result after each step. A screenshot is sent to the topic after each action. The loop continues until the LLM marks the task as done.
+
+**Configuration** in `settings.json` under `tools.computer`:
+
+```json
+"computer": {
+  "api": {
+    "base_url": "http://localhost:1234/v1",
+    "api_key": "lm-studio",
+    "model": "qwen3.5-9b"
+  },
+  "capture_interval": 3,
+  "max_history": 20,
+  "system_prompt": ""
+}
+```
+
+Works with any OpenAI-compatible vision API (LM Studio, Ollama, vLLM, etc.). Requires a vision-capable model.
+
+Controls:
+- Send a new message to interrupt and give a new instruction
+- `/pause` / `/resume` -- pause/resume
+- `/stop` -- stop the session
+
+**Requirements:** `pyautogui` (included in requirements.txt)
+
 ### Screen video capture
 
 Record a window continuously in video chunks (length = `capture.video_interval` seconds, default 60):
@@ -242,7 +282,18 @@ Each key under `tools` becomes a backend available via `/new <key>`. Add any too
 | `session` | object | Backend-specific options (e.g. `resume_id` → `--resume`) |
 
 Built-in backends: `claude`, `claude-local`, `codex`, `codex-local`, `shell`, `powershell`.
-Screen image capture (`screen`) and video recording (`video`) are internal non-PTY backends.
+Screen image capture (`screen`), video recording (`video`), and computer control (`computer`) are internal non-PTY backends.
+
+### `tools.computer`
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `api.base_url` | string | OpenAI-compatible API endpoint |
+| `api.api_key` | string | API key |
+| `api.model` | string | Vision-capable model name |
+| `capture_interval` | number | Seconds between captures (default 3) |
+| `max_history` | number | Max conversation turns to keep (default 20) |
+| `system_prompt` | string | Override the default system prompt (empty = use built-in) |
 
 ---
 
@@ -256,13 +307,14 @@ store.py               JSON persistence
 
 backends/
   base.py              CLIBackend base class
-  implementations.py   GenericCLIBackend (data-driven) + Screen, Video
+  implementations.py   GenericCLIBackend (data-driven) + Screen, Video, Computer
   registry.py          Auto-built from settings.json tools
   params.py            Load params from settings
 
 sessions/
   process.py           PTY process + pyte screen diffing
   screen.py            Screen image capture (PrintWindow/mss) + video recording (ffmpeg)
+  computer.py          Vision LLM computer control (capture + actions)
   manager.py           Session lifecycle manager
 
 bot/

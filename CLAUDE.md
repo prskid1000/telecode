@@ -1,6 +1,6 @@
 # CLAUDE.md — Telecode developer guide
 
-Telecode is a **Telegram bot** that runs **CLI tools** (Claude Code, Codex, shell) inside a **pseudo-terminal**, reads their screen with **pyte**, and posts text to **forum topic** threads. It also supports **screen image capture** and **screen video recording** of any window. It does **not** call any AI API itself.
+Telecode is a **Telegram bot** that runs **CLI tools** (Claude Code, Codex, shell) inside a **pseudo-terminal**, reads their screen with **pyte**, and posts text to **forum topic** threads. It also supports **screen image capture**, **screen video recording**, and **vision-LLM-driven computer control** of any window or the full screen.
 
 User-facing docs (setup, commands, settings reference) are in [README.md](README.md).
 
@@ -28,6 +28,16 @@ Screen video capture:
     -> capture_window(hwnd) -> JPEG frames saved to temp dir (3fps)
     -> every capture.video_interval seconds: ffmpeg encodes frames -> MP4 -> send_video
     -> repeats until /stop
+
+Computer control (vision LLM):
+    /new computer -> window picker + "Full Screen" option
+    -> user picks target -> ComputerControl(hwnd) starts
+    -> user sends instruction via Telegram
+    -> capture screenshot (with cursor drawn) -> send to user + vision LLM
+    -> LLM returns structured JSON: {thought, done, action}
+    -> execute action via pyautogui (click/type/key/scroll)
+    -> capture post-action screenshot -> edit same photo message
+    -> repeat (one action per LLM call) until done=true or user sends new message
 ```
 
 - **Session key:** `{backend}:{name}` -- colon is the separator; do not use colons in names.
@@ -65,6 +75,7 @@ Screen video capture:
 | `store.py` | Topics + voice prefs JSON |
 | `sessions/process.py` | PTY + pyte + snapshot diff + timers |
 | `sessions/screen.py` | Image capture, video recording, window enumeration |
+| `sessions/computer.py` | Vision LLM computer control (capture + actions + LLM loop) |
 | `sessions/manager.py` | Start/kill sessions, send, send_raw, interrupt, pause/resume |
 | `bot/handlers.py` | Commands, callbacks, `_LiveMessage`, `_FrameSender` |
 | `bot/rate.py` | Stale session cleanup, topic probing, topic-gone detection |
@@ -82,7 +93,7 @@ Screen video capture:
 1. **Config** -- only `settings.json`; no scattered env vars except `TELECODE_SETTINGS`.
 2. **`config.py`** -- always `config.foo()`, never cached module-level constants for values that can change.
 3. **Sessions** -- key format `backend:name`; routing by `thread_id` only.
-4. **Processes** -- real PTY (Unix `openpty`, Windows ConPTY via pywinpty), not plain pipes. Screen capture uses PrintWindow (Win) / screencapture (Mac) / import (Linux), not PTY.
+4. **Processes** -- real PTY (Unix `openpty`, Windows ConPTY via pywinpty), not plain pipes. Screen capture uses PrintWindow (Win) / screencapture (Mac) / import (Linux), not PTY. Computer control uses `pyautogui` for mouse/keyboard.
 5. **Telegram** -- `ParseMode.HTML`; escape user/process text with `html.escape()` where needed.
 6. **No** in-bot AI and **no** separate "memory" layer -- CLIs own context.
 
@@ -127,6 +138,26 @@ Tunables near top of `process.py`: idle interval, max wait, screen rows/history 
 6. Continues until `/stop`. On stop, encodes and sends any remaining frames.
 7. Pause: recording loop sleeps, paused time doesn't count towards chunk duration.
 8. Minimized windows: auto-restored before each frame capture.
+
+---
+
+## Computer control pipeline (`sessions/computer.py`)
+
+1. `ComputerControl(hwnd)` — duck-type compatible with PTYProcess/ScreenCapture (`.alive`, `.start()`, `.stop()`, `.subscribe()`, `.send()`).
+2. `hwnd=0` (sentinel `FULL_SCREEN_HWND`) captures the entire screen via `mss`. Otherwise captures the specific window via `capture_window()`.
+3. Mouse cursor position is drawn onto every screenshot as a red crosshair (since PrintWindow/mss don't capture the OS cursor).
+4. Coordinates: screenshots are physical pixels, window rect is logical pixels. The ratio `img_w/win_w` naturally handles DPI scaling. `pyautogui` receives logical coords.
+5. Action loop (one action per LLM call):
+   - User sends message → capture screenshot → send to vision LLM with conversation history.
+   - LLM returns structured JSON: `{thought, done, action}` via `response_format: json_schema`.
+   - If `done=false`: execute the single action via `pyautogui`, capture post-action screenshot, send to user (edit photo in place), loop back to call LLM again.
+   - `wait` actions are handled async (not blocking a thread), capped at 30s. After wait, screenshot is sent to LLM with "Continue." to check if the UI has updated.
+   - If `done=true`: send final screenshot, break loop, wait for next user message.
+   - If user sends new message mid-loop: interrupts via `_msg_queue.get_nowait()`, restarts with new instruction.
+6. LLM API: OpenAI-compatible `POST /chat/completions` with vision (base64 JPEG in `image_url`). Works with LM Studio, Ollama, vLLM, etc.
+7. Conversation history: rolling window of `max_history` turns. System prompt teaches computer interaction fundamentals (mouse, focus, text cursor, selection, editing, UI elements).
+8. Photo delivery: first screenshot sends a new photo message, subsequent screenshots edit the same message via `edit_message_media`.
+9. Text delivery: thoughts and action summaries go through `_send_output` → `_LiveMessage.append()` (same as PTY sessions).
 
 ---
 
@@ -180,6 +211,8 @@ Test: `/settings reload` then `/new <key> test`.
 | `settings` change ignored | `/settings reload` or restart |
 | Screen capture blank | Window may be on another virtual desktop; minimized windows are auto-restored |
 | Video encoding fails | Ensure ffmpeg is on PATH; check logs for ffmpeg stderr |
+| Computer control clicks wrong spot | DPI scaling issue; check `_get_window_rect` returns logical coords |
+| Computer control LLM error | Check LM Studio is running, model is loaded, base_url/model in settings |
 | Voice not working | Run `/voice`; start STT service, bot detects within 60s |
 
 ---
@@ -192,4 +225,4 @@ Use `pythonw main.py` instead of `python main.py` to run without a console windo
 
 ## Dependencies (see `requirements.txt`)
 
-**python-telegram-bot**, **aiohttp**, **aiofiles**, **pyte**, **pywinpty** (Windows PTY), **mss** (fallback capture on Linux/Mac), **Pillow** (JPEG encoding), **pywin32** (Windows Session 0 support). ffmpeg must be on PATH for video recording.
+**python-telegram-bot**, **aiohttp**, **aiofiles**, **pyte**, **pywinpty** (Windows PTY), **mss** (fallback capture on Linux/Mac), **Pillow** (JPEG encoding), **pywin32** (Windows Session 0 support), **pyautogui** (mouse/keyboard for computer control). ffmpeg must be on PATH for video recording.

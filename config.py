@@ -133,6 +133,29 @@ def all_tool_keys() -> list[str]:
     return list(_raw.get("tools", {}).keys())
 
 
+# ── Computer control ────────────────────────────────────────────────────────
+def _computer_cfg() -> dict[str, Any]:
+    return tool_cfg("computer")
+
+def computer_api_base_url() -> str:
+    return _computer_cfg().get("api", {}).get("base_url", "http://localhost:1234/v1")
+
+def computer_api_key() -> str:
+    return _computer_cfg().get("api", {}).get("api_key", "")
+
+def computer_model() -> str:
+    return _computer_cfg().get("api", {}).get("model", "")
+
+def computer_capture_interval() -> float:
+    return float(_computer_cfg().get("capture_interval", 3))
+
+def computer_system_prompt() -> str:
+    return _computer_cfg().get("system_prompt", "")
+
+def computer_max_history() -> int:
+    return int(_computer_cfg().get("max_history", 20))
+
+
 # ── Validation ────────────────────────────────────────────────────────────────
 def validate() -> list[str]:
     w: list[str] = []

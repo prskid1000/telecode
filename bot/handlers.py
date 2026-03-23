@@ -16,6 +16,7 @@ from backends.registry import get_backend, all_backends
 from backends.params import load_params
 from sessions.manager import SessionManager
 from sessions.screen import ScreenCapture, VideoCapture, enumerate_windows, get_window_title
+from sessions.computer import ComputerControl
 from bot.topic_manager import get_or_create_topic, invalidate_topic, close_topic
 from bot.settings_handler import handle_settings
 from bot.rate import (
@@ -245,8 +246,9 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "<b>Screen capture</b>\n"
         "/new screen [name] - Stream window images\n"
         "/new video [name] - Record 1-min window video\n"
-        "/pause - Pause image capture\n"
-        "/resume - Resume image capture\n\n"
+        "/new computer [name] - Control a window via vision LLM\n"
+        "/pause - Pause capture\n"
+        "/resume - Resume capture\n\n"
         "<b>Other</b>\n"
         "/voice - Voice settings\n"
         "/settings - Configuration\n"
@@ -425,9 +427,9 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
 
         await cleanup_stale_sessions(ctx.bot, _mgr(ctx), user_id)
 
-        # Screen/video capture: show window picker instead of starting immediately
-        if backend_key in ("screen", "video"):
-            cb_prefix = "scr" if backend_key == "screen" else "vid"
+        # Screen/video/computer: show window picker instead of starting immediately
+        if backend_key in ("screen", "video", "computer"):
+            cb_prefix = {"screen": "scr", "video": "vid", "computer": "cmp"}[backend_key]
             windows = enumerate_windows()
             if not windows:
                 try:
@@ -436,16 +438,24 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
                     pass
                 return
             rows = []
+            # Computer control: add "Full Screen" option at the top
+            if backend_key == "computer":
+                rows.append([InlineKeyboardButton(
+                    "\U0001f5a5 Full Screen", callback_data="cmp:auto:0",
+                )])
             for hwnd, title in windows[:20]:
                 label = title[:40] + "\u2026" if len(title) > 40 else title
                 cb_data = f"{cb_prefix}:auto:{hwnd}"
                 if len(cb_data) <= 64:
                     rows.append([InlineKeyboardButton(label, callback_data=cb_data)])
-            prompt = ("Pick a window to capture:" if backend_key == "screen"
-                      else "Pick a window to record:")
+            prompts = {
+                "screen": "Pick a window to capture:",
+                "video": "Pick a window to record:",
+                "computer": "Pick a window or full screen to control:",
+            }
             try:
                 await q.edit_message_text(
-                    prompt,
+                    prompts[backend_key],
                     reply_markup=InlineKeyboardMarkup(rows),
                 )
             except TelegramError as e:
@@ -511,6 +521,22 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
                 pass
             await _start_video_session(ctx, user_id, session_name, hwnd)
 
+    elif data.startswith("cmp:"):
+        # Computer control window picker callback: cmp:{session_name}:{hwnd}
+        parts = data.split(":", 2)
+        if len(parts) == 3:
+            session_name, hwnd_str = parts[1], parts[2]
+            try:
+                hwnd = int(hwnd_str)
+            except ValueError:
+                return
+            await cleanup_stale_sessions(ctx.bot, _mgr(ctx), user_id)
+            try:
+                await q.edit_message_text("Starting computer control\u2026")
+            except TelegramError:
+                pass
+            await _start_computer_session(ctx, user_id, session_name, hwnd)
+
     elif data.startswith("scr_pause:"):
         session_key = data.split(":", 1)[1]
         if _mgr(ctx).pause_session(user_id, session_key):
@@ -568,6 +594,24 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     thread_id = update.message.message_thread_id
     chat_id = config.telegram_group_id()
     bot = ctx.bot
+
+    # Computer control sessions: route text to LLM via .send()
+    if isinstance(session.process, ComputerControl):
+        # Finalize previous live message, start a fresh one for this turn
+        old_lm = _live_messages.pop(thread_id, None)
+        if old_lm:
+            await old_lm.finalize()
+        lm = _LiveMessage(bot, chat_id, thread_id)
+        _live_messages[thread_id] = lm
+
+        text = update.message.text.strip()
+        log.info("Sending to computer control %s: %.100s", session.session_key, text)
+        try:
+            await session.process.send(text)
+            session.touch()
+        except Exception as e:
+            await update.message.reply_text(f"Error: {e}")
+        return
 
     # Finalize previous live message, start a fresh one for this turn
     old_lm = _live_messages.pop(thread_id, None)
@@ -658,9 +702,9 @@ async def _start_session(update, ctx, backend_key: str, session_name: str) -> No
         await update.message.reply_text(f"Unknown: {backend_key}. Available: {keys}")
         return
 
-    # Screen/video capture: show window picker instead of starting immediately
-    if backend_key in ("screen", "video"):
-        cb_prefix = "scr" if backend_key == "screen" else "vid"
+    # Screen/video/computer: show window picker instead of starting immediately
+    if backend_key in ("screen", "video", "computer"):
+        cb_prefix = {"screen": "scr", "video": "vid", "computer": "cmp"}[backend_key]
         await _show_window_picker(update, session_name, cb_prefix)
         return
 
@@ -916,15 +960,21 @@ async def _show_window_picker(update: Update, session_name: str, cb_prefix: str 
         return
 
     rows = []
+    # Computer control: add "Full Screen" option at the top
+    if cb_prefix == "cmp":
+        rows.append([InlineKeyboardButton(
+            "\U0001f5a5 Full Screen", callback_data=f"cmp:{session_name}:0",
+        )])
     for hwnd, title in windows[:20]:
         label = title[:40] + "\u2026" if len(title) > 40 else title
         cb_data = f"{cb_prefix}:{session_name}:{hwnd}"
         if len(cb_data) <= 64:
             rows.append([InlineKeyboardButton(label, callback_data=cb_data)])
 
-    prompt = "Pick a window to capture:" if cb_prefix == "scr" else "Pick a window to record:"
+    prompts = {"scr": "Pick a window to capture:", "vid": "Pick a window to record:",
+               "cmp": "Pick a window or full screen to control:"}
     await update.message.reply_text(
-        prompt,
+        prompts.get(cb_prefix, "Pick a window:"),
         reply_markup=InlineKeyboardMarkup(rows),
     )
 
@@ -1083,6 +1133,98 @@ async def _start_video_session(ctx, user_id: int, session_name: str, hwnd: int) 
         await _do_start(thread_id)
 
 
+async def _start_computer_session(ctx, user_id: int, session_name: str, hwnd: int) -> None:
+    """Create a topic and start a ComputerControl session."""
+    from sessions.computer import FULL_SCREEN_HWND
+    backend = get_backend("computer")
+    if session_name in ("default", "auto"):
+        if hwnd == FULL_SCREEN_HWND:
+            session_name = "Full Screen"
+        else:
+            win_title = get_window_title(hwnd)
+            if win_title:
+                clean = win_title.strip().replace(":", "-")[:60]
+                if clean:
+                    session_name = clean
+            if session_name in ("default", "auto"):
+                session_name = _next_session_name()
+    session_key = f"computer:{session_name}"
+    thread_id = await get_or_create_topic(ctx.bot, user_id, session_key)
+
+    async def _do_start(tid: int) -> None:
+        bot = ctx.bot
+        chat_id = config.telegram_group_id()
+
+        def on_text(text: str) -> None:
+            asyncio.ensure_future(_send_output(bot, chat_id, tid, text))
+
+        # Track the current screenshot message so we can edit it in place
+        _photo_msg_id: dict[str, int | None] = {"id": None}
+
+        def on_frame(jpeg_bytes: bytes) -> None:
+            async def _send_or_edit_photo():
+                if _flood_active():
+                    return
+                try:
+                    photo_buf = io.BytesIO(jpeg_bytes)
+                    photo_buf.name = "screen.jpg"
+                    from telegram import InputMediaPhoto
+                    if _photo_msg_id["id"]:
+                        # Edit existing photo message
+                        try:
+                            await bot.edit_message_media(
+                                chat_id=chat_id,
+                                message_id=_photo_msg_id["id"],
+                                media=InputMediaPhoto(media=photo_buf),
+                            )
+                            return
+                        except BadRequest:
+                            # Edit failed — fall through to send new
+                            _photo_msg_id["id"] = None
+                            photo_buf.seek(0)
+                    # Send new photo
+                    msg = await bot.send_photo(
+                        chat_id=chat_id,
+                        message_thread_id=tid,
+                        photo=photo_buf,
+                    )
+                    _photo_msg_id["id"] = msg.message_id
+                except RetryAfter as e:
+                    _set_flood_backoff(e.retry_after)
+                    log.warning("Computer photo flood control — backing off %ds", e.retry_after)
+                except BadRequest as e:
+                    if is_thread_not_found(e):
+                        asyncio.ensure_future(handle_topic_gone(tid))
+                        return
+                    log.warning("Computer photo send failed: %s", e)
+                except TelegramError as e:
+                    log.warning("Computer photo send failed: %s", e)
+            asyncio.ensure_future(_send_or_edit_photo())
+
+        await _mgr(ctx).start_computer_session(
+            user_id=user_id, session_key=session_key, backend=backend,
+            hwnd=hwnd, text_callback=on_text, frame_callback=on_frame,
+            thread_id=tid,
+        )
+        await bot.send_message(
+            chat_id=chat_id, message_thread_id=tid,
+            text="🖥️ <b>Computer Control</b> — Ready\n\n"
+                 "Send a message to instruct the AI to control this window.\n"
+                 "Use /stop to end the session.",
+            parse_mode=ParseMode.HTML,
+        )
+
+    try:
+        await _do_start(thread_id)
+    except BadRequest as exc:
+        if "thread not found" not in str(exc).lower():
+            raise
+        await invalidate_topic(user_id, session_key)
+        await _kill_and_cleanup(ctx, user_id, session_key)
+        thread_id = await get_or_create_topic(ctx.bot, user_id, session_key)
+        await _do_start(thread_id)
+
+
 class _FrameSender:
     """Sends each JPEG frame as a new photo message in a topic."""
 
@@ -1161,8 +1303,8 @@ async def cmd_pause(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _auth(update, ctx):
         return
     session = _session_for_thread(update, ctx)
-    if not session or not isinstance(session.process, (ScreenCapture, VideoCapture)):
-        await update.message.reply_text("No capture session in this thread.")
+    if not session or not isinstance(session.process, (ScreenCapture, VideoCapture, ComputerControl)):
+        await update.message.reply_text("No capture/control session in this thread.")
         return
     _mgr(ctx).pause_session(update.effective_user.id, session.session_key)
     # Cancel any pending photo send
@@ -1179,8 +1321,8 @@ async def cmd_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _auth(update, ctx):
         return
     session = _session_for_thread(update, ctx)
-    if not session or not isinstance(session.process, (ScreenCapture, VideoCapture)):
-        await update.message.reply_text("No capture session in this thread.")
+    if not session or not isinstance(session.process, (ScreenCapture, VideoCapture, ComputerControl)):
+        await update.message.reply_text("No capture/control session in this thread.")
         return
     _mgr(ctx).resume_session(update.effective_user.id, session.session_key)
     await update.message.reply_text("\u25b6 Resumed.")

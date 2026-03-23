@@ -12,8 +12,8 @@ SESSION_ARG_FLAGS: dict[str, str] = {
     "resume_id": "--resume",
 }
 
-# Keys that are non-PTY (screen capture, video) — handled separately.
-NON_PTY_KEYS = {"screen", "video"}
+# Keys that are non-PTY (screen capture, video, computer control) — handled separately.
+NON_PTY_KEYS = {"screen", "video", "computer"}
 
 
 class GenericCLIBackend(CLIBackend):
@@ -80,3 +80,19 @@ class VideoBackend(CLIBackend):
 
     def startup_message(self) -> str:
         return "🎬 <b>Screen Video Capture</b> — Recording"
+
+
+class ComputerBackend(CLIBackend):
+    @property
+    def info(self) -> BackendInfo:
+        return BackendInfo(
+            key="computer", name="Computer Control",
+            description="Control a window via vision LLM",
+            base_cmd=[], default_flags=[],
+        )
+
+    def build_launch_cmd(self, params: BackendParams) -> list[str]:
+        return []
+
+    def startup_message(self) -> str:
+        return "🖥️ <b>Computer Control</b> — Ready"
