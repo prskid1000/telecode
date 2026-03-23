@@ -119,6 +119,18 @@
       "flags": [],
       "env": {},
       "session": {}
+    },
+    "computer": {
+      "name": "Computer Control",
+      "icon": "🖥️",
+      "api": {
+        "base_url": "http://localhost:1234/v1",
+        "api_key": "lm-studio",
+        "model": "qwen3.5-9b"
+      },
+      "capture_interval": 3,
+      "max_history": 20,
+      "system_prompt": ""
     }
   }
 }
