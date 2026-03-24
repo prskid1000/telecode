@@ -154,7 +154,7 @@ Tunables near top of `process.py`: idle interval, max wait, screen rows/history 
    - `wait` actions are handled async (not blocking a thread), capped at 30s. After wait, screenshot is sent to LLM with "Continue." to check if the UI has updated.
    - If `done=true`: send final screenshot, break loop, wait for next user message.
    - If user sends new message mid-loop: interrupts via `_msg_queue.get_nowait()`, restarts with new instruction.
-6. LLM API: supports both OpenAI (`/chat/completions`) and Anthropic (`/messages`) wire formats, toggled by `api.format` in settings. Works with LM Studio, Ollama, vLLM, etc.
+6. LLM API: supports OpenAI (`/chat/completions`), Anthropic (`/messages`), and Claude Code CLI (`claude -p --output-format json`) wire formats, toggled by `api.format` in settings (`"openai"`, `"anthropic"`, `"claude-code"`). Claude Code format uses `--resume` for conversation continuity and `--json-schema` for structured output. When `base_url`/`api_key`/`model` are set with `claude-code` format, they are passed as `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_MODEL` env vars to the subprocess — enabling local LM Studio backends without code changes.
 7. Conversation history: rolling window of `max_history` turns. System prompt teaches computer interaction fundamentals (mouse, focus, text cursor, selection, editing, UI elements).
 8. Photo delivery: first screenshot sends a new photo message, subsequent screenshots edit the same message via `edit_message_media`.
 9. Text delivery: thoughts and action summaries go through `_send_output` → `_LiveMessage.append()` (same as PTY sessions).
