@@ -5,8 +5,9 @@ The LLM sees screenshots of a target window and responds with JSON actions
 pyautogui, with coordinates translated from window-relative to absolute screen
 positions.
 
-Uses OpenAI-compatible chat/completions API — works with LM Studio, Ollama,
-vLLM, or any provider that supports vision.
+Supports both OpenAI-compatible and Anthropic API formats — toggle via
+``api.format`` in settings (``"openai"`` or ``"anthropic"``).  Works with
+LM Studio, Ollama, vLLM, or any provider that supports either format.
 """
 from __future__ import annotations
 
@@ -251,7 +252,51 @@ def _execute_action(action: dict, win_left: int, win_top: int,
 # LLM API call
 # ═══════════════════════════════════════════════════════════════════════════════
 
+_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "thought": {"type": "string", "description": "Brief reasoning about what you see and plan to do"},
+        "done": {"type": "boolean", "description": "True when the task is fully complete"},
+        "action": {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "enum": ["click", "type", "key", "scroll", "move", "wait"]},
+                        "x": {"type": "integer"},
+                        "y": {"type": "integer"},
+                        "button": {"type": "string"},
+                        "text": {"type": "string"},
+                        "keys": {"type": "array", "items": {"type": "string"}},
+                        "direction": {"type": "string"},
+                        "amount": {"type": "integer"},
+                        "seconds": {"type": "number"},
+                    },
+                    "required": ["action"],
+                },
+                {"type": "null"},
+            ],
+            "description": "Single action to perform, or null if done",
+        },
+    },
+    "required": ["thought", "done", "action"],
+}
+
+
 async def _call_vision_llm(
+    messages: list[dict],
+    base_url: str,
+    api_key: str,
+    model: str,
+    api_format: str = "openai",
+) -> str:
+    """Call a vision LLM. Supports OpenAI and Anthropic wire formats."""
+    if api_format == "anthropic":
+        return await _call_vision_llm_anthropic(messages, base_url, api_key, model)
+    return await _call_vision_llm_openai(messages, base_url, api_key, model)
+
+
+async def _call_vision_llm_openai(
     messages: list[dict],
     base_url: str,
     api_key: str,
@@ -273,35 +318,7 @@ async def _call_vision_llm(
             "json_schema": {
                 "name": "computer_action",
                 "strict": True,
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "thought": {"type": "string", "description": "Brief reasoning about what you see and plan to do"},
-                        "done": {"type": "boolean", "description": "True when the task is fully complete"},
-                        "action": {
-                            "oneOf": [
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "action": {"type": "string", "enum": ["click", "type", "key", "scroll", "move", "wait"]},
-                                        "x": {"type": "integer"},
-                                        "y": {"type": "integer"},
-                                        "button": {"type": "string"},
-                                        "text": {"type": "string"},
-                                        "keys": {"type": "array", "items": {"type": "string"}},
-                                        "direction": {"type": "string"},
-                                        "amount": {"type": "integer"},
-                                        "seconds": {"type": "number"},
-                                    },
-                                    "required": ["action"],
-                                },
-                                {"type": "null"},
-                            ],
-                            "description": "Single action to perform, or null if done",
-                        },
-                    },
-                    "required": ["thought", "done", "action"],
-                },
+                "schema": _JSON_SCHEMA,
             },
         },
     }
@@ -313,6 +330,86 @@ async def _call_vision_llm(
                 raise RuntimeError(f"LLM API error {resp.status}: {body[:500]}")
             data = await resp.json()
             return data["choices"][0]["message"]["content"]
+
+
+async def _call_vision_llm_anthropic(
+    messages: list[dict],
+    base_url: str,
+    api_key: str,
+    model: str,
+) -> str:
+    """Call Anthropic-format /messages endpoint with vision."""
+    url = f"{base_url.rstrip('/')}/messages"
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": api_key or "",
+        "anthropic-version": "2023-06-01",
+    }
+
+    # Separate system prompt from conversation messages
+    system_text = ""
+    conv_messages: list[dict] = []
+    for msg in messages:
+        if msg["role"] == "system":
+            system_text = msg["content"] if isinstance(msg["content"], str) else ""
+        else:
+            conv_messages.append(_to_anthropic_message(msg))
+
+    payload: dict[str, Any] = {
+        "model": model,
+        "max_tokens": 4096,
+        "temperature": 0.1,
+        "messages": conv_messages,
+    }
+    if system_text:
+        payload["system"] = system_text
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=120)) as resp:
+            if resp.status != 200:
+                body = await resp.text()
+                raise RuntimeError(f"LLM API error {resp.status}: {body[:500]}")
+            data = await resp.json()
+            # Anthropic returns content as a list of blocks
+            blocks = data.get("content", [])
+            texts = [b["text"] for b in blocks if b.get("type") == "text"]
+            return "\n".join(texts)
+
+
+def _to_anthropic_message(msg: dict) -> dict:
+    """Convert an OpenAI-format message to Anthropic format."""
+    role = msg["role"]
+    content = msg.get("content", "")
+
+    # Simple text message
+    if isinstance(content, str):
+        return {"role": role, "content": content}
+
+    # Multi-part content (text + images)
+    anthropic_parts: list[dict] = []
+    for part in content:
+        if part.get("type") == "text":
+            anthropic_parts.append({"type": "text", "text": part["text"]})
+        elif part.get("type") == "image_url":
+            # Extract base64 data from data URI
+            data_uri = part["image_url"]["url"]
+            # Format: data:image/jpeg;base64,<data>
+            if data_uri.startswith("data:"):
+                header, b64data = data_uri.split(",", 1)
+                # Extract media type: "data:image/jpeg;base64" -> "image/jpeg"
+                media_type = header.split(":")[1].split(";")[0]
+            else:
+                b64data = data_uri
+                media_type = "image/jpeg"
+            anthropic_parts.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": b64data,
+                },
+            })
+    return {"role": role, "content": anthropic_parts}
 
 
 def _parse_llm_response(raw: str) -> tuple[str, bool, dict | None]:
@@ -725,6 +822,7 @@ class ComputerControl:
                             base_url=config.computer_api_base_url(),
                             api_key=config.computer_api_key(),
                             model=config.computer_model(),
+                            api_format=config.computer_api_format(),
                         )
                     except Exception as e:
                         self._emit_text(f"LLM error: {e}")

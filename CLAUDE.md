@@ -154,7 +154,7 @@ Tunables near top of `process.py`: idle interval, max wait, screen rows/history 
    - `wait` actions are handled async (not blocking a thread), capped at 30s. After wait, screenshot is sent to LLM with "Continue." to check if the UI has updated.
    - If `done=true`: send final screenshot, break loop, wait for next user message.
    - If user sends new message mid-loop: interrupts via `_msg_queue.get_nowait()`, restarts with new instruction.
-6. LLM API: OpenAI-compatible `POST /chat/completions` with vision (base64 JPEG in `image_url`). Works with LM Studio, Ollama, vLLM, etc.
+6. LLM API: supports both OpenAI (`/chat/completions`) and Anthropic (`/messages`) wire formats, toggled by `api.format` in settings. Works with LM Studio, Ollama, vLLM, etc.
 7. Conversation history: rolling window of `max_history` turns. System prompt teaches computer interaction fundamentals (mouse, focus, text cursor, selection, editing, UI elements).
 8. Photo delivery: first screenshot sends a new photo message, subsequent screenshots edit the same message via `edit_message_media`.
 9. Text delivery: thoughts and action summaries go through `_send_output` → `_LiveMessage.append()` (same as PTY sessions).
