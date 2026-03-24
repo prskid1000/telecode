@@ -160,7 +160,9 @@ The LLM performs one action at a time, verifying the result after each step. A s
 }
 ```
 
-Works with any OpenAI-compatible or Anthropic-compatible vision API (LM Studio, Ollama, vLLM, etc.). Set `api.format` to `"openai"` (default) or `"anthropic"` to switch wire formats. Requires a vision-capable model.
+Works with any OpenAI-compatible or Anthropic-compatible vision API (LM Studio, Ollama, vLLM, etc.), or directly via **Claude Code CLI**. Set `api.format` to `"openai"` (default), `"anthropic"`, or `"claude-code"` to switch. Requires a vision-capable model.
+
+**`claude-code` format** runs `claude -p` as a subprocess with `--output-format json` and `--json-schema`. When `base_url`, `api_key`, or `model` are set, they are passed as `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, and `ANTHROPIC_MODEL` env vars — so the same settings block works for both cloud and local (LM Studio) backends. Leave them empty to use Claude Code's default configuration. Conversation continuity is maintained via `--resume`.
 
 Controls:
 - Send a new message to interrupt and give a new instruction
@@ -289,10 +291,10 @@ Screen image capture (`screen`), video recording (`video`), and computer control
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `api.base_url` | string | API endpoint |
-| `api.api_key` | string | API key |
-| `api.model` | string | Vision-capable model name |
-| `api.format` | string | `"openai"` (default) or `"anthropic"` — selects wire format |
+| `api.base_url` | string | API endpoint (for `openai`/`anthropic`: HTTP URL; for `claude-code`: sets `ANTHROPIC_BASE_URL` env var, empty = use default) |
+| `api.api_key` | string | API key (for `claude-code`: sets `ANTHROPIC_AUTH_TOKEN` env var) |
+| `api.model` | string | Vision-capable model name (for `claude-code`: sets `ANTHROPIC_MODEL` env var) |
+| `api.format` | string | `"openai"` (default), `"anthropic"`, or `"claude-code"` — selects wire format |
 | `capture_interval` | number | Seconds between captures (default 3) |
 | `max_history` | number | Max conversation turns to keep (default 20) |
 | `system_prompt` | string | Override the default system prompt (empty = use built-in) |
