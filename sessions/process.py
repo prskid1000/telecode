@@ -523,8 +523,12 @@ class PTYProcess:
         try:
             curr = _full_snapshot_lines(self._screen)
             skip = self._user_input_pending
-            self._user_input_pending = False
             all_new = _extract_new_lines(self._last_full_lines, curr, skip_filter=skip)
+            # Only clear the flag once we actually produced output — otherwise
+            # an early empty snapshot eats the flag and subsequent real output
+            # gets filtered by the similarity check (bug: /key enter shows nothing).
+            if all_new:
+                self._user_input_pending = False
             self._last_full_lines = list(curr)
 
             if not all_new:
