@@ -396,6 +396,12 @@ async def cmd_key(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
+    # Finalize old live message so post-key output goes to a fresh message
+    thread_id = update.message.message_thread_id
+    old_lm = _live_messages.pop(thread_id, None)
+    if old_lm:
+        await old_lm.finalize()
+
     try:
         await _mgr(ctx).send_raw(
             update.effective_user.id, session.session_key, seq
