@@ -29,7 +29,71 @@ from voice.stt import transcribe
 
 log = logging.getLogger("telecode.handlers")
 
-_MAX_TG_LEN = 4000
+_TG_HARD_LIMIT = 4096  # Telegram's absolute limit (post-HTML)
+
+
+def _max_tg_len() -> int:
+    """Effective max length from config, capped to Telegram's hard limit."""
+    try:
+        return min(config.max_msg_length(), _TG_HARD_LIMIT)
+    except Exception:
+        return 3800
+
+
+def _escaped_len(text: str) -> int:
+    """Approximate length after HTML escaping (& < > expand).
+
+    Telegram counts the *escaped* HTML text against its 4096-char limit,
+    so we must account for entity expansion when deciding where to split.
+    """
+    extra = text.count("&") * 4 + text.count("<") * 3 + text.count(">") * 3
+    return len(text) + extra
+
+
+def _safe_split(text: str, limit: int, last_sent: str) -> int:
+    """Find a split point in *text* so the first part fits within *limit* after escaping.
+
+    Prefers splitting on a newline boundary to avoid cutting mid-line.
+    If *last_sent* is non-empty, splits at that boundary instead (the part already
+    delivered stays, the rest overflows to a new message).
+    """
+    if last_sent:
+        return len(last_sent)
+
+    # Binary-ish search: walk backwards from a generous estimate to find
+    # the last newline where escaped length fits within limit.
+    # Start estimate: limit minus some headroom for escaping
+    estimate = min(len(text), limit)
+    while estimate > 0 and _escaped_len(text[:estimate]) > limit:
+        estimate -= 200
+
+    # Find the last newline at or before estimate
+    nl = text.rfind("\n", 0, max(estimate, 1))
+    if nl > 0:
+        return nl + 1  # include the newline in the head
+
+    # No newline found — just use the estimate
+    return max(estimate, 1)
+
+
+def _truncate_to_fit(text: str, limit: int) -> str:
+    """Truncate *text* from the HEAD so it fits within *limit* after escaping.
+
+    Keeps the most recent output (tail) which is usually most relevant.
+    Tries to break on a newline boundary.
+    """
+    # Walk from the end to find how much tail fits
+    start = len(text)
+    while start > 0 and _escaped_len(text[start:]) < limit:
+        start -= 200
+    # Went too far back — step forward
+    while start < len(text) and _escaped_len(text[start:]) > limit:
+        start += 50
+    # Snap to next newline for a clean break
+    nl = text.find("\n", start)
+    if nl != -1 and _escaped_len(text[nl + 1:]) <= limit:
+        return text[nl + 1:]
+    return text[start:]
 
 # ── Flood-control backoff ────────────────────────────────────────────────────
 
@@ -866,12 +930,17 @@ class _LiveMessage:
         if not display or display == self._last_sent:
             return
 
-        # If text exceeds limit, finalize current message and start a new one
-        if len(display) > _MAX_TG_LEN:
+        limit = _max_tg_len()
+
+        # Use escaped length to account for HTML entity expansion
+        if _escaped_len(display) > limit:
+            # Find a safe split point that fits after escaping
+            split_at = _safe_split(display, limit, self._last_sent)
+            head = display[:split_at].strip()
             # Finalize current message with what fits
-            await self._edit_to(self._last_sent or display[:_MAX_TG_LEN])
+            await self._edit_to(self._last_sent or head)
             # Start a new message for the overflow
-            overflow = display[len(self._last_sent):].strip() if self._last_sent else display[_MAX_TG_LEN:].strip()
+            overflow = display[split_at:].strip()
             self.full_text = overflow + "\n"
             self.msg_id = None
             self._last_sent = ""
@@ -880,9 +949,9 @@ class _LiveMessage:
             if not display:
                 return
 
-        # Truncate to fit in one message
-        if len(display) > _MAX_TG_LEN:
-            display = display[-_MAX_TG_LEN:]
+        # Final safety: if still over limit after split, truncate from head
+        if _escaped_len(display) > limit:
+            display = _truncate_to_fit(display, limit)
 
         await self._edit_to(display)
 

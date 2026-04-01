@@ -224,6 +224,88 @@ class TestBuildKeySequence:
 # 2. Overlap detection (_find_overlap_end)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+class TestEscapedLen:
+    """Tests for _escaped_len — HTML entity expansion accounting."""
+
+    def test_plain_text(self):
+        from bot.handlers import _escaped_len
+        assert _escaped_len("hello world") == 11
+
+    def test_ampersand(self):
+        from bot.handlers import _escaped_len
+        # & -> &amp; = 5 chars, so +4 per &
+        assert _escaped_len("a&b") == 3 + 4
+
+    def test_angle_brackets(self):
+        from bot.handlers import _escaped_len
+        # < -> &lt; = 4 chars (+3), > -> &gt; = 4 chars (+3)
+        assert _escaped_len("<>") == 2 + 3 + 3
+
+    def test_java_generics(self):
+        from bot.handlers import _escaped_len
+        text = "Map<String, Boolean>"
+        raw = len(text)
+        escaped = _escaped_len(text)
+        assert escaped > raw  # < and > cause expansion
+        assert escaped == raw + 3 + 3  # one < and one >
+
+    def test_heavy_special_chars(self):
+        from bot.handlers import _escaped_len
+        # 100 ampersands: raw=100, escaped=100 + 100*4 = 500
+        text = "&" * 100
+        assert _escaped_len(text) == 500
+
+
+class TestSafeSplit:
+    """Tests for _safe_split — newline-aware splitting."""
+
+    def test_uses_last_sent_boundary(self):
+        from bot.handlers import _safe_split
+        # When last_sent is non-empty, split at its length
+        assert _safe_split("abcdefgh", 5, "abc") == 3
+
+    def test_splits_on_newline(self):
+        from bot.handlers import _safe_split, _escaped_len
+        text = "line1\nline2\nline3\nline4\n" + "x" * 4000
+        limit = 3800
+        pos = _safe_split(text, limit, "")
+        # Should split on a newline boundary
+        head = text[:pos]
+        assert _escaped_len(head) <= limit
+
+    def test_handles_no_newlines(self):
+        from bot.handlers import _safe_split, _escaped_len
+        text = "x" * 5000
+        pos = _safe_split(text, 3800, "")
+        assert _escaped_len(text[:pos]) <= 3800
+
+
+class TestTruncateToFit:
+    """Tests for _truncate_to_fit — tail-preserving truncation."""
+
+    def test_keeps_tail(self):
+        from bot.handlers import _truncate_to_fit, _escaped_len
+        text = "a" * 5000
+        result = _truncate_to_fit(text, 3800)
+        assert _escaped_len(result) <= 3800
+
+    def test_snaps_to_newline(self):
+        from bot.handlers import _truncate_to_fit, _escaped_len
+        lines = [f"line{i}" for i in range(500)]
+        text = "\n".join(lines)
+        result = _truncate_to_fit(text, 3800)
+        assert _escaped_len(result) <= 3800
+        # Should start at a line boundary (no partial first line)
+        assert result.startswith("line")
+
+    def test_special_chars_respected(self):
+        from bot.handlers import _truncate_to_fit, _escaped_len
+        # Text with lots of <> should be shorter in raw chars
+        text = "<>" * 2000  # raw=4000, escaped=4000+6000=10000
+        result = _truncate_to_fit(text, 3800)
+        assert _escaped_len(result) <= 3800
+
+
 class TestFindOverlapEnd:
     def _overlap(self, existing, new):
         from bot.handlers import _find_overlap_end
@@ -669,15 +751,50 @@ class TestLiveMessage:
 
     @pytest.mark.asyncio
     async def test_do_edit_overflow(self):
-        """Text exceeding _MAX_TG_LEN should start a new message."""
+        """Text exceeding max length should start a new message."""
         lm, bot = self._make_lm()
         lm.msg_id = 42
         lm._last_sent = "old"
-        # Set text well over 4000 chars
+        # Set text well over the limit
         lm.full_text = "x" * 5000 + "\n"
         await lm._do_edit()
         # Should have called edit at least once and send_message for overflow
         assert bot.edit_message_text.call_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_do_edit_html_escape_overflow(self):
+        """Text with many special chars should split based on escaped length."""
+        from bot.handlers import _escaped_len
+        lm, bot = self._make_lm()
+        lm.msg_id = 42
+        # Build text that's under 3800 raw chars but over 3800 after escaping
+        # Each '<' expands to '&lt;' (4 chars = +3), so 1000 '<' = +3000
+        line = "Map<String, Boolean>" * 100  # 2000 chars raw, ~2900 escaped
+        text = line + "\n" + "normal " * 300  # push total past limit
+        lm.full_text = text + "\n"
+        await lm._do_edit()
+        # Should have created a new message for overflow
+        assert bot.send_message.call_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_do_edit_splits_on_newline(self):
+        """Overflow split should prefer newline boundaries (no mid-line cuts)."""
+        from bot.handlers import _escaped_len, _max_tg_len, _safe_split
+        lm, bot = self._make_lm()
+        lm.msg_id = 42
+        limit = _max_tg_len()
+        # Build text with newlines so split can land on a boundary
+        lines = [f"line {i}: some content here" for i in range(200)]
+        full = "\n".join(lines)
+        lm.full_text = full + "\n"
+        # Only proceed if this would actually overflow
+        if _escaped_len(lm.full_text.strip()) > limit:
+            # Test that _safe_split lands on a newline boundary
+            pos = _safe_split(full, limit, "")
+            head = full[:pos]
+            # The head should end at a newline (the split includes it)
+            assert head.endswith("\n"), f"Split at {pos} didn't land on newline"
+            assert _escaped_len(head) <= limit
 
     @pytest.mark.asyncio
     async def test_finalize_cancels_handle(self):
