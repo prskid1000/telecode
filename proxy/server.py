@@ -145,6 +145,25 @@ async def _do_tool_search(
         return index.search(query, max_results)
 
 
+# ── Debug dump (disabled — set _DEBUG = True to enable) ──────────────────────
+
+_dump_counter = 0
+
+
+async def _dump_request(body: dict[str, Any], label: str) -> None:
+    """Dump request to log file. Enable via proxy.debug in settings.json."""
+    if not proxy_config.debug():
+        return
+    import os, aiofiles, time
+    global _dump_counter
+    _dump_counter += 1
+    dump_dir = os.path.join(os.path.dirname(__file__), "..", "data", "logs")
+    os.makedirs(dump_dir, exist_ok=True)
+    full_path = os.path.join(dump_dir, f"proxy_full_{_dump_counter}.json")
+    async with aiofiles.open(full_path, "w", encoding="utf-8") as f:
+        await f.write(json.dumps({"label": label, "body": body}, indent=2, ensure_ascii=False))
+    log.info("Proxy debug #%d: %s -> %s", _dump_counter, label, full_path)
+
 
 async def handle_messages(request: web.Request) -> web.StreamResponse:
     """Main proxy endpoint: POST /v1/messages"""
