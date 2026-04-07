@@ -16,9 +16,9 @@ from proxy.config import core_tools
 TOOL_SEARCH_TOOL: dict[str, Any] = {
     "name": "ToolSearch",
     "description": (
-        "MANDATORY: Call this BEFORE using any tool not in your core set "
-        "(Bash, Edit, Read, Write, Glob, Grep, Agent, Skill). "
-        "All other tools require ToolSearch first to load their schema."
+        "Search and load tool schemas that are not yet available to you. "
+        "If a tool call fails or a tool schema is missing, use this to find "
+        "and load the right tool for your task."
     ),
     "input_schema": {
         "type": "object",
@@ -59,9 +59,9 @@ def split_tools(
         else:
             deferred.append(tool)
 
-    # Inject ToolSearch if we have deferred tools
+    # Inject ToolSearch as FIRST tool if we have deferred tools
     if deferred:
-        core.append(TOOL_SEARCH_TOOL)
+        core.insert(0, TOOL_SEARCH_TOOL)
 
     return core, deferred
 
@@ -95,14 +95,8 @@ def build_tool_catalog(
     """Build a dynamic system instruction describing available tools."""
     core_names = [t["name"] for t in core if t["name"] != "ToolSearch"]
 
-    lines = [
-        "Always call ToolSearch before using a tool not listed here: "
-        + ", ".join(core_names) + ".",
-        "",
-    ]
-
     if not deferred:
-        return "\n".join(lines)
+        return ""
 
     # Group deferred tools by category
     groups: dict[str, list[str]] = defaultdict(list)
@@ -113,49 +107,95 @@ def build_tool_catalog(
     # Sort: named categories first, "other" last
     sorted_cats = sorted(groups.keys(), key=lambda c: (c == "other", c))
 
-    lines.append(f"Deferred tools ({len(deferred)}):")
+    lines = [
+        "=== TOOL SCHEMAS (loaded via ToolSearch) ===",
+        f"Core tools (always available): {', '.join(core_names)}",
+        f"Deferred tools ({len(deferred)}) — call ToolSearch(query) to load schema before use:",
+    ]
     for cat in sorted_cats:
         names = sorted(groups[cat])
         preview = ", ".join(names[:10])
         if len(names) > 10:
             preview += "..."
-        lines.append(f"  {cat} ({len(names)}): {preview}")
+        lines.append(f"  [{cat}] ({len(names)}): {preview}")
 
     return "\n".join(lines)
 
 
-# ── Strip deferred-tool system-reminders from messages ───────────────────────
-
-# Matches <system-reminder> blocks that contain deferred tool listings
-_DEFERRED_REMINDER_RE = re.compile(
-    r"<system-reminder>\s*\n?"
-    r"The following deferred tools are now available via ToolSearch:.*?"
-    r"</system-reminder>",
-    re.DOTALL,
+SKILLS_VS_TOOLS_REMINDER = (
+    "<system-reminder>\n"
+    "Understanding Skills vs Tools:\n"
+    "\n"
+    "Skills are instructions, hints, guides, and references. When you invoke a Skill, "
+    "it loads domain-specific knowledge that tells you how to approach a task — which "
+    "tools to use, what patterns to follow, and how to behave in that context. "
+    "Skills steer your behavior. They do not execute actions themselves.\n"
+    "\n"
+    "Tools are executable actions. They read files, run queries, take screenshots, "
+    "search code, and interact with external systems. When a tool schema is not "
+    "available to you, call ToolSearch to find and load it.\n"
+    "\n"
+    "Skills = knowledge about how to work. Tools = actions that do the work.\n"
+    "</system-reminder>"
 )
 
 
-def strip_deferred_reminders(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Remove Claude Code's deferred-tool system-reminder blocks from messages."""
+# ── Strip deferred-tool system-reminders from messages ───────────────────────
+
+# Patterns to strip from messages
+_STRIP_PATTERNS = [
+    # Deferred tool listings (replaced by our catalog)
+    re.compile(
+        r"<system-reminder>\s*\n?"
+        r"The following deferred tools are now available via ToolSearch:.*?"
+        r"</system-reminder>",
+        re.DOTALL,
+    ),
+    # context-mode hooks — references deferred tools by full name, confuses model
+    re.compile(
+        r"<system-reminder>\s*\n?"
+        r"SessionStart hook additional context:.*?"
+        r"</system-reminder>",
+        re.DOTALL,
+    ),
+    # Companion — wastes tokens
+    re.compile(
+        r"<system-reminder>\s*\n?"
+        r"# Companion.*?"
+        r"</system-reminder>",
+        re.DOTALL,
+    ),
+]
+
+
+def strip_noisy_reminders(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove noisy system-reminders and inject skills vs tools distinction."""
+
+    def _strip_text(text: str) -> str:
+        for pat in _STRIP_PATTERNS:
+            text = pat.sub("", text)
+        return text.strip()
+
     cleaned = []
     for msg in messages:
         content = msg.get("content")
-        if isinstance(content, str) and _DEFERRED_REMINDER_RE.search(content):
-            new_content = _DEFERRED_REMINDER_RE.sub("", content).strip()
+        if isinstance(content, str):
+            new_content = _strip_text(content)
             if new_content:
                 cleaned.append({**msg, "content": new_content})
-            # Drop message entirely if it was only the reminder
             continue
         if isinstance(content, list):
             new_blocks = []
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "text":
                     text = block.get("text", "")
-                    if _DEFERRED_REMINDER_RE.search(text):
-                        new_text = _DEFERRED_REMINDER_RE.sub("", text).strip()
-                        if new_text:
-                            new_blocks.append({**block, "text": new_text})
-                        continue
+                    new_text = _strip_text(text)
+                    if new_text:
+                        new_blocks.append({**block, "text": new_text})
+                        # Inject distinction reminder right after skills listing
+                        if "skills are available for use with the Skill tool" in text:
+                            new_blocks.append({"type": "text", "text": SKILLS_VS_TOOLS_REMINDER})
+                    continue
                 new_blocks.append(block)
             if new_blocks:
                 cleaned.append({**msg, "content": new_blocks})
