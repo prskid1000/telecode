@@ -32,3 +32,7 @@ def upstream_url() -> str:
 
 def enabled() -> bool:
     return bool(app_config.get_nested("proxy.enabled", False))
+
+
+def debug() -> bool:
+    return bool(app_config.get_nested("proxy.debug", False))
