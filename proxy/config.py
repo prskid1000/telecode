@@ -4,12 +4,10 @@ from __future__ import annotations
 import config as app_config
 
 # Tools always forwarded to the model (never deferred).
+# Matches Opus's core set — only 9 tools (~6.9k tokens).
 DEFAULT_CORE_TOOLS = [
     "Bash", "Edit", "Read", "Write", "Glob", "Grep",
-    "Agent", "Skill", "WebFetch", "WebSearch", "AskUserQuestion",
-    "EnterPlanMode", "ExitPlanMode", "TaskCreate", "TaskUpdate",
-    "TaskGet", "TaskList", "TaskOutput", "TaskStop",
-    "NotebookEdit", "LSP",
+    "Agent", "Skill",
 ]
 
 # BM25 tuning

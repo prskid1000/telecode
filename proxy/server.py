@@ -14,7 +14,7 @@ import aiohttp
 from aiohttp import web
 
 from proxy import config as proxy_config
-from proxy.tool_registry import split_tools
+from proxy.tool_registry import split_tools, build_tool_catalog, strip_deferred_reminders
 from proxy.tool_search import BM25Index, search_regex
 
 log = logging.getLogger("telecode.proxy")
@@ -145,6 +145,39 @@ async def _do_tool_search(
         return index.search(query, max_results)
 
 
+_dump_counter = 0
+
+async def _dump_request(body: dict[str, Any], label: str) -> None:
+    """Dump request to log file for debugging."""
+    import os, aiofiles, time
+    global _dump_counter
+    _dump_counter += 1
+    dump_dir = os.path.join(os.path.dirname(__file__), "..", "data", "logs")
+    os.makedirs(dump_dir, exist_ok=True)
+    path = os.path.join(dump_dir, "proxy_debug.jsonl")
+    tools = body.get("tools", [])
+    system = body.get("system", "")
+    sys_len = len(json.dumps(system)) if system else 0
+    tools_len = len(json.dumps(tools))
+    msgs = body.get("messages", [])
+
+    dump = {
+        "seq": _dump_counter,
+        "ts": time.strftime("%H:%M:%S"),
+        "label": label,
+        "tool_count": len(tools),
+        "tool_names": [t.get("name", "?") for t in tools],
+        "tools_json_bytes": tools_len,
+        "system_json_bytes": sys_len,
+        "message_count": len(msgs),
+        "system_preview": json.dumps(system)[:500] if system else "",
+        "messages_preview": json.dumps(msgs)[:1000],
+    }
+    async with aiofiles.open(path, "a", encoding="utf-8") as f:
+        await f.write(json.dumps(dump, ensure_ascii=False) + "\n")
+    log.info("Proxy debug #%d: %s — %d tools, %d bytes", _dump_counter, label, len(tools), tools_len)
+
+
 async def handle_messages(request: web.Request) -> web.StreamResponse:
     """Main proxy endpoint: POST /v1/messages"""
     try:
@@ -163,6 +196,19 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
         "Proxy: %d tools -> %d core + %d deferred",
         len(tools), len(core), len(deferred),
     )
+
+    # Inject dynamic tool catalog into system message
+    if deferred:
+        catalog = build_tool_catalog(core, deferred)
+        system = body.get("system", "")
+        if isinstance(system, str):
+            body["system"] = f"{system}\n\n{catalog}" if system else catalog
+        elif isinstance(system, list):
+            # Anthropic system can be array of content blocks
+            body["system"] = system + [{"type": "text", "text": f"\n\n{catalog}"}]
+
+        # Strip Claude Code's duplicate deferred-tool reminders from messages
+        body["messages"] = strip_deferred_reminders(body.get("messages", []))
 
     # Forward auth headers
     headers = {}

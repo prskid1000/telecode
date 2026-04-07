@@ -273,15 +273,16 @@ PTY processes always start in the OS home directory.
 
 ### `proxy`
 
-Tool-search proxy that sits between Claude Code and LM Studio. Strips non-essential tools from requests and provides BM25/regex search via an injected `ToolSearch` meta-tool — reducing token usage for local models.
+Tool-search proxy that sits between Claude Code and LM Studio. Reduces 101 tools to ~9 core tools (matching Opus's core set), injects a `ToolSearch` meta-tool for on-demand schema loading, and appends a dynamic tool catalog to the system prompt. Strips duplicate deferred-tool reminders from messages.
 
 | Key | Type | Description |
 |-----|------|-------------|
 | `enabled` | boolean | Enable the proxy (default `false`) |
 | `port` | number | Proxy listen port (default `1235`) |
 | `upstream_url` | string | LM Studio or other backend URL (default `http://localhost:1234`) |
+| `core_tools` | array | Override which tools stay loaded (default: Bash, Edit, Read, Write, Glob, Grep, Agent, Skill) |
 
-When enabled, the proxy starts automatically with Telecode. Point your `claude-local` tool's `ANTHROPIC_BASE_URL` at `http://localhost:<port>` to route through it.
+When enabled, the proxy starts automatically with Telecode. Point your `claude-local` tool's `ANTHROPIC_BASE_URL` at `http://localhost:<port>` to route through it. Also works standalone with Claude Code by setting `ANTHROPIC_BASE_URL=http://localhost:1235`.
 
 ### `tools.<key>`
 
