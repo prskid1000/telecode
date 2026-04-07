@@ -172,6 +172,8 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
     except json.JSONDecodeError:
         return web.json_response({"error": "Invalid JSON"}, status=400)
 
+    await _dump_request(body, "INCOMING")
+
     upstream = proxy_config.upstream_url()
     tools = body.get("tools", [])
 
@@ -196,6 +198,8 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
 
         # Strip noisy system-reminders that confuse local models
         body["messages"] = strip_noisy_reminders(body.get("messages", []))
+
+    await _dump_request(body, "OUTGOING")
 
     # Forward auth headers
     headers = {}
