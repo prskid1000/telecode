@@ -184,12 +184,13 @@ Middleware proxy for local models (LM Studio, Ollama, etc.) that reduces tool to
 
 1. **Startup:** `start_proxy_background()` called from `main.py:_post_init`. Listens on `127.0.0.1:{proxy.port}` (default 1235). Disabled when `proxy.enabled` is `false`.
 2. **Request interception** (`handle_messages`): extracts `tools` from the Anthropic-format request, calls `split_tools()` to separate core (always forwarded) from deferred (stored in memory). Injects `ToolSearch` meta-tool into core list.
-3. **Core tools** (configurable via `proxy.core_tools`): `Bash`, `Edit`, `Read`, `Write`, `Glob`, `Grep`, `Agent`, `Skill`, `WebFetch`, `WebSearch`, `AskUserQuestion`, `EnterPlanMode`, `ExitPlanMode`, `TaskCreate/Update/Get/List/Output/Stop`, `NotebookEdit`, `LSP`.
-4. **ToolSearch interception:** if the model's response calls `ToolSearch`, the proxy intercepts (does NOT forward to Claude Code), runs BM25 or regex search on deferred tools, injects matched tool definitions into the request, appends a tool_result message, and does a transparent round-trip to the upstream. The second response streams to Claude Code.
-5. **BM25 search** (`tool_search.py`): tokenizes tool name + description + arg names + arg descriptions. Standard BM25 scoring with `k1=0.9`, `b=0.4`. Regex search via `re:` prefix.
-6. **Streaming:** SSE events are parsed line-by-line. Non-ToolSearch content streams through immediately. ToolSearch blocks are buffered and intercepted.
-7. **Passthrough:** all non-`/v1/messages` requests (models, health checks) are forwarded unchanged.
-8. **Shutdown:** `_post_shutdown` calls `runner.cleanup()`.
+3. **Core tools** (configurable via `proxy.core_tools`): `Bash`, `Edit`, `Read`, `Write`, `Glob`, `Grep`, `Agent`, `Skill`. Matches Opus's core set (~6.9k tokens). Everything else is deferred.
+4. **System instruction injection** (`build_tool_catalog`): appends a dynamic catalog to the system message listing core tools and all deferred tools grouped by category (chrome-devtools, context-mode, code-review-graph, etc.). Strips Claude Code's duplicate `<system-reminder>` deferred-tool listings from messages.
+5. **ToolSearch interception:** if the model's response calls `ToolSearch`, the proxy intercepts (does NOT forward to Claude Code), runs BM25 or regex search on deferred tools, injects matched tool definitions into the request, appends a tool_result message, and does a transparent round-trip to the upstream. The second response streams to Claude Code.
+6. **BM25 search** (`tool_search.py`): tokenizes tool name + description + arg names + arg descriptions. Standard BM25 scoring with `k1=0.9`, `b=0.4`. Regex search via `re:` prefix.
+7. **Streaming:** SSE events are parsed line-by-line. Non-ToolSearch content streams through immediately. ToolSearch blocks are buffered and intercepted.
+8. **Passthrough:** all non-`/v1/messages` requests (models, health checks) are forwarded unchanged.
+9. **Shutdown:** `_post_shutdown` calls `runner.cleanup()`.
 
 To use: set `proxy.enabled: true` in settings.json and point `claude-local`'s `ANTHROPIC_BASE_URL` at `http://localhost:1235`.
 
