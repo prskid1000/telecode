@@ -160,6 +160,12 @@ def computer_max_history() -> int:
     return int(_computer_cfg().get("max_history", 20))
 
 
+# ── Proxy ─────────────────────────────────────────────────────────────────────
+def proxy_enabled()      -> bool: return bool(get_nested("proxy.enabled", False))
+def proxy_port()         -> int:  return int(get_nested("proxy.port", 1235))
+def proxy_upstream_url() -> str:  return get_nested("proxy.upstream_url", "http://localhost:1234")
+
+
 # ── Validation ────────────────────────────────────────────────────────────────
 def validate() -> list[str]:
     w: list[str] = []

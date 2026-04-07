@@ -38,6 +38,19 @@ Computer control (vision LLM):
     -> execute action via pyautogui (click/type/key/scroll)
     -> capture post-action screenshot -> edit same photo message
     -> repeat (one action per LLM call) until done=true or user sends new message
+
+Tool-search proxy (for local models):
+    Claude Code request (with ~100+ tools)
+    -> proxy intercepts on http://127.0.0.1:1235/v1/messages
+    -> split_tools(): core tools forwarded, rest stored as deferred
+    -> inject ToolSearch meta-tool into core tools
+    -> forward to LM Studio (http://localhost:1234)
+    -> if model calls ToolSearch:
+        -> BM25/regex search over deferred tools
+        -> inject matched tool definitions into request
+        -> transparent round-trip to LM Studio
+        -> stream second response to Claude Code
+    -> else: stream response through unchanged
 ```
 
 - **Session key:** `{backend}:{name}` -- colon is the separator; do not use colons in names.
@@ -85,6 +98,10 @@ Computer control (vision LLM):
 | `backends/registry.py` | Auto-built from `settings.json` tools; `get_backend`, `all_backends`, `refresh` |
 | `backends/params.py` | Load tool params from settings |
 | `voice/*` | STT health, prefs, transcribe |
+| `proxy/server.py` | aiohttp streaming proxy with ToolSearch interception |
+| `proxy/tool_search.py` | BM25 + regex search engine (zero deps) |
+| `proxy/tool_registry.py` | Core/deferred tool splitting, ToolSearch injection |
+| `proxy/config.py` | Proxy settings (port, upstream, core tools, BM25 params) |
 
 ---
 
@@ -161,6 +178,23 @@ Tunables near top of `process.py`: idle interval, max wait, screen rows/history 
 
 ---
 
+## Tool-search proxy pipeline (`proxy/`)
+
+Middleware proxy for local models (LM Studio, Ollama, etc.) that reduces tool token bloat. Claude Code sends ~100+ tool definitions per request; local models choke on them. The proxy strips non-essential tools and provides on-demand search.
+
+1. **Startup:** `start_proxy_background()` called from `main.py:_post_init`. Listens on `127.0.0.1:{proxy.port}` (default 1235). Disabled when `proxy.enabled` is `false`.
+2. **Request interception** (`handle_messages`): extracts `tools` from the Anthropic-format request, calls `split_tools()` to separate core (always forwarded) from deferred (stored in memory). Injects `ToolSearch` meta-tool into core list.
+3. **Core tools** (configurable via `proxy.core_tools`): `Bash`, `Edit`, `Read`, `Write`, `Glob`, `Grep`, `Agent`, `Skill`, `WebFetch`, `WebSearch`, `AskUserQuestion`, `EnterPlanMode`, `ExitPlanMode`, `TaskCreate/Update/Get/List/Output/Stop`, `NotebookEdit`, `LSP`.
+4. **ToolSearch interception:** if the model's response calls `ToolSearch`, the proxy intercepts (does NOT forward to Claude Code), runs BM25 or regex search on deferred tools, injects matched tool definitions into the request, appends a tool_result message, and does a transparent round-trip to the upstream. The second response streams to Claude Code.
+5. **BM25 search** (`tool_search.py`): tokenizes tool name + description + arg names + arg descriptions. Standard BM25 scoring with `k1=0.9`, `b=0.4`. Regex search via `re:` prefix.
+6. **Streaming:** SSE events are parsed line-by-line. Non-ToolSearch content streams through immediately. ToolSearch blocks are buffered and intercepted.
+7. **Passthrough:** all non-`/v1/messages` requests (models, health checks) are forwarded unchanged.
+8. **Shutdown:** `_post_shutdown` calls `runner.cleanup()`.
+
+To use: set `proxy.enabled: true` in settings.json and point `claude-local`'s `ANTHROPIC_BASE_URL` at `http://localhost:1235`.
+
+---
+
 ## Live Telegram messages (`bot/handlers.py`)
 
 - **`_LiveMessage`:** one text message per "turn", updated by `append()`; debounced edits (~1s); overflow opens a new message. Overlap trim skips duplicate tails.
@@ -214,6 +248,9 @@ Test: `/settings reload` then `/new <key> test`.
 | Computer control clicks wrong spot | DPI scaling issue; check `_get_window_rect` returns logical coords |
 | Computer control LLM error | Check LM Studio is running, model is loaded, base_url/model in settings |
 | Voice not working | Run `/voice`; start STT service, bot detects within 60s |
+| Proxy not starting | Check `proxy.enabled` is `true` in settings.json; check port not in use |
+| ToolSearch not triggered | Model may not call it; check upstream is reachable; check logs for "Proxy:" lines |
+| Tools missing after search | Tool may not match query; try regex with `re:` prefix; check `MAX_SEARCH_RESULTS` |
 
 ---
 

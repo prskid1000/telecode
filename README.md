@@ -271,6 +271,18 @@ PTY processes always start in the OS home directory.
 | `image_interval` | number | Seconds between image capture sends (default 15) |
 | `video_interval` | number | Seconds per video chunk / recording length per segment (default 60) |
 
+### `proxy`
+
+Tool-search proxy that sits between Claude Code and LM Studio. Strips non-essential tools from requests and provides BM25/regex search via an injected `ToolSearch` meta-tool — reducing token usage for local models.
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `enabled` | boolean | Enable the proxy (default `false`) |
+| `port` | number | Proxy listen port (default `1235`) |
+| `upstream_url` | string | LM Studio or other backend URL (default `http://localhost:1234`) |
+
+When enabled, the proxy starts automatically with Telecode. Point your `claude-local` tool's `ANTHROPIC_BASE_URL` at `http://localhost:<port>` to route through it.
+
 ### `tools.<key>`
 
 Each key under `tools` becomes a backend available via `/new <key>`. Add any tool — no code changes needed.
@@ -325,6 +337,12 @@ bot/
   handlers.py          Telegram handlers + LiveMessage + LivePhoto
   topic_manager.py     Forum topic creation
   settings_handler.py  /settings command
+
+proxy/
+  server.py            aiohttp streaming proxy with ToolSearch interception
+  tool_search.py       BM25 + regex search engine
+  tool_registry.py     Core/deferred tool splitting
+  config.py            Proxy settings
 
 voice/
   health.py            STT availability probe
