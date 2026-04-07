@@ -142,10 +142,6 @@ SKILLS_VS_TOOLS_REMINDER = (
     "Each skill entry starts with '- name: description'. "
     "The name may contain colons (e.g. plugin:skill). "
     "Use the full identifier before the description text.\n"
-    "\n"
-    "Format:\n"
-    "  Skill(skill: \"exact-name-from-list\", args: \"optional arguments\")\n"
-    "  ToolSearch(query: \"search term or re:regex\")\n"
     "</system-reminder>"
 )
 
