@@ -16,8 +16,9 @@ from proxy.config import core_tools
 TOOL_SEARCH_TOOL: dict[str, Any] = {
     "name": "ToolSearch",
     "description": (
-        "Fetch full schemas for deferred tools so you can call them. "
-        "You must call this before using any tool not in your core set."
+        "MANDATORY: Call this BEFORE using any tool not in your core set "
+        "(Bash, Edit, Read, Write, Glob, Grep, Agent, Skill). "
+        "All other tools require ToolSearch first to load their schema."
     ),
     "input_schema": {
         "type": "object",

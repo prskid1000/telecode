@@ -197,15 +197,15 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
         len(tools), len(core), len(deferred),
     )
 
-    # Inject dynamic tool catalog into system message
+    # Inject dynamic tool catalog into system message (prepend for visibility)
     if deferred:
         catalog = build_tool_catalog(core, deferred)
         system = body.get("system", "")
         if isinstance(system, str):
-            body["system"] = f"{system}\n\n{catalog}" if system else catalog
+            body["system"] = f"{catalog}\n\n{system}" if system else catalog
         elif isinstance(system, list):
             # Anthropic system can be array of content blocks
-            body["system"] = system + [{"type": "text", "text": f"\n\n{catalog}"}]
+            body["system"] = [{"type": "text", "text": f"{catalog}\n\n"}] + system
 
         # Strip Claude Code's duplicate deferred-tool reminders from messages
         body["messages"] = strip_deferred_reminders(body.get("messages", []))
