@@ -20,6 +20,7 @@ from bot.handlers import (
     BOT_COMMANDS,
 )
 from bot.rate import set_session_manager
+from proxy.server import start_proxy_background
 
 
 def _setup_logging() -> None:
@@ -59,8 +60,18 @@ async def _post_init(app) -> None:
     log.info("Voice: STT=%s", "OK" if vs.stt_available else "unavailable")
     app.bot_data["_probe_task"] = asyncio.ensure_future(probe_loop(60))
 
+    # Start tool-search proxy
+    runner = await start_proxy_background()
+    if runner:
+        app.bot_data["_proxy_runner"] = runner
+
 
 async def _post_shutdown(app) -> None:
+    # Stop proxy
+    runner = app.bot_data.get("_proxy_runner")
+    if runner:
+        await runner.cleanup()
+
     for key in ("_probe_task", "_stale_check_task"):
         task = app.bot_data.get(key)
         if task and not task.done():
