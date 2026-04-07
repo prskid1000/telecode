@@ -137,8 +137,8 @@ SKILLS_VS_TOOLS_REMINDER = (
     "\n"
     "Skills = knowledge about how to work. Tools = actions that do the work.\n"
     "\n"
-    "Skill names are exact identifiers from the skills list above (e.g. 'claude-claw', "
-    "'hauliermagic-sde', 'frontend-design'). Do not guess skill names from keywords. "
+    "Skill names are exact identifiers from the skills list above. "
+    "Do not guess skill names from keywords. "
     "Read the skill list and use the exact name shown before the colon.\n"
     "</system-reminder>"
 )
