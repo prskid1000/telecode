@@ -140,6 +140,10 @@ SKILLS_VS_TOOLS_REMINDER = (
     "Skill names are exact identifiers from the skills list above. "
     "Do not guess skill names from keywords. "
     "Read the skill list and use the exact name shown before the colon.\n"
+    "\n"
+    "Format:\n"
+    "  Skill(skill: \"exact-name-from-list\", args: \"optional arguments\")\n"
+    "  ToolSearch(query: \"search term or re:regex\")\n"
     "</system-reminder>"
 )
 
