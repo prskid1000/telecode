@@ -41,3 +41,8 @@ def debug() -> bool:
 def strip_reminders() -> bool:
     """Strip all system-reminder blocks from messages (except our deferred listing)."""
     return bool(app_config.get_nested("proxy.strip_reminders", False))
+
+
+def auto_load_tools() -> bool:
+    """Auto-load deferred tool schemas when model calls them without loading first."""
+    return bool(app_config.get_nested("proxy.auto_load_tools", False))

@@ -44,6 +44,7 @@ async def _forward_stream(
     payload: dict[str, Any],
     headers: dict[str, str],
     resp: web.StreamResponse,
+    intercept_names: set[str] | None = None,
 ) -> dict[str, Any] | None:
     """Stream response from upstream to client. Returns parsed result if tool_use detected."""
     collected_events: list[dict[str, Any]] = []
@@ -104,25 +105,25 @@ async def _forward_stream(
                             current_tool_name = block.get("name", "")
                             current_tool_id = block.get("id", "")
                             current_tool_json = ""
-                            if current_tool_name == "ToolSearch":
-                                # Don't stream ToolSearch blocks to client
+                            if intercept_names and current_tool_name in intercept_names:
+                                # Don't stream intercepted tool blocks to client
                                 continue
 
                     if etype == "content_block_delta":
                         delta = event.get("delta", {})
                         if delta.get("type") == "input_json_delta":
                             current_tool_json += delta.get("partial_json", "")
-                            if current_tool_name == "ToolSearch":
+                            if intercept_names and current_tool_name in intercept_names:
                                 continue
 
-                    if etype == "content_block_stop" and current_tool_name == "ToolSearch":
+                    if etype == "content_block_stop" and intercept_names and current_tool_name in intercept_names:
                         try:
                             args = json.loads(current_tool_json) if current_tool_json else {}
                         except json.JSONDecodeError:
                             args = {}
                         tool_use_block = {
                             "id": current_tool_id,
-                            "name": "ToolSearch",
+                            "name": current_tool_name,
                             "input": args,
                         }
                         current_tool_name = ""
@@ -133,7 +134,7 @@ async def _forward_stream(
                         continue
 
                     # Forward everything else to client
-                    if current_tool_name != "ToolSearch":
+                    if not (intercept_names and current_tool_name in intercept_names):
                         if not resp.prepared:
                             resp.content_type = "text/event-stream"
                             resp.headers["Cache-Control"] = "no-cache"
@@ -265,48 +266,71 @@ async def _handle_streaming(
     deferred: list[dict[str, Any]],
     request: web.Request,
 ) -> web.StreamResponse:
-    """Handle streaming request with ToolSearch interception."""
+    """Handle streaming request with ToolSearch and auto-load interception."""
+    # Build set of tool names to intercept
+    intercept = {"ToolSearch"}
+    deferred_names = {t["name"] for t in deferred}
+    if proxy_config.auto_load_tools():
+        intercept |= deferred_names
+
     resp = web.StreamResponse()
     resp.content_type = "text/event-stream"
     resp.headers["Cache-Control"] = "no-cache"
     resp.headers["Connection"] = "keep-alive"
-    # Store request ref for prepare()
     resp._req = request
     await resp.prepare(request)
 
-    tool_use = await _forward_stream(upstream, body, headers, resp)
+    tool_use = await _forward_stream(upstream, body, headers, resp, intercept)
 
-    if tool_use and tool_use["name"] == "ToolSearch":
-        # ToolSearch intercepted — do round-trip
-        matched = await _do_tool_search(deferred, tool_use["input"])
-        log.info("ToolSearch matched %d tools for query=%r", len(matched), tool_use["input"].get("query"))
+    if tool_use:
+        tool_name = tool_use["name"]
 
-        result_content = _format_functions_block(matched)
+        if tool_name == "ToolSearch":
+            # ToolSearch intercepted — do round-trip
+            matched = await _do_tool_search(deferred, tool_use["input"])
+            log.info("ToolSearch matched %d tools for query=%r", len(matched), tool_use["input"].get("query"))
+            result_content = _format_functions_block(matched)
 
-        # Inject matched tools into the tool list and re-send
-        body["tools"] = body["tools"] + matched
+        elif proxy_config.auto_load_tools() and tool_name in deferred_names:
+            # Auto-intercept: model called a deferred tool without loading schema
+            matched = [t for t in deferred if t["name"] == tool_name]
+            log.info("Auto-loading schema for deferred tool: %s", tool_name)
+            schema_info = _format_functions_block(matched)
+            result_content = (
+                f"This tool's schema was not loaded. Here is the schema:\n\n"
+                f"{schema_info}\n\n"
+                f"Call the tool again with the correct parameter names from the schema above."
+            )
+        else:
+            matched = []
+            result_content = None
 
-        # Add tool_result to messages
-        body["messages"] = body.get("messages", []) + [
-            {"role": "assistant", "content": [
-                {"type": "tool_use", "id": tool_use["id"],
-                 "name": "ToolSearch", "input": tool_use["input"]},
-            ]},
-            {"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": tool_use["id"],
-                 "content": result_content},
-            ]},
-        ]
+        if result_content:
+            # Inject matched tools into the tool list and re-send
+            if matched:
+                body["tools"] = body["tools"] + matched
 
-        # Second round-trip — stream directly to client
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{upstream}/v1/messages",
-                json=body,
-                headers=headers,
-            ) as upstream_resp:
-                async for chunk in upstream_resp.content.iter_any():
-                    await resp.write(chunk)
+            # Add tool_result to messages
+            body["messages"] = body.get("messages", []) + [
+                {"role": "assistant", "content": [
+                    {"type": "tool_use", "id": tool_use["id"],
+                     "name": tool_name, "input": tool_use["input"]},
+                ]},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": tool_use["id"],
+                     "content": result_content},
+                ]},
+            ]
+
+            # Second round-trip — stream directly to client
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{upstream}/v1/messages",
+                    json=body,
+                    headers=headers,
+                ) as upstream_resp:
+                    async for chunk in upstream_resp.content.iter_any():
+                        await resp.write(chunk)
 
     await resp.write_eof()
     return resp
@@ -327,33 +351,50 @@ async def _handle_non_streaming(
         ) as upstream_resp:
             result = await upstream_resp.json()
 
-    # Check if response contains ToolSearch call
+    # Check if response contains ToolSearch or deferred tool call
+    deferred_names = {t["name"] for t in deferred}
     stop_reason = result.get("stop_reason", "")
     if stop_reason == "tool_use":
         for block in result.get("content", []):
-            if block.get("type") == "tool_use" and block.get("name") == "ToolSearch":
+            if block.get("type") != "tool_use":
+                continue
+            tool_name = block.get("name", "")
+
+            if tool_name == "ToolSearch":
                 matched = await _do_tool_search(deferred, block.get("input", {}))
                 log.info("ToolSearch matched %d tools", len(matched))
-
                 result_text = _format_functions_block(matched)
 
-                # Re-send with matched tools injected
-                body["tools"] = body["tools"] + matched
-                body["messages"] = body.get("messages", []) + [
-                    {"role": "assistant", "content": result.get("content", [])},
-                    {"role": "user", "content": [
-                        {"type": "tool_result", "tool_use_id": block["id"],
-                         "content": result_text},
-                    ]},
-                ]
+            elif proxy_config.auto_load_tools() and tool_name in deferred_names:
+                matched = [t for t in deferred if t["name"] == tool_name]
+                log.info("Auto-loading schema for deferred tool: %s", tool_name)
+                schema_info = _format_functions_block(matched)
+                result_text = (
+                    f"This tool's schema was not loaded. Here is the schema:\n\n"
+                    f"{schema_info}\n\n"
+                    f"Call the tool again with the correct parameter names from the schema above."
+                )
+            else:
+                continue
 
-                async with aiohttp.ClientSession() as session2:
-                    async with session2.post(
-                        f"{upstream}/v1/messages",
-                        json=body,
-                        headers=headers,
-                    ) as resp2:
-                        return web.json_response(await resp2.json(), status=resp2.status)
+            # Re-send with matched tools injected
+            if matched:
+                body["tools"] = body["tools"] + matched
+            body["messages"] = body.get("messages", []) + [
+                {"role": "assistant", "content": result.get("content", [])},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": block["id"],
+                     "content": result_text},
+                ]},
+            ]
+
+            async with aiohttp.ClientSession() as session2:
+                async with session2.post(
+                    f"{upstream}/v1/messages",
+                    json=body,
+                    headers=headers,
+                ) as resp2:
+                    return web.json_response(await resp2.json(), status=resp2.status)
 
     return web.json_response(result, status=200)
 
