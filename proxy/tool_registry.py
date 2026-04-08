@@ -104,7 +104,7 @@ def build_deferred_listing(deferred: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-# ── Rewrite deferred-tool reminders in messages ───────────────────────────
+# ── Message rewriting ──────────────────────────────────────────────────────
 
 _DEFERRED_LISTING_RE = re.compile(
     r"<system-reminder>\s*\n?"
@@ -113,43 +113,22 @@ _DEFERRED_LISTING_RE = re.compile(
     re.DOTALL,
 )
 
-# Matches any <system-reminder>...</system-reminder> block
 _ALL_REMINDERS_RE = re.compile(
     r"<system-reminder>.*?</system-reminder>",
     re.DOTALL,
 )
 
 
-def rewrite_messages(
+def _apply_to_messages(
     messages: list[dict[str, Any]],
-    deferred: list[dict[str, Any]],
+    text_fn,
 ) -> list[dict[str, Any]]:
-    """Replace deferred-tool listings in messages with our actual deferred list.
-
-    If no existing listing found, inject one into the first user message.
-    If strip_reminders() is true, strips ALL system-reminder blocks first.
-    """
-    replacement = build_deferred_listing(deferred) if deferred else ""
-    found_listing = False
-    strip_all = strip_reminders()
-
-    def _rewrite_text(text: str) -> str:
-        nonlocal found_listing
-        if strip_all:
-            # Strip all system-reminder blocks
-            text = _ALL_REMINDERS_RE.sub("", text)
-        else:
-            # Only replace deferred listings
-            if _DEFERRED_LISTING_RE.search(text):
-                found_listing = True
-                text = _DEFERRED_LISTING_RE.sub(replacement, text)
-        return text.strip()
-
+    """Apply text_fn to all text content in messages, dropping empty results."""
     cleaned = []
     for msg in messages:
         content = msg.get("content")
         if isinstance(content, str):
-            new_content = _rewrite_text(content)
+            new_content = text_fn(content)
             if new_content:
                 cleaned.append({**msg, "content": new_content})
             continue
@@ -157,8 +136,7 @@ def rewrite_messages(
             new_blocks = []
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "text":
-                    text = block.get("text", "")
-                    new_text = _rewrite_text(text)
+                    new_text = text_fn(block.get("text", ""))
                     if new_text:
                         new_blocks.append({**block, "text": new_text})
                     continue
@@ -167,9 +145,37 @@ def rewrite_messages(
                 cleaned.append({**msg, "content": new_blocks})
             continue
         cleaned.append(msg)
+    return cleaned
 
-    # No existing listing — inject into first user message
-    if not found_listing and replacement:
+
+def strip_all_reminders(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Strip all <system-reminder> blocks from messages."""
+    return _apply_to_messages(
+        messages, lambda t: _ALL_REMINDERS_RE.sub("", t).strip()
+    )
+
+
+def rewrite_messages(
+    messages: list[dict[str, Any]],
+    deferred: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Replace deferred-tool listings with ours. Inject if none found."""
+    replacement = build_deferred_listing(deferred) if deferred else ""
+    found = False
+
+    def _rewrite(text: str) -> str:
+        nonlocal found
+        if strip_reminders():
+            text = _ALL_REMINDERS_RE.sub("", text)
+        elif _DEFERRED_LISTING_RE.search(text):
+            found = True
+            text = _DEFERRED_LISTING_RE.sub(replacement, text)
+        return text.strip()
+
+    cleaned = _apply_to_messages(messages, _rewrite)
+
+    # Inject into first user message if no existing listing was replaced
+    if not found and replacement:
         for msg in cleaned:
             if msg.get("role") != "user":
                 continue
