@@ -15,9 +15,26 @@ from aiohttp import web
 
 from proxy import config as proxy_config
 from proxy.tool_registry import split_tools, rewrite_messages
-from proxy.tool_search import BM25Index, search_regex
+from proxy.tool_search import BM25Index
 
 log = logging.getLogger("telecode.proxy")
+
+
+def _format_functions_block(matched: list[dict[str, Any]]) -> str:
+    """Format matched tools as a <functions> block matching real Claude Code ToolSearch."""
+    if not matched:
+        return "No matching tools found. Try a different query."
+    lines = ["<functions>"]
+    for t in matched:
+        # Match Claude Code format: {"description": ..., "name": ..., "parameters": ...}
+        entry = {
+            "description": t.get("description", ""),
+            "name": t.get("name", ""),
+            "parameters": t.get("input_schema", {}),
+        }
+        lines.append(f"<function>{json.dumps(entry)}</function>")
+    lines.append("</functions>")
+    return "\n".join(lines)
 
 
 # ── Request handling ─────────────────────────────────────────────────────────
@@ -140,7 +157,6 @@ async def _do_tool_search(
       select:Read,Edit,Grep  — exact name match, comma-separated
       +slack send             — require "slack" in name, rank by remaining terms
       notebook jupyter        — keyword search (BM25)
-      re:pattern              — regex search (extra, kept for power users)
     """
     query = args.get("query", "")
     max_results = args.get("max_results", 5)
@@ -149,10 +165,6 @@ async def _do_tool_search(
     if query.startswith("select:"):
         names = {n.strip() for n in query[7:].split(",") if n.strip()}
         return [t for t in deferred if t.get("name", "") in names]
-
-    # re:pattern — regex search
-    if query.startswith("re:"):
-        return search_regex(deferred, query[3:], max_results)
 
     # +required_in_name rest of keywords — filter by name, rank remainder
     if query.startswith("+"):
@@ -172,13 +184,17 @@ async def _do_tool_search(
 # ── Debug dump (disabled — set _DEBUG = True to enable) ──────────────────────
 
 _dump_counter = 0
+_MAX_DUMP_FILES = 50
 
 
 async def _dump_request(body: dict[str, Any], label: str) -> None:
-    """Dump request to log file. Enable via proxy.debug in settings.json."""
+    """Dump request to log file. Enable via proxy.debug in settings.json.
+
+    Rotates to keep only the last _MAX_DUMP_FILES files.
+    """
     if not proxy_config.debug():
         return
-    import os, aiofiles, time
+    import os, glob as globmod, aiofiles
     global _dump_counter
     _dump_counter += 1
     dump_dir = os.path.join(os.path.dirname(__file__), "..", "data", "logs")
@@ -187,6 +203,14 @@ async def _dump_request(body: dict[str, Any], label: str) -> None:
     async with aiofiles.open(full_path, "w", encoding="utf-8") as f:
         await f.write(json.dumps({"label": label, "body": body}, indent=2, ensure_ascii=False))
     log.info("Proxy debug #%d: %s -> %s", _dump_counter, label, full_path)
+
+    # Rotate: keep only last _MAX_DUMP_FILES
+    files = sorted(globmod.glob(os.path.join(dump_dir, "proxy_full_*.json")))
+    for old in files[:-_MAX_DUMP_FILES]:
+        try:
+            os.remove(old)
+        except OSError:
+            pass
 
 
 async def handle_messages(request: web.Request) -> web.StreamResponse:
@@ -252,22 +276,7 @@ async def _handle_streaming(
         matched = await _do_tool_search(deferred, tool_use["input"])
         log.info("ToolSearch matched %d tools for query=%r", len(matched), tool_use["input"].get("query"))
 
-        if not matched:
-            # Send a tool_result saying no matches, let model continue
-            result_content = json.dumps({
-                "type": "tool_search_results",
-                "tools": [],
-                "message": "No matching tools found. Try a different query.",
-            })
-        else:
-            result_content = json.dumps({
-                "type": "tool_search_results",
-                "tools": [
-                    {"name": t["name"], "description": t.get("description", "")[:200]}
-                    for t in matched
-                ],
-                "message": f"Found {len(matched)} tools. They have been made available.",
-            })
+        result_content = _format_functions_block(matched)
 
         # Inject matched tools into the tool list and re-send
         body["tools"] = body["tools"] + matched
@@ -321,21 +330,7 @@ async def _handle_non_streaming(
                 matched = await _do_tool_search(deferred, block.get("input", {}))
                 log.info("ToolSearch matched %d tools", len(matched))
 
-                # Build tool result
-                if matched:
-                    result_text = json.dumps({
-                        "type": "tool_search_results",
-                        "tools": [
-                            {"name": t["name"], "description": t.get("description", "")[:200]}
-                            for t in matched
-                        ],
-                    })
-                else:
-                    result_text = json.dumps({
-                        "type": "tool_search_results",
-                        "tools": [],
-                        "message": "No matching tools found.",
-                    })
+                result_text = _format_functions_block(matched)
 
                 # Re-send with matched tools injected
                 body["tools"] = body["tools"] + matched

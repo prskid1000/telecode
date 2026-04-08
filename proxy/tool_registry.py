@@ -89,7 +89,21 @@ def build_deferred_listing(deferred: list[dict[str, Any]]) -> str:
     names = [t["name"] for t in deferred]
     lines = [
         "<system-reminder>",
-        "The following deferred tools are now available via ToolSearch:",
+        "# Deferred Tools (schema not loaded)",
+        "",
+        "The tools listed below exist but their schemas are NOT loaded yet. "
+        "You cannot call them directly — you do not know their parameter names, "
+        "types, descriptions, or required fields. Any attempt to call them "
+        "without loading the schema first WILL fail.",
+        "",
+        "To use any of these tools:",
+        "1. Call ToolSearch with the tool name to fetch its full schema",
+        "2. The schema will be returned in a <functions> block",
+        "3. Only then can you call the tool with the correct parameters",
+        "",
+        "NEVER guess or assume anything about these tools — not parameter names, "
+        "not input format, not behavior. ALWAYS fetch the schema first.",
+        "",
     ]
     for name in names:
         lines.append(name)
