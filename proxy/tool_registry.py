@@ -85,10 +85,10 @@ def split_tools(
 # ── Deferred tool listing for in-place replacement ─────────────────────────
 
 PROXY_SYSTEM_INSTRUCTION = """\
-Prefer dedicated tools over shell commands. \
-Skills load domain instructions — tools execute actions. \
-Some tools have unloaded schemas — use ToolSearch to load them before calling. \
-Always load a tool's schema before calling it for the first time."""
+If a tool is not in your available tools list, you cannot call it. \
+You must call ToolSearch first — it will return the tool's schema. \
+Only after receiving the schema can you call that tool. \
+Calling an unloaded tool without its schema will always fail."""
 
 
 def build_deferred_listing(deferred: list[dict[str, Any]]) -> str:
