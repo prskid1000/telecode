@@ -6,7 +6,6 @@ Builds dynamic system instruction catalog from deferred tools.
 from __future__ import annotations
 
 import re
-from collections import defaultdict
 from typing import Any
 
 from proxy.config import core_tools
@@ -16,24 +15,41 @@ from proxy.config import core_tools
 TOOL_SEARCH_TOOL: dict[str, Any] = {
     "name": "ToolSearch",
     "description": (
-        "Search and load tool schemas that are not yet available to you. "
-        "If a tool call fails or a tool schema is missing, use this to find "
-        "and load the right tool for your task."
+        "Fetches full schema definitions for deferred tools so they can be called.\n\n"
+        "Deferred tools appear by name in <system-reminder> messages. Until fetched, "
+        "only the name is known \u2014 there is no parameter schema, so the tool cannot "
+        "be invoked. This tool takes a query, matches it against the deferred tool list, "
+        "and returns the matched tools' complete JSONSchema definitions inside a "
+        "<functions> block. Once a tool's schema appears in that result, it is callable "
+        "exactly like any tool defined at the top of the prompt.\n\n"
+        "Result format: each matched tool appears as one "
+        '<function>{"description": "...", "name": "...", "parameters": {...}}</function> '
+        "line inside the <functions> block \u2014 the same encoding as the tool list at "
+        "the top of this prompt.\n\n"
+        "Query forms:\n"
+        '- "select:Read,Edit,Grep" \u2014 fetch these exact tools by name\n'
+        '- "notebook jupyter" \u2014 keyword search, up to max_results best matches\n'
+        '- "+slack send" \u2014 require "slack" in the name, rank by remaining terms'
     ),
     "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": False,
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "description": "Search query or regex prefixed with 're:'",
+                "description": (
+                    'Query to find deferred tools. Use "select:<tool_name>" '
+                    "for direct selection, or keywords to search."
+                ),
             },
             "max_results": {
-                "type": "integer",
-                "description": "Max results (default 5)",
                 "default": 5,
+                "description": "Maximum number of results to return (default: 5)",
+                "type": "number",
             },
         },
-        "required": ["query"],
+        "required": ["query", "max_results"],
     },
 }
 
@@ -66,130 +82,63 @@ def split_tools(
     return core, deferred
 
 
-# ── Dynamic catalog from deferred tools ──────────────────────────────────────
+# ── Deferred tool listing for in-place replacement ─────────────────────────
 
-# Known MCP prefix -> friendly category name
-_PREFIX_MAP = {
-    "mcp__plugin_chrome-devtools-mcp_chrome-devtools__": "chrome-devtools",
-    "mcp__plugin_context-mode_context-mode__": "context-mode",
-    "mcp__plugin_claude-historian_historian__": "claude-historian",
-    "mcp__code-review-graph__": "code-review-graph",
-    "mcp__claude_ai_Hauliermagic__hauliermagic-": "Hauliermagic",
-    "mcp__claude_ai_Routemagic__routemagic-": "Routemagic",
-    "mcp__mcp_server_mysql__": "mysql",
-}
-
-
-def _categorize(name: str) -> tuple[str, str]:
-    """Return (category, short_name) for a tool name."""
-    for prefix, category in _PREFIX_MAP.items():
-        if name.startswith(prefix):
-            return category, name[len(prefix):]
-    return "other", name
-
-
-def build_tool_catalog(
-    core: list[dict[str, Any]],
-    deferred: list[dict[str, Any]],
-) -> str:
-    """Build a dynamic system instruction describing available tools."""
-    core_names = [t["name"] for t in core if t["name"] != "ToolSearch"]
-
-    if not deferred:
-        return ""
-
-    # Group deferred tools by category
-    groups: dict[str, list[str]] = defaultdict(list)
-    for tool in deferred:
-        cat, short = _categorize(tool["name"])
-        groups[cat].append(short)
-
-    # Sort: named categories first, "other" last
-    sorted_cats = sorted(groups.keys(), key=lambda c: (c == "other", c))
-
+def build_deferred_listing(deferred: list[dict[str, Any]]) -> str:
+    """Build a deferred tool listing matching Claude Code's format."""
+    names = [t["name"] for t in deferred]
     lines = [
-        "=== TOOL SCHEMAS (loaded via ToolSearch) ===",
-        f"Core tools (always available): {', '.join(core_names)}",
-        f"Deferred tools ({len(deferred)}) — call ToolSearch(query) to load schema before use:",
+        "<system-reminder>",
+        "The following deferred tools are now available via ToolSearch:",
     ]
-    for cat in sorted_cats:
-        names = sorted(groups[cat])
-        preview = ", ".join(names[:10])
-        if len(names) > 10:
-            preview += "..."
-        lines.append(f"  [{cat}] ({len(names)}): {preview}")
-
+    for name in names:
+        lines.append(name)
+    lines.append("</system-reminder>")
     return "\n".join(lines)
 
 
-SKILLS_VS_TOOLS_REMINDER = (
-    "<system-reminder>\n"
-    "Understanding Skills vs Tools:\n"
-    "\n"
-    "Skills are loaded instructions — not actions. The descriptions above are just "
-    "short summaries. When you invoke a Skill, it expands into a full prompt containing "
-    "scripts, reference files, documentation, conventions, tool recommendations, and "
-    "step-by-step workflows. Skills tell you how to behave, which tools to call, and "
-    "what patterns to follow for a specific domain. Always invoke the relevant Skill "
-    "first when the task matches one, then follow its loaded instructions.\n"
-    "\n"
-    "Tools are executable actions. They read files, run queries, take screenshots, "
-    "search code, and interact with external systems. When a tool schema is not "
-    "available to you, call ToolSearch to find and load it.\n"
-    "\n"
-    "Skills = loaded knowledge, guides, scripts, references. "
-    "Tools = executable actions that do the work.\n"
-    "\n"
-    "Skill names are exact identifiers from the skills list above. "
-    "Do not guess skill names from keywords. "
-    "Each entry starts with '- name: description'. "
-    "The name may contain colons (plugin:skill). "
-    "Use the full identifier before the description text.\n"
-    "</system-reminder>"
+# ── Rewrite deferred-tool reminders in messages ───────────────────────────
+
+_DEFERRED_LISTING_RE = re.compile(
+    r"<system-reminder>\s*\n?"
+    r"The following deferred tools are now available via ToolSearch:.*?"
+    r"</system-reminder>",
+    re.DOTALL,
+)
+
+_COMPANION_RE = re.compile(
+    r"<system-reminder>\s*\n?"
+    r"# Companion.*?"
+    r"</system-reminder>",
+    re.DOTALL,
 )
 
 
-# ── Strip deferred-tool system-reminders from messages ───────────────────────
+def rewrite_messages(
+    messages: list[dict[str, Any]],
+    deferred: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Replace deferred-tool listings in messages with our actual deferred list.
 
-# Patterns to strip from messages
-_STRIP_PATTERNS = [
-    # Deferred tool listings (replaced by our catalog)
-    re.compile(
-        r"<system-reminder>\s*\n?"
-        r"The following deferred tools are now available via ToolSearch:.*?"
-        r"</system-reminder>",
-        re.DOTALL,
-    ),
-    # context-mode hooks — references deferred tools by full name, confuses model
-    re.compile(
-        r"<system-reminder>\s*\n?"
-        r"SessionStart hook additional context:.*?"
-        r"</system-reminder>",
-        re.DOTALL,
-    ),
-    # Companion — wastes tokens
-    re.compile(
-        r"<system-reminder>\s*\n?"
-        r"# Companion.*?"
-        r"</system-reminder>",
-        re.DOTALL,
-    ),
-]
+    If no existing listing found, inject one into the first user message.
+    Strips Companion blocks.
+    """
+    replacement = build_deferred_listing(deferred) if deferred else ""
+    found_listing = False
 
-
-def strip_noisy_reminders(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Remove noisy system-reminders and inject skills vs tools distinction."""
-
-    def _strip_text(text: str) -> str:
-        for pat in _STRIP_PATTERNS:
-            text = pat.sub("", text)
+    def _rewrite_text(text: str) -> str:
+        nonlocal found_listing
+        if _DEFERRED_LISTING_RE.search(text):
+            found_listing = True
+            text = _DEFERRED_LISTING_RE.sub(replacement, text)
+        text = _COMPANION_RE.sub("", text)
         return text.strip()
 
     cleaned = []
     for msg in messages:
         content = msg.get("content")
         if isinstance(content, str):
-            new_content = _strip_text(content)
+            new_content = _rewrite_text(content)
             if new_content:
                 cleaned.append({**msg, "content": new_content})
             continue
@@ -198,16 +147,26 @@ def strip_noisy_reminders(messages: list[dict[str, Any]]) -> list[dict[str, Any]
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "text":
                     text = block.get("text", "")
-                    new_text = _strip_text(text)
+                    new_text = _rewrite_text(text)
                     if new_text:
                         new_blocks.append({**block, "text": new_text})
-                        # Inject distinction reminder right after skills listing
-                        if "skills are available for use with the Skill tool" in text:
-                            new_blocks.append({"type": "text", "text": SKILLS_VS_TOOLS_REMINDER})
                     continue
                 new_blocks.append(block)
             if new_blocks:
                 cleaned.append({**msg, "content": new_blocks})
             continue
         cleaned.append(msg)
+
+    # No existing listing — inject into first user message
+    if not found_listing and replacement:
+        for msg in cleaned:
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if isinstance(content, str):
+                msg["content"] = f"{replacement}\n{content}"
+            elif isinstance(content, list):
+                content.insert(0, {"type": "text", "text": replacement})
+            break
+
     return cleaned

@@ -14,7 +14,7 @@ import aiohttp
 from aiohttp import web
 
 from proxy import config as proxy_config
-from proxy.tool_registry import split_tools, build_tool_catalog, strip_noisy_reminders
+from proxy.tool_registry import split_tools, rewrite_messages
 from proxy.tool_search import BM25Index, search_regex
 
 log = logging.getLogger("telecode.proxy")
@@ -134,15 +134,39 @@ async def _do_tool_search(
     deferred: list[dict[str, Any]],
     args: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Execute ToolSearch and return matching tool definitions."""
+    """Execute ToolSearch and return matching tool definitions.
+
+    Query forms (matching Claude Code's real ToolSearch):
+      select:Read,Edit,Grep  — exact name match, comma-separated
+      +slack send             — require "slack" in name, rank by remaining terms
+      notebook jupyter        — keyword search (BM25)
+      re:pattern              — regex search (extra, kept for power users)
+    """
     query = args.get("query", "")
     max_results = args.get("max_results", 5)
 
+    # select:Name1,Name2 — exact name lookup
+    if query.startswith("select:"):
+        names = {n.strip() for n in query[7:].split(",") if n.strip()}
+        return [t for t in deferred if t.get("name", "") in names]
+
+    # re:pattern — regex search
     if query.startswith("re:"):
         return search_regex(deferred, query[3:], max_results)
-    else:
-        index = BM25Index(deferred)
-        return index.search(query, max_results)
+
+    # +required_in_name rest of keywords — filter by name, rank remainder
+    if query.startswith("+"):
+        parts = query.split(None, 1)
+        required = parts[0][1:].lower()  # strip the +
+        filtered = [t for t in deferred if required in t.get("name", "").lower()]
+        if len(parts) > 1 and filtered:
+            index = BM25Index(filtered)
+            return index.search(parts[1], max_results)
+        return filtered[:max_results]
+
+    # Default: BM25 keyword search
+    index = BM25Index(deferred)
+    return index.search(query, max_results)
 
 
 # ── Debug dump (disabled — set _DEBUG = True to enable) ──────────────────────
@@ -186,18 +210,9 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
         len(tools), len(core), len(deferred),
     )
 
-    # Inject dynamic tool catalog into system message (prepend for visibility)
+    # Replace deferred-tool listings in messages with our actual deferred list
     if deferred:
-        catalog = build_tool_catalog(core, deferred)
-        system = body.get("system", "")
-        if isinstance(system, str):
-            body["system"] = f"{catalog}\n\n{system}" if system else catalog
-        elif isinstance(system, list):
-            # Anthropic system can be array of content blocks
-            body["system"] = [{"type": "text", "text": f"{catalog}\n\n"}] + system
-
-        # Strip noisy system-reminders that confuse local models
-        body["messages"] = strip_noisy_reminders(body.get("messages", []))
+        body["messages"] = rewrite_messages(body.get("messages", []), deferred)
 
     await _dump_request(body, "OUTGOING")
 
