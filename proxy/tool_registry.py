@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from proxy.config import core_tools
+from proxy.config import core_tools, strip_reminders
 
 # ── ToolSearch meta-tool definition ──────────────────────────────────────────
 
@@ -84,26 +84,19 @@ def split_tools(
 
 # ── Deferred tool listing for in-place replacement ─────────────────────────
 
+PROXY_SYSTEM_INSTRUCTION = """\
+Prefer dedicated tools over shell commands. \
+Skills load domain instructions — tools execute actions. \
+Some tools have unloaded schemas — use ToolSearch to load them before calling. \
+Always load a tool's schema before calling it for the first time."""
+
+
 def build_deferred_listing(deferred: list[dict[str, Any]]) -> str:
-    """Build a deferred tool listing matching Claude Code's format."""
+    """Build a deferred tool name list for injection into messages."""
     names = [t["name"] for t in deferred]
     lines = [
         "<system-reminder>",
-        "# Deferred Tools (schema not loaded)",
-        "",
-        "The tools listed below exist but their schemas are NOT loaded yet. "
-        "You cannot call them directly — you do not know their parameter names, "
-        "types, descriptions, or required fields. Any attempt to call them "
-        "without loading the schema first WILL fail.",
-        "",
-        "To use any of these tools:",
-        "1. Call ToolSearch with the tool name to fetch its full schema",
-        "2. The schema will be returned in a <functions> block",
-        "3. Only then can you call the tool with the correct parameters",
-        "",
-        "NEVER guess or assume anything about these tools — not parameter names, "
-        "not input format, not behavior. ALWAYS fetch the schema first.",
-        "",
+        "Deferred tools (call ToolSearch to load schema before use):",
     ]
     for name in names:
         lines.append(name)
@@ -120,10 +113,9 @@ _DEFERRED_LISTING_RE = re.compile(
     re.DOTALL,
 )
 
-_COMPANION_RE = re.compile(
-    r"<system-reminder>\s*\n?"
-    r"# Companion.*?"
-    r"</system-reminder>",
+# Matches any <system-reminder>...</system-reminder> block
+_ALL_REMINDERS_RE = re.compile(
+    r"<system-reminder>.*?</system-reminder>",
     re.DOTALL,
 )
 
@@ -135,17 +127,22 @@ def rewrite_messages(
     """Replace deferred-tool listings in messages with our actual deferred list.
 
     If no existing listing found, inject one into the first user message.
-    Strips Companion blocks.
+    If strip_reminders() is true, strips ALL system-reminder blocks first.
     """
     replacement = build_deferred_listing(deferred) if deferred else ""
     found_listing = False
+    strip_all = strip_reminders()
 
     def _rewrite_text(text: str) -> str:
         nonlocal found_listing
-        if _DEFERRED_LISTING_RE.search(text):
-            found_listing = True
-            text = _DEFERRED_LISTING_RE.sub(replacement, text)
-        text = _COMPANION_RE.sub("", text)
+        if strip_all:
+            # Strip all system-reminder blocks
+            text = _ALL_REMINDERS_RE.sub("", text)
+        else:
+            # Only replace deferred listings
+            if _DEFERRED_LISTING_RE.search(text):
+                found_listing = True
+                text = _DEFERRED_LISTING_RE.sub(replacement, text)
         return text.strip()
 
     cleaned = []

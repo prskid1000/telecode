@@ -14,7 +14,7 @@ import aiohttp
 from aiohttp import web
 
 from proxy import config as proxy_config
-from proxy.tool_registry import split_tools, rewrite_messages
+from proxy.tool_registry import split_tools, rewrite_messages, PROXY_SYSTEM_INSTRUCTION
 from proxy.tool_search import BM25Index
 
 log = logging.getLogger("telecode.proxy")
@@ -234,8 +234,13 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
         len(tools), len(core), len(deferred),
     )
 
-    # Replace deferred-tool listings in messages with our actual deferred list
+    # Inject deferred tools instruction into system, tool names into messages
     if deferred:
+        system = body.get("system", "")
+        if isinstance(system, str):
+            body["system"] = f"{PROXY_SYSTEM_INSTRUCTION}\n\n{system}" if system else PROXY_SYSTEM_INSTRUCTION
+        elif isinstance(system, list):
+            system.insert(0, {"type": "text", "text": PROXY_SYSTEM_INSTRUCTION})
         body["messages"] = rewrite_messages(body.get("messages", []), deferred)
 
     await _dump_request(body, "OUTGOING")
