@@ -36,3 +36,8 @@ def enabled() -> bool:
 
 def debug() -> bool:
     return bool(app_config.get_nested("proxy.debug", False))
+
+
+def strip_reminders() -> bool:
+    """Strip all system-reminder blocks from messages (except our deferred listing)."""
+    return bool(app_config.get_nested("proxy.strip_reminders", False))
