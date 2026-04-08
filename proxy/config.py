@@ -38,11 +38,17 @@ def debug() -> bool:
     return bool(app_config.get_nested("proxy.debug", False))
 
 
+def tool_splitting() -> bool:
+    """Enable tool splitting, ToolSearch injection, and deferred tool handling."""
+    return bool(app_config.get_nested("proxy.tool_splitting", False))
+
+
 def strip_reminders() -> bool:
-    """Strip all system-reminder blocks from messages (except our deferred listing)."""
+    """Strip all system-reminder blocks from messages. Works independently or with tool_splitting."""
     return bool(app_config.get_nested("proxy.strip_reminders", False))
 
 
 def auto_load_tools() -> bool:
-    """Auto-load deferred tool schemas when model calls them without loading first."""
-    return bool(app_config.get_nested("proxy.auto_load_tools", False))
+    """Auto-load deferred tool schemas when model calls them without loading first.
+    Only effective when tool_splitting is enabled."""
+    return tool_splitting() and bool(app_config.get_nested("proxy.auto_load_tools", False))

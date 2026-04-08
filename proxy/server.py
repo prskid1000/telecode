@@ -14,7 +14,9 @@ import aiohttp
 from aiohttp import web
 
 from proxy import config as proxy_config
-from proxy.tool_registry import split_tools, rewrite_messages, PROXY_SYSTEM_INSTRUCTION
+from proxy.tool_registry import (
+    split_tools, rewrite_messages, strip_all_reminders, PROXY_SYSTEM_INSTRUCTION,
+)
 from proxy.tool_search import BM25Index
 
 log = logging.getLogger("telecode.proxy")
@@ -46,8 +48,12 @@ async def _forward_stream(
     resp: web.StreamResponse,
     intercept_names: set[str] | None = None,
 ) -> dict[str, Any] | None:
-    """Stream response from upstream to client. Returns parsed result if tool_use detected."""
-    collected_events: list[dict[str, Any]] = []
+    """Buffer response from upstream, check for interceptable tool calls.
+
+    If no intercept needed, flushes entire buffer to client.
+    If intercept found, returns tool_use block without flushing.
+    """
+    buffered_lines: list[str] = []  # raw SSE lines to flush if clean
     tool_use_block: dict[str, Any] | None = None
     current_tool_json = ""
     current_tool_id = ""
@@ -61,41 +67,38 @@ async def _forward_stream(
         ) as upstream_resp:
             if upstream_resp.status != 200:
                 body = await upstream_resp.text()
-                resp.set_status(upstream_resp.status)
-                await resp.prepare(upstream_resp._request if hasattr(upstream_resp, '_request') else None)
+                if not resp.prepared:
+                    resp.set_status(upstream_resp.status)
+                    await resp.prepare(resp._req if hasattr(resp, '_req') else None)
                 await resp.write(body.encode())
                 return None
 
-            # Stream SSE events
-            buffer = ""
+            # Buffer all SSE events
+            buf = ""
             async for chunk in upstream_resp.content.iter_any():
                 text = chunk.decode("utf-8", errors="replace")
-                buffer += text
+                buf += text
 
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
                     line = line.rstrip("\r")
 
                     if not line.startswith("data: "):
-                        # Forward non-data lines (event:, empty lines)
-                        if resp.prepared:
-                            await resp.write(f"{line}\n".encode())
+                        buffered_lines.append(f"{line}\n")
                         continue
 
-                    data_str = line[6:]  # strip "data: "
+                    data_str = line[6:]
                     if data_str.strip() == "[DONE]":
-                        if resp.prepared:
-                            await resp.write(b"data: [DONE]\n\n")
+                        buffered_lines.append("data: [DONE]\n\n")
                         continue
 
                     try:
                         event = json.loads(data_str)
                     except json.JSONDecodeError:
-                        if resp.prepared:
-                            await resp.write(f"{line}\n".encode())
+                        buffered_lines.append(f"data: {data_str}\n\n")
                         continue
 
-                    collected_events.append(event)
+                    buffered_lines.append(f"data: {data_str}\n\n")
                     etype = event.get("type", "")
 
                     # Track tool_use blocks
@@ -105,16 +108,11 @@ async def _forward_stream(
                             current_tool_name = block.get("name", "")
                             current_tool_id = block.get("id", "")
                             current_tool_json = ""
-                            if intercept_names and current_tool_name in intercept_names:
-                                # Don't stream intercepted tool blocks to client
-                                continue
 
                     if etype == "content_block_delta":
                         delta = event.get("delta", {})
                         if delta.get("type") == "input_json_delta":
                             current_tool_json += delta.get("partial_json", "")
-                            if intercept_names and current_tool_name in intercept_names:
-                                continue
 
                     if etype == "content_block_stop" and intercept_names and current_tool_name in intercept_names:
                         try:
@@ -127,25 +125,21 @@ async def _forward_stream(
                             "input": args,
                         }
                         current_tool_name = ""
-                        continue
 
-                    if etype == "message_stop" and tool_use_block:
-                        # Don't forward message_stop — we'll do a round-trip
-                        continue
+    # If intercepted, don't flush — caller handles round-trip
+    if tool_use_block:
+        return tool_use_block
 
-                    # Forward everything else to client
-                    if not (intercept_names and current_tool_name in intercept_names):
-                        if not resp.prepared:
-                            resp.content_type = "text/event-stream"
-                            resp.headers["Cache-Control"] = "no-cache"
-                            resp.headers["Connection"] = "keep-alive"
-                            await resp.prepare(
-                                # aiohttp needs the request object
-                                resp._req if hasattr(resp, '_req') else None
-                            )
-                        await resp.write(f"data: {data_str}\n\n".encode())
+    # Clean response — flush entire buffer to client
+    if not resp.prepared:
+        resp.content_type = "text/event-stream"
+        resp.headers["Cache-Control"] = "no-cache"
+        resp.headers["Connection"] = "keep-alive"
+        await resp.prepare(resp._req if hasattr(resp, '_req') else None)
+    for line in buffered_lines:
+        await resp.write(line.encode())
 
-    return tool_use_block
+    return None
 
 
 async def _do_tool_search(
@@ -224,25 +218,30 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
     await _dump_request(body, "INCOMING")
 
     upstream = proxy_config.upstream_url()
-    tools = body.get("tools", [])
+    deferred: list[dict[str, Any]] = []
 
-    # Split tools
-    core, deferred = split_tools(tools)
-    body["tools"] = core
+    if proxy_config.tool_splitting():
+        tools = body.get("tools", [])
+        core, deferred = split_tools(tools)
+        body["tools"] = core
 
-    log.info(
-        "Proxy: %d tools -> %d core + %d deferred",
-        len(tools), len(core), len(deferred),
-    )
+        log.info(
+            "Proxy: %d tools -> %d core + %d deferred",
+            len(tools), len(core), len(deferred),
+        )
 
-    # Inject deferred tools instruction into system, tool names into messages
-    if deferred:
-        system = body.get("system", "")
-        if isinstance(system, str):
-            body["system"] = f"{PROXY_SYSTEM_INSTRUCTION}\n\n{system}" if system else PROXY_SYSTEM_INSTRUCTION
-        elif isinstance(system, list):
-            system.insert(0, {"type": "text", "text": PROXY_SYSTEM_INSTRUCTION})
-        body["messages"] = rewrite_messages(body.get("messages", []), deferred)
+        # Inject deferred tools instruction into system, tool names into messages
+        if deferred:
+            system = body.get("system", "")
+            if isinstance(system, str):
+                body["system"] = f"{PROXY_SYSTEM_INSTRUCTION}\n\n{system}" if system else PROXY_SYSTEM_INSTRUCTION
+            elif isinstance(system, list):
+                system.insert(0, {"type": "text", "text": PROXY_SYSTEM_INSTRUCTION})
+            body["messages"] = rewrite_messages(body.get("messages", []), deferred)
+
+    elif proxy_config.strip_reminders():
+        # Strip reminders even without tool splitting
+        body["messages"] = strip_all_reminders(body.get("messages", []))
 
     await _dump_request(body, "OUTGOING")
 
@@ -268,17 +267,15 @@ async def _handle_streaming(
 ) -> web.StreamResponse:
     """Handle streaming request with ToolSearch and auto-load interception."""
     # Build set of tool names to intercept
-    intercept = {"ToolSearch"}
+    intercept: set[str] | None = None
     deferred_names = {t["name"] for t in deferred}
-    if proxy_config.auto_load_tools():
-        intercept |= deferred_names
+    if deferred:
+        intercept = {"ToolSearch"}
+        if proxy_config.auto_load_tools():
+            intercept |= deferred_names
 
     resp = web.StreamResponse()
-    resp.content_type = "text/event-stream"
-    resp.headers["Cache-Control"] = "no-cache"
-    resp.headers["Connection"] = "keep-alive"
     resp._req = request
-    await resp.prepare(request)
 
     tool_use = await _forward_stream(upstream, body, headers, resp, intercept)
 
@@ -286,13 +283,11 @@ async def _handle_streaming(
         tool_name = tool_use["name"]
 
         if tool_name == "ToolSearch":
-            # ToolSearch intercepted — do round-trip
             matched = await _do_tool_search(deferred, tool_use["input"])
             log.info("ToolSearch matched %d tools for query=%r", len(matched), tool_use["input"].get("query"))
             result_content = _format_functions_block(matched)
 
         elif proxy_config.auto_load_tools() and tool_name in deferred_names:
-            # Auto-intercept: model called a deferred tool without loading schema
             matched = [t for t in deferred if t["name"] == tool_name]
             log.info("Auto-loading schema for deferred tool: %s", tool_name)
             schema_info = _format_functions_block(matched)
@@ -306,11 +301,9 @@ async def _handle_streaming(
             result_content = None
 
         if result_content:
-            # Inject matched tools into the tool list and re-send
             if matched:
                 body["tools"] = body["tools"] + matched
 
-            # Add tool_result to messages
             body["messages"] = body.get("messages", []) + [
                 {"role": "assistant", "content": [
                     {"type": "tool_use", "id": tool_use["id"],
@@ -322,7 +315,12 @@ async def _handle_streaming(
                 ]},
             ]
 
-            # Second round-trip — stream directly to client
+            # Round-trip — stream retry to client
+            if not resp.prepared:
+                resp.content_type = "text/event-stream"
+                resp.headers["Cache-Control"] = "no-cache"
+                resp.headers["Connection"] = "keep-alive"
+                await resp.prepare(request)
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     f"{upstream}/v1/messages",
@@ -332,6 +330,8 @@ async def _handle_streaming(
                     async for chunk in upstream_resp.content.iter_any():
                         await resp.write(chunk)
 
+    if not resp.prepared:
+        await resp.prepare(request)
     await resp.write_eof()
     return resp
 
