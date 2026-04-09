@@ -271,6 +271,34 @@ PTY processes always start in the OS home directory.
 | `image_interval` | number | Seconds between image capture sends (default 15) |
 | `video_interval` | number | Seconds per video chunk / recording length per segment (default 60) |
 
+### `mcp_server`
+
+Streamable HTTP MCP server exposing local TTS/STT as tools for Claude Code or any MCP client. Starts automatically with Telecode in a background thread.
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `enabled` | boolean | Enable the MCP server (default `true`) |
+| `host` | string | Listen address (default `127.0.0.1`) |
+| `port` | number | Listen port (default `1236`) |
+| `tts_url` | string | Kokoro TTS base URL (default `http://127.0.0.1:6500`) |
+| `stt_url` | string | Whisper STT base URL (default `http://127.0.0.1:6600`) |
+
+**Tools provided:**
+- `speak(text, voice?, output_path?)` — generate speech via Kokoro TTS, returns audio file path
+- `transcribe(audio_path, language?)` — transcribe audio via Whisper STT, returns text
+
+**Add to Claude Code:**
+```bash
+claude mcp add telecode-audio --transport streamable-http --url http://127.0.0.1:1236/mcp
+```
+
+**Run standalone** (without Telegram bot):
+```bash
+python -m mcp_server
+```
+
+**Adding new tools:** drop a `.py` file in `mcp_server/tools/` with `@mcp_app.tool()` decorators. No other files need to change — auto-discovered at startup.
+
 ### `proxy`
 
 Tool-search proxy that sits between Claude Code and LM Studio. Reduces 101 tools to ~9 core tools (matching Opus's core set), injects a `ToolSearch` meta-tool for on-demand schema loading, and appends a dynamic tool catalog to the system prompt. Strips duplicate deferred-tool reminders from messages.
@@ -344,6 +372,15 @@ proxy/
   tool_search.py       BM25 + regex search engine
   tool_registry.py     Core/deferred tool splitting
   config.py            Proxy settings
+
+mcp_server/
+  app.py               FastMCP instance (stateless streamable HTTP)
+  server.py            Background startup for telecode integration
+  __main__.py           Standalone entry: python -m mcp_server
+  tools/
+    __init__.py        Auto-discovers tool modules (drop-in)
+    tts.py             speak tool (Kokoro TTS)
+    stt.py             transcribe tool (Whisper STT)
 
 voice/
   health.py            STT availability probe
