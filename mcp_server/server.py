@@ -29,8 +29,8 @@ def start_mcp_background(host: str, port: int) -> threading.Thread | None:
         pass  # standalone mode, always start
 
     def _run() -> None:
-        from mcp_server.app import mcp_app
-        import mcp_server.tools  # noqa: F401 — triggers auto-discovery
+        from mcp_server.app import mcp_app, register_all
+        register_all()
 
         log.info("MCP server starting on http://%s:%d/mcp", mcp_app.settings.host, mcp_app.settings.port)
         mcp_app.run(transport="streamable-http")

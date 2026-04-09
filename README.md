@@ -297,7 +297,10 @@ claude mcp add telecode-audio --transport streamable-http --url http://127.0.0.1
 python -m mcp_server
 ```
 
-**Adding new tools:** drop a `.py` file in `mcp_server/tools/` with `@mcp_app.tool()` decorators. No other files need to change — auto-discovered at startup.
+**Adding new tools/resources/prompts:** drop a `.py` file in the appropriate folder — auto-discovered at startup:
+- `mcp_server/tools/` — `@mcp_app.tool()` decorators
+- `mcp_server/resources/` — `@mcp_app.resource()` decorators
+- `mcp_server/prompts/` — `@mcp_app.prompt()` decorators
 
 ### `proxy`
 
@@ -387,6 +390,10 @@ mcp_server/
     __init__.py        Auto-discovers tool modules (drop-in)
     tts.py             speak tool (Kokoro TTS)
     stt.py             transcribe tool (Whisper STT)
+  resources/
+    __init__.py        Auto-discovers resource modules (drop-in)
+  prompts/
+    __init__.py        Auto-discovers prompt modules (drop-in)
 
 voice/
   health.py            STT availability probe

@@ -106,9 +106,11 @@ Tool-search proxy (for local models):
 | `mcp_server/app.py` | FastMCP instance (stateless streamable HTTP) |
 | `mcp_server/server.py` | Background startup (daemon thread, like proxy) |
 | `mcp_server/__main__.py` | Standalone entry: `python -m mcp_server` |
-| `mcp_server/tools/__init__.py` | Auto-discovers tool modules (drop-in pattern) |
+| `mcp_server/tools/__init__.py` | Auto-discovers tool modules (drop-in) |
 | `mcp_server/tools/tts.py` | `speak` tool — Kokoro TTS → audio file |
 | `mcp_server/tools/stt.py` | `transcribe` tool — Whisper STT → text |
+| `mcp_server/resources/__init__.py` | Auto-discovers resource modules (drop-in) |
+| `mcp_server/prompts/__init__.py` | Auto-discovers prompt modules (drop-in) |
 
 ---
 
@@ -246,7 +248,11 @@ Test: `/settings reload` then `/new <key> test`.
 Streamable HTTP MCP server exposing local TTS and STT as tools for Claude Code (or any MCP client). Uses FastMCP with stateless HTTP transport.
 
 1. **Startup:** `start_mcp_background()` called from `main.py:_post_init`. Runs in a daemon thread (FastMCP manages its own uvicorn loop). Listens on `127.0.0.1:{mcp_server.port}` (default 1236). Disabled when `mcp_server.enabled` is `false`.
-2. **Tool auto-discovery:** `mcp_server/tools/__init__.py` uses `pkgutil.iter_modules` to import every `.py` file in the `tools/` directory. Each file decorates functions with `@mcp_app.tool()` to register them. Adding a new tool = drop a new `.py` file — no other files change.
+2. **Drop-in auto-discovery:** three folders use `pkgutil.iter_modules` to import every `.py` file automatically:
+   - `mcp_server/tools/` — functions decorated with `@mcp_app.tool()`
+   - `mcp_server/resources/` — functions decorated with `@mcp_app.resource()`
+   - `mcp_server/prompts/` — functions decorated with `@mcp_app.prompt()`
+   Adding a new tool/resource/prompt = drop a `.py` file in the right folder. No other files change.
 3. **Built-in tools:**
    - `speak(text, voice?, output_path?)` — POST to Kokoro TTS (`mcp_server.tts_url`), saves audio to file, returns path.
    - `transcribe(audio_path, language?)` — POST to Whisper STT (`mcp_server.stt_url`), returns transcribed text.
