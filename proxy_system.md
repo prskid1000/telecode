@@ -19,18 +19,19 @@ Deferred tools are NOT in your tool list — only their names are known. They ap
 Deferred tools come in three naming patterns:
 
 **Built-in tools** use PascalCase with no prefix:
-`TaskCreate`, `WebFetch`, `WebSearch`, `AskUserQuestion`, `NotebookEdit`, etc.
+Format: `SomeToolName`
+These are standalone tools with simple descriptive names in PascalCase.
 
 **Cloud MCP tools** use double-underscore separators with `mcp__claude_ai_` prefix:
-`mcp__claude_ai_<ServerName>__<server-prefix>-<action>`
+Format: `mcp__claude_ai_<ServerName>__<server-prefix>-<action>`
 The server name appears twice — once in PascalCase after `claude_ai_`, once as a lowercase prefix on the action. The action part after the last `__` describes what the tool does.
 
 **Plugin MCP tools** use double-underscore separators with `mcp__plugin_` prefix:
-`mcp__plugin_<plugin-name>_<server-name>__<action>`
+Format: `mcp__plugin_<plugin-name>_<server-name>__<action>`
 The plugin name and server name appear between the underscores. The action part after the last `__` is the short name describing what the tool does.
 
 **Standalone MCP tools** use double-underscore separators with `mcp__` prefix:
-`mcp__<server-name>__<action>`
+Format: `mcp__<server-name>__<action>`
 
 ### ToolSearch
 
@@ -57,12 +58,13 @@ Skills are **multi-step workflow templates**. They are completely different from
 Skills come in two naming patterns, both using **colons** (`:`) as separators — never double-underscores:
 
 **Simple skills** have no namespace:
-`update-config`, `simplify`, `loop`, `schedule`, `claude-api`, etc.
-These use lowercase with hyphens. To invoke: `Skill(skill: "simplify")`
+Format: `<skill-name>` — lowercase with hyphens, no colon.
+To invoke: `Skill(skill: "<skill-name>")`
 
-**Namespaced skills** have a `namespace:skill-name` format:
-`chrome-devtools-mcp:chrome-devtools`, `context-mode:ctx-stats`, `frontend-design:frontend-design`, etc.
-The namespace groups related skills. The full `namespace:skill-name` string is the skill's identity. To invoke: `Skill(skill: "chrome-devtools-mcp:chrome-devtools")`
+**Namespaced skills** have a namespace prefix:
+Format: `<namespace>:<skill-name>` — a single colon separates the namespace from the skill name.
+The namespace groups related skills. The full `<namespace>:<skill-name>` string is the skill's identity.
+To invoke: `Skill(skill: "<namespace>:<skill-name>")`
 
 ### Parsing the Skills Listing
 
@@ -99,8 +101,7 @@ This is NOT a final result. The instructions are for YOU to execute. After readi
 
 The single most reliable way to tell tools and skills apart is their naming syntax:
 
-- **Tools** use **double-underscores** (`__`) as separators: `mcp__plugin_context-mode_context-mode__ctx_stats`
-- **Skills** use **colons** (`:`) as separators: `context-mode:ctx-stats`
-- **Built-in deferred tools** use **PascalCase** with no separator: `TaskCreate`, `WebSearch`
+- **Tools** use **double-underscores** (`__`) as separators or **PascalCase** with no separator
+- **Skills** use **colons** (`:`) as separators or **lowercase-with-hyphens** with no separator
 
-Even when a skill and a tool share the same words (like "context-mode" and "ctx-stats"), they are different things invoked differently. The skill is a workflow that may instruct you to call the corresponding tool — but you must invoke the skill via `Skill` and the tool via direct call after `ToolSearch`.
+Even when a skill and a tool share the same words, they are different things invoked differently. A skill is a workflow that may instruct you to call a corresponding tool — but you must invoke the skill via `Skill` and the tool via direct call after `ToolSearch`.
