@@ -102,6 +102,12 @@ Tool-search proxy (for local models):
 | `proxy/tool_search.py` | BM25 + regex search engine (zero deps) |
 | `proxy/tool_registry.py` | Core/deferred tool splitting, ToolSearch injection |
 | `proxy/config.py` | Proxy settings (port, upstream, core tools, BM25 params) |
+| `mcp_server/app.py` | FastMCP instance (stateless streamable HTTP) |
+| `mcp_server/server.py` | Background startup (daemon thread, like proxy) |
+| `mcp_server/__main__.py` | Standalone entry: `python -m mcp_server` |
+| `mcp_server/tools/__init__.py` | Auto-discovers tool modules (drop-in pattern) |
+| `mcp_server/tools/tts.py` | `speak` tool — Kokoro TTS → audio file |
+| `mcp_server/tools/stt.py` | `transcribe` tool — Whisper STT → text |
 
 ---
 
@@ -234,6 +240,23 @@ Test: `/settings reload` then `/new <key> test`.
 
 ---
 
+## MCP audio server (`mcp_server/`)
+
+Streamable HTTP MCP server exposing local TTS and STT as tools for Claude Code (or any MCP client). Uses FastMCP with stateless HTTP transport.
+
+1. **Startup:** `start_mcp_background()` called from `main.py:_post_init`. Runs in a daemon thread (FastMCP manages its own uvicorn loop). Listens on `127.0.0.1:{mcp_server.port}` (default 1236). Disabled when `mcp_server.enabled` is `false`.
+2. **Tool auto-discovery:** `mcp_server/tools/__init__.py` uses `pkgutil.iter_modules` to import every `.py` file in the `tools/` directory. Each file decorates functions with `@mcp_app.tool()` to register them. Adding a new tool = drop a new `.py` file — no other files change.
+3. **Built-in tools:**
+   - `speak(text, voice?, output_path?)` — POST to Kokoro TTS (`mcp_server.tts_url`), saves audio to file, returns path.
+   - `transcribe(audio_path, language?)` — POST to Whisper STT (`mcp_server.stt_url`), returns transcribed text.
+4. **Config:** URLs and port from `settings.json` under `mcp_server.*`, with env var fallback (`KOKORO_URL`, `WHISPER_URL`, `MCP_HOST`, `MCP_PORT`) for standalone use.
+5. **Standalone:** `python -m mcp_server` runs independently of the Telegram bot.
+6. **Shutdown:** daemon thread dies with the process.
+
+To use with Claude Code: `claude mcp add telecode-audio --transport streamable-http --url http://127.0.0.1:1236/mcp`
+
+---
+
 ## Common problems
 
 | Symptom | What to check |
@@ -252,6 +275,9 @@ Test: `/settings reload` then `/new <key> test`.
 | Proxy not starting | Check `proxy.enabled` is `true` in settings.json; check port not in use |
 | ToolSearch not triggered | Model may not call it; check upstream is reachable; check logs for "Proxy:" lines |
 | Tools missing after search | Tool may not match query; try regex with `re:` prefix; check `MAX_SEARCH_RESULTS` |
+| MCP server not starting | Check `mcp_server.enabled` is `true`; check port 1236 not in use |
+| MCP speak fails | Kokoro TTS must be running on `mcp_server.tts_url` (default :6500) |
+| MCP transcribe fails | Whisper STT must be running on `mcp_server.stt_url` (default :6600) |
 
 ---
 
@@ -263,4 +289,4 @@ Use `pythonw main.py` instead of `python main.py` to run without a console windo
 
 ## Dependencies (see `requirements.txt`)
 
-**python-telegram-bot**, **aiohttp**, **aiofiles**, **pyte**, **pywinpty** (Windows PTY), **mss** (fallback capture on Linux/Mac), **Pillow** (JPEG encoding), **pywin32** (Windows Session 0 support), **pyautogui** (mouse/keyboard for computer control). ffmpeg must be on PATH for video recording.
+**python-telegram-bot**, **aiohttp**, **aiofiles**, **pyte**, **pywinpty** (Windows PTY), **mss** (fallback capture on Linux/Mac), **Pillow** (JPEG encoding), **pywin32** (Windows Session 0 support), **pyautogui** (mouse/keyboard for computer control), **mcp** (MCP SDK for audio server). ffmpeg must be on PATH for video recording.

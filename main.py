@@ -21,6 +21,7 @@ from bot.handlers import (
 )
 from bot.rate import set_session_manager
 from proxy.server import start_proxy_background
+from mcp_server.server import start_mcp_background
 
 
 def _setup_logging() -> None:
@@ -64,6 +65,11 @@ async def _post_init(app) -> None:
     runner = await start_proxy_background()
     if runner:
         app.bot_data["_proxy_runner"] = runner
+
+    # Start MCP audio server
+    mcp_thread = start_mcp_background(config.mcp_server_host(), config.mcp_server_port())
+    if mcp_thread:
+        app.bot_data["_mcp_thread"] = mcp_thread
 
 
 async def _post_shutdown(app) -> None:

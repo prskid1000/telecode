@@ -160,6 +160,14 @@ def computer_max_history() -> int:
     return int(_computer_cfg().get("max_history", 20))
 
 
+# ── MCP server ────────────────────────────────────────────────────────────────
+def mcp_server_enabled() -> bool: return bool(get_nested("mcp_server.enabled", False))
+def mcp_server_host()    -> str:  return get_nested("mcp_server.host", "127.0.0.1")
+def mcp_server_port()    -> int:  return int(get_nested("mcp_server.port", 1236))
+def mcp_server_tts_url() -> str:  return get_nested("mcp_server.tts_url", "http://127.0.0.1:6500")
+def mcp_server_stt_url() -> str:  return get_nested("mcp_server.stt_url", "http://127.0.0.1:6600")
+
+
 # ── Proxy ─────────────────────────────────────────────────────────────────────
 def proxy_enabled()      -> bool: return bool(get_nested("proxy.enabled", False))
 def proxy_port()         -> int:  return int(get_nested("proxy.port", 1235))

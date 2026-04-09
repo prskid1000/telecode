@@ -56,7 +56,8 @@
       "claude:fc4ad": 2007,
       "claude:0d599": 2034,
       "claude:89625": 2042,
-      "claude:4e9b2": 2051
+      "claude:4e9b2": 2051,
+      "claude-local:63e1a": 2114
     }
   },
   "voice_prefs": {}
