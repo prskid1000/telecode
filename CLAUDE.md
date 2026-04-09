@@ -98,6 +98,7 @@ Tool-search proxy (for local models):
 | `backends/registry.py` | Auto-built from `settings.json` tools; `get_backend`, `all_backends`, `refresh` |
 | `backends/params.py` | Load tool params from settings |
 | `voice/*` | STT health, prefs, transcribe |
+| `proxy/__main__.py` | Standalone entry: `python -m proxy` |
 | `proxy/server.py` | aiohttp streaming proxy with ToolSearch interception |
 | `proxy/tool_search.py` | BM25 + regex search engine (zero deps) |
 | `proxy/tool_registry.py` | Core/deferred tool splitting, ToolSearch injection |
@@ -188,7 +189,7 @@ Tunables near top of `process.py`: idle interval, max wait, screen rows/history 
 
 Middleware proxy for local models (LM Studio, Ollama, etc.) that reduces tool token bloat. Claude Code sends ~100+ tool definitions per request; local models choke on them. The proxy strips non-essential tools and provides on-demand search.
 
-1. **Startup:** `start_proxy_background()` called from `main.py:_post_init`. Listens on `127.0.0.1:{proxy.port}` (default 1235). Disabled when `proxy.enabled` is `false`.
+1. **Startup:** `start_proxy_background()` called from `main.py:_post_init`. Listens on `127.0.0.1:{proxy.port}` (default 1235). Disabled when `proxy.enabled` is `false`. Can also run standalone via `python -m proxy`.
 2. **Request interception** (`handle_messages`): extracts `tools` from the Anthropic-format request, calls `split_tools()` to separate core (always forwarded) from deferred (stored in memory). Injects `ToolSearch` meta-tool into core list.
 3. **Core tools** (configurable via `proxy.core_tools`): `Bash`, `Edit`, `Read`, `Write`, `Glob`, `Grep`, `Agent`, `Skill`. Matches Opus's core set (~6.9k tokens). Everything else is deferred.
 4. **System instruction injection** (`build_tool_catalog`): appends a dynamic catalog to the system message listing core tools and all deferred tools grouped by category (chrome-devtools, context-mode, code-review-graph, etc.). Strips Claude Code's duplicate `<system-reminder>` deferred-tool listings from messages.
