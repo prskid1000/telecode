@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import tempfile
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -13,6 +15,25 @@ try:
 except Exception:
     _STT_URL = os.environ.get("WHISPER_URL", "http://127.0.0.1:6600")
 
+_CT_MAP = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".ogg": "audio/ogg",
+           ".webm": "audio/webm", ".flac": "audio/flac", ".m4a": "audio/mp4"}
+
+
+async def _fetch_remote(url: str) -> tuple[bytes, str, str]:
+    """Download a remote audio file. Returns (bytes, filename, content_type)."""
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"HTTP {resp.status} fetching {url}")
+            audio_bytes = await resp.read()
+
+    # Derive filename and content type from URL path
+    path = urlparse(url).path
+    filename = os.path.basename(path) or "audio.wav"
+    ext = os.path.splitext(filename)[1].lower()
+    content_type = _CT_MAP.get(ext, resp.content_type or "application/octet-stream")
+    return audio_bytes, filename, content_type
+
 
 @mcp_app.tool()
 async def transcribe(
@@ -22,26 +43,27 @@ async def transcribe(
     """Transcribe an audio file to text using Whisper STT.
 
     Args:
-        audio_path: Absolute path to the audio file (WAV, MP3, WEBM, OGG, etc.).
+        audio_path: Local file path or remote URL (http/https) to an audio file (WAV, MP3, WEBM, OGG, etc.).
         language: Language code for transcription (default: en).
 
     Returns:
         Transcribed text, or an error message.
     """
-    if not os.path.isfile(audio_path):
-        return f"Error: file not found: {audio_path}"
+    is_url = audio_path.startswith("http://") or audio_path.startswith("https://")
 
-    url = f"{_STT_URL}/v1/audio/transcriptions"
-
-    with open(audio_path, "rb") as f:
-        audio_bytes = f.read()
-
-    # Guess content type from extension
-    ext = os.path.splitext(audio_path)[1].lower()
-    ct_map = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".ogg": "audio/ogg",
-              ".webm": "audio/webm", ".flac": "audio/flac", ".m4a": "audio/mp4"}
-    content_type = ct_map.get(ext, "application/octet-stream")
-    filename = os.path.basename(audio_path)
+    if is_url:
+        try:
+            audio_bytes, filename, content_type = await _fetch_remote(audio_path)
+        except Exception as e:
+            return f"Error downloading audio: {e}"
+    else:
+        if not os.path.isfile(audio_path):
+            return f"Error: file not found: {audio_path}"
+        with open(audio_path, "rb") as f:
+            audio_bytes = f.read()
+        ext = os.path.splitext(audio_path)[1].lower()
+        content_type = _CT_MAP.get(ext, "application/octet-stream")
+        filename = os.path.basename(audio_path)
 
     form = aiohttp.FormData()
     form.add_field("file", audio_bytes, filename=filename, content_type=content_type)
