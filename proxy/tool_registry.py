@@ -129,6 +129,32 @@ _ALL_REMINDERS_RE = re.compile(
     re.DOTALL,
 )
 
+# Patterns for reminders we want to KEEP even when strip_reminders is on
+_SKILLS_REMINDER_RE = re.compile(
+    r"<system-reminder>\s*\n?"
+    r"The following skills are available.*?"
+    r"</system-reminder>",
+    re.DOTALL,
+)
+_DEFERRED_KEEP_RE = re.compile(
+    r"<system-reminder>\s*\n?"
+    r"Deferred tools \(call ToolSearch.*?"
+    r"</system-reminder>",
+    re.DOTALL,
+)
+
+
+def _strip_reminders_except_preserved(text: str) -> str:
+    """Strip all system-reminder blocks EXCEPT skills listings and our deferred listing."""
+    # Extract blocks we want to keep
+    preserved = _SKILLS_REMINDER_RE.findall(text) + _DEFERRED_KEEP_RE.findall(text)
+    # Strip all reminders
+    text = _ALL_REMINDERS_RE.sub("", text)
+    # Re-append preserved blocks
+    if preserved:
+        text = text.rstrip() + "\n\n" + "\n\n".join(preserved)
+    return text
+
 
 def _apply_to_messages(
     messages: list[dict[str, Any]],
@@ -160,9 +186,9 @@ def _apply_to_messages(
 
 
 def strip_all_reminders(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Strip all <system-reminder> blocks from messages."""
+    """Strip system-reminder blocks from messages, preserving skills listings."""
     return _apply_to_messages(
-        messages, lambda t: _ALL_REMINDERS_RE.sub("", t).strip()
+        messages, lambda t: _strip_reminders_except_preserved(t).strip()
     )
 
 
@@ -177,7 +203,7 @@ def rewrite_messages(
     def _rewrite(text: str) -> str:
         nonlocal found
         if strip_reminders():
-            text = _ALL_REMINDERS_RE.sub("", text)
+            text = _strip_reminders_except_preserved(text)
         elif _DEFERRED_LISTING_RE.search(text):
             found = True
             text = _DEFERRED_LISTING_RE.sub(replacement, text)
