@@ -6,6 +6,7 @@ Builds dynamic system instruction catalog from deferred tools.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 from proxy.config import core_tools, strip_reminders
@@ -84,11 +85,21 @@ def split_tools(
 
 # ── Deferred tool listing for in-place replacement ─────────────────────────
 
-PROXY_SYSTEM_INSTRUCTION = """\
-If a tool is not in your available tools list, you cannot call it. \
-You must call ToolSearch first — it will return the tool's schema. \
-Only after receiving the schema can you call that tool. \
-Calling an unloaded tool without its schema will always fail."""
+def _load_system_instruction() -> str:
+    """Load proxy system instruction from proxy_system.md next to settings.json."""
+    md_path = Path(__file__).resolve().parent.parent / "proxy_system.md"
+    try:
+        return md_path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return (
+            "If a tool is not in your available tools list, you cannot call it. "
+            "You must call ToolSearch first — it will return the tool's schema. "
+            "Only after receiving the schema can you call that tool. "
+            "Calling an unloaded tool without its schema will always fail."
+        )
+
+
+PROXY_SYSTEM_INSTRUCTION = _load_system_instruction()
 
 
 def build_deferred_listing(deferred: list[dict[str, Any]]) -> str:
