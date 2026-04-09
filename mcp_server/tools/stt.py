@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import tempfile
 from urllib.parse import urlparse
 
 import aiohttp
@@ -31,7 +30,7 @@ async def _fetch_remote(url: str) -> tuple[bytes, str, str]:
     path = urlparse(url).path
     filename = os.path.basename(path) or "audio.wav"
     ext = os.path.splitext(filename)[1].lower()
-    content_type = _CT_MAP.get(ext, resp.content_type or "application/octet-stream")
+    content_type = _CT_MAP.get(ext, "application/octet-stream")
     return audio_bytes, filename, content_type
 
 
@@ -72,7 +71,7 @@ async def transcribe(
     form.add_field("response_format", "json")
 
     async with aiohttp.ClientSession() as session:
-        async with session.post(url, data=form, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+        async with session.post(f"{_STT_URL}/v1/audio/transcriptions", data=form, timeout=aiohttp.ClientTimeout(total=60)) as resp:
             if resp.status != 200:
                 body = await resp.text()
                 return f"Error: Whisper STT returned HTTP {resp.status}: {body[:200]}"

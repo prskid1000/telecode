@@ -255,7 +255,7 @@ Streamable HTTP MCP server exposing local TTS and STT as tools for Claude Code (
    Adding a new tool/resource/prompt = drop a `.py` file in the right folder. No other files change.
 3. **Built-in tools:**
    - `speak(text, voice?, output_path?)` — POST to Kokoro TTS (`mcp_server.tts_url`), saves audio to file, returns path.
-   - `transcribe(audio_path, language?)` — POST to Whisper STT (`mcp_server.stt_url`), returns transcribed text.
+   - `transcribe(audio_path, language?)` — POST to Whisper STT (`mcp_server.stt_url`), returns transcribed text. Accepts local file paths or remote URLs (http/https).
 4. **Config:** URLs and port from `settings.json` under `mcp_server.*`, with env var fallback (`KOKORO_URL`, `WHISPER_URL`, `MCP_HOST`, `MCP_PORT`) for standalone use.
 5. **Standalone:** `python -m mcp_server` runs independently of the Telegram bot.
 6. **Shutdown:** daemon thread dies with the process.

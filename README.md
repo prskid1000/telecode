@@ -285,7 +285,7 @@ Streamable HTTP MCP server exposing local TTS/STT as tools for Claude Code or an
 
 **Tools provided:**
 - `speak(text, voice?, output_path?)` — generate speech via Kokoro TTS, returns audio file path
-- `transcribe(audio_path, language?)` — transcribe audio via Whisper STT, returns text
+- `transcribe(audio_path, language?)` — transcribe audio via Whisper STT, returns text. Accepts local paths or remote URLs (http/https)
 
 **Add to Claude Code:**
 ```bash
