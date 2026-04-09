@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import threading
+
 log = logging.getLogger("telecode.mcp_server")
 
 _thread: threading.Thread | None = None
@@ -13,6 +14,9 @@ def start_mcp_background(host: str, port: int) -> threading.Thread | None:
 
     Mirrors the proxy's start_proxy_background() pattern but uses a thread
     because FastMCP.run() manages its own uvicorn event loop.
+
+    Note: host/port args are accepted for interface consistency with main.py
+    but the actual values come from mcp_server.app (reads settings.json).
     """
     global _thread
 
@@ -25,12 +29,11 @@ def start_mcp_background(host: str, port: int) -> threading.Thread | None:
         pass  # standalone mode, always start
 
     def _run() -> None:
-        # Import here so tool modules register on the thread that runs the server
         from mcp_server.app import mcp_app
         import mcp_server.tools  # noqa: F401 — triggers auto-discovery
 
-        log.info("MCP server starting on http://%s:%d/mcp", host, port)
-        mcp_app.run(transport="streamable-http", host=host, port=port)
+        log.info("MCP server starting on http://%s:%d/mcp", mcp_app.settings.host, mcp_app.settings.port)
+        mcp_app.run(transport="streamable-http")
 
     _thread = threading.Thread(target=_run, daemon=True, name="mcp-server")
     _thread.start()
