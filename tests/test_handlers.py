@@ -48,7 +48,6 @@ def settings_json(tmp_path):
             "allowed_user_ids": [111],
         },
         "paths": {
-            "sessions_dir": str(tmp_path / "sessions"),
             "store_path": str(tmp_path / "store.json"),
             "logs_dir": str(tmp_path / "logs"),
         },
