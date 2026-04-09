@@ -13,3 +13,10 @@ except Exception:
     _port = int(os.environ.get("MCP_PORT", "1236"))
 
 mcp_app = FastMCP("telecode-audio", stateless_http=True, host=_host, port=_port)
+
+
+def register_all() -> None:
+    """Import all drop-in modules (tools, resources, prompts)."""
+    import mcp_server.tools      # noqa: F401
+    import mcp_server.resources  # noqa: F401
+    import mcp_server.prompts    # noqa: F401
