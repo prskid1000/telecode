@@ -312,6 +312,11 @@ Tool-search proxy that sits between Claude Code and LM Studio. Reduces 101 tools
 
 When enabled, the proxy starts automatically with Telecode. Point your `claude-local` tool's `ANTHROPIC_BASE_URL` at `http://localhost:<port>` to route through it. Also works standalone with Claude Code by setting `ANTHROPIC_BASE_URL=http://localhost:1235`.
 
+**Run standalone** (without Telegram bot):
+```bash
+python -m proxy
+```
+
 ### `tools.<key>`
 
 Each key under `tools` becomes a backend available via `/new <key>`. Add any tool — no code changes needed.
@@ -368,6 +373,7 @@ bot/
   settings_handler.py  /settings command
 
 proxy/
+  __main__.py          Standalone entry: python -m proxy
   server.py            aiohttp streaming proxy with ToolSearch interception
   tool_search.py       BM25 + regex search engine
   tool_registry.py     Core/deferred tool splitting
