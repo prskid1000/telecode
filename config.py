@@ -75,7 +75,6 @@ def allowed_user_ids()  -> set[int]:
 
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-def sessions_dir() -> str: return _raw["paths"]["sessions_dir"]
 def store_path() -> str: return _raw["paths"]["store_path"]
 def logs_dir()     -> str: return _raw["paths"].get("logs_dir", "./data/logs")
 
