@@ -2,32 +2,44 @@
 
 ## Tools vs Skills
 
-There are two ways to execute capabilities: **tools** and **skills**. They are fundamentally different.
+Tools and skills are fundamentally different. Never confuse them.
 
 ### Tools
 
-Tools are **low-level, single-purpose functions** with strict input/output schemas. Each tool performs one atomic operation — reading a file, running a command, making an API call. You call tools directly by name with parameters.
+Tools are **atomic functions** with strict input/output schemas. Each tool does one operation — read a file, run a command, fetch a URL, click a button. You call tools directly by name with parameters.
 
-Most tools are **deferred** — their schemas are not loaded upfront. You must call `ToolSearch` to fetch a tool's schema before you can invoke it. Calling a deferred tool without loading its schema first will always fail.
+Most tools are **deferred** — their schemas are not loaded upfront. You must call `ToolSearch` to fetch a tool's schema before you can invoke it. Calling a deferred tool without its schema will always fail.
+
+Deferred tools are listed in a system-reminder that starts with:
+"Deferred tools (call ToolSearch to load schema before use):"
 
 ### Skills
 
-Skills are **high-level, multi-step workflows** that expand into rich prompts with specialized instructions, domain knowledge, and strategies. A single skill invocation may orchestrate dozens of tool calls internally to accomplish a complex task.
+Skills are **multi-step workflow templates** that expand into specialized prompts with domain knowledge. A skill orchestrates many tool calls internally. You invoke skills exclusively through the `Skill` tool.
 
-You invoke skills exclusively through the `Skill` tool — they cannot be called directly by name. Think of skills as expert procedures: you describe what you need, and the skill handles the execution plan.
+Available skills are listed in a system-reminder that starts with:
+"The following skills are available for use with the Skill tool:"
+
+### How to Tell Them Apart
+
+Match the item against its source listing:
+- Appears under **"Deferred tools"** → it is a tool → use `ToolSearch` to load, then call directly
+- Appears under **"skills are available"** → it is a skill → call via `Skill` tool
+
+A shared namespace prefix does not make them interchangeable. The listing it appears in is authoritative.
 
 ### When to Use Which
 
-| Goal | Use |
+| Goal | Method |
 |---|---|
-| Single atomic operation (read, write, search, shell command) | **Tool** — call directly or load via ToolSearch |
-| Complex multi-step workflow (commit, debug, build, review) | **Skill** — invoke via the `Skill` tool |
-| Interact with an external service (browser, database, MCP) | **Tool** — load the MCP tool via ToolSearch first |
-| Task that requires domain expertise and orchestration | **Skill** — the skill prompt carries the expertise |
+| Single atomic operation (read, write, search, fetch, click) | **Tool** — call directly or load via ToolSearch |
+| Complex multi-step workflow (commit, debug, build, review) | **Skill** — invoke via `Skill` tool |
+| Interact with an external service (browser, database, MCP) | **Tool** — load via ToolSearch first |
+| Task requiring domain expertise and orchestration | **Skill** — the skill carries the expertise |
 
 ## ToolSearch
 
-To use a deferred tool, call `ToolSearch` with a query:
+To load a deferred tool's schema:
 
 - `select:ToolName1,ToolName2` — load specific tools by exact name
 - `keyword query` — BM25 keyword search across tool names and descriptions
@@ -35,19 +47,20 @@ To use a deferred tool, call `ToolSearch` with a query:
 
 ## Skill Invocation
 
-Available skills appear in system-reminder messages. Each entry follows one of two formats:
+Each skill entry follows one of two formats:
 
 ```
 - name: description...
 - namespace:skill-name: description...
 ```
 
-The **skill name** is everything before the description — either a plain `name` or a `namespace:skill-name` pair. The description starts after the last colon-space separator.
+The skill name is everything before the description — pass it exactly to the `Skill` tool.
+
+- No namespace: `skill: "commit"`, `skill: "simplify"`
+- With namespace: `skill: "chrome-devtools-mcp:chrome-devtools"`, `skill: "context-mode:ctx-stats"`
 
 ### Rules
 
-1. Invoke skills by calling the `Skill` tool with the `skill` parameter set to the full name including namespace (e.g. `skill: "chrome-devtools-mcp:chrome-devtools"`).
-2. For skills without a namespace, use just the bare name (e.g. `skill: "commit"`).
-3. Do NOT strip, abbreviate, or modify the skill name — pass it exactly as listed.
-4. Skills may accept optional `args` — a freeform string passed along (e.g. `args: "-m 'Fix bug'"`).
-5. Only invoke skills that appear in the current listing. Never guess or fabricate skill names.
+1. Pass the full skill name exactly as listed — do not strip, abbreviate, or modify it.
+2. Skills may accept optional `args` — a freeform string (e.g. `args: "-m 'Fix bug'"`).
+3. Only invoke skills from the current listing. Never guess or fabricate skill names.
