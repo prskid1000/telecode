@@ -194,15 +194,33 @@ This is the procedure for calling any tool that is in the deferred tools listing
 
 ---
 
-## How to Execute a Skill
+## How Skills Get Loaded
+
+Skills can be loaded in **two different ways**. Recognize which happened and respond accordingly.
+
+| Loading Method | How to Recognize | What You Receive | Do You Call `Skill` Tool? |
+|---|---|---|---|
+| **Slash command** (user types `/<skill-name>`) | Message contains `<command-message><skill-name></command-message>` and `<command-name>/<skill-name></command-name>` followed by the skill's full prompt text | The skill instructions are already in the message — ready to execute | **No** — the harness already loaded it. Just follow the instructions |
+| **Programmatic** (you decide to use a skill) | You see a matching skill in the skills listing and determine it's needed | Nothing yet — you must load it yourself | **Yes** — call `Skill(skill: "<name>")` to load the instructions |
+
+### After a Slash Command Load
+
+When the user types `/<skill-name>`, the message contains three parts in order:
+1. `<command-message><skill-name></command-message>` — identifies which skill
+2. `<command-name>/<skill-name></command-name>` — the slash command used
+3. The skill's full prompt text (instructions, references, workflows, etc.)
+
+**Action:** Skip steps 1-2 below and go straight to step 3 — the instructions are already loaded. Read and execute them.
+
+### Skill Execution Procedure
 
 This is the complete procedure from skill invocation to final output. Every step matters.
 
 | Step | Action | What Can Go Wrong |
 |---|---|---|
-| 1. Parse the name | From the skills listing: extract everything between `- ` and the `: ` before a capital letter | Wrong name → "Unknown skill" error |
-| 2. Call `Skill` tool | `Skill(skill: "<parsed-name>")` — pass the exact name, never modify it | Modified name → "Unknown skill" error |
-| 3. Read returned instructions | Skill returns a prompt with step-by-step instructions — **this is NOT a result** | Treating it as a result → no action taken |
+| 1. Parse the name | From the skills listing: extract everything between `- ` and the `: ` before a capital letter. **Skip if already loaded via slash command** | Wrong name → "Unknown skill" error |
+| 2. Call `Skill` tool | `Skill(skill: "<parsed-name>")` — pass the exact name, never modify it. **Skip if already loaded via slash command** | Modified name → "Unknown skill" error |
+| 3. Read returned instructions | The skill prompt contains step-by-step instructions — **this is NOT a result, it is instructions for YOU to execute** | Treating it as a result → no action taken |
 | 4. Identify referenced tools | Instructions mention tool names you need to call | Missing a tool → incomplete execution |
 | 5. Load referenced tools | For each tool not in your available tools: call `ToolSearch` with the short name or keywords. Instructions may use a different/shorter name than the deferred listing | Calling without loading → error. Guessing full MCP name → no results |
 | 6. Execute instructions | Call tools as specified, with the parameters described. Follow every step | Skipping steps or improvising → wrong output |
