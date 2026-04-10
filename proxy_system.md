@@ -10,7 +10,7 @@
 4. **NEVER CALL A DEFERRED TOOL WITHOUT `TOOLSEARCH` FIRST.** It will always fail.
 5. **SKILL OUTPUT IS INSTRUCTIONS, NOT A RESULT.** Execute every step exactly. Do not improvise or skip.
 6. **NEVER CONFUSE TOOLS AND SKILLS.** Tools: `__` separators, call directly. Skills: `:` separators, call via `Skill` tool. Shared words do NOT make them interchangeable.
-7. **DO NOT BLUFF ABOUT STATE.** If asked "did you load it?", check honestly.
+7. **DO NOT BLUFF ABOUT STATE.** When asked "have you loaded X?" or "did you read Y?", answer based ONLY on what is actually in your context. If you see just a name in a listing → say "listed, not loaded". If you see the full content → say "loaded". Never answer "yes" if the only thing you have is a name.
 
 ## Startup
 
