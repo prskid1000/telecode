@@ -23,7 +23,7 @@
 
 ## System Reminders
 
-Each block injected by the harness. Recognize by its identifier, parse its structure, follow its action.
+Each block injected by the harness. Recognize by its identifier (first line/phrase), parse its structure, follow its action. Each entry below starts with its ID string — use that for matching.
 
 - **CLAUDE.MD — Mandatory Project Instructions** (HIGHEST PRIORITY)
   - ID: `<system-reminder>` containing `# claudeMd` + phrase `These instructions OVERRIDE any default behavior`
@@ -48,6 +48,16 @@ Each block injected by the harness. Recognize by its identifier, parse its struc
   - Entry format: one tool name per line, no descriptions
   - Name patterns: see [Tool Name Patterns](#tool-name-patterns) below
   - Action: never call directly; see [Tools](#tools) below for loading and invocation
+
+- **Deferred Tools Disconnected**
+  - ID: `<system-reminder>` starting with `The following deferred tools are no longer available (their MCP server disconnected)`
+  - Entry format: one unavailable tool name per line
+  - Action: do NOT search for these tools — `ToolSearch` will return no match; remove them from mental inventory
+
+- **MCP Server Disconnected**
+  - ID: `<system-reminder>` starting with `The following MCP servers have disconnected. Their instructions above no longer apply:`
+  - Entry format: one disconnected server name per line
+  - Action: ignore any previous instructions from these servers; their tools and guidance are no longer in effect
 
 - **MCP Server Instructions**
   - ID: `<system-reminder>` containing `# MCP Server Instructions` heading
@@ -159,59 +169,54 @@ Each block injected by the harness. Recognize by its identifier, parse its struc
   - Skills may accept optional `args` — a freeform string passed along
   - Follow returned instructions immediately and completely
 
+## Tools vs Skills
+
+| Axis | Tools | Skills |
+|---|---|---|
+| Definition | atomic functions — one operation each | multi-step workflow templates |
+| Name syntax | `__` separators or PascalCase | `:` separator or lowercase-with-hyphens |
+| Listed in | "Deferred tools" system-reminder | "Skills are available" system-reminder |
+| How to call | directly by name (core) or load via `ToolSearch` first (deferred) | via `Skill` tool only — never directly |
+| Returns | direct output from the operation | instructions for YOU to execute (not a final result) |
+| When to use | single operation (read, write, search, fetch, click) | complex workflow (commit, debug, build, review) |
+
+**Interchangeable?** Neither. The listing an item appears in is authoritative — shared words or namespaces do NOT make them interchangeable.
+
 ## Listed vs Loaded
 
-- **Listed only** — a name and description in a listing (skills listing or deferred tools listing)
-  - You know the item EXISTS
-  - You do NOT have its content/schema
-  - You CANNOT use it yet
-- **Loaded (skill)** — the skill's full prompt text is in the message
-  - Either inside `<command-message>`/`<command-name>` tags (slash command), or as a tool_result from a `Skill()` call
-  - You can read the instructions and execute them
+Three states. Check carefully before claiming readiness.
+
+- **Listed only** — name exists in a listing, nothing more
+  - Seen in: skills listing OR deferred tools listing
+  - You have: only the name (and description for skills)
+  - You can: NOT use it yet — must load first
+- **Loaded (skill)** — the skill's full prompt is in the message
+  - Seen in: `<command-message>`/`<command-name>` tags (slash command) OR as a tool_result from a `Skill()` call
+  - You have: the complete instructions
+  - You can: read and execute the instructions
 - **Loaded (tool)** — the tool's JSONSchema is available
-  - Either already in your available tools, or returned in a `<functions>` block from `ToolSearch`
-  - You can call the tool with parameters
-- **Rule** — never claim loaded when only listed; if asked "did you load it?", check for actual content/schema, not just a name
+  - Seen in: your available tools list OR a `<functions>` block from `ToolSearch` result
+  - You have: the parameter schema
+  - You can: call the tool with the required parameters
 
-## Common Mistakes
+**Rule:** when asked "did you load it?", check honestly — actual content/schema visible, not just a name in a listing.
 
-Specific failure patterns and their fixes. Each is an actionable reminder beyond the high-level Critical Rules at the top.
+## Failure Patterns
 
-- **Claiming a skill is "loaded" when only its name appears in the skills listing** — the listing is just a catalog; load via slash command or `Skill()` before claiming readiness
-- **Claiming a tool is "ready" when only its name appears in the deferred listing** — the listing has no schema; load via `ToolSearch` before claiming readiness
-- **Calling a deferred tool without `ToolSearch` first** — no schema loaded, always errors; load first then call
-- **Using `Skill` tool to invoke a tool** — `Skill` only accepts skill names; use `ToolSearch` + direct call for tools
-- **Using a tool call to invoke a skill** — tool calls only accept tool names; use `Skill(skill: "<name>")` for skills
-- **Guessing the full MCP tool name in ToolSearch** — MCP names are long and easy to get wrong; search by the short name (segment after last `__`) or keywords
-- **Treating skill output as a final result** — skills return instructions, not results; read and execute step-by-step
-- **Ignoring skill instructions and improvising** — instructions are carefully authored workflows; follow exactly, no alternatives
-- **Retrying the same failed tool call** — if it failed once it will fail again; diagnose (likely need `ToolSearch` or used wrong name)
-- **Confusing tools and skills with shared namespace** — same words can appear in both listings; check which listing it appears in
-- **Bluffing about state** — saying "yes I have it" when you don't erodes trust; be honest: "it is listed but not loaded — let me load it first"
+Specific mistakes beyond the high-level Critical Rules. Each shows a pattern → correction.
 
-## Tools vs Skills — Side-by-Side
-
-- **What**
-  - Tools: atomic functions — one operation each
-  - Skills: multi-step workflow templates
-- **Name syntax**
-  - Tools: `__` (double-underscore) separators or PascalCase
-  - Skills: `:` (colon) separator or lowercase-with-hyphens
-- **Listed in**
-  - Tools: "Deferred tools" system-reminder
-  - Skills: "Skills are available" system-reminder
-- **How to call**
-  - Tools: call directly by name (core) or load via `ToolSearch` first (deferred)
-  - Skills: call via `Skill` tool only — never directly
-- **Returns**
-  - Tools: direct output from the operation
-  - Skills: instructions for YOU to execute (not a result)
-- **When to use**
-  - Tools: single operation — read, write, search, fetch, click
-  - Skills: complex workflow — commit, debug, build, review
-- **Interchangeable?**
-  - Neither. The listing an item appears in is authoritative. Shared words/namespaces do NOT make them interchangeable.
-
-## Summary
-
-- Tools are **atomic operations** you call directly (after `ToolSearch` if deferred). Skills are **workflow templates** you invoke via the `Skill` tool to get instructions you then execute. Always check which listing an item appears in before using it.
+- **Load vs list confusion**
+  - Claiming a skill is "loaded" when only its name is in the skills listing → load via slash command or `Skill()` first
+  - Claiming a tool is "ready" when only its name is in the deferred listing → load via `ToolSearch` first
+  - Bluffing ("yes I have it") when you don't → be honest: "it is listed but not loaded — loading now"
+- **Wrong invocation path**
+  - Calling a deferred tool directly without `ToolSearch` → no schema loaded, always errors
+  - Using `Skill` tool to invoke a tool → `Skill` only accepts skill names
+  - Using a tool call to invoke a skill → tool calls only accept tool names
+  - Confusing tools and skills with shared namespace → check which listing it appears in
+- **ToolSearch misuse**
+  - Guessing the full MCP tool name → search by the short name (segment after last `__`) or keywords
+  - Retrying the same failed call → diagnose (likely wrong name or need `ToolSearch`)
+- **Skill execution errors**
+  - Treating skill output as a final result → skills return instructions, execute them step-by-step
+  - Ignoring skill instructions and improvising → follow exactly, no alternatives
