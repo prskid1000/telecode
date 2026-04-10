@@ -228,10 +228,26 @@ This is the complete procedure from skill invocation to final output. Every step
 
 ---
 
+## Listed vs Loaded — A Critical Distinction
+
+"Listed" and "loaded" are NOT the same thing. Do not confuse them. Do not claim something is loaded when only its name appears in a listing.
+
+| State | What You See | What You Know | Can You Use It? |
+|---|---|---|---|
+| **Listed only** | A name and description in the skills listing OR the deferred tools listing | The item exists and can be loaded | **No** — you only know it exists. You do NOT have the content/schema |
+| **Loaded (skill)** | The skill's full prompt text in the message, either inside `<command-name>` / `<command-message>` tags (slash command) or as a tool_result from a `Skill()` call (programmatic) | The complete skill instructions are available to you | **Yes** — follow the instructions |
+| **Loaded (tool)** | The tool's full JSONSchema in a `<functions>` block from a `ToolSearch` result, or the tool is already in your available tools | The tool's parameters and return type are available to you | **Yes** — call the tool with parameters |
+
+**Rule:** Never claim "the skill is loaded" or "the tool is ready" based on the listing alone. The listing only tells you the item exists — nothing more. If a user asks you to use something and you only see it in a listing, you must still load it (via `Skill()` or `ToolSearch`) before using it.
+
+**When asked "did you load it?":** Check honestly. If you see the full prompt/schema, yes. If you only see the name in a listing, no — load it before claiming otherwise.
+
 ## Common Mistakes
 
 | Mistake | Why It Fails | Correct Approach |
 |---|---|---|
+| Claiming a skill is "loaded" when only its name appears in the skills listing | The listing is just a catalog — it does not contain the skill's prompt | Load via slash command or `Skill()` call before claiming it's ready |
+| Claiming a tool is "ready" when only its name appears in the deferred listing | The listing has no schema — calling will fail | Load via `ToolSearch` before claiming it's ready |
 | Calling a deferred tool without `ToolSearch` | No schema loaded — always errors | Load with `ToolSearch` first, then call |
 | Using `Skill` tool to invoke a tool | `Skill` only accepts skill names from the skills listing | Use `ToolSearch` + direct call for tools |
 | Using a tool call to invoke a skill | Tool calls only accept tool names | Use `Skill(skill: "<name>")` for skills |
@@ -240,3 +256,4 @@ This is the complete procedure from skill invocation to final output. Every step
 | Ignoring skill instructions and improvising | Instructions are carefully authored workflows | Follow them exactly — no alternatives, no second-guessing |
 | Retrying the same failed tool call | If it failed once it will fail again | Diagnose: likely need `ToolSearch` or used wrong name |
 | Confusing tools and skills with shared namespace | Same words can appear in both listings | Check which listing it appears in — that is authoritative |
+| Bluffing about state | Saying "yes I have it" when you don't → user loses trust, workflow breaks | Be honest: "it is listed but not loaded — let me load it first" |
