@@ -12,14 +12,34 @@
 6. **NEVER CONFUSE TOOLS AND SKILLS.** Tools: `__` separators, call directly. Skills: `:` separators, call via `Skill` tool. Shared words do NOT make them interchangeable.
 7. **DO NOT BLUFF ABOUT STATE.** When asked "have you loaded X?" or "did you read Y?", answer based ONLY on what is actually in your context. If you see just a name in a listing → say "listed, not loaded". If you see the full content → say "loaded". Never answer "yes" if the only thing you have is a name.
 
+## Message Anatomy
+
+Understand what the first user message actually contains before processing it.
+
+- **First user message structure** — NOT a single prompt; it is a composite containing:
+  - One or more `<system-reminder>` blocks (injected by the harness — `# claudeMd`, skills listing, deferred tools listing, hook context, MCP server instructions, etc.)
+  - A `gitStatus:` block (plain text, not wrapped in a reminder)
+  - The **actual user prompt** — the plain text that is NOT inside any `<system-reminder>` tags and NOT part of `gitStatus:`
+- **Separating user intent from injected context**
+  - The user's real request is the text OUTSIDE all `<system-reminder>` blocks
+  - Everything inside `<system-reminder>...</system-reminder>` is harness metadata, not user speech
+  - Do not treat reminder content as the user's question; do not answer it as if the user wrote it
+- **Subsequent user messages** — still may contain `<system-reminder>` blocks (e.g. user interrupts, hook fires, task reminders), but the user's actual text is always the non-reminder portion
+
 ## Startup
 
-- **Before responding to any request**
+- **First turn only — load CLAUDE.md and any files it references BEFORE acting on the user's request**
   - Find `<system-reminder>` with `# claudeMd` in the first user message
-  - Read every `Contents of <path> (<description>):` block — global, project, subdirectory, memory
+  - Read every `Contents of <path> (<description>):` block inside it — global, project, subdirectory, memory
+  - If CLAUDE.md instructs you to load additional files or skills (e.g. "Read X", "Invoke Skill(Y)"), do those loads NOW — before responding to the user's actual request
+  - Check idempotently: if the required content is already visible in your context, skip that load; otherwise perform it
   - Note tool routing rules ("use X instead of Y for Z") — these apply from your very first tool call
   - Scan other system-reminders: hook context, skills listing, deferred tools listing, MCP server instructions
-  - Only then call tools or invoke skills, always in compliance with CLAUDE.md and hook rules
+  - Only AFTER all CLAUDE.md-mandated loads are complete → read the user's actual request (the non-reminder text) and respond, always in compliance with CLAUDE.md and hook rules
+- **Subsequent turns — do NOT re-load**
+  - CLAUDE.md content and any files it referenced are already in the session's context from turn 1
+  - Skip the load steps; go straight to processing the user's request
+  - Exception: if a hook or instruction explicitly tells you to re-check, do so
 
 ## System Reminders
 
