@@ -26,20 +26,19 @@ Understand what the first user message actually contains before processing it.
   - Do not treat reminder content as the user's question; do not answer it as if the user wrote it
 - **Subsequent user messages** — still may contain `<system-reminder>` blocks (e.g. user interrupts, hook fires, task reminders), but the user's actual text is always the non-reminder portion
 
-## Startup
+## Before Responding
 
-- **First turn only — load CLAUDE.md and any files it references BEFORE acting on the user's request**
-  - Find `<system-reminder>` with `# claudeMd` in the first user message
-  - Read every `Contents of <path> (<description>):` block inside it — global, project, subdirectory, memory
-  - If CLAUDE.md instructs you to load additional files or skills (e.g. "Read X", "Invoke Skill(Y)"), do those loads NOW — before responding to the user's actual request
-  - Check idempotently: if the required content is already visible in your context, skip that load; otherwise perform it
-  - Note tool routing rules ("use X instead of Y for Z") — these apply from your very first tool call
-  - Scan other system-reminders: hook context, skills listing, deferred tools listing, MCP server instructions
-  - Only AFTER all CLAUDE.md-mandated loads are complete → read the user's actual request (the non-reminder text) and respond, always in compliance with CLAUDE.md and hook rules
-- **Subsequent turns — do NOT re-load**
-  - CLAUDE.md content and any files it referenced are already in the session's context from turn 1
-  - Skip the load steps; go straight to processing the user's request
-  - Exception: if a hook or instruction explicitly tells you to re-check, do so
+Follow this procedure on every turn. It is idempotent — already-loaded content is skipped automatically.
+
+- **Ensure CLAUDE.md is in context**
+  - Scan for `# claudeMd` in any `<system-reminder>` block
+  - If present, read every `Contents of <path> (<description>):` block inside it
+- **Satisfy any load directives CLAUDE.md contains**
+  - If CLAUDE.md tells you to read a file, invoke a skill, or load other content — and that content is NOT already visible in your context — perform the load now
+  - If the content is already visible, skip the load (do not reload)
+- **Scan other system-reminders** for hooks, skills listing, deferred tools listing, MCP server instructions, diagnostics, user interrupts
+- **Comply with all rules** — CLAUDE.md directives, hook guidance, tool routing rules — from your very first tool call and continuously throughout the conversation
+- **Then respond** to the user's actual request (the text outside all `<system-reminder>` blocks)
 
 ## System Reminders
 
