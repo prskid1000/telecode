@@ -289,7 +289,7 @@ Streamable HTTP MCP server exposing local TTS/STT as tools for Claude Code or an
 
 **Add to Claude Code:**
 ```bash
-claude mcp add telecode-audio --transport streamable-http --url http://127.0.0.1:1236/mcp
+claude mcp add telecode --transport streamable-http --url http://127.0.0.1:1236/mcp
 ```
 
 **Run standalone** (without Telegram bot):
@@ -316,6 +316,40 @@ Tool-search proxy that sits between Claude Code and LM Studio. Reduces 101 tools
 | `strip_reminders` | boolean | Strip `<system-reminder>` blocks from messages, keeping only skills + deferred-tool listings (default `false`) |
 | `auto_load_tools` | boolean | Auto-load deferred tool schemas when the model calls them without `ToolSearch` first (requires `tool_splitting`, default `false`) |
 | `lift_tool_result_images` | boolean | Rewrite array-form `tool_result.content` (text + image blocks) as a plain-string placeholder and append the lifted image blocks, labeled by `tool_use_id`, at the end of the user message — works around LM Studio rejecting array-form content and preserves Anthropic's "tool_results first" rule (default `false`) |
+| `tool_result_rewriting` | boolean | Master switch for the generic tool_result rewriter framework (`proxy/tool_result_rewriters.py`). When on, drop-in modules under `proxy/rewriters/` can replace empty/broken `tool_result` content in the conversation history before it reaches the local model. Required for `web_search.enabled` to take effect (default `false`) |
+| `web_search.enabled` | boolean | Replace empty `WebSearch` tool_results (CC's stub when no Anthropic backend is reachable) with real search results so the local model gets usable data. The CC UI still shows the WebSearch call but its "Did N searches" count comes from CC's own executor and stays at 0 — only the model's view of history is rewritten (default `false`) |
+| `web_search.provider` | string | Search backend. Currently only `searxng` is implemented — talks to a local SearXNG instance via its JSON API (default `searxng`) |
+| `web_search.url` | string | Base URL of the local SearXNG instance (default `http://localhost:8888`). Host + port are parsed and pushed into the generated `settings.yml` so SearXNG actually binds here |
+| `web_search.max_results` | number | Number of results to fetch per search (default `5`) |
+| `web_search.searxng.engines` | array | Names of engines to enable in SearXNG. Anything not in this list is disabled. Default: `["bing"]` — see "Engine selection" below for why most other scraping engines are excluded |
+| `web_search.searxng.safesearch` | number | 0 = off, 1 = moderate, 2 = strict (default `0`) |
+| `web_search.searxng.language` | string | Two-letter language code passed to `search.default_lang` (default `en`) |
+
+**SearXNG auto-setup.** When `web_search.enabled` is `true` and `provider` is `searxng`, Telecode pings `web_search.url` on startup. If nothing answers, it provisions a local install — **native Python, no Docker, no .exe**:
+
+1. `git clone --depth 1 https://github.com/mbaozi/SearXNGforWindows.git` → `data/searxng/repo/`
+2. `python -m venv` → `data/searxng/.venv/`
+3. `pip install -r repo/config/requirements.txt` (1-2 minutes the first time)
+4. Generate `data/searxng/settings.yml` from the upstream template, overlaying values from `proxy.web_search.searxng.*` (engines, port, language, safesearch, plus a random `secret_key`). The upstream fork ships with only Chinese engines enabled (Sogou + Baidu) — this overlay is what makes English search work.
+5. Spawn `.venv/Scripts/python.exe -m searx.webapp` as a managed child of Telecode (no console window, dies with Telecode)
+6. Poll `web_search.url` for up to 60 seconds, then start the proxy.
+
+Requires `git` on PATH ([git for Windows](https://git-scm.com/download/win)) and `PyYAML` (in `requirements.txt`). On Linux/macOS the same flow runs with `.venv/bin/python` and works the same way. No flag to flip — opting into the `searxng` provider opts you into setup. To re-provision from scratch, delete `data/searxng/` and restart.
+
+**SearXNG lifecycle.** The spawned `python -m searx.webapp` is bound to a Windows **Job Object** (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) so it dies whenever Telecode dies — graceful shutdown, `Stop-ScheduledTask`, `taskkill /F`, or BSOD. As a belt-and-braces fallback, the PID is written to `data/searxng/searxng.pid` and on every Telecode boot we both read that file *and* probe whichever process is listening on `web_search.url`'s port and terminate it before spawning fresh. Settings.yml is also regenerated on every boot, so changes to `proxy.web_search.searxng.*` take effect on next restart.
+
+**Engine selection.** Out of SearXNG's 254 engines, only `bing` consistently returns results from a single residential IP without a proxy in 2026. Empirical findings (verified end-to-end with the JSON API):
+
+- **bing**: ✅ 10 results per query, no rate limits.
+- **google**: HTTP 302 → `google.com/sorry/index` (CAPTCHA wall) → `SearxEngineTooManyRequestsException`. Only fix is rotating egress IP via paid residential proxy.
+- **duckduckgo**: `SearxEngineCaptchaException`. Upstream PR #3955 fix landed *after* 2025.05, but the `mbaozi/SearXNGforWindows` fork is from 2025.05 so it's missing the patch.
+- **mojeek**: HTTP 403 → `SearxEngineAccessDeniedException` → SearXNG circuit-breaker bans for 24 hours after a single failure.
+- **qwant**: `JSONDecodeError` — Qwant returns an HTML CAPTCHA page instead of JSON.
+- **brave** / **yahoo**: silent 0-result returns. HTML parsers in the fork are out of sync with current `brave.com` / `search.yahoo.com` markup. Nothing logged because parser succeeds — it just finds no results.
+- **startpage**: works (~9 results/query) but suspended after a few hours of use; flaky enough to exclude from defaults.
+- **wikipedia**: works for fact lookups (returns 1 result on exact title match — by design, not a bug).
+
+Override the default by setting `proxy.web_search.searxng.engines` to any combination of engine names from the upstream `settings.yml` template (run `data/searxng/repo/config/settings.yml` to see all 254).
 
 **`proxy_system.md` conditional sections.** The proxy system instruction loaded into requests is `proxy_system.md`, preprocessed at request time. Wrap any block in `<if dotted.settings.path="value">…</if>` (tags on their own lines) and the preprocessor keeps the inner content only when the named setting matches. Example: paragraphs documenting reminder types stripped by `proxy.strip_reminders` are wrapped in `<if proxy.strip_reminders="false">…</if>` so they vanish from the model's prompt when stripping is on. Single source of truth, one file to maintain.
 

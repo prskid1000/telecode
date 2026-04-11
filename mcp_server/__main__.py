@@ -11,5 +11,5 @@ from mcp_server.app import mcp_app, register_all
 register_all()
 
 if __name__ == "__main__":
-    print(f"Starting telecode-audio MCP server on http://{mcp_app.settings.host}:{mcp_app.settings.port}/mcp")
+    print(f"Starting telecode MCP server on http://{mcp_app.settings.host}:{mcp_app.settings.port}/mcp")
     mcp_app.run(transport="streamable-http")

@@ -12,7 +12,7 @@ except Exception:
     _host = os.environ.get("MCP_HOST", "127.0.0.1")
     _port = int(os.environ.get("MCP_PORT", "1236"))
 
-mcp_app = FastMCP("telecode-audio", stateless_http=True, host=_host, port=_port)
+mcp_app = FastMCP("telecode", stateless_http=True, host=_host, port=_port)
 
 
 def register_all() -> None:

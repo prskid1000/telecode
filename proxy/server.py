@@ -14,6 +14,7 @@ import aiohttp
 from aiohttp import web
 
 from proxy import config as proxy_config
+from proxy import tool_result_rewriters  # auto-loads proxy.rewriters package
 from proxy.tool_registry import (
     split_tools, rewrite_messages, strip_all_reminders, proxy_system_instruction,
     lift_tool_result_images as _lift_tool_result_images,
@@ -248,6 +249,11 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
     if proxy_config.lift_tool_result_images():
         body["messages"] = _lift_tool_result_images(body.get("messages", []))
 
+    if proxy_config.tool_result_rewriting():
+        body["messages"] = await tool_result_rewriters.rewrite_messages(
+            body.get("messages", [])
+        )
+
     await _dump_request(body, "OUTGOING")
 
     # Forward auth headers
@@ -445,6 +451,16 @@ async def start_proxy_background() -> aiohttp.web.AppRunner | None:
     if not proxy_config.enabled():
         log.info("Proxy disabled in settings")
         return None
+
+    # Bring up any external services that registered rewriters depend on
+    # (e.g. SearXNG for the WebSearch rewriter). Failures degrade gracefully:
+    # the proxy still starts, the rewriter just returns ERROR strings until
+    # the backend comes up.
+    try:
+        from proxy.rewriters.web_search import ensure_searxng_running
+        await ensure_searxng_running()
+    except Exception as exc:
+        log.warning("web_search auto-setup raised: %s", exc)
 
     port = proxy_config.proxy_port()
     app = create_app()
