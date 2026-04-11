@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from config import get_nested as _settings_get
 from proxy.config import core_tools, strip_reminders
 
 # ── ToolSearch meta-tool definition ──────────────────────────────────────────
@@ -83,23 +84,50 @@ def split_tools(
     return core, deferred
 
 
-# ── Deferred tool listing for in-place replacement ─────────────────────────
+# ── System instruction loading + conditional preprocessing ────────────────
 
-def _load_system_instruction() -> str:
-    """Load proxy system instruction from proxy_system.md next to settings.json."""
+# `<if dotted.settings.path="value">...</if>` blocks let proxy_system.md gate
+# paragraphs by current settings. Tags must live on their own lines. Flat only —
+# no nesting.
+_IF_TAG_RE = re.compile(
+    r'<if\s+([\w.]+)="([^"]*)">[ \t]*\n(.*?)\n[ \t]*</if>[ \t]*\n?',
+    re.DOTALL,
+)
+
+
+def _preprocess_conditionals(text: str) -> str:
+    def repl(m: re.Match[str]) -> str:
+        path, expected, content = m.group(1), m.group(2), m.group(3)
+        actual = _settings_get(path, None)
+        if isinstance(actual, bool):
+            actual_str = "true" if actual else "false"
+        elif actual is None:
+            actual_str = ""
+        else:
+            actual_str = str(actual)
+        return content + "\n" if actual_str == expected else ""
+    return _IF_TAG_RE.sub(repl, text)
+
+
+_FALLBACK_INSTRUCTION = (
+    "If a tool is not in your available tools list, you cannot call it. "
+    "You must call ToolSearch first — it will return the tool's schema. "
+    "Only after receiving the schema can you call that tool. "
+    "Calling an unloaded tool without its schema will always fail."
+)
+
+
+def proxy_system_instruction() -> str:
+    """Load proxy_system.md and resolve `<if>` conditionals against current settings.
+
+    Re-read each call so settings hot-reload and doc edits both take effect.
+    """
     md_path = Path(__file__).resolve().parent.parent / "proxy_system.md"
     try:
-        return md_path.read_text(encoding="utf-8").strip()
+        text = md_path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return (
-            "If a tool is not in your available tools list, you cannot call it. "
-            "You must call ToolSearch first — it will return the tool's schema. "
-            "Only after receiving the schema can you call that tool. "
-            "Calling an unloaded tool without its schema will always fail."
-        )
-
-
-PROXY_SYSTEM_INSTRUCTION = _load_system_instruction()
+        return _FALLBACK_INSTRUCTION
+    return _preprocess_conditionals(text).strip()
 
 
 def build_deferred_listing(deferred: list[dict[str, Any]]) -> str:

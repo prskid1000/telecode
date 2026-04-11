@@ -312,6 +312,11 @@ Tool-search proxy that sits between Claude Code and LM Studio. Reduces 101 tools
 | `port` | number | Proxy listen port (default `1235`) |
 | `upstream_url` | string | LM Studio or other backend URL (default `http://localhost:1234`) |
 | `core_tools` | array | Override which tools stay loaded (default: Bash, Edit, Read, Write, Glob, Grep, Agent, Skill) |
+| `tool_splitting` | boolean | Split tools into core/deferred and inject `ToolSearch` (default `false`) |
+| `strip_reminders` | boolean | Strip `<system-reminder>` blocks from messages, keeping only skills + deferred-tool listings (default `false`) |
+| `auto_load_tools` | boolean | Auto-load deferred tool schemas when the model calls them without `ToolSearch` first (requires `tool_splitting`, default `false`) |
+
+**`proxy_system.md` conditional sections.** The proxy system instruction loaded into requests is `proxy_system.md`, preprocessed at request time. Wrap any block in `<if dotted.settings.path="value">…</if>` (tags on their own lines) and the preprocessor keeps the inner content only when the named setting matches. Example: paragraphs documenting reminder types stripped by `proxy.strip_reminders` are wrapped in `<if proxy.strip_reminders="false">…</if>` so they vanish from the model's prompt when stripping is on. Single source of truth, one file to maintain.
 
 When enabled, the proxy starts automatically with Telecode. Point your `claude-local` tool's `ANTHROPIC_BASE_URL` at `http://localhost:<port>` to route through it. Also works standalone with Claude Code by setting `ANTHROPIC_BASE_URL=http://localhost:1235`.
 
