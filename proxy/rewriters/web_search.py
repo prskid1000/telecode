@@ -45,11 +45,44 @@ _REMINDER = (
 )
 
 
-def _format_results(query: str, results: list[dict[str, Any]], answer: str = "") -> str:
-    """Format search results in the Anthropic web_search-style result string."""
+def _format_results(
+    query: str,
+    results: list[dict[str, Any]],
+    answer: str = "",
+    infoboxes: list[dict[str, Any]] | None = None,
+) -> str:
+    """Format search results in the Anthropic web_search-style result string.
+
+    Surfaces three sources of content from SearXNG's response:
+      - `answer` (str): one-line summary, e.g. currency conversion result
+      - `infoboxes` (list): structured per-entity data, e.g. Wikipedia/Wikidata
+        infoboxes for queries like "Albert Einstein"
+      - `results` (list): the standard ranked link list
+
+    Some engines (currency, wikipedia/wikidata for entity queries) put their
+    primary content into `answers`/`infoboxes` and return an empty `results`
+    array. Surfacing all three means those engines aren't silently dropped.
+    """
     lines = [f'Web search results for query: "{query}"', ""]
     if answer:
         lines.append(f"Summary: {answer}")
+        lines.append("")
+    for ib in infoboxes or []:
+        if not isinstance(ib, dict):
+            continue
+        title = (ib.get("infobox") or ib.get("title") or "").strip()
+        content = (ib.get("content") or "").strip()
+        if not title and not content:
+            continue
+        lines.append(f"[infobox] {title}")
+        if content:
+            lines.append(content[:600])
+        for url_entry in (ib.get("urls") or [])[:3]:
+            if isinstance(url_entry, dict):
+                u = url_entry.get("url", "")
+                t = url_entry.get("title", "")
+                if u:
+                    lines.append(f"  - {t}: {u}" if t else f"  - {u}")
         lines.append("")
     for i, r in enumerate(results, 1):
         title = (r.get("title") or "(no title)").strip()
@@ -88,7 +121,10 @@ _SEARXNG_HEADERS = {
 }
 
 
-async def _search_searxng(query: str, max_results: int) -> tuple[list[dict[str, Any]], str]:
+async def _search_searxng(
+    query: str,
+    max_results: int,
+) -> tuple[list[dict[str, Any]], str, list[dict[str, Any]]]:
     base = proxy_config.web_search_url()
     params = {
         "q": query,
@@ -120,14 +156,17 @@ async def _search_searxng(query: str, max_results: int) -> tuple[list[dict[str, 
         if len(deduped) >= max_results:
             break
 
-    # SearXNG can also surface a one-line summary in `answers` (Wikipedia
-    # infoboxes etc.) — pass the first one through as the answer.
+    # SearXNG can surface content via three channels — `results`,
+    # `infoboxes` (structured per-entity data), and `answers` (one-line
+    # summaries from currency conversion / quick facts). Pass them all
+    # so the formatter can render whichever the engine populated.
     answers = data.get("answers") or []
     answer = answers[0] if answers else ""
     if isinstance(answer, dict):
         answer = answer.get("answer", "") or ""
+    infoboxes = data.get("infoboxes") or []
 
-    return deduped, str(answer)
+    return deduped, str(answer), list(infoboxes)
 
 
 _PROVIDERS = {
@@ -182,15 +221,18 @@ async def search(query: str, max_results: int | None = None) -> str:
         return _format_error(query, f"unknown provider {provider_name!r}")
 
     try:
-        results, answer = await fn(query, n)
+        results, answer, infoboxes = await fn(query, n)
     except Exception as exc:
         log.warning("WebSearch %s failed: %s", provider_name, exc)
         return _format_error(query, str(exc))
 
-    if not results:
+    # Treat the response as "no results" only if all three channels are empty.
+    # currency / wikidata-entity queries return empty `results` but populated
+    # `answer` / `infoboxes`, and we still want to surface those.
+    if not results and not answer and not infoboxes:
         out = _format_error(query, "no results")
     else:
-        out = _format_results(query, results, answer)
+        out = _format_results(query, results, answer, infoboxes)
     _cache_put(cache_key, out)
     return out
 

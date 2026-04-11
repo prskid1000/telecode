@@ -95,7 +95,7 @@ async def web_search(
         return _ws._format_error(query, f"unknown provider {provider_name!r}")
 
     try:
-        results, answer = await fn(query, fetch_n)
+        results, answer, infoboxes = await fn(query, fetch_n)
     except Exception as exc:
         log.warning("MCP web_search %s failed: %s", provider_name, exc)
         return _ws._format_error(query, str(exc))
@@ -120,7 +120,7 @@ async def web_search(
     else:
         results = results[:n]
 
-    if not results:
+    if not results and not answer and not infoboxes:
         return _ws._format_error(query, "no results")
 
-    return _ws._format_results(query, results, answer)
+    return _ws._format_results(query, results, answer, infoboxes)
