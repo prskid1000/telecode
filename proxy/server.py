@@ -16,6 +16,7 @@ from aiohttp import web
 from proxy import config as proxy_config
 from proxy.tool_registry import (
     split_tools, rewrite_messages, strip_all_reminders, proxy_system_instruction,
+    lift_tool_result_images as _lift_tool_result_images,
 )
 from proxy.tool_search import BM25Index
 
@@ -243,6 +244,9 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
     elif proxy_config.strip_reminders():
         # Strip reminders even without tool splitting
         body["messages"] = strip_all_reminders(body.get("messages", []))
+
+    if proxy_config.lift_tool_result_images():
+        body["messages"] = _lift_tool_result_images(body.get("messages", []))
 
     await _dump_request(body, "OUTGOING")
 

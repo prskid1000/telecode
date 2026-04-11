@@ -52,3 +52,9 @@ def auto_load_tools() -> bool:
     """Auto-load deferred tool schemas when model calls them without loading first.
     Only effective when tool_splitting is enabled."""
     return tool_splitting() and bool(app_config.get_nested("proxy.auto_load_tools", False))
+
+
+def lift_tool_result_images() -> bool:
+    """Rewrite array-form tool_result.content so LM Studio accepts it, lifting
+    image blocks out as siblings in the same user message."""
+    return bool(app_config.get_nested("proxy.lift_tool_result_images", False))
