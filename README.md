@@ -315,6 +315,7 @@ Tool-search proxy that sits between Claude Code and LM Studio. Reduces 101 tools
 | `tool_splitting` | boolean | Split tools into core/deferred and inject `ToolSearch` (default `false`) |
 | `strip_reminders` | boolean | Strip `<system-reminder>` blocks from messages, keeping only skills + deferred-tool listings (default `false`) |
 | `auto_load_tools` | boolean | Auto-load deferred tool schemas when the model calls them without `ToolSearch` first (requires `tool_splitting`, default `false`) |
+| `lift_tool_result_images` | boolean | Rewrite array-form `tool_result.content` (text + image blocks) as a plain-string placeholder and append the lifted image blocks, labeled by `tool_use_id`, at the end of the user message — works around LM Studio rejecting array-form content and preserves Anthropic's "tool_results first" rule (default `false`) |
 
 **`proxy_system.md` conditional sections.** The proxy system instruction loaded into requests is `proxy_system.md`, preprocessed at request time. Wrap any block in `<if dotted.settings.path="value">…</if>` (tags on their own lines) and the preprocessor keeps the inner content only when the named setting matches. Example: paragraphs documenting reminder types stripped by `proxy.strip_reminders` are wrapped in `<if proxy.strip_reminders="false">…</if>` so they vanish from the model's prompt when stripping is on. Single source of truth, one file to maintain.
 
