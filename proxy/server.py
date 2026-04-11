@@ -15,7 +15,7 @@ from aiohttp import web
 
 from proxy import config as proxy_config
 from proxy.tool_registry import (
-    split_tools, rewrite_messages, strip_all_reminders, PROXY_SYSTEM_INSTRUCTION,
+    split_tools, rewrite_messages, strip_all_reminders, proxy_system_instruction,
 )
 from proxy.tool_search import BM25Index
 
@@ -232,11 +232,12 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
 
         # Inject deferred tools instruction into system, tool names into messages
         if deferred:
+            instruction = proxy_system_instruction()
             system = body.get("system", "")
             if isinstance(system, str):
-                body["system"] = f"{PROXY_SYSTEM_INSTRUCTION}\n\n{system}" if system else PROXY_SYSTEM_INSTRUCTION
+                body["system"] = f"{instruction}\n\n{system}" if system else instruction
             elif isinstance(system, list):
-                system.insert(0, {"type": "text", "text": PROXY_SYSTEM_INSTRUCTION})
+                system.insert(0, {"type": "text", "text": instruction})
             body["messages"] = rewrite_messages(body.get("messages", []), deferred)
 
     elif proxy_config.strip_reminders():
