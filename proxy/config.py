@@ -21,6 +21,10 @@ def core_tools() -> list[str]:
     return app_config.get_nested("proxy.core_tools", DEFAULT_CORE_TOOLS)
 
 
+def proxy_host() -> str:
+    return app_config.get_nested("proxy.host", "127.0.0.1")
+
+
 def proxy_port() -> int:
     return int(app_config.get_nested("proxy.port", 1235))
 
@@ -73,6 +77,11 @@ def location() -> str:
 
 
 # ── Web search (Brave Search scraper) ──────────────────────────────────────
+
+def cors_origins() -> list[str]:
+    """CORS allowed origins. Empty list = CORS disabled."""
+    return app_config.get_nested("proxy.cors_origins", [])
+
 
 def web_search_enabled() -> bool:
     return bool(app_config.get_nested("proxy.web_search.enabled", False))

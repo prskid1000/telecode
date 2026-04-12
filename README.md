@@ -88,6 +88,60 @@ Register-ScheduledTask -TaskName "Telecode" `
 
 Use `pythonw.exe` (not `python.exe`) to keep the terminal hidden.
 
+### HTTPS access via Tailscale Funnel
+
+Exposes the proxy and MCP server over HTTPS with a persistent domain. Required for integrations that run in browser sandboxes (e.g. Claude for Excel/PowerPoint/Word add-ins).
+
+**One-time setup:**
+
+1. Install Tailscale:
+
+   ```powershell
+   winget install Tailscale.Tailscale
+   ```
+
+2. Log in and enable HTTPS + Funnel on your tailnet:
+
+   ```bash
+   tailscale login
+   tailscale cert  # enables HTTPS for your machine
+   ```
+
+3. Enable Funnel in the [Tailscale admin console](https://login.tailscale.com/admin/acls) — add `"nodeAttrs"` with `"funnel"` capability (see [Tailscale Funnel docs](https://tailscale.com/kb/1223/funnel)).
+
+4. Add CORS and host settings to `settings.json`:
+
+   ```json
+   {
+     "proxy": {
+       "enabled": true,
+       "host": "0.0.0.0",
+       "cors_origins": ["https://pivot.claude.ai"]
+     },
+     "mcp_server": {
+       "enabled": true,
+       "host": "0.0.0.0",
+       "cors_origins": ["https://pivot.claude.ai"]
+     }
+   }
+   ```
+
+5. Start Telecode — it auto-detects `tailscale` on PATH and starts Funnel subprocesses:
+   - `https://<machine>.<tailnet>.ts.net` → proxy (port 1235)
+   - `https://<machine>.<tailnet>.ts.net:8443` → MCP server (port 1236)
+
+   Funnel processes die with the bot. If Tailscale is not installed, a warning is logged and the bot runs normally without HTTPS.
+
+**Using with Claude Office add-ins:**
+
+1. Install "Claude by Anthropic" from Microsoft AppSource in Excel/PowerPoint/Word
+2. On the sign-in screen, select **Enterprise gateway**
+3. Enter gateway URL: `https://<machine>.<tailnet>.ts.net`
+4. Enter any API token (the proxy accepts any value)
+5. The add-in auto-discovers models from LM Studio via `/v1/models`
+
+The proxy converts LM Studio's OpenAI model list to Anthropic format automatically.
+
 ### 7. First session
 
 Send `/start` in the group, or `/new claude work`.
@@ -279,6 +333,7 @@ Streamable HTTP MCP server for Claude Code or any MCP client. For local models r
 | `port` | number | Listen port (default `1236`) |
 | `tts_url` | string | Kokoro TTS base URL (default `http://127.0.0.1:6500`) |
 | `stt_url` | string | Whisper STT base URL (default `http://127.0.0.1:6600`) |
+| `cors_origins` | array | CORS allowed origins (e.g. `["https://pivot.claude.ai"]`). Empty = disabled |
 
 **Tools:** `speak` (TTS), `transcribe` (STT), `web_search` (Brave scraper). Drop-in: add a `.py` file in `mcp_server/tools/`.
 
@@ -291,6 +346,7 @@ Middleware proxy for local models (LM Studio, Ollama, etc.). Reduces ~100+ CC to
 | Key | Type | Description |
 |-----|------|-------------|
 | `enabled` | boolean | Enable the proxy (default `false`) |
+| `host` | string | Listen address (default `127.0.0.1`, set `0.0.0.0` for external/Tailscale access) |
 | `port` | number | Listen port (default `1235`) |
 | `upstream_url` | string | LM Studio URL (default `http://localhost:1234`) |
 | `debug` | boolean | Dump full request bodies to `data/logs/proxy_full_*.json` for debugging (default `false`) |
@@ -300,6 +356,7 @@ Middleware proxy for local models (LM Studio, Ollama, etc.). Reduces ~100+ CC to
 | `lift_tool_result_images` | boolean | Lift image blocks out of array-form tool_results for LM Studio (default `false`) |
 | `location` | string | User location for context injection (e.g. `Kolkata, India`). Empty = auto-detect via IP geolocation |
 | `core_tools` | array | Tools always forwarded (default: Bash, Edit, Read, Write, Glob, Grep, Agent, Skill) |
+| `cors_origins` | array | CORS allowed origins (e.g. `["https://pivot.claude.ai"]`). Empty = disabled |
 | `web_search.enabled` | boolean | Enable WebSearch managed tool (default `false`) |
 
 **Managed tools** (`proxy/managed_tools.py`): the proxy strips CC's versions of these tools and injects its own schemas. When the model calls them, the proxy intercepts (CC never sees the call), executes locally, and round-trips — looping up to 15 rounds for multi-tool sequences. Tools can declare `pre_llm`/`post_llm` hooks (`LLMHook`) for automatic pre/post-processing via `proxy/llm.py`. Visibility: a summary is prepended into the model's own text output (preserves LM Studio's prefix cache). Currently registered: `WebSearch` (Brave scraper — `{query, max_results?}`, no key needed, only `data-type="web"` results parsed — video/image clusters excluded), `speak` (Kokoro TTS), `transcribe` (Whisper STT). Adding a new tool = `register(name, schema, handler)` in `managed_tools.py`.
