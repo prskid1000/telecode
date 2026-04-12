@@ -280,7 +280,7 @@ Streamable HTTP MCP server for Claude Code or any MCP client. For local models r
 | `tts_url` | string | Kokoro TTS base URL (default `http://127.0.0.1:6500`) |
 | `stt_url` | string | Whisper STT base URL (default `http://127.0.0.1:6600`) |
 
-**Tools:** `speak` (TTS), `transcribe` (STT), `web_search` (SearXNG). Drop-in: add a `.py` file in `mcp_server/tools/`.
+**Tools:** `speak` (TTS), `transcribe` (STT), `web_search` (Brave scraper). Drop-in: add a `.py` file in `mcp_server/tools/`.
 
 `claude mcp add telecode --transport streamable-http --url http://127.0.0.1:1236/mcp`
 
@@ -299,16 +299,9 @@ Middleware proxy for local models (LM Studio, Ollama, etc.). Reduces ~100+ CC to
 | `auto_load_tools` | boolean | Auto-load deferred tool schemas on first call (default `false`) |
 | `lift_tool_result_images` | boolean | Lift image blocks out of array-form tool_results for LM Studio (default `false`) |
 | `core_tools` | array | Tools always forwarded (default: Bash, Edit, Read, Write, Glob, Grep, Agent, Skill) |
-| `web_search.enabled` | boolean | Enable WebSearch managed tool + SearXNG auto-setup (default `false`) |
-| `web_search.provider` | string | Search backend (default `searxng`) |
-| `web_search.url` | string | SearXNG URL — host+port pushed to generated settings.yml (default `http://localhost:8888`) |
-| `web_search.searxng.engines` | array | Engines to enable (default: `bing`, `bing news`, `wikipedia`, `wiktionary`, `reddit`, `stackoverflow`, `askubuntu`, `github`, `mdn`, `semantic scholar`, `photon`) |
-| `web_search.searxng.safesearch` | number | 0/1/2 (default `0`) |
-| `web_search.searxng.language` | string | Language code (default `en`) |
+| `web_search.enabled` | boolean | Enable WebSearch managed tool (default `false`) |
 
-**Managed tools** (`proxy/managed_tools.py`): the proxy strips CC's versions of these tools and injects its own schemas. When the model calls them, the proxy intercepts (CC never sees the call), executes locally, and round-trips — looping up to 15 rounds for multi-tool sequences. Tools can declare `pre_llm`/`post_llm` hooks (`LLMHook`) that call the upstream model via `proxy/llm.py` for automatic pre/post-processing (e.g. query classification). Visibility: a `🔍` summary is prepended into the model's own text output (no new blocks, no index changes, preserves LM Studio's prefix cache). Currently registered: `WebSearch` (SearXNG — just `{query}`, categories auto-classified by pre_llm hook), `speak` (Kokoro TTS), `transcribe` (Whisper STT). Adding a new tool = `register(name, schema, handler, pre_llm=..., post_llm=...)` in `managed_tools.py`, zero changes to `server.py`.
-
-**SearXNG auto-setup**: when `web_search.enabled` is on, Telecode clones `mbaozi/SearXNGforWindows` into `data/searxng/`, creates a `.venv`, pip-installs, generates `settings.yml` with engine overrides, and spawns `python -m searx.webapp` as a managed child (Job Object + PID file for lifecycle). Requires `git` on PATH. Delete `data/searxng/` to re-provision.
+**Managed tools** (`proxy/managed_tools.py`): the proxy strips CC's versions of these tools and injects its own schemas. When the model calls them, the proxy intercepts (CC never sees the call), executes locally, and round-trips — looping up to 15 rounds for multi-tool sequences. Tools can declare `pre_llm`/`post_llm` hooks (`LLMHook`) for automatic pre/post-processing via `proxy/llm.py`. Visibility: a summary is prepended into the model's own text output (preserves LM Studio's prefix cache). Currently registered: `WebSearch` (Brave scraper — `{query, max_results?}`, no key needed, only `data-type="web"` results parsed — video/image clusters excluded), `speak` (Kokoro TTS), `transcribe` (Whisper STT). Adding a new tool = `register(name, schema, handler)` in `managed_tools.py`.
 
 Point `ANTHROPIC_BASE_URL=http://localhost:1235`. Also runs standalone: `python -m proxy`.
 
@@ -374,7 +367,7 @@ proxy/
   tool_registry.py     Core/deferred tool splitting
   managed_tools.py     Managed tool registry + LLM hooks
   llm.py               Upstream LLM structured_call utility
-  web_search.py        SearXNG client + auto-installer
+  web_search.py        Brave Search scraper + result formatter
   config.py            Proxy settings
 
 mcp_server/
@@ -385,7 +378,7 @@ mcp_server/
     __init__.py        Auto-discovers tool modules (drop-in)
     tts.py             speak tool (Kokoro TTS)
     stt.py             transcribe tool (Whisper STT)
-    web_search.py      web_search tool (SearXNG)
+    web_search.py      web_search tool (Brave scraper)
   resources/
     __init__.py        Auto-discovers resource modules (drop-in)
   prompts/
