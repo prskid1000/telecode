@@ -128,6 +128,15 @@ async def search(
         params = {"q": query, "source": "web"}
         async with aiohttp.ClientSession(timeout=timeout, headers=_HEADERS) as session:
             async with session.get(_BRAVE_URL, params=params) as resp:
+                if resp.status == 429:
+                    unlock_url = f"https://search.brave.com/search?q={query.replace(' ', '+')}"
+                    return _format_error(
+                        query,
+                        f"Brave Search rate limited (HTTP 429). "
+                        f"Ask the user to open this link in their browser to unlock: {unlock_url} "
+                        f"— opening it in a browser often resets the rate limit for this IP. "
+                        f"Then try searching again."
+                    ), 0
                 if resp.status != 200:
                     body = await resp.text()
                     return _format_error(query, f"Brave HTTP {resp.status}: {body[:200]}"), 0
