@@ -76,8 +76,6 @@ def web_search_url() -> str:
     return str(app_config.get_nested("proxy.web_search.url", "http://localhost:8888")).rstrip("/")
 
 
-def web_search_max_results() -> int:
-    return int(app_config.get_nested("proxy.web_search.max_results", 5))
 
 
 # ── SearXNG-specific overlays applied to data/searxng/settings.yml ─────────

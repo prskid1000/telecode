@@ -221,7 +221,7 @@ async def search(
     query = (query or "").strip()
     if not query:
         return _format_error("", "empty query"), 0
-    n = int(max_results if max_results is not None else proxy_config.web_search_max_results())
+    n = int(max_results if max_results is not None else 5)
     cats = categories or ["general"]
     searxng_cats = ",".join(
         CATEGORY_TO_SEARXNG.get(c, c) for c in cats
