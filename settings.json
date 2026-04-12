@@ -1,0 +1,159 @@
+{
+  "telegram": {
+    "bot_token": "8789723990:AAEnUo60W9Z5BjSbMUoPN9Qpm7f1CgP4oW4",
+    "group_id": -1003745506015,
+    "allowed_user_ids": [
+      8401193952
+    ]
+  },
+  "paths": {
+    "store_path": "./data/telecode.json",
+    "logs_dir": "./data/logs"
+  },
+  "streaming": {
+    "interval_sec": 0.8,
+    "max_message_length": 3800,
+    "idle_timeout_sec": 1800
+  },
+  "voice": {
+    "stt": {
+      "enabled": true,
+      "base_url": "http://localhost:6600/v1",
+      "model": "whisper-1"
+    }
+  },
+  "capture": {
+    "image_interval": 15,
+    "video_interval": 60
+  },
+  "mcp_server": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 1236,
+    "tts_url": "http://127.0.0.1:6500",
+    "stt_url": "http://127.0.0.1:6600"
+  },
+  "proxy": {
+    "enabled": true,
+    "port": 1235,
+    "upstream_url": "http://localhost:1234",
+    "debug": true,
+    "tool_splitting": true,
+    "strip_reminders": true,
+    "auto_load_tools": true,
+    "lift_tool_result_images": true,
+    "web_search": {
+      "enabled": true
+    }
+  },
+  "tools": {
+    "claude": {
+      "name": "Claude Code",
+      "icon": "🟣",
+      "startup_cmd": [
+        "claude"
+      ],
+      "flags": [
+        "--dangerously-skip-permissions"
+      ],
+      "env": {
+        "ANTHROPIC_API_KEY": "",
+        "ANTHROPIC_BASE_URL": ""
+      },
+      "session": {
+        "resume_id": ""
+      }
+    },
+    "claude-local": {
+      "name": "Claude Code (Local)",
+      "icon": "🟤",
+      "startup_cmd": [
+        "claude"
+      ],
+      "flags": [
+        "--dangerously-skip-permissions",
+        "--max-turns", "100"
+      ],
+      "env": {
+        "ANTHROPIC_BASE_URL": "http://localhost:1235",
+        "ANTHROPIC_AUTH_TOKEN": "lmstudio",
+        "ANTHROPIC_MODEL": "qwen3.5-35b-a3b",
+        "BASH_DEFAULT_TIMEOUT_MS": "1800000",
+        "BASH_MAX_TIMEOUT_MS": "3600000",
+        "DISABLE_PROMPT_CACHING": "1",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
+        "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+        "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1",
+        "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "8192",
+        "ENABLE_TOOL_SEARCH": "false"
+      },
+      "session": {
+        "resume_id": ""
+      }
+    },
+    "codex": {
+      "name": "Codex CLI",
+      "icon": "🟢",
+      "startup_cmd": [
+        "codex"
+      ],
+      "flags": [],
+      "env": {
+        "OPENAI_API_KEY": "",
+        "OPENAI_BASE_URL": ""
+      },
+      "session": {}
+    },
+    "codex-local": {
+      "name": "Codex CLI (Local)",
+      "icon": "🟠",
+      "startup_cmd": [
+        "codex"
+      ],
+      "flags": [
+        "--oss",
+        "-m", "qwen3.5-9b"
+      ],
+      "env": {},
+      "session": {}
+    },
+    "shell": {
+      "name": "Bash",
+      "icon": "🐚",
+      "startup_cmd": [
+        "bash",
+        "--norc",
+        "--noprofile"
+      ],
+      "flags": [],
+      "env": {},
+      "session": {}
+    },
+    "powershell": {
+      "name": "PowerShell",
+      "icon": "🔷",
+      "startup_cmd": [
+        "powershell.exe",
+        "-NoProfile",
+        "-NoLogo"
+      ],
+      "flags": [],
+      "env": {},
+      "session": {}
+    },
+    "computer": {
+      "name": "Computer Control",
+      "icon": "🖥️",
+      "api": {
+        "base_url": "http://localhost:1234/v1",
+        "api_key": "lm-studio",
+        "model": "qwen3.5-9b",
+        "format": "openai"
+      },
+      "capture_interval": 3,
+      "max_history": 20,
+      "system_prompt": ""
+    }
+  }
+}
