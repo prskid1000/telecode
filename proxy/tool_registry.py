@@ -66,7 +66,8 @@ WEB_SEARCH_TOOL: dict[str, Any] = {
         "asks you to search/look up something. Returns titles, URLs, and snippets "
         "— always cite the URLs as markdown links in your response.\n\n"
         "Just provide the query. If your first search doesn't find what you need, "
-        "try different keywords before giving up."
+        "try different keywords before giving up. You can use WebFetch on any "
+        "returned URL to read the full page content if the snippet isn't enough."
     ),
     "input_schema": {
         "type": "object",
