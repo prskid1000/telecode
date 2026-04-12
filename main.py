@@ -75,7 +75,7 @@ async def _post_init(app) -> None:
 async def _post_shutdown(app) -> None:
     # Stop managed SearXNG child (if proxy auto-started one)
     try:
-        from proxy.rewriters.web_search import stop_searxng
+        from proxy.web_search import stop_searxng
         stop_searxng()
     except Exception:
         pass

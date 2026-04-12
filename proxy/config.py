@@ -60,14 +60,7 @@ def lift_tool_result_images() -> bool:
     return bool(app_config.get_nested("proxy.lift_tool_result_images", False))
 
 
-# ── Tool-result rewriters (generic framework) ──────────────────────────────
-
-def tool_result_rewriting() -> bool:
-    """Master switch for the tool_result rewriter framework."""
-    return bool(app_config.get_nested("proxy.tool_result_rewriting", False))
-
-
-# ── Web search (one specific rewriter) ─────────────────────────────────────
+# ── Web search ─────────────────────────────────────────────────────────────
 
 def web_search_enabled() -> bool:
     """Replace empty WebSearch tool_results with real search results."""
@@ -149,9 +142,10 @@ def web_search_max_results() -> int:
 DEFAULT_SEARXNG_ENGINES = [
     "startpage", "bing news",
     "wikipedia", "wiktionary",
-    "reddit", "stackoverflow",
+    "reddit", "stackoverflow", "askubuntu",
     "github", "mdn",
     "semantic scholar",
+    "photon",
 ]
 
 

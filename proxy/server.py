@@ -14,7 +14,7 @@ import aiohttp
 from aiohttp import web
 
 from proxy import config as proxy_config
-from proxy import tool_result_rewriters  # auto-loads proxy.rewriters package
+from proxy import managed_tools as _managed_tools  # noqa: F401  registers tools
 from proxy.tool_registry import (
     split_tools, rewrite_messages, strip_all_reminders, proxy_system_instruction,
     lift_tool_result_images as _lift_tool_result_images,
@@ -249,11 +249,6 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
     if proxy_config.lift_tool_result_images():
         body["messages"] = _lift_tool_result_images(body.get("messages", []))
 
-    if proxy_config.tool_result_rewriting():
-        body["messages"] = await tool_result_rewriters.rewrite_messages(
-            body.get("messages", [])
-        )
-
     await _dump_request(body, "OUTGOING")
 
     # Forward auth headers
@@ -276,7 +271,9 @@ async def _handle_streaming(
     deferred: list[dict[str, Any]],
     request: web.Request,
 ) -> web.StreamResponse:
-    """Handle streaming request with ToolSearch and auto-load interception."""
+    """Handle streaming request with managed tools, ToolSearch, and auto-load interception."""
+    from proxy.managed_tools import is_managed, get_handler
+
     # Build set of tool names to intercept
     intercept: set[str] | None = None
     deferred_names = {t["name"] for t in deferred}
@@ -285,6 +282,12 @@ async def _handle_streaming(
         if proxy_config.auto_load_tools():
             intercept |= deferred_names
 
+    # Add all managed tools (WebSearch, speak, transcribe, etc.) to intercept set
+    from proxy.managed_tools import _REGISTRY
+    managed_names = set(_REGISTRY.keys())
+    if managed_names:
+        intercept = (intercept or set()) | managed_names
+
     resp = web.StreamResponse()
     resp._req = request
 
@@ -292,11 +295,23 @@ async def _handle_streaming(
 
     if tool_use:
         tool_name = tool_use["name"]
+        matched: list[dict[str, Any]] = []
+        result_content: str | None = None
 
         if tool_name == "ToolSearch":
             matched = await _do_tool_search(deferred, tool_use["input"])
             log.info("ToolSearch matched %d tools for query=%r", len(matched), tool_use["input"].get("query"))
             result_content = _format_functions_block(matched)
+
+        elif is_managed(tool_name):
+            handler = get_handler(tool_name)
+            if handler:
+                try:
+                    result_content = await handler(tool_use["input"])
+                    log.info("Managed tool %s executed", tool_name)
+                except Exception as exc:
+                    log.warning("Managed tool %s failed: %s", tool_name, exc)
+                    result_content = f"ERROR: {tool_name} failed: {exc}"
 
         elif proxy_config.auto_load_tools() and tool_name in deferred_names:
             matched = [t for t in deferred if t["name"] == tool_name]
@@ -307,9 +322,6 @@ async def _handle_streaming(
                 f"{schema_info}\n\n"
                 f"Call the tool again with the correct parameter names from the schema above."
             )
-        else:
-            matched = []
-            result_content = None
 
         if result_content:
             if matched:
@@ -457,7 +469,7 @@ async def start_proxy_background() -> aiohttp.web.AppRunner | None:
     # the proxy still starts, the rewriter just returns ERROR strings until
     # the backend comes up.
     try:
-        from proxy.rewriters.web_search import ensure_searxng_running
+        from proxy.web_search import ensure_searxng_running
         await ensure_searxng_running()
     except Exception as exc:
         log.warning("web_search auto-setup raised: %s", exc)
