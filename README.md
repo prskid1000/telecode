@@ -316,49 +316,18 @@ Tool-search proxy that sits between Claude Code and LM Studio. Reduces 101 tools
 | `strip_reminders` | boolean | Strip `<system-reminder>` blocks from messages, keeping only skills + deferred-tool listings (default `false`) |
 | `auto_load_tools` | boolean | Auto-load deferred tool schemas when the model calls them without `ToolSearch` first (requires `tool_splitting`, default `false`) |
 | `lift_tool_result_images` | boolean | Rewrite array-form `tool_result.content` (text + image blocks) as a plain-string placeholder and append the lifted image blocks, labeled by `tool_use_id`, at the end of the user message — works around LM Studio rejecting array-form content and preserves Anthropic's "tool_results first" rule (default `false`) |
-| `tool_result_rewriting` | boolean | Master switch for the generic tool_result rewriter framework (`proxy/tool_result_rewriters.py`). When on, drop-in modules under `proxy/rewriters/` can replace empty/broken `tool_result` content in the conversation history before it reaches the local model. Required for `web_search.enabled` to take effect (default `false`) |
-| `web_search.enabled` | boolean | Replace empty `WebSearch` tool_results (CC's stub when no Anthropic backend is reachable) with real search results so the local model gets usable data. The CC UI still shows the WebSearch call but its "Did N searches" count comes from CC's own executor and stays at 0 — only the model's view of history is rewritten (default `false`) |
-| `web_search.provider` | string | Search backend. Currently only `searxng` is implemented — talks to a local SearXNG instance via its JSON API (default `searxng`) |
-| `web_search.url` | string | Base URL of the local SearXNG instance (default `http://localhost:8888`). Host + port are parsed and pushed into the generated `settings.yml` so SearXNG actually binds here |
-| `web_search.max_results` | number | Number of results to fetch per search (default `5`) |
-| `web_search.searxng.engines` | array | Names of engines to enable in SearXNG. Anything not in this list is disabled. Default: 9 engines, one per type — `startpage`, `bing news`, `wikipedia`, `wiktionary`, `reddit`, `stackoverflow`, `github`, `mdn`, `semantic scholar`. See "Engine selection" below |
-| `web_search.searxng.safesearch` | number | 0 = off, 1 = moderate, 2 = strict (default `0`) |
-| `web_search.searxng.language` | string | Two-letter language code passed to `search.default_lang` (default `en`) |
+| `tool_result_rewriting` | boolean | Enable the rewriter framework (`proxy/rewriters/`). Required for `web_search` (default `false`) |
+| `web_search.enabled` | boolean | Replace empty `WebSearch` tool_results with real search results (default `false`) |
+| `web_search.provider` | string | Search backend; only `searxng` implemented (default `searxng`) |
+| `web_search.url` | string | Local SearXNG URL (default `http://localhost:8888`) |
+| `web_search.max_results` | number | Results per search (default `5`) |
+| `web_search.searxng.engines` | array | Engines to enable. Default: `startpage`, `bing news`, `wikipedia`, `wiktionary`, `reddit`, `stackoverflow`, `github`, `mdn`, `semantic scholar` |
+| `web_search.searxng.safesearch` | number | 0=off, 1=moderate, 2=strict (default `0`) |
+| `web_search.searxng.language` | string | Language code (default `en`) |
 
-**SearXNG auto-setup.** When `web_search.enabled` is `true` and `provider` is `searxng`, Telecode pings `web_search.url` on startup. If nothing answers, it provisions a local install — **native Python, no Docker, no .exe**:
+When `web_search.enabled` is on with the `searxng` provider, Telecode auto-installs `mbaozi/SearXNGforWindows` on first boot: clones into `data/searxng/repo/`, creates `.venv/`, pip-installs, generates `config/settings.yml` from telecode's overrides, spawns `python -m searx.webapp` as a managed child bound to a Windows Job Object so it dies with Telecode. Requires `git` on PATH. To re-provision: delete `data/searxng/` and restart.
 
-1. `git clone --depth 1 https://github.com/mbaozi/SearXNGforWindows.git` → `data/searxng/repo/`
-2. `python -m venv` → `data/searxng/.venv/`
-3. `pip install -r repo/config/requirements.txt` (1-2 minutes the first time)
-4. Generate `data/searxng/settings.yml` from the upstream template, overlaying values from `proxy.web_search.searxng.*` (engines, port, language, safesearch, plus a random `secret_key`). The upstream fork ships with only Chinese engines enabled (Sogou + Baidu) — this overlay is what makes English search work.
-5. Spawn `.venv/Scripts/python.exe -m searx.webapp` as a managed child of Telecode (no console window, dies with Telecode)
-6. Poll `web_search.url` for up to 60 seconds, then start the proxy.
-
-Requires `git` on PATH ([git for Windows](https://git-scm.com/download/win)) and `PyYAML` (in `requirements.txt`). On Linux/macOS the same flow runs with `.venv/bin/python` and works the same way. No flag to flip — opting into the `searxng` provider opts you into setup. To re-provision from scratch, delete `data/searxng/` and restart.
-
-**SearXNG lifecycle.** The spawned `python -m searx.webapp` is bound to a Windows **Job Object** (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) so it dies whenever Telecode dies — graceful shutdown, `Stop-ScheduledTask`, `taskkill /F`, or BSOD. As a belt-and-braces fallback, the PID is written to `data/searxng/searxng.pid` and on every Telecode boot we both read that file *and* probe whichever process is listening on `web_search.url`'s port and terminate it before spawning fresh. Settings.yml is also regenerated on every boot, so changes to `proxy.web_search.searxng.*` take effect on next restart.
-
-**Engine selection.** SearXNG ships with 254 engines. The default set picks **one best engine per distinct purpose** — no duplicates — verified end-to-end against the JSON API on a residential IP:
-
-| Type | Engine | Notes |
-|---|---|---|
-| General web | `startpage` | ~9 diverse results/query. Chosen over bing because bing serves decoy spam (cryptocurrency blogs, generic Hotels.com pages) to SearXNG-IP scrapers — verified side-by-side: for `2026 midterm elections governor`, bing returned 1 unique domain of crypto-blog spam, startpage returned 10 diverse results including Wikipedia's exact gubernatorial-election article |
-| News | `bing news` | The bing news module doesn't suffer the same decoy issue as base bing — returns fresh AP/Reuters/MSN/Yahoo articles. Only fires when the query is in SearXNG's `news` category or via `!bin` bang |
-| Encyclopedia | `wikipedia` | mediawiki API; returns prose results AND structured infoboxes (the rewriter's formatter surfaces both) |
-| Definitions | `wiktionary` | mediawiki API |
-| Discussion | `reddit` | Reddit API, ~25 results/query |
-| Programming Q&A | `stackoverflow` | stackexchange API |
-| Code repos | `github` | GitHub search API, ~30 results/query |
-| Web/JS docs | `mdn` | Mozilla MDN JSON |
-| Academic papers | `semantic scholar` | Indexes arxiv + biomed + general |
-
-**Excluded as duplicates of the picks above**: `wikidata` (wikipedia covers same entity facts), `wikinews` (bing news is broader), `wikiquote` (niche), `gitlab` (github is dominant), `arxiv` (semantic scholar already indexes it), `hackernews` (reddit covers tech discussion broader).
-
-**Excluded as broken from a residential IP** (verified empirically — failure mode in parens): `bing` (decoy spam), `google` (HTTP 302 to `/sorry/index` CAPTCHA wall), `duckduckgo` (CAPTCHA — upstream PR #3955 fix postdates the fork), `mojeek` (HTTP 403 + 24h SearXNG circuit-breaker ban), `qwant` (HTML CAPTCHA page → JSONDecodeError), `brave` / `yahoo` (silent 0-result; HTML parsers out of sync with current markup), `pypi` (returns 0), `pubmed` / `openstreetmap` (timeout), `openlibrary` / `mwmbl` (crash), `reuters` (HTTP error).
-
-**Note on category fan-out**: SearXNG only sends a query to engines whose `categories` field matches the request. The default request category is `general`, which means general queries fan out to `startpage` + `wikipedia` + `wiktionary` only. Specialized engines (`reddit`, `stackoverflow`, `github`, `mdn`, `semantic scholar`, `bing news`) sit in `it` / `news` / `social media` categories and don't fire automatically — the model needs to use the `!shortcut` bang (e.g. `!gh flask`, `!st python`, `!bin trump tariffs`) to query them directly.
-
-Override the default by setting `proxy.web_search.searxng.engines` to any combination from the upstream `settings.yml` template (see `data/searxng/repo/config/settings.yml` for all 254). Note: `startpage` may get suspended after several hours of heavy use ("flaky" per the upstream issue tracker); if that happens, add `bing` back as a fallback.
+Engines were picked by enabling all 25+ candidates and probing each — only the listed defaults work reliably from a residential IP. Notable: `startpage` is preferred over `bing` (which serves decoy spam to SearXNG scrapers); google/ddg/mojeek/brave fail with CAPTCHAs or stale HTML parsers. SearXNG only routes queries to engines whose `categories` match the request, so general queries hit `startpage`/`wikipedia`/`wiktionary` only — the specialized engines fire via `!shortcut` bangs (e.g. `!gh flask`, `!st python`, `!bin trump`).
 
 **`proxy_system.md` conditional sections.** The proxy system instruction loaded into requests is `proxy_system.md`, preprocessed at request time. Wrap any block in `<if dotted.settings.path="value">…</if>` (tags on their own lines) and the preprocessor keeps the inner content only when the named setting matches. Example: paragraphs documenting reminder types stripped by `proxy.strip_reminders` are wrapped in `<if proxy.strip_reminders="false">…</if>` so they vanish from the model's prompt when stripping is on. Single source of truth, one file to maintain.
 
