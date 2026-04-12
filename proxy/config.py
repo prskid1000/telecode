@@ -138,7 +138,7 @@ def web_search_url() -> str:
 # suspended after several hours of heavy use ("flaky" per the upstream
 # issue tracker); if that happens, add `bing` back as a fallback.
 DEFAULT_SEARXNG_ENGINES = [
-    "startpage", "bing news",
+    "startpage", "bing", "bing news",
     "wikipedia", "wiktionary",
     "reddit", "stackoverflow", "askubuntu",
     "github", "mdn",
