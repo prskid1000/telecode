@@ -42,42 +42,33 @@ def _format_functions_block(matched: list[dict[str, Any]]) -> str:
 
 
 
-def _prepend_text_block(buffered: list[str], text: str) -> list[str]:
-    """Insert a synthetic text content block (index 0) before the first
-    content_block_start in the buffered SSE lines, and increment all
-    subsequent content block indices by 1.
+def _prepend_text_to_stream(buffered: list[str], text: str) -> list[str]:
+    """Prepend `text` to the model's first text_delta in the SSE stream.
 
-    This makes `text` appear as the first block in the model's response
-    when CC renders the SSE stream.
+    No new blocks, no re-indexing — just injects a text_delta event
+    right before the model's first one, carrying the summary text.
+    Preserves all indices and ordering so CC's cache stays valid.
     """
-    escaped = json.dumps(text + "\n\n")
-    synthetic = [
-        'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
-        f'data: {{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":{escaped}}}}}\n\n',
-        'data: {"type":"content_block_stop","index":0}\n\n',
-    ]
-
+    prefix = json.dumps(text + "\n\n")
     output: list[str] = []
-    inserted = False
+    injected = False
     for line in buffered:
         if (
-            not inserted
+            not injected
             and line.startswith("data: ")
-            and '"content_block_start"' in line
+            and '"text_delta"' in line
         ):
-            output.extend(synthetic)
-            inserted = True
-
-        if inserted and line.startswith("data: "):
-            data_str = line[6:].rstrip("\n")
+            # Parse to get the index, then emit our prefix delta first
             try:
-                event = json.loads(data_str)
-                if isinstance(event, dict) and "index" in event:
-                    event["index"] += 1
-                    line = f"data: {json.dumps(event)}\n\n"
+                event = json.loads(line[6:].rstrip("\n"))
+                idx = event.get("index", 0)
+                output.append(
+                    f'data: {{"type":"content_block_delta","index":{idx},'
+                    f'"delta":{{"type":"text_delta","text":{prefix}}}}}\n\n'
+                )
             except json.JSONDecodeError:
                 pass
-
+            injected = True
         output.append(line)
     return output
 
@@ -352,7 +343,7 @@ async def _handle_streaming(
             # Clean response — no more intercepted tools.
             # Prepend summaries (if any) then flush to CC.
             if summaries:
-                buffered = _prepend_text_block(
+                buffered = _prepend_text_to_stream(
                     buffered, "\n".join(summaries),
                 )
             await _flush_sse(resp, request, buffered)
@@ -422,11 +413,12 @@ async def _handle_non_streaming(
     deferred: list[dict[str, Any]],
 ) -> web.Response:
     """Handle non-streaming request with the same intercept loop as streaming."""
-    from proxy.managed_tools import is_managed, get_handler
+    from proxy.managed_tools import get_handler
+    from proxy.managed_tools import _REGISTRY
 
     deferred_names = {t["name"] for t in deferred}
-    from proxy.managed_tools import _REGISTRY
     managed_names = set(_REGISTRY.keys())
+    summaries: list[str] = []
 
     max_roundtrips = 15
     for _rt in range(max_roundtrips):
@@ -439,9 +431,15 @@ async def _handle_non_streaming(
                 result = await upstream_resp.json()
 
         if result.get("stop_reason") != "tool_use":
+            # Prepend summaries into the model's first text block (no new blocks)
+            if summaries:
+                prefix = "\n".join(summaries) + "\n\n"
+                for block in result.get("content", []):
+                    if block.get("type") == "text":
+                        block["text"] = prefix + block.get("text", "")
+                        break
             return web.json_response(result, status=200)
 
-        # Find the first interceptable tool_use in the response
         handled = False
         for block in result.get("content", []):
             if block.get("type") != "tool_use":
@@ -464,6 +462,8 @@ async def _handle_non_streaming(
                     except Exception as exc:
                         log.warning("Managed tool %s failed: %s", tool_name, exc)
                         result_text = f"ERROR: {tool_name} failed: {exc}"
+                    if result_text and "\n\n" in result_text:
+                        summaries.append(result_text.split("\n\n", 1)[0])
 
             elif proxy_config.auto_load_tools() and tool_name in deferred_names:
                 matched = [t for t in deferred if t["name"] == tool_name]
@@ -487,7 +487,7 @@ async def _handle_non_streaming(
                 ]},
             ]
             handled = True
-            break  # re-loop with updated messages
+            break
 
         if not handled:
             return web.json_response(result, status=200)
