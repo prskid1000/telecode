@@ -73,13 +73,6 @@ async def _post_init(app) -> None:
 
 
 async def _post_shutdown(app) -> None:
-    # Stop managed SearXNG child (if proxy auto-started one)
-    try:
-        from proxy.web_search import stop_searxng
-        stop_searxng()
-    except Exception:
-        pass
-
     # Stop proxy
     runner = app.bot_data.get("_proxy_runner")
     if runner:

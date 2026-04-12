@@ -189,45 +189,14 @@ def _register_all() -> None:
 
     # ── WebSearch ──────────────────────────────────────────────────────
     if proxy_config.web_search_enabled():
-        from proxy.tool_registry import CATEGORY_DESCRIPTIONS
-
-        cat_list = "\n".join(f"- {k}: {v}" for k, v in CATEGORY_DESCRIPTIONS.items())
-
         async def _handle_web_search(args: dict[str, Any]) -> tuple[str, str]:
             from proxy.web_search import search as ws_search
             query = (args.get("query") or "").strip()
-            # pre_llm injects _pre_llm.categories via the hook
-            pre = args.get("_pre_llm", {})
-            categories = pre.get("categories", ["general"])
-            result_str, count = await ws_search(query, categories=categories)
-            return f"Found {count} results ({', '.join(categories)})", result_str
+            result_str, count = await ws_search(query)
+            return f"Found {count} results", result_str
 
-        register(
-            "WebSearch", WEB_SEARCH_TOOL, _handle_web_search,
-            strip=["WebSearch"], primary_arg="query",
-            pre_llm=LLMHook(
-                system="You are a search query classifier. Pick 1-3 categories that best match the query.",
-                prompt_template=(
-                    f"Available categories:\n{cat_list}\n\n"
-                    "Query: \"{query}\""
-                ),
-                schema={
-                    "type": "object",
-                    "properties": {
-                        "categories": {
-                            "type": "array",
-                            "items": {
-                                "type": "string",
-                                "enum": list(CATEGORY_DESCRIPTIONS.keys()),
-                            },
-                        },
-                    },
-                    "required": ["categories"],
-                    "additionalProperties": False,
-                },
-                max_tokens=50,
-            ),
-        )
+        register("WebSearch", WEB_SEARCH_TOOL, _handle_web_search,
+                 strip=["WebSearch"], primary_arg="query")
 
     # ── speak (TTS) ───────────────────────────────────────────────────
     speak_schema: dict[str, Any] = {
