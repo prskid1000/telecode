@@ -242,11 +242,8 @@ All options in `settings.json`. Use `TELECODE_SETTINGS` env var to point to a di
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `sessions_dir` | string | Base directory for session data |
-| `store_path` | string | JSON file for topic-session mapping |
+| `store_path` | string | JSON file for topic-session mapping (default `./data/telecode.json`) |
 | `logs_dir` | string | Log directory (default `./data/logs`) |
-
-PTY processes always start in the OS home directory.
 
 ### `streaming`
 
@@ -273,7 +270,7 @@ PTY processes always start in the OS home directory.
 
 ### `mcp_server`
 
-Streamable HTTP MCP server exposing local TTS/STT as tools for Claude Code or any MCP client. Starts automatically with Telecode in a background thread.
+Streamable HTTP MCP server for Claude Code or any MCP client. For local models routed through the proxy, these tools are injected automatically via `managed_tools.py` — no MCP connection needed.
 
 | Key | Type | Description |
 |-----|------|-------------|
@@ -283,24 +280,9 @@ Streamable HTTP MCP server exposing local TTS/STT as tools for Claude Code or an
 | `tts_url` | string | Kokoro TTS base URL (default `http://127.0.0.1:6500`) |
 | `stt_url` | string | Whisper STT base URL (default `http://127.0.0.1:6600`) |
 
-**Tools provided:**
-- `speak(text, voice?, output_path?)` — generate speech via Kokoro TTS, returns audio file path
-- `transcribe(audio_path, language?)` — transcribe audio via Whisper STT, returns text. Accepts local paths or remote URLs (http/https)
+**Tools:** `speak` (TTS), `transcribe` (STT), `web_search` (SearXNG). Drop-in: add a `.py` file in `mcp_server/tools/`.
 
-**Add to Claude Code:**
-```bash
-claude mcp add telecode --transport streamable-http --url http://127.0.0.1:1236/mcp
-```
-
-**Run standalone** (without Telegram bot):
-```bash
-python -m mcp_server
-```
-
-**Adding new tools/resources/prompts:** drop a `.py` file in the appropriate folder — auto-discovered at startup:
-- `mcp_server/tools/` — `@mcp_app.tool()` decorators
-- `mcp_server/resources/` — `@mcp_app.resource()` decorators
-- `mcp_server/prompts/` — `@mcp_app.prompt()` decorators
+`claude mcp add telecode --transport streamable-http --url http://127.0.0.1:1236/mcp`
 
 ### `proxy`
 
@@ -311,15 +293,16 @@ Middleware proxy for local models (LM Studio, Ollama, etc.). Reduces ~100+ CC to
 | `enabled` | boolean | Enable the proxy (default `false`) |
 | `port` | number | Listen port (default `1235`) |
 | `upstream_url` | string | LM Studio URL (default `http://localhost:1234`) |
-| `upstream_model` | string | Model name for proxy-internal LLM calls (query classification, etc.). Falls back to `tools.claude-local.env.ANTHROPIC_MODEL` |
-| `core_tools` | array | Tools always forwarded (default: Bash, Edit, Read, Write, Glob, Grep, Agent, Skill) |
+| `debug` | boolean | Dump full request bodies to `data/logs/proxy_full_*.json` for debugging (default `false`) |
 | `tool_splitting` | boolean | Split tools into core/deferred + inject ToolSearch (default `false`) |
 | `strip_reminders` | boolean | Strip `<system-reminder>` blocks (default `false`) |
 | `auto_load_tools` | boolean | Auto-load deferred tool schemas on first call (default `false`) |
-| `lift_tool_result_images` | boolean | Lift image blocks out of array-form tool_results for LM Studio compatibility (default `false`) |
+| `lift_tool_result_images` | boolean | Lift image blocks out of array-form tool_results for LM Studio (default `false`) |
+| `core_tools` | array | Tools always forwarded (default: Bash, Edit, Read, Write, Glob, Grep, Agent, Skill) |
 | `web_search.enabled` | boolean | Enable WebSearch managed tool + SearXNG auto-setup (default `false`) |
+| `web_search.provider` | string | Search backend (default `searxng`) |
 | `web_search.url` | string | SearXNG URL — host+port pushed to generated settings.yml (default `http://localhost:8888`) |
-| `web_search.searxng.engines` | array | SearXNG engines to enable (default: `bing`, `bing news`, `wikipedia`, `wiktionary`, `reddit`, `stackoverflow`, `askubuntu`, `github`, `mdn`, `semantic scholar`, `photon`) |
+| `web_search.searxng.engines` | array | Engines to enable (default: `bing`, `bing news`, `wikipedia`, `wiktionary`, `reddit`, `stackoverflow`, `askubuntu`, `github`, `mdn`, `semantic scholar`, `photon`) |
 | `web_search.searxng.safesearch` | number | 0/1/2 (default `0`) |
 | `web_search.searxng.language` | string | Language code (default `en`) |
 
@@ -402,6 +385,7 @@ mcp_server/
     __init__.py        Auto-discovers tool modules (drop-in)
     tts.py             speak tool (Kokoro TTS)
     stt.py             transcribe tool (Whisper STT)
+    web_search.py      web_search tool (SearXNG)
   resources/
     __init__.py        Auto-discovers resource modules (drop-in)
   prompts/
