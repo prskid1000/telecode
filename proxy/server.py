@@ -305,7 +305,7 @@ async def _handle_streaming(
     request: web.Request,
 ) -> web.StreamResponse:
     """Handle streaming request with managed tools, ToolSearch, and auto-load interception."""
-    from proxy.managed_tools import is_managed, get_handler
+    from proxy.managed_tools import is_managed, get_handler, format_visibility
 
     # Build set of tool names to intercept
     intercept: set[str] | None = None
@@ -363,13 +363,13 @@ async def _handle_streaming(
             handler = get_handler(tool_name)
             if handler:
                 try:
-                    result_content = await handler(tool_use["input"])
-                    log.info("Managed tool %s executed", tool_name)
+                    summary, result_content = await handler(tool_use["input"])
+                    log.info("Managed tool %s: %s", tool_name, summary)
                 except Exception as exc:
                     log.warning("Managed tool %s failed: %s", tool_name, exc)
+                    summary = f"Failed: {exc}"
                     result_content = f"ERROR: {tool_name} failed: {exc}"
-                if result_content and "\n\n" in result_content:
-                    summaries.append(result_content.split("\n\n", 1)[0])
+                summaries.append(format_visibility(tool_name, tool_use["input"], summary))
 
         elif proxy_config.auto_load_tools() and tool_name in deferred_names:
             matched = [t for t in deferred if t["name"] == tool_name]
@@ -413,7 +413,7 @@ async def _handle_non_streaming(
     deferred: list[dict[str, Any]],
 ) -> web.Response:
     """Handle non-streaming request with the same intercept loop as streaming."""
-    from proxy.managed_tools import get_handler
+    from proxy.managed_tools import get_handler, format_visibility
     from proxy.managed_tools import _REGISTRY
 
     deferred_names = {t["name"] for t in deferred}
@@ -457,13 +457,13 @@ async def _handle_non_streaming(
                 handler = get_handler(tool_name)
                 if handler:
                     try:
-                        result_text = await handler(block.get("input", {}))
-                        log.info("Managed tool %s executed (non-streaming)", tool_name)
+                        summary, result_text = await handler(block.get("input", {}))
+                        log.info("Managed tool %s (non-streaming): %s", tool_name, summary)
                     except Exception as exc:
                         log.warning("Managed tool %s failed: %s", tool_name, exc)
+                        summary = f"Failed: {exc}"
                         result_text = f"ERROR: {tool_name} failed: {exc}"
-                    if result_text and "\n\n" in result_text:
-                        summaries.append(result_text.split("\n\n", 1)[0])
+                    summaries.append(format_visibility(tool_name, block.get("input", {}), summary))
 
             elif proxy_config.auto_load_tools() and tool_name in deferred_names:
                 matched = [t for t in deferred if t["name"] == tool_name]
