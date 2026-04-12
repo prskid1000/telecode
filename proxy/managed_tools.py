@@ -86,7 +86,8 @@ def _register_all() -> None:
             categories = args.get("categories") or ["general"]
             if isinstance(categories, str):
                 categories = [categories]
-            result_str, count = await ws_search(query, categories=categories)
+            max_results = args.get("max_results")
+            result_str, count = await ws_search(query, categories=categories, max_results=max_results)
             summary = f'\U0001f50d WebSearch("{query}", categories={categories}) \u2192 {count} results'
             log.info("%s", summary)
             return f"{summary}\n\n{result_str}"

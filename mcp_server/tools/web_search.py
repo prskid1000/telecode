@@ -23,6 +23,7 @@ log = logging.getLogger("telecode.mcp_server.web_search")
 async def web_search(
     query: str,
     categories: Optional[list[str]] = None,
+    max_results: int = 5,
 ) -> str:
     """Search the web for current information.
 
@@ -42,6 +43,7 @@ async def web_search(
     Args:
         query: The search query (2+ characters).
         categories: Which source types to search. Default: ["general"].
+        max_results: Number of results to return (1-20). Default: 5.
 
     Returns:
         Formatted multi-line string with search results and a reminder
@@ -52,5 +54,5 @@ async def web_search(
         return _ws._format_error(query, "query must be at least 2 characters")
 
     cats = list(categories or ["general"])
-    result_str, count = await _ws.search(query, categories=cats)
+    result_str, count = await _ws.search(query, categories=cats, max_results=max_results)
     return result_str
