@@ -192,7 +192,8 @@ def _register_all() -> None:
         async def _handle_web_search(args: dict[str, Any]) -> tuple[str, str]:
             from proxy.web_search import search as ws_search
             query = (args.get("query") or "").strip()
-            result_str, count = await ws_search(query)
+            max_results = args.get("max_results")
+            result_str, count = await ws_search(query, max_results=max_results)
             return f"Found {count} results", result_str
 
         register("WebSearch", WEB_SEARCH_TOOL, _handle_web_search,

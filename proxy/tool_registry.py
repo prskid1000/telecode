@@ -76,6 +76,19 @@ WEB_SEARCH_TOOL: dict[str, Any] = {
                 "description": "The search query.",
                 "minLength": 2,
             },
+            "max_results": {
+                "type": "integer",
+                "description": (
+                    "Number of results to return (1-20, default 5). "
+                    "Start with 3-5 for quick lookups. "
+                    "Use 10-15 for broad research. "
+                    "If initial results are insufficient, refine the query "
+                    "rather than requesting 20 upfront."
+                ),
+                "default": 5,
+                "minimum": 1,
+                "maximum": 20,
+            },
         },
         "required": ["query"],
     },

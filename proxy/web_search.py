@@ -15,7 +15,6 @@ from __future__ import annotations
 import html as _html
 import logging
 import re
-from collections import OrderedDict
 from typing import Any
 
 import aiohttp
@@ -30,7 +29,7 @@ _HEADERS = {
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
+    "Accept-Encoding": "gzip, deflate",
     "DNT": "1",
     "Sec-Fetch-Dest": "document",
     "Sec-Fetch-Mode": "navigate",
@@ -111,26 +110,6 @@ def _format_error(query: str, message: str) -> str:
     )
 
 
-# ── Cache ──────────────────────────────────────────────────────────────────
-
-_CACHE: "OrderedDict[str, tuple[str, int]]" = OrderedDict()
-_CACHE_MAX = 256
-
-
-def _cache_get(key: str) -> tuple[str, int] | None:
-    val = _CACHE.get(key)
-    if val is not None:
-        _CACHE.move_to_end(key)
-    return val
-
-
-def _cache_put(key: str, value: tuple[str, int]) -> None:
-    _CACHE[key] = value
-    _CACHE.move_to_end(key)
-    while len(_CACHE) > _CACHE_MAX:
-        _CACHE.popitem(last=False)
-
-
 # ── Search ─────────────────────────────────────────────────────────────────
 
 async def search(
@@ -143,11 +122,6 @@ async def search(
     if not query:
         return _format_error("", "empty query"), 0
     n = max_results or 5
-
-    cache_key = f"{n}:{query}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
 
     try:
         timeout = aiohttp.ClientTimeout(total=15)
@@ -166,7 +140,4 @@ async def search(
     if not results:
         return _format_error(query, "no results (HTML parse returned empty)"), 0
 
-    out = _format_results(query, results)
-    count = len(results)
-    _cache_put(cache_key, (out, count))
-    return out, count
+    return _format_results(query, results), len(results)
