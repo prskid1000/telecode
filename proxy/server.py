@@ -252,6 +252,19 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
 
     await _dump_request(body, "INCOMING")
 
+    # Inject current date + location into system so the local model knows
+    from datetime import datetime
+    date_str = datetime.now().strftime("%Y-%m-%d (%A)")
+    location = proxy_config.location()
+    context_line = f"Current date: {date_str}."
+    if location:
+        context_line += f" User location: {location}."
+    system = body.get("system", "")
+    if isinstance(system, str):
+        body["system"] = f"{context_line}\n\n{system}" if system else context_line
+    elif isinstance(system, list):
+        system.insert(0, {"type": "text", "text": context_line})
+
     upstream = proxy_config.upstream_url()
     deferred: list[dict[str, Any]] = []
 
