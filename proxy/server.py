@@ -305,7 +305,7 @@ async def _handle_streaming(
     request: web.Request,
 ) -> web.StreamResponse:
     """Handle streaming request with managed tools, ToolSearch, and auto-load interception."""
-    from proxy.managed_tools import is_managed, get_handler, format_visibility
+    from proxy.managed_tools import is_managed, get_handler, get_tool, format_visibility, run_pre_llm, run_post_llm
 
     # Build set of tool names to intercept
     intercept: set[str] | None = None
@@ -360,10 +360,16 @@ async def _handle_streaming(
             result_content = _format_functions_block(matched)
 
         elif is_managed(tool_name):
-            handler = get_handler(tool_name)
-            if handler:
+            tool_entry = get_tool(tool_name)
+            handler = tool_entry.handler if tool_entry else None
+            if handler and tool_entry:
                 try:
-                    summary, result_content = await handler(tool_use["input"])
+                    # pre_llm: model input → LLM → enrich args
+                    enriched = await run_pre_llm(tool_entry, tool_use["input"])
+                    # handler: enriched args → (summary, result)
+                    summary, result_content = await handler(enriched)
+                    # post_llm: result → LLM → processed result
+                    result_content = await run_post_llm(tool_entry, result_content)
                     log.info("Managed tool %s: %s", tool_name, summary)
                 except Exception as exc:
                     log.warning("Managed tool %s failed: %s", tool_name, exc)
@@ -413,7 +419,7 @@ async def _handle_non_streaming(
     deferred: list[dict[str, Any]],
 ) -> web.Response:
     """Handle non-streaming request with the same intercept loop as streaming."""
-    from proxy.managed_tools import get_handler, format_visibility
+    from proxy.managed_tools import get_handler, get_tool, format_visibility, run_pre_llm, run_post_llm
     from proxy.managed_tools import _REGISTRY
 
     deferred_names = {t["name"] for t in deferred}
@@ -454,10 +460,13 @@ async def _handle_non_streaming(
                 result_text = _format_functions_block(matched)
 
             elif tool_name in managed_names:
-                handler = get_handler(tool_name)
-                if handler:
+                tool_entry = get_tool(tool_name)
+                handler = tool_entry.handler if tool_entry else None
+                if handler and tool_entry:
                     try:
-                        summary, result_text = await handler(block.get("input", {}))
+                        enriched = await run_pre_llm(tool_entry, block.get("input", {}))
+                        summary, result_text = await handler(enriched)
+                        result_text = await run_post_llm(tool_entry, result_text)
                         log.info("Managed tool %s (non-streaming): %s", tool_name, summary)
                     except Exception as exc:
                         log.warning("Managed tool %s failed: %s", tool_name, exc)

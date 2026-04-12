@@ -84,13 +84,10 @@ WEB_SEARCH_TOOL: dict[str, Any] = {
         "outdated in your training data, or when the user explicitly asks you to "
         "search/look up something. Returns titles, URLs, and snippets — always "
         "cite the URLs as markdown links in your response.\n\n"
-        "Pick the right category for your query:\n"
-        + "\n".join(f"- {k}: {v}" for k, v in CATEGORY_DESCRIPTIONS.items())
-        + "\n\nCombine categories when a query spans types "
-        "(e.g. [\"general\", \"news\"] for a recent event with background, "
-        "[\"code\", \"discussion\"] for a library issue with community workarounds). "
-        "If your first search doesn't find what you need, try different keywords "
-        "or a different category before giving up."
+        "Just provide the query — the proxy automatically routes it to the best "
+        "sources (web, news, code repos, academic papers, forums, maps) based on "
+        "query intent. If your first search doesn't find what you need, try "
+        "different keywords before giving up."
     ),
     "input_schema": {
         "type": "object",
@@ -99,31 +96,6 @@ WEB_SEARCH_TOOL: dict[str, Any] = {
                 "type": "string",
                 "description": "The search query.",
                 "minLength": 2,
-            },
-            "categories": {
-                "type": "array",
-                "description": (
-                    "Which source types to search. Default: [\"general\"]. "
-                    "Pick the smallest set that fits the query."
-                ),
-                "items": {
-                    "type": "string",
-                    "enum": list(CATEGORY_DESCRIPTIONS.keys()),
-                },
-                "default": ["general"],
-            },
-            "max_results": {
-                "type": "integer",
-                "description": (
-                    "Number of results to return (1-20, default 5). "
-                    "Start with 3-5 for quick factual lookups. "
-                    "Use 10-15 for broad research or comparing multiple sources. "
-                    "If initial results are insufficient, search again with more results "
-                    "or a refined query rather than requesting 20 upfront."
-                ),
-                "default": 5,
-                "minimum": 1,
-                "maximum": 20,
             },
         },
         "required": ["query"],

@@ -30,6 +30,13 @@ def upstream_url() -> str:
     return app_config.get_nested("proxy.upstream_url", "http://localhost:1234")
 
 
+def upstream_model() -> str:
+    """Model name for lightweight proxy-internal LLM calls (query classifier etc.)."""
+    return app_config.get_nested("proxy.upstream_model", app_config.get_nested(
+        "tools.claude-local.env.ANTHROPIC_MODEL", "qwen3.5-35b-a3b"
+    ))
+
+
 def enabled() -> bool:
     return bool(app_config.get_nested("proxy.enabled", False))
 
@@ -138,7 +145,7 @@ def web_search_url() -> str:
 # suspended after several hours of heavy use ("flaky" per the upstream
 # issue tracker); if that happens, add `bing` back as a fallback.
 DEFAULT_SEARXNG_ENGINES = [
-    "startpage", "bing", "bing news",
+    "bing", "bing news",
     "wikipedia", "wiktionary",
     "reddit", "stackoverflow", "askubuntu",
     "github", "mdn",
