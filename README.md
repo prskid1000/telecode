@@ -311,19 +311,19 @@ Middleware proxy for local models (LM Studio, Ollama, etc.). Reduces ~100+ CC to
 | `enabled` | boolean | Enable the proxy (default `false`) |
 | `port` | number | Listen port (default `1235`) |
 | `upstream_url` | string | LM Studio URL (default `http://localhost:1234`) |
+| `upstream_model` | string | Model name for proxy-internal LLM calls (query classification, etc.). Falls back to `tools.claude-local.env.ANTHROPIC_MODEL` |
 | `core_tools` | array | Tools always forwarded (default: Bash, Edit, Read, Write, Glob, Grep, Agent, Skill) |
 | `tool_splitting` | boolean | Split tools into core/deferred + inject ToolSearch (default `false`) |
 | `strip_reminders` | boolean | Strip `<system-reminder>` blocks (default `false`) |
 | `auto_load_tools` | boolean | Auto-load deferred tool schemas on first call (default `false`) |
 | `lift_tool_result_images` | boolean | Lift image blocks out of array-form tool_results for LM Studio compatibility (default `false`) |
 | `web_search.enabled` | boolean | Enable WebSearch managed tool + SearXNG auto-setup (default `false`) |
-| `web_search.url` | string | SearXNG URL — host+port pushed to generated settings.yml (default `http://localhost:1237`) |
-| `web_search.max_results` | number | Results per search (default `5`) |
-| `web_search.searxng.engines` | array | SearXNG engines to enable (default: `startpage`, `bing news`, `wikipedia`, `wiktionary`, `reddit`, `stackoverflow`, `askubuntu`, `github`, `mdn`, `semantic scholar`, `photon`) |
+| `web_search.url` | string | SearXNG URL — host+port pushed to generated settings.yml (default `http://localhost:8888`) |
+| `web_search.searxng.engines` | array | SearXNG engines to enable (default: `bing`, `bing news`, `wikipedia`, `wiktionary`, `reddit`, `stackoverflow`, `askubuntu`, `github`, `mdn`, `semantic scholar`, `photon`) |
 | `web_search.searxng.safesearch` | number | 0/1/2 (default `0`) |
 | `web_search.searxng.language` | string | Language code (default `en`) |
 
-**Managed tools** (`proxy/managed_tools.py`): the proxy strips CC's versions of these tools and injects its own schemas. When the model calls them, the proxy intercepts (CC never sees the call), executes locally, and round-trips — looping up to 15 rounds for multi-tool sequences. Visibility: a `🔍` summary is prepended into the model's own text output (no new blocks, no index changes, preserves LM Studio's prefix cache). Currently registered: `WebSearch` (SearXNG, with categories enum: general/news/code/science/discussion/map), `speak` (Kokoro TTS), `transcribe` (Whisper STT). Adding a new tool = `register(name, schema, handler)` in `managed_tools.py`, zero changes to `server.py`.
+**Managed tools** (`proxy/managed_tools.py`): the proxy strips CC's versions of these tools and injects its own schemas. When the model calls them, the proxy intercepts (CC never sees the call), executes locally, and round-trips — looping up to 15 rounds for multi-tool sequences. Tools can declare `pre_llm`/`post_llm` hooks (`LLMHook`) that call the upstream model via `proxy/llm.py` for automatic pre/post-processing (e.g. query classification). Visibility: a `🔍` summary is prepended into the model's own text output (no new blocks, no index changes, preserves LM Studio's prefix cache). Currently registered: `WebSearch` (SearXNG — just `{query}`, categories auto-classified by pre_llm hook), `speak` (Kokoro TTS), `transcribe` (Whisper STT). Adding a new tool = `register(name, schema, handler, pre_llm=..., post_llm=...)` in `managed_tools.py`, zero changes to `server.py`.
 
 **SearXNG auto-setup**: when `web_search.enabled` is on, Telecode clones `mbaozi/SearXNGforWindows` into `data/searxng/`, creates a `.venv`, pip-installs, generates `settings.yml` with engine overrides, and spawns `python -m searx.webapp` as a managed child (Job Object + PID file for lifecycle). Requires `git` on PATH. Delete `data/searxng/` to re-provision.
 
@@ -389,6 +389,9 @@ proxy/
   server.py            aiohttp streaming proxy with ToolSearch interception
   tool_search.py       BM25 + regex search engine
   tool_registry.py     Core/deferred tool splitting
+  managed_tools.py     Managed tool registry + LLM hooks
+  llm.py               Upstream LLM structured_call utility
+  web_search.py        SearXNG client + auto-installer
   config.py            Proxy settings
 
 mcp_server/
