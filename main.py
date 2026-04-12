@@ -2,6 +2,8 @@
 import asyncio
 import logging
 import os
+import shutil
+import subprocess
 import sys
 
 from telegram.ext import (
@@ -45,6 +47,64 @@ def _setup_logging() -> None:
     )
 
 
+def _start_tailscale_funnels(log: logging.Logger) -> list[subprocess.Popen]:
+    """Start Tailscale Funnel subprocesses for proxy and MCP server.
+
+    Returns list of Popen objects (empty if tailscale not found).
+    Processes die automatically when the parent exits.
+    """
+    if not shutil.which("tailscale"):
+        log.warning("Tailscale not found on PATH — HTTPS funnel not available. "
+                     "Install Tailscale for external HTTPS access.")
+        return []
+
+    # Get the machine's Tailscale FQDN for logging the HTTPS URL
+    ts_domain = ""
+    try:
+        cmd = ["tailscale", "status", "--json"]
+        if sys.platform == "win32":
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5,
+                                    creationflags=subprocess.CREATE_NO_WINDOW)
+        else:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            import json
+            status = json.loads(result.stdout)
+            ts_domain = status.get("Self", {}).get("DNSName", "").rstrip(".")
+    except Exception:
+        pass
+
+    funnels: list[subprocess.Popen] = []
+    # Each entry: (https_port, local_port, label)
+    # Funnel at root (no --set-path) so paths like /v1/messages arrive unchanged.
+    routes: list[tuple[int, int, str]] = []
+
+    if config.get_nested("proxy.enabled", False):
+        port = int(config.get_nested("proxy.port", 1235))
+        routes.append((443, port, "proxy"))
+
+    if config.get_nested("mcp_server.enabled", False):
+        port = int(config.get_nested("mcp_server.port", 1236))
+        routes.append((8443, port, "mcp"))
+
+    for https_port, local_port, label in routes:
+        try:
+            cmd = ["tailscale", "funnel", "--bg", "--https", str(https_port), str(local_port)]
+            if sys.platform == "win32":
+                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                        creationflags=subprocess.CREATE_NO_WINDOW)
+            else:
+                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            funnels.append(proc)
+            port_suffix = "" if https_port == 443 else f":{https_port}"
+            url = f"https://{ts_domain}{port_suffix}" if ts_domain else f"<tailscale>{port_suffix}"
+            log.info("Tailscale Funnel (%s): %s -> localhost:%d (pid %d)", label, url, local_port, proc.pid)
+        except Exception as exc:
+            log.warning("Failed to start Tailscale Funnel for %s: %s", label, exc)
+
+    return funnels
+
+
 async def _post_init(app) -> None:
     log = logging.getLogger("telecode.main")
     os.makedirs(os.path.dirname(config.store_path()) or ".", exist_ok=True)
@@ -71,12 +131,21 @@ async def _post_init(app) -> None:
     if mcp_thread:
         app.bot_data["_mcp_thread"] = mcp_thread
 
+    # Start Tailscale Funnel if available
+    funnels = _start_tailscale_funnels(log)
+    if funnels:
+        app.bot_data["_tailscale_funnels"] = funnels
+
 
 async def _post_shutdown(app) -> None:
     # Stop proxy
     runner = app.bot_data.get("_proxy_runner")
     if runner:
         await runner.cleanup()
+
+    # Stop Tailscale Funnel subprocesses
+    for proc in app.bot_data.get("_tailscale_funnels", []):
+        proc.terminate()
 
     for key in ("_probe_task", "_stale_check_task"):
         task = app.bot_data.get(key)

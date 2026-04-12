@@ -561,6 +561,53 @@ async def _handle_non_streaming(
     return web.json_response(result, status=200)
 
 
+# ── /v1/models — convert OpenAI format from LM Studio to Anthropic format ──
+
+def _openai_models_to_anthropic(openai_data: dict) -> dict:
+    """Convert OpenAI /v1/models response to Anthropic format."""
+    from datetime import datetime, timezone
+
+    models = []
+    for m in openai_data.get("data", []):
+        created_ts = m.get("created", 0)
+        try:
+            created_at = datetime.fromtimestamp(created_ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except (OSError, ValueError):
+            created_at = "2024-01-01T00:00:00Z"
+
+        model_id = m.get("id", "unknown")
+        display = model_id.replace("-", " ").replace("_", " ").title()
+        models.append({
+            "id": model_id,
+            "type": "model",
+            "display_name": display,
+            "created_at": created_at,
+        })
+
+    return {
+        "data": models,
+        "has_more": False,
+        "first_id": models[0]["id"] if models else "",
+        "last_id": models[-1]["id"] if models else "",
+    }
+
+
+async def handle_models(request: web.Request) -> web.Response:
+    """GET /v1/models — fetch from LM Studio (OpenAI format), return Anthropic format."""
+    upstream = proxy_config.upstream_url()
+    headers = {k: v for k, v in request.headers.items()
+               if k.lower() not in ("host", "transfer-encoding")}
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{upstream}/v1/models", headers=headers) as resp:
+                data = await resp.json()
+                return web.json_response(_openai_models_to_anthropic(data))
+    except Exception as exc:
+        log.warning("Failed to fetch models from upstream: %s", exc)
+        return web.json_response({"data": [], "has_more": False, "first_id": "", "last_id": ""})
+
+
 # ── Passthrough for non-messages endpoints ───────────────────────────────────
 
 async def handle_passthrough(request: web.Request) -> web.Response:
@@ -589,10 +636,38 @@ async def handle_passthrough(request: web.Request) -> web.Response:
 
 # ── App factory ──────────────────────────────────────────────────────────────
 
+@web.middleware
+async def cors_middleware(request: web.Request, handler):
+    """Add CORS headers to all responses when proxy.cors_origins is set."""
+    origins = proxy_config.cors_origins()
+    origin = request.headers.get("Origin", "")
+    allowed = origins and ("*" in origins or origin in origins)
+
+    # All OPTIONS requests get a direct response (never forward to handler)
+    if request.method == "OPTIONS":
+        resp = web.Response(status=204)
+        if allowed:
+            resp.headers["Access-Control-Allow-Origin"] = origin or "*"
+            resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+            resp.headers["Access-Control-Allow-Headers"] = request.headers.get(
+                "Access-Control-Request-Headers", "*"
+            )
+            resp.headers["Access-Control-Allow-Private-Network"] = "true"
+            resp.headers["Access-Control-Max-Age"] = "86400"
+        return resp
+
+    resp = await handler(request)
+    if allowed:
+        resp.headers["Access-Control-Allow-Origin"] = origin or "*"
+        resp.headers["Access-Control-Allow-Private-Network"] = "true"
+    return resp
+
+
 def create_app() -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[cors_middleware])
     app.router.add_post("/v1/messages", handle_messages)
-    # Passthrough everything else (models, health, etc.)
+    app.router.add_get("/v1/models", handle_models)
+    # Passthrough everything else (health, etc.)
     app.router.add_route("*", "/{path:.*}", handle_passthrough)
     return app
 
@@ -607,7 +682,8 @@ async def start_proxy_background() -> aiohttp.web.AppRunner | None:
     app = create_app()
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", port)
+    host = proxy_config.proxy_host()
+    site = web.TCPSite(runner, host, port)
     await site.start()
-    log.info("Tool-search proxy listening on http://127.0.0.1:%d -> %s", port, proxy_config.upstream_url())
+    log.info("Tool-search proxy listening on http://%s:%d -> %s", host, port, proxy_config.upstream_url())
     return runner
