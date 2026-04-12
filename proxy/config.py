@@ -67,12 +67,7 @@ def lift_tool_result_images() -> bool:
     return bool(app_config.get_nested("proxy.lift_tool_result_images", False))
 
 
-# ── Web search (Brave Search API) ──────────────────────────────────────────
+# ── Web search (Brave Search scraper) ──────────────────────────────────────
 
 def web_search_enabled() -> bool:
     return bool(app_config.get_nested("proxy.web_search.enabled", False))
-
-
-def web_search_api_key() -> str:
-    """Brave Search API key. Get one at https://brave.com/search/api/"""
-    return str(app_config.get_nested("proxy.web_search.api_key", "") or "")
