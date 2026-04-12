@@ -58,36 +58,15 @@ TOOL_SEARCH_TOOL: dict[str, Any] = {
 
 # ── WebSearch tool definition (replaces CC's built-in WebSearch) ───────────
 
-CATEGORY_DESCRIPTIONS = {
-    "general": "Default. Use for factual questions, definitions, how-tos, Wikipedia lookups, product info. Always include this unless you're sure the query is purely code/news/science.",
-    "news": "Use when the user asks about something that happened recently, is happening now, or is time-sensitive (elections, conflicts, releases, market moves).",
-    "code": "Use for programming questions: find code examples, library docs (MDN, StackOverflow), GitHub repos, error messages, package info.",
-    "science": "Use when the user needs academic papers, research citations, or scientific studies (Semantic Scholar, arxiv).",
-    "discussion": "Use when the user wants opinions, experiences, or community takes — 'best X for Y', 'anyone else having this issue', reviews, comparisons (Reddit).",
-    "map": "Use when the query is about a specific place, address, or location (OpenStreetMap/Photon geocoder).",
-}
-
-# Maps our clean enum to SearXNG's actual category param values.
-CATEGORY_TO_SEARXNG = {
-    "general": "general",
-    "news": "news",
-    "code": "it",
-    "science": "science",
-    "discussion": "social media",
-    "map": "map",
-}
-
 WEB_SEARCH_TOOL: dict[str, Any] = {
     "name": "WebSearch",
     "description": (
-        "Search the web. Use this whenever you need information that might be "
-        "outdated in your training data, or when the user explicitly asks you to "
-        "search/look up something. Returns titles, URLs, and snippets — always "
-        "cite the URLs as markdown links in your response.\n\n"
-        "Just provide the query — the proxy automatically routes it to the best "
-        "sources (web, news, code repos, academic papers, forums, maps) based on "
-        "query intent. If your first search doesn't find what you need, try "
-        "different keywords before giving up."
+        "Search the web via Brave Search. Use this whenever you need information "
+        "that might be outdated in your training data, or when the user explicitly "
+        "asks you to search/look up something. Returns titles, URLs, and snippets "
+        "— always cite the URLs as markdown links in your response.\n\n"
+        "Just provide the query. If your first search doesn't find what you need, "
+        "try different keywords before giving up."
     ),
     "input_schema": {
         "type": "object",

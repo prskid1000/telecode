@@ -67,105 +67,12 @@ def lift_tool_result_images() -> bool:
     return bool(app_config.get_nested("proxy.lift_tool_result_images", False))
 
 
-# ── Web search ─────────────────────────────────────────────────────────────
+# ── Web search (Brave Search API) ──────────────────────────────────────────
 
 def web_search_enabled() -> bool:
-    """Replace empty WebSearch tool_results with real search results."""
     return bool(app_config.get_nested("proxy.web_search.enabled", False))
 
 
-def web_search_provider() -> str:
-    return str(app_config.get_nested("proxy.web_search.provider", "searxng"))
-
-
-def web_search_url() -> str:
-    """Base URL of the local SearXNG instance (no trailing slash)."""
-    return str(app_config.get_nested("proxy.web_search.url", "http://localhost:8888")).rstrip("/")
-
-
-
-
-# ── SearXNG-specific overlays applied to data/searxng/settings.yml ─────────
-
-# Engines tested directly against the mbaozi/SearXNGforWindows fork from a
-# residential IP (April 2026). The default set picks ONE best engine per
-# distinct purpose — no duplicates:
-#
-#   startpage        general web search       (~9 results/q, diverse domains;
-#                                              chosen over bing because bing
-#                                              serves decoy spam to scrapers —
-#                                              tested side-by-side: for
-#                                              "2026 midterm elections governor"
-#                                              bing returned 1 unique domain
-#                                              of crypto-blog spam, startpage
-#                                              returned 10 diverse real results
-#                                              including Wikipedia's exact
-#                                              gubernatorial-election article)
-#   bing news        current news             (dedicated bing-news module;
-#                                              the news variant doesn't suffer
-#                                              the same decoy issue as base bing)
-#   wikipedia        encyclopedic facts       (mediawiki API; results + infoboxes)
-#   wiktionary       word definitions         (mediawiki API)
-#   reddit           discussion / forums      (Reddit API, 25 results/q)
-#   stackoverflow    programming Q&A          (stackexchange API, 10 results/q)
-#   github           code repos               (GitHub search API, 30 results/q)
-#   mdn              web/JS API docs          (Mozilla MDN JSON)
-#   semantic scholar academic papers          (Semantic Scholar API; indexes
-#                                              arxiv + biomed + general)
-#
-# Excluded as duplicates of the picks above:
-#   - wikidata: wikipedia covers same entity facts in prose
-#   - wikinews: bing news is broader and more current
-#   - wikiquote: niche
-#   - gitlab: github is the dominant code host
-#   - arxiv: semantic scholar indexes arxiv plus more sources
-#   - hackernews: reddit covers tech discussion broader
-#
-# Excluded as niche / category-specific (only fire on specialized queries):
-#   - npm, crates.io, docker hub: package registry searches; useful only for
-#     specific package metadata lookups, not general info
-#   - currency: only fires on specific phrasings; the model rarely needs
-#     currency conversion via search anyway
-#
-# Excluded as broken from a residential IP (verified empirically):
-#   - bing: serves query-specific decoy content (cryptocurrency blogs,
-#     Fiverr ads, Hotels.com generic pages) to SearXNG-IP scrapers
-#   - google, duckduckgo, mojeek, qwant: bot defenses (CAPTCHA / 403 /
-#     HTML instead of JSON / 24h ban); only fix is paid residential proxy
-#   - brave, yahoo: silent 0-result returns; HTML parsers out of sync
-#     with current brave.com / search.yahoo.com markup
-#   - pypi: returns 0 results across multiple queries on this fork build
-#   - pubmed, openstreetmap: SearxEngineResponseException(timeout)
-#   - openlibrary, mwmbl: SearxEngineUnexpectedException(crash)
-#   - reuters: HTTP error
-#
-# Users can override by setting `proxy.web_search.searxng.engines` in
-# settings.json with any combination of engine names from the upstream
-# template (254 total engines available). NOTE: startpage may get
-# suspended after several hours of heavy use ("flaky" per the upstream
-# issue tracker); if that happens, add `bing` back as a fallback.
-DEFAULT_SEARXNG_ENGINES = [
-    "bing", "bing news",
-    "wikipedia", "wiktionary",
-    "reddit", "stackoverflow", "askubuntu",
-    "github", "mdn",
-    "semantic scholar",
-    "photon",
-]
-
-
-def web_search_searxng_engines() -> list[str]:
-    """Names of search engines to enable in SearXNG. Anything not in this
-    list is disabled by overlay onto the upstream settings template."""
-    val = app_config.get_nested("proxy.web_search.searxng.engines", DEFAULT_SEARXNG_ENGINES)
-    return list(val) if val else DEFAULT_SEARXNG_ENGINES
-
-
-def web_search_searxng_safesearch() -> int:
-    """0 = off, 1 = moderate, 2 = strict."""
-    return int(app_config.get_nested("proxy.web_search.searxng.safesearch", 0))
-
-
-def web_search_searxng_language() -> str:
-    """Two-letter language code passed to `search.default_lang`."""
-    return str(app_config.get_nested("proxy.web_search.searxng.language", "en"))
+def web_search_api_key() -> str:
+    """Brave Search API key. Get one at https://brave.com/search/api/"""
+    return str(app_config.get_nested("proxy.web_search.api_key", "") or "")

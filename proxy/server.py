@@ -546,16 +546,6 @@ async def start_proxy_background() -> aiohttp.web.AppRunner | None:
         log.info("Proxy disabled in settings")
         return None
 
-    # Bring up any external services that registered rewriters depend on
-    # (e.g. SearXNG for the WebSearch rewriter). Failures degrade gracefully:
-    # the proxy still starts, the rewriter just returns ERROR strings until
-    # the backend comes up.
-    try:
-        from proxy.web_search import ensure_searxng_running
-        await ensure_searxng_running()
-    except Exception as exc:
-        log.warning("web_search auto-setup raised: %s", exc)
-
     port = proxy_config.proxy_port()
     app = create_app()
     runner = web.AppRunner(app)
