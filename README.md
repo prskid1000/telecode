@@ -43,17 +43,25 @@ pip install -r requirements.txt
 
 ### 5. Configure
 
-Edit `settings.json`:
+Copy the example and fill in your values:
+
+```bash
+cp settings.example.json settings.json
+```
+
+Edit `settings.json` — at minimum set these three fields:
 
 ```json
 {
   "telegram": {
-    "bot_token": "your-token-here",
+    "bot_token": "your-token-from-botfather",
     "group_id": -100your-group-id,
     "allowed_user_ids": [your-user-id]
   }
 }
 ```
+
+See `settings.example.json` for all available options. `settings.json` is gitignored — never commit it.
 
 API keys can be set from Telegram:
 
