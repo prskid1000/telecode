@@ -19,7 +19,10 @@ from typing import Any, Awaitable, Callable
 
 log = logging.getLogger("telecode.proxy.managed_tools")
 
-Handler = Callable[[dict[str, Any]], Awaitable[str]]
+# Handler returns (summary_line, tool_result_content).
+# summary_line is displayed to the user (e.g. "Found 5 results (general)").
+# tool_result_content is what the model sees in its conversation history.
+Handler = Callable[[dict[str, Any]], Awaitable[tuple[str, str]]]
 
 
 @dataclass
@@ -28,6 +31,7 @@ class ManagedTool:
     schema: dict[str, Any]
     handler: Handler
     strip_from_cc: list[str] = field(default_factory=list)
+    primary_arg: str = ""  # which input arg to show in the call display
 
 
 _REGISTRY: dict[str, ManagedTool] = {}
@@ -38,10 +42,12 @@ def register(
     schema: dict[str, Any],
     handler: Handler,
     strip: list[str] | None = None,
+    primary_arg: str = "",
 ) -> None:
     _REGISTRY[name] = ManagedTool(
         name=name, schema=schema, handler=handler,
         strip_from_cc=strip or [],
+        primary_arg=primary_arg,
     )
     log.info("Registered managed tool: %s (strips CC tools: %s)", name, strip or [])
 
@@ -67,6 +73,25 @@ def is_managed(name: str) -> bool:
     return name in _REGISTRY
 
 
+def format_visibility(name: str, tool_input: dict[str, Any], summary: str) -> str:
+    """Build the CC-native-style visibility line for a managed tool call.
+
+    Format:
+        ● ToolName("primary_arg_value")
+        └  Summary line
+
+    Generic — works for any managed tool that declares `primary_arg`.
+    """
+    tool = _REGISTRY.get(name)
+    if not tool or not tool.primary_arg:
+        return f"● {name}()\n└  {summary}"
+    arg_val = str(tool_input.get(tool.primary_arg, ""))
+    # Truncate long args for display
+    if len(arg_val) > 80:
+        arg_val = arg_val[:77] + "..."
+    return f"● {name}(\"{arg_val}\")\n└  {summary}"
+
+
 # ── Tool registrations ────────────────────────────────────────────────────
 # Lazy-imported at the bottom so handlers can reference heavy modules
 # without slowing proxy boot.
@@ -80,7 +105,7 @@ def _register_all() -> None:
 
     # ── WebSearch ──────────────────────────────────────────────────────
     if proxy_config.web_search_enabled():
-        async def _handle_web_search(args: dict[str, Any]) -> str:
+        async def _handle_web_search(args: dict[str, Any]) -> tuple[str, str]:
             from proxy.web_search import search as ws_search
             query = (args.get("query") or "").strip()
             categories = args.get("categories") or ["general"]
@@ -88,11 +113,10 @@ def _register_all() -> None:
                 categories = [categories]
             max_results = args.get("max_results")
             result_str, count = await ws_search(query, categories=categories, max_results=max_results)
-            summary = f'\U0001f50d WebSearch("{query}", categories={categories}) \u2192 {count} results'
-            log.info("%s", summary)
-            return f"{summary}\n\n{result_str}"
+            return f"Found {count} results ({', '.join(categories)})", result_str
 
-        register("WebSearch", WEB_SEARCH_TOOL, _handle_web_search, strip=["WebSearch"])
+        register("WebSearch", WEB_SEARCH_TOOL, _handle_web_search,
+                 strip=["WebSearch"], primary_arg="query")
 
     # ── speak (TTS) ───────────────────────────────────────────────────
     speak_schema: dict[str, Any] = {
@@ -120,15 +144,16 @@ def _register_all() -> None:
         },
     }
 
-    async def _handle_speak(args: dict[str, Any]) -> str:
+    async def _handle_speak(args: dict[str, Any]) -> tuple[str, str]:
         from mcp_server.tools.tts import speak
-        return await speak(
+        path = await speak(
             text=args.get("text", ""),
             voice=args.get("voice", "af_heart"),
             output_path=args.get("output_path", ""),
         )
+        return f"Audio saved ({args.get('voice', 'af_heart')})", path
 
-    register("speak", speak_schema, _handle_speak)
+    register("speak", speak_schema, _handle_speak, primary_arg="text")
 
     # ── transcribe (STT) ──────────────────────────────────────────────
     transcribe_schema: dict[str, Any] = {
@@ -155,14 +180,16 @@ def _register_all() -> None:
         },
     }
 
-    async def _handle_transcribe(args: dict[str, Any]) -> str:
+    async def _handle_transcribe(args: dict[str, Any]) -> tuple[str, str]:
         from mcp_server.tools.stt import transcribe
-        return await transcribe(
+        text = await transcribe(
             audio_path=args.get("audio_path", ""),
             language=args.get("language", ""),
         )
+        word_count = len(text.split()) if isinstance(text, str) else 0
+        return f"Transcribed {word_count} words", text
 
-    register("transcribe", transcribe_schema, _handle_transcribe)
+    register("transcribe", transcribe_schema, _handle_transcribe, primary_arg="audio_path")
 
 
 _register_all()
