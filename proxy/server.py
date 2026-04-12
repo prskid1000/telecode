@@ -73,6 +73,49 @@ def _prepend_text_to_stream(buffered: list[str], text: str) -> list[str]:
     return output
 
 
+# ── Location detection ───────────────────────────────────────────────────────
+
+_location_cache: str | None = None
+
+
+async def _get_location() -> str:
+    """Get user's location. Uses settings override if set, otherwise
+    auto-detects once via ip-api.com (free, no key, cached for session)."""
+    global _location_cache
+
+    # Settings override
+    configured = proxy_config.location()
+    if configured:
+        return configured
+
+    # Return cached result
+    if _location_cache is not None:
+        return _location_cache
+
+    # Auto-detect via IP geolocation (one-time)
+    try:
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get("http://ip-api.com/json/?fields=city,country") as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    city = data.get("city", "")
+                    country = data.get("country", "")
+                    if city and country:
+                        _location_cache = f"{city}, {country}"
+                    elif country:
+                        _location_cache = country
+                    else:
+                        _location_cache = ""
+                    log.info("Auto-detected location: %s", _location_cache)
+                else:
+                    _location_cache = ""
+    except Exception:
+        _location_cache = ""
+
+    return _location_cache
+
+
 # ── Request handling ─────────────────────────────────────────────────────────
 
 async def _forward_stream(
@@ -252,18 +295,19 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
 
     await _dump_request(body, "INCOMING")
 
-    # Inject current date + location into system so the local model knows
+    # Inject current date + location as a system-reminder (same format CC uses)
     from datetime import datetime
     date_str = datetime.now().strftime("%Y-%m-%d (%A)")
-    location = proxy_config.location()
-    context_line = f"Current date: {date_str}."
+    location = await _get_location()
+    parts = [f"Current date: {date_str}."]
     if location:
-        context_line += f" User location: {location}."
+        parts.append(f"User location: {location}.")
+    context = "<system-reminder>\n" + " ".join(parts) + "\n</system-reminder>"
     system = body.get("system", "")
     if isinstance(system, str):
-        body["system"] = f"{context_line}\n\n{system}" if system else context_line
+        body["system"] = f"{system}\n\n{context}" if system else context
     elif isinstance(system, list):
-        system.insert(0, {"type": "text", "text": context_line})
+        system.append({"type": "text", "text": context})
 
     upstream = proxy_config.upstream_url()
     deferred: list[dict[str, Any]] = []

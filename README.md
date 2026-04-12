@@ -298,6 +298,7 @@ Middleware proxy for local models (LM Studio, Ollama, etc.). Reduces ~100+ CC to
 | `strip_reminders` | boolean | Strip `<system-reminder>` blocks (default `false`) |
 | `auto_load_tools` | boolean | Auto-load deferred tool schemas on first call (default `false`) |
 | `lift_tool_result_images` | boolean | Lift image blocks out of array-form tool_results for LM Studio (default `false`) |
+| `location` | string | User location for context injection (e.g. `Kolkata, India`). Empty = auto-detect via IP geolocation |
 | `core_tools` | array | Tools always forwarded (default: Bash, Edit, Read, Write, Glob, Grep, Agent, Skill) |
 | `web_search.enabled` | boolean | Enable WebSearch managed tool (default `false`) |
 
