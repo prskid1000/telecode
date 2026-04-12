@@ -67,6 +67,11 @@ def lift_tool_result_images() -> bool:
     return bool(app_config.get_nested("proxy.lift_tool_result_images", False))
 
 
+def location() -> str:
+    """User's location for context injection (e.g. 'Kolkata, India'). Empty = omit."""
+    return str(app_config.get_nested("proxy.location", "") or "")
+
+
 # ── Web search (Brave Search scraper) ──────────────────────────────────────
 
 def web_search_enabled() -> bool:
