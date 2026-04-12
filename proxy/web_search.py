@@ -1,37 +1,98 @@
-"""Web search backend via Brave Search API.
+"""Web search via Brave Search scraping.
 
-Direct API calls — no self-hosted engine, no Docker, no venv. Just an
-API key from https://brave.com/search/api/ ($5/month for ~1000 queries).
+Scrapes https://search.brave.com/search?q=QUERY — no API key, no
+self-hosted engine. Results are in the raw HTML (Svelte SSR, no JS
+execution needed). URLs are direct (no redirect wrapper).
 
-The managed tools framework handles interception, visibility, and
-round-tripping. This module just does the search + formats results.
+Stable CSS selectors used (not svelte-XXXXX build hashes):
+  - div.snippet[data-type="web"]  → result container
+  - div.title[title="..."]        → full title in `title` attr
+  - a[href="https://..."]         → direct destination URL
+  - div.content                   → snippet text
 """
 from __future__ import annotations
 
+import html as _html
 import logging
+import re
 from collections import OrderedDict
 from typing import Any
 
 import aiohttp
 
-from proxy import config as proxy_config
-
 log = logging.getLogger("telecode.proxy.web_search")
 
-_BRAVE_URL = "https://api.search.brave.com/res/v1/web/search"
+_BRAVE_URL = "https://search.brave.com/search"
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "DNT": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    "Connection": "keep-alive",
+}
 
 _REMINDER = (
     "REMINDER: You MUST cite the sources above in your response to the user "
     "using markdown hyperlinks."
 )
 
+# ── HTML parsing ───────────────────────────────────────────────────────────
+# Split on snippet boundaries, extract title/url/snippet via regex.
+# Avoids svelte-XXXXX class hashes — uses only stable semantic classes.
+
+_SNIPPET_SPLIT = re.compile(
+    r'<div\s+[^>]*class="snippet\b[^"]*"[^>]*data-type="web"',
+)
+_TITLE_RE = re.compile(
+    r'class="title[^"]*"\s+title="([^"]*)"',
+)
+_URL_RE = re.compile(
+    r'<a\s+href="(https?://[^"]+)"',
+)
+_CONTENT_RE = re.compile(
+    r'<div\s+class="content\s+desktop-default-regular[^"]*"[^>]*>(.*?)</div>',
+    re.DOTALL,
+)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _parse_brave_html(html: str, max_results: int) -> list[dict[str, str]]:
+    parts = _SNIPPET_SPLIT.split(html)
+    results: list[dict[str, str]] = []
+    for part in parts[1 : max_results + 1]:
+        m_title = _TITLE_RE.search(part)
+        m_url = _URL_RE.search(part)
+        if not m_title or not m_url:
+            continue
+        m_snip = _CONTENT_RE.search(part)
+        snippet = ""
+        if m_snip:
+            snippet = _html.unescape(_TAG_RE.sub("", m_snip.group(1))).strip()
+        results.append({
+            "title": _html.unescape(m_title.group(1)).strip(),
+            "url": _html.unescape(m_url.group(1)).strip(),
+            "description": snippet,
+        })
+    return results
+
+
+# ── Formatting ─────────────────────────────────────────────────────────────
 
 def _format_results(query: str, results: list[dict[str, Any]]) -> str:
     lines = [f'Web search results for query: "{query}"', ""]
     for i, r in enumerate(results, 1):
         title = (r.get("title") or "(no title)").strip()
         url = (r.get("url") or "").strip()
-        snippet = (r.get("description") or r.get("content") or "").strip()
+        snippet = (r.get("description") or "").strip()
         lines.append(f"[{i}] {title}")
         if url:
             lines.append(f"URL: {url}")
@@ -77,11 +138,7 @@ async def search(
     max_results: int | None = None,
     **_kwargs: Any,
 ) -> tuple[str, int]:
-    """Search via Brave API. Returns (formatted_result_string, count).
-
-    Always returns a string (never raises) — errors become visible
-    ERROR strings so the model can keep going.
-    """
+    """Scrape Brave Search. Returns (formatted_result_string, count)."""
     query = (query or "").strip()
     if not query:
         return _format_error("", "empty query"), 0
@@ -92,36 +149,24 @@ async def search(
     if cached is not None:
         return cached
 
-    api_key = proxy_config.web_search_api_key()
-    if not api_key:
-        return _format_error(query, "Brave API key missing — set proxy.web_search.api_key in settings.json"), 0
-
     try:
         timeout = aiohttp.ClientTimeout(total=15)
-        headers = {
-            "X-Subscription-Token": api_key,
-            "Accept": "application/json",
-        }
-        params = {"q": query, "count": str(n)}
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(_BRAVE_URL, headers=headers, params=params) as resp:
-                if resp.status == 401:
-                    return _format_error(query, "Brave API key invalid (401)"), 0
-                if resp.status == 429:
-                    return _format_error(query, "Brave API rate limited (429) — try again later"), 0
+        params = {"q": query, "source": "web"}
+        async with aiohttp.ClientSession(timeout=timeout, headers=_HEADERS) as session:
+            async with session.get(_BRAVE_URL, params=params) as resp:
                 if resp.status != 200:
                     body = await resp.text()
                     return _format_error(query, f"Brave HTTP {resp.status}: {body[:200]}"), 0
-                data = await resp.json()
+                html = await resp.text()
     except Exception as exc:
         log.warning("Brave search failed: %s", exc)
         return _format_error(query, str(exc)), 0
 
-    results = (data.get("web") or {}).get("results") or []
+    results = _parse_brave_html(html, n)
     if not results:
-        return _format_error(query, "no results"), 0
+        return _format_error(query, "no results (HTML parse returned empty)"), 0
 
-    out = _format_results(query, results[:n])
-    count = len(results[:n])
+    out = _format_results(query, results)
+    count = len(results)
     _cache_put(cache_key, (out, count))
     return out, count
