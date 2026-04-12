@@ -4,5 +4,6 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Local sessions, store, logs (see settings.json paths)
+# Local sessions, store, logs, secrets
 data/
+settings.json
