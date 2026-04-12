@@ -99,12 +99,11 @@ Tool-search proxy (for local models):
 | `backends/params.py` | Load tool params from settings |
 | `voice/*` | STT health, prefs, transcribe |
 | `proxy/__main__.py` | Standalone entry: `python -m proxy` |
-| `proxy/server.py` | aiohttp streaming proxy with ToolSearch interception |
+| `proxy/server.py` | aiohttp streaming proxy with intercept loop (ToolSearch + managed tools) |
 | `proxy/tool_search.py` | BM25 + regex search engine (zero deps) |
-| `proxy/tool_registry.py` | Core/deferred tool splitting, ToolSearch injection |
-| `proxy/tool_result_rewriters.py` | Generic framework: replace `tool_result` content from registered tools; auto-loads `proxy/rewriters/` |
-| `proxy/rewriters/__init__.py` | Drop-in package — every sibling `.py` is auto-imported on framework load |
-| `proxy/rewriters/web_search.py` | SearXNG-backed `WebSearch` rewriter + native auto-installer (clone + venv + generated settings.yml) |
+| `proxy/tool_registry.py` | Core/deferred tool splitting, ToolSearch + managed tool schema injection |
+| `proxy/managed_tools.py` | Registry of proxy-handled tools (WebSearch, speak, transcribe); schemas + handlers |
+| `proxy/web_search.py` | SearXNG client, result formatter, auto-installer (clone + venv + settings.yml) |
 | `proxy/config.py` | Proxy settings (port, upstream, core tools, BM25 params, web_search) |
 | `mcp_server/app.py` | FastMCP instance (stateless streamable HTTP) |
 | `mcp_server/server.py` | Background startup (daemon thread, like proxy) |
@@ -192,28 +191,17 @@ Tunables near top of `process.py`: idle interval, max wait, screen rows/history 
 
 ## Tool-search proxy pipeline (`proxy/`)
 
-Middleware proxy for local models (LM Studio, Ollama, etc.) that reduces tool token bloat. Claude Code sends ~100+ tool definitions per request; local models choke on them. The proxy strips non-essential tools and provides on-demand search.
+Middleware proxy for local models (LM Studio, Ollama, etc.). Reduces ~100+ CC tool definitions to ~9 core tools, provides on-demand ToolSearch, and injects + intercepts managed tools (WebSearch, speak, transcribe) so the model can use them without a separate MCP connection.
 
-1. **Startup:** `start_proxy_background()` called from `main.py:_post_init`. Listens on `127.0.0.1:{proxy.port}` (default 1235). Disabled when `proxy.enabled` is `false`. Can also run standalone via `python -m proxy`.
-2. **Request interception** (`handle_messages`): extracts `tools` from the Anthropic-format request, calls `split_tools()` to separate core (always forwarded) from deferred (stored in memory). Injects `ToolSearch` meta-tool into core list.
-3. **Core tools** (configurable via `proxy.core_tools`): `Bash`, `Edit`, `Read`, `Write`, `Glob`, `Grep`, `Agent`, `Skill`. Matches Opus's core set (~6.9k tokens). Everything else is deferred.
-4. **System instruction injection** (`build_tool_catalog`): appends a dynamic catalog to the system message listing core tools and all deferred tools grouped by category (chrome-devtools, context-mode, code-review-graph, etc.). Strips Claude Code's duplicate `<system-reminder>` deferred-tool listings from messages.
-   - **`proxy_system.md` conditional preprocessor** (`proxy_system_instruction()` in `tool_registry.py`): the markdown source is re-read per request and run through `_preprocess_conditionals()`, which resolves `<if dotted.settings.path="value">…</if>` blocks against current settings via `config.get_nested()`. Tags must live on their own lines; flat only (no nesting). Inner content is kept (tags stripped) when the value matches, otherwise the whole block is dropped — letting one source file slim down based on toggles like `proxy.strip_reminders` without maintaining parallel docs.
-5. **ToolSearch interception:** if the model's response calls `ToolSearch`, the proxy intercepts (does NOT forward to Claude Code), runs BM25 or regex search on deferred tools, injects matched tool definitions into the request, appends a tool_result message, and does a transparent round-trip to the upstream. The second response streams to Claude Code.
-6. **BM25 search** (`tool_search.py`): tokenizes tool name + description + arg names + arg descriptions. Standard BM25 scoring with `k1=0.9`, `b=0.4`. Regex search via `re:` prefix.
-7. **`tool_result` image lifting** (`lift_tool_result_images()` in `tool_registry.py`, gated by `proxy.lift_tool_result_images`): LM Studio's Anthropic endpoint rejects `tool_result.content` when it's an array of blocks, and Anthropic itself requires `tool_result` blocks to come first in a user message — so images returned by `Read` on `.jpg` or by MCP screenshot tools can't ride inside the tool_result. The transform rewrites each array-form `tool_result.content` as a plain-string placeholder naming the `tool_use_id` and image count (e.g. `"[2 images from tool_use_id=abc appended at the end of this user message, labeled: tool_use_id=abc.1, tool_use_id=abc.2]"`) and appends the image blocks, each preceded by a matching text label, at the **end** of the same user message. Tool_results stay contiguous at the start (spec-compliant), images arrive as normal user-message image blocks (which LM Studio accepts, same as pasted-image chat), and the label cross-reference preserves provenance since position alone no longer encodes it.
-8. **Streaming:** SSE events are parsed line-by-line. Non-ToolSearch content streams through immediately. ToolSearch blocks are buffered and intercepted.
-9. **Tool-result rewriters** (`proxy/tool_result_rewriters.py`, gated by `proxy.tool_result_rewriting`): walks `body.messages[]`, finds `tool_result` blocks whose originating `tool_use` was for a registered tool, lets the rewriter substitute new content. Drop-in modules under `proxy/rewriters/` are auto-loaded via `pkgutil.iter_modules`. Concurrent via `asyncio.gather`. Add a rewriter: drop a file at `proxy/rewriters/<tool_name>.py`, call `make_rewriter("WebSearch", should_fn, async_replace_fn)`. CC's UI still shows the original tool_use; only the model's view of history is rewritten.
-   - **`rewriters/web_search.py`**: detects CC's empty `Web search results for query: "..."` placeholder (starts with the literal prefix, no `http://`/`https://`) and queries a local SearXNG via `/search?format=json`. Surfaces SearXNG's three content channels (`results`, `infoboxes`, `answers`) so wikipedia entity infoboxes and currency conversions aren't dropped. LRU-cached by `max_results:query` (cap 256). Errors return as `ERROR: ...` strings inline.
-   - **SearXNG auto-setup** (`ensure_searxng_running()`, runs on every `start_proxy_background()`): clones [`mbaozi/SearXNGforWindows`](https://github.com/mbaozi/SearXNGforWindows) into `data/searxng/repo/`, creates a venv at `data/searxng/.venv/`, pip-installs `repo/config/requirements.txt`, **copies** the patched `searx/` package into the venv's own `site-packages/` (NOT via PYTHONPATH — the embedded fork's compiled msgspec/lxml are built for Python 3.11.9 and would ImportError under any other interpreter), generates `data/searxng/config/settings.yml` from `repo/config/settings.yml` overlaid with `proxy.web_search.searxng.*` (engine enable/disable, port, secret_key, language, safesearch). The generated settings.yml lives outside `repo/` so `git pull` doesn't clobber it. All setup subprocess calls run silent via `CREATE_NO_WINDOW + STARTUPINFO.SW_HIDE`. Settings.yml is regenerated on every boot so config changes always take effect.
-   - **Run command**: `.venv/Scripts/python.exe -m searx.webapp` with `cwd=data/searxng/`. cwd MUST be an ancestor of `.venv/Lib/site-packages/searx/data/` because the fork patched `searx/data/__init__.py` to compute `Path(__file__).parent.relative_to(Path.cwd())`. Settings come via `SEARXNG_SETTINGS_PATH` env var.
-   - **Process lifecycle**: bound to a Windows Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` via ctypes — when Telecode dies for any reason (graceful, `Stop-ScheduledTask`, `taskkill /F`, BSOD) the kernel closes the job handle and kills every member. Belt-and-braces fallbacks: PID written to `data/searxng/searxng.pid`, and `_kill_orphan()` runs at every boot to (a) kill any pid in the file, (b) kill any process listening on `web_search.url`'s port via `Get-NetTCPConnection`. Deliberately NOT using `CREATE_NEW_PROCESS_GROUP` — that breaks job-based parent-death propagation. `stop_searxng()` is wired into `main.py:_post_shutdown` for graceful path.
-   - **Engine selection** (verified empirically by enabling all 25+ candidates and probing each via shortcut bang): default picks one best engine per distinct purpose, no duplicates — `startpage` (general web), `bing news` (current news), `wikipedia` (encyclopedic facts), `wiktionary` (definitions), `reddit` (discussion), `stackoverflow` (programming Q&A), `github` (code), `mdn` (web docs), `semantic scholar` (academic papers). `startpage` is preferred over `bing` (which serves decoy spam to SearXNG scrapers); google/ddg/mojeek/brave fail with CAPTCHAs or stale HTML parsers. SearXNG only routes queries to engines whose `categories` match the request, so general queries hit `startpage`/`wikipedia`/`wiktionary` only — specialized engines fire via `!shortcut` bangs (`!gh`, `!st`, `!re`, `!bin`).
-   - **CC display caveat**: CC's "Did N searches" count is computed by CC's own executor before the empty result leaves CC, so the proxy can't reach it — the UI stays at 0 even though the model sees populated results.
-10. **Passthrough:** all non-`/v1/messages` requests (models, health checks) are forwarded unchanged.
-11. **Shutdown:** `_post_shutdown` calls `runner.cleanup()`.
+1. **Startup:** `start_proxy_background()` from `main.py:_post_init`. Port 1235 by default. Also runs standalone via `python -m proxy`.
+2. **Tool splitting** (`split_tools()` in `tool_registry.py`): core tools forwarded (Bash, Edit, Read, Write, Glob, Grep, Agent, Skill), rest deferred. ToolSearch meta-tool injected for on-demand schema loading (BM25 search in `tool_search.py`). Managed tool schemas (from `managed_tools.py`) injected into core; CC's versions stripped.
+3. **Intercept loop** (`_handle_streaming` / `_handle_non_streaming`): buffers upstream response via `_forward_stream()`. If the model calls an intercepted tool (ToolSearch, WebSearch, speak, transcribe, or any auto-loaded deferred tool), the proxy executes it locally, appends `[tool_use, tool_result]` to messages, and retries upstream. Loops up to 15 rounds — handles multi-search sequences where the model searches → reads → searches again. When the model finally produces a non-tool response, it flushes to CC (with `🔍` visibility summaries prepended via `_prepend_text_block` for managed tools).
+4. **Managed tools** (`managed_tools.py`): generic registry. Each tool has an Anthropic-format schema + async handler. Currently registered: `WebSearch` (SearXNG with categories enum: general/news/code/science/discussion/map), `speak` (Kokoro TTS), `transcribe` (Whisper STT). Adding a new tool = `register(name, schema, handler, strip=[...])` — zero changes to `server.py`.
+5. **SearXNG auto-setup** (`proxy/web_search.py:ensure_searxng_running()`): clones `mbaozi/SearXNGforWindows` → `data/searxng/repo/`, creates `.venv/`, pip-installs, copies patched `searx/` into venv site-packages, generates `data/searxng/config/settings.yml` overlaid with `proxy.web_search.searxng.*`. Spawned as managed child via Job Object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) + PID file + port-probe orphan recovery. Default engines: `startpage`, `bing news`, `wikipedia`, `wiktionary`, `reddit`, `stackoverflow`, `askubuntu`, `github`, `mdn`, `semantic scholar`, `photon`.
+6. **Other transforms**: `lift_tool_result_images` (LM Studio array-form workaround), `strip_reminders`, `proxy_system.md` conditional preprocessor (`<if>` tags).
+7. **Passthrough:** all non-`/v1/messages` requests forwarded unchanged.
 
-To use: set `proxy.enabled: true` in settings.json and point `claude-local`'s `ANTHROPIC_BASE_URL` at `http://localhost:1235`.
+To use: set `proxy.enabled: true` and point `ANTHROPIC_BASE_URL` at `http://localhost:1235`.
 
 ---
 
@@ -255,25 +243,11 @@ Test: `/settings reload` then `/new <key> test`.
 
 ---
 
-## MCP audio server (`mcp_server/`)
+## MCP server (`mcp_server/`)
 
-Streamable HTTP MCP server exposing local TTS and STT as tools for Claude Code (or any MCP client). Uses FastMCP with stateless HTTP transport.
+Streamable HTTP MCP server (FastMCP, port 1236). Drop-in tools/resources/prompts under `mcp_server/tools/`, `resources/`, `prompts/` — auto-discovered via `pkgutil.iter_modules`. Built-in tools: `speak` (Kokoro TTS), `transcribe` (Whisper STT), `web_search` (SearXNG, same backend as the proxy's managed WebSearch). For local models routed through the proxy, these tools are injected automatically via `managed_tools.py` — no MCP connection needed. The MCP server is for external clients or Claude Code running against the real Anthropic API.
 
-1. **Startup:** `start_mcp_background()` called from `main.py:_post_init`. Runs in a daemon thread (FastMCP manages its own uvicorn loop). Listens on `127.0.0.1:{mcp_server.port}` (default 1236). Disabled when `mcp_server.enabled` is `false`.
-2. **Drop-in auto-discovery:** three folders use `pkgutil.iter_modules` to import every `.py` file automatically:
-   - `mcp_server/tools/` — functions decorated with `@mcp_app.tool()`
-   - `mcp_server/resources/` — functions decorated with `@mcp_app.resource()`
-   - `mcp_server/prompts/` — functions decorated with `@mcp_app.prompt()`
-   Adding a new tool/resource/prompt = drop a `.py` file in the right folder. No other files change.
-3. **Built-in tools:**
-   - `speak(text, voice?, output_path?)` — POST to Kokoro TTS (`mcp_server.tts_url`), saves audio to file, returns path.
-   - `transcribe(audio_path, language?)` — POST to Whisper STT (`mcp_server.stt_url`), returns transcribed text. Accepts local file paths or remote URLs (http/https).
-   - `web_search(query, allowed_domains?, blocked_domains?)` — same schema as Anthropic's official `WebSearch` tool. Reuses the SearXNG backend, cache, and config from `proxy/rewriters/web_search.py` so the MCP entry point and the proxy intercept entry point share one provider abstraction. Domain filters fetch 3× extra results then post-filter by hostname (subdomain matches included). Returns the same Anthropic-style `[N] Title / URL / Snippet` formatted string.
-4. **Config:** URLs and port from `settings.json` under `mcp_server.*`, with env var fallback (`KOKORO_URL`, `WHISPER_URL`, `MCP_HOST`, `MCP_PORT`) for standalone use.
-5. **Standalone:** `python -m mcp_server` runs independently of the Telegram bot.
-6. **Shutdown:** daemon thread dies with the process.
-
-To use with Claude Code: `claude mcp add telecode --transport streamable-http --url http://127.0.0.1:1236/mcp`
+`claude mcp add telecode --transport streamable-http --url http://127.0.0.1:1236/mcp`
 
 ---
 
