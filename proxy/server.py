@@ -41,6 +41,47 @@ def _format_functions_block(matched: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+
+def _prepend_text_block(buffered: list[str], text: str) -> list[str]:
+    """Insert a synthetic text content block (index 0) before the first
+    content_block_start in the buffered SSE lines, and increment all
+    subsequent content block indices by 1.
+
+    This makes `text` appear as the first block in the model's response
+    when CC renders the SSE stream.
+    """
+    escaped = json.dumps(text + "\n\n")
+    synthetic = [
+        'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+        f'data: {{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":{escaped}}}}}\n\n',
+        'data: {"type":"content_block_stop","index":0}\n\n',
+    ]
+
+    output: list[str] = []
+    inserted = False
+    for line in buffered:
+        if (
+            not inserted
+            and line.startswith("data: ")
+            and '"content_block_start"' in line
+        ):
+            output.extend(synthetic)
+            inserted = True
+
+        if inserted and line.startswith("data: "):
+            data_str = line[6:].rstrip("\n")
+            try:
+                event = json.loads(data_str)
+                if isinstance(event, dict) and "index" in event:
+                    event["index"] += 1
+                    line = f"data: {json.dumps(event)}\n\n"
+            except json.JSONDecodeError:
+                pass
+
+        output.append(line)
+    return output
+
+
 # ── Request handling ─────────────────────────────────────────────────────────
 
 async def _forward_stream(
@@ -49,13 +90,14 @@ async def _forward_stream(
     headers: dict[str, str],
     resp: web.StreamResponse,
     intercept_names: set[str] | None = None,
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, list[str]]:
     """Buffer response from upstream, check for interceptable tool calls.
 
-    If no intercept needed, flushes entire buffer to client.
-    If intercept found, returns tool_use block without flushing.
+    Returns (tool_use_block, buffered_lines). NEVER flushes to the client —
+    the caller decides when and how to flush (possibly prepending a
+    synthetic text block for visibility).
     """
-    buffered_lines: list[str] = []  # raw SSE lines to flush if clean
+    buffered_lines: list[str] = []
     tool_use_block: dict[str, Any] | None = None
     current_tool_json = ""
     current_tool_id = ""
@@ -73,9 +115,8 @@ async def _forward_stream(
                     resp.set_status(upstream_resp.status)
                     await resp.prepare(resp._req if hasattr(resp, '_req') else None)
                 await resp.write(body.encode())
-                return None
+                return None, []
 
-            # Buffer all SSE events
             buf = ""
             async for chunk in upstream_resp.content.iter_any():
                 text = chunk.decode("utf-8", errors="replace")
@@ -103,7 +144,6 @@ async def _forward_stream(
                     buffered_lines.append(f"data: {data_str}\n\n")
                     etype = event.get("type", "")
 
-                    # Track tool_use blocks
                     if etype == "content_block_start":
                         block = event.get("content_block", {})
                         if block.get("type") == "tool_use":
@@ -128,20 +168,22 @@ async def _forward_stream(
                         }
                         current_tool_name = ""
 
-    # If intercepted, don't flush — caller handles round-trip
-    if tool_use_block:
-        return tool_use_block
+    return tool_use_block, buffered_lines
 
-    # Clean response — flush entire buffer to client
+
+async def _flush_sse(
+    resp: web.StreamResponse,
+    request: web.Request,
+    lines: list[str],
+) -> None:
+    """Flush buffered SSE lines to the client."""
     if not resp.prepared:
         resp.content_type = "text/event-stream"
         resp.headers["Cache-Control"] = "no-cache"
         resp.headers["Connection"] = "keep-alive"
-        await resp.prepare(resp._req if hasattr(resp, '_req') else None)
-    for line in buffered_lines:
+        await resp.prepare(request)
+    for line in lines:
         await resp.write(line.encode())
-
-    return None
 
 
 async def _do_tool_search(
@@ -291,9 +333,32 @@ async def _handle_streaming(
     resp = web.StreamResponse()
     resp._req = request
 
-    tool_use = await _forward_stream(upstream, body, headers, resp, intercept)
+    # ── Intercept loop ───────────────────────────────────────────
+    # The model may call intercepted tools across multiple round-trips
+    # (e.g. WebSearch → reads result → WebSearch again → ToolSearch → text).
+    # We loop: each iteration calls upstream, checks for intercepted tools,
+    # handles them, appends messages, and retries. When the model finally
+    # produces a response with NO intercepted tools, we flush it to CC
+    # (optionally prepending visibility summaries).
+    summaries: list[str] = []
+    max_roundtrips = 15
 
-    if tool_use:
+    for _rt in range(max_roundtrips):
+        tool_use, buffered = await _forward_stream(
+            upstream, body, headers, resp, intercept,
+        )
+
+        if not tool_use:
+            # Clean response — no more intercepted tools.
+            # Prepend summaries (if any) then flush to CC.
+            if summaries:
+                buffered = _prepend_text_block(
+                    buffered, "\n".join(summaries),
+                )
+            await _flush_sse(resp, request, buffered)
+            break
+
+        # Handle the intercepted tool
         tool_name = tool_use["name"]
         matched: list[dict[str, Any]] = []
         result_content: str | None = None
@@ -312,46 +377,37 @@ async def _handle_streaming(
                 except Exception as exc:
                     log.warning("Managed tool %s failed: %s", tool_name, exc)
                     result_content = f"ERROR: {tool_name} failed: {exc}"
+                if result_content and "\n\n" in result_content:
+                    summaries.append(result_content.split("\n\n", 1)[0])
 
         elif proxy_config.auto_load_tools() and tool_name in deferred_names:
             matched = [t for t in deferred if t["name"] == tool_name]
             log.info("Auto-loading schema for deferred tool: %s", tool_name)
-            schema_info = _format_functions_block(matched)
             result_content = (
                 f"This tool's schema was not loaded. Here is the schema:\n\n"
-                f"{schema_info}\n\n"
+                f"{_format_functions_block(matched)}\n\n"
                 f"Call the tool again with the correct parameter names from the schema above."
             )
 
-        if result_content:
-            if matched:
-                body["tools"] = body["tools"] + matched
+        if not result_content:
+            # Unhandled tool — flush as-is and break
+            await _flush_sse(resp, request, buffered)
+            break
 
-            body["messages"] = body.get("messages", []) + [
-                {"role": "assistant", "content": [
-                    {"type": "tool_use", "id": tool_use["id"],
-                     "name": tool_name, "input": tool_use["input"]},
-                ]},
-                {"role": "user", "content": [
-                    {"type": "tool_result", "tool_use_id": tool_use["id"],
-                     "content": result_content},
-                ]},
-            ]
+        if matched:
+            body["tools"] = body["tools"] + matched
 
-            # Round-trip — stream retry to client
-            if not resp.prepared:
-                resp.content_type = "text/event-stream"
-                resp.headers["Cache-Control"] = "no-cache"
-                resp.headers["Connection"] = "keep-alive"
-                await resp.prepare(request)
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{upstream}/v1/messages",
-                    json=body,
-                    headers=headers,
-                ) as upstream_resp:
-                    async for chunk in upstream_resp.content.iter_any():
-                        await resp.write(chunk)
+        body["messages"] = body.get("messages", []) + [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": tool_use["id"],
+                 "name": tool_name, "input": tool_use["input"]},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": tool_use["id"],
+                 "content": result_content},
+            ]},
+        ]
+        # Continue loop — next iteration calls upstream again
 
     if not resp.prepared:
         await resp.prepare(request)
@@ -365,42 +421,62 @@ async def _handle_non_streaming(
     headers: dict[str, str],
     deferred: list[dict[str, Any]],
 ) -> web.Response:
-    """Handle non-streaming request."""
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            f"{upstream}/v1/messages",
-            json=body,
-            headers=headers,
-        ) as upstream_resp:
-            result = await upstream_resp.json()
+    """Handle non-streaming request with the same intercept loop as streaming."""
+    from proxy.managed_tools import is_managed, get_handler
 
-    # Check if response contains ToolSearch or deferred tool call
     deferred_names = {t["name"] for t in deferred}
-    stop_reason = result.get("stop_reason", "")
-    if stop_reason == "tool_use":
+    from proxy.managed_tools import _REGISTRY
+    managed_names = set(_REGISTRY.keys())
+
+    max_roundtrips = 15
+    for _rt in range(max_roundtrips):
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{upstream}/v1/messages",
+                json=body,
+                headers=headers,
+            ) as upstream_resp:
+                result = await upstream_resp.json()
+
+        if result.get("stop_reason") != "tool_use":
+            return web.json_response(result, status=200)
+
+        # Find the first interceptable tool_use in the response
+        handled = False
         for block in result.get("content", []):
             if block.get("type") != "tool_use":
                 continue
             tool_name = block.get("name", "")
+            matched: list[dict[str, Any]] = []
+            result_text: str | None = None
 
             if tool_name == "ToolSearch":
                 matched = await _do_tool_search(deferred, block.get("input", {}))
                 log.info("ToolSearch matched %d tools", len(matched))
                 result_text = _format_functions_block(matched)
 
+            elif tool_name in managed_names:
+                handler = get_handler(tool_name)
+                if handler:
+                    try:
+                        result_text = await handler(block.get("input", {}))
+                        log.info("Managed tool %s executed (non-streaming)", tool_name)
+                    except Exception as exc:
+                        log.warning("Managed tool %s failed: %s", tool_name, exc)
+                        result_text = f"ERROR: {tool_name} failed: {exc}"
+
             elif proxy_config.auto_load_tools() and tool_name in deferred_names:
                 matched = [t for t in deferred if t["name"] == tool_name]
                 log.info("Auto-loading schema for deferred tool: %s", tool_name)
-                schema_info = _format_functions_block(matched)
                 result_text = (
                     f"This tool's schema was not loaded. Here is the schema:\n\n"
-                    f"{schema_info}\n\n"
-                    f"Call the tool again with the correct parameter names from the schema above."
+                    f"{_format_functions_block(matched)}\n\n"
+                    f"Call the tool again with the correct parameter names."
                 )
-            else:
+
+            if not result_text:
                 continue
 
-            # Re-send with matched tools injected
             if matched:
                 body["tools"] = body["tools"] + matched
             body["messages"] = body.get("messages", []) + [
@@ -410,14 +486,11 @@ async def _handle_non_streaming(
                      "content": result_text},
                 ]},
             ]
+            handled = True
+            break  # re-loop with updated messages
 
-            async with aiohttp.ClientSession() as session2:
-                async with session2.post(
-                    f"{upstream}/v1/messages",
-                    json=body,
-                    headers=headers,
-                ) as resp2:
-                    return web.json_response(await resp2.json(), status=resp2.status)
+        if not handled:
+            return web.json_response(result, status=200)
 
     return web.json_response(result, status=200)
 

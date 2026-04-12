@@ -304,39 +304,30 @@ python -m mcp_server
 
 ### `proxy`
 
-Tool-search proxy that sits between Claude Code and LM Studio. Reduces 101 tools to ~9 core tools (matching Opus's core set), injects a `ToolSearch` meta-tool for on-demand schema loading, and appends a dynamic tool catalog to the system prompt. Strips duplicate deferred-tool reminders from messages.
+Middleware proxy for local models (LM Studio, Ollama, etc.). Reduces ~100+ CC tools to ~9 core, provides on-demand ToolSearch, and injects **managed tools** (WebSearch, speak, transcribe) that the proxy intercepts and executes locally — the model calls them like any other tool, and the proxy handles multi-round tool sequences automatically (up to 15 round-trips per turn).
 
 | Key | Type | Description |
 |-----|------|-------------|
 | `enabled` | boolean | Enable the proxy (default `false`) |
-| `port` | number | Proxy listen port (default `1235`) |
-| `upstream_url` | string | LM Studio or other backend URL (default `http://localhost:1234`) |
-| `core_tools` | array | Override which tools stay loaded (default: Bash, Edit, Read, Write, Glob, Grep, Agent, Skill) |
-| `tool_splitting` | boolean | Split tools into core/deferred and inject `ToolSearch` (default `false`) |
-| `strip_reminders` | boolean | Strip `<system-reminder>` blocks from messages, keeping only skills + deferred-tool listings (default `false`) |
-| `auto_load_tools` | boolean | Auto-load deferred tool schemas when the model calls them without `ToolSearch` first (requires `tool_splitting`, default `false`) |
-| `lift_tool_result_images` | boolean | Rewrite array-form `tool_result.content` (text + image blocks) as a plain-string placeholder and append the lifted image blocks, labeled by `tool_use_id`, at the end of the user message — works around LM Studio rejecting array-form content and preserves Anthropic's "tool_results first" rule (default `false`) |
-| `tool_result_rewriting` | boolean | Enable the rewriter framework (`proxy/rewriters/`). Required for `web_search` (default `false`) |
-| `web_search.enabled` | boolean | Replace empty `WebSearch` tool_results with real search results (default `false`) |
-| `web_search.provider` | string | Search backend; only `searxng` implemented (default `searxng`) |
-| `web_search.url` | string | Local SearXNG URL (default `http://localhost:8888`) |
+| `port` | number | Listen port (default `1235`) |
+| `upstream_url` | string | LM Studio URL (default `http://localhost:1234`) |
+| `core_tools` | array | Tools always forwarded (default: Bash, Edit, Read, Write, Glob, Grep, Agent, Skill) |
+| `tool_splitting` | boolean | Split tools into core/deferred + inject ToolSearch (default `false`) |
+| `strip_reminders` | boolean | Strip `<system-reminder>` blocks (default `false`) |
+| `auto_load_tools` | boolean | Auto-load deferred tool schemas on first call (default `false`) |
+| `lift_tool_result_images` | boolean | Lift image blocks out of array-form tool_results for LM Studio compatibility (default `false`) |
+| `web_search.enabled` | boolean | Enable WebSearch managed tool + SearXNG auto-setup (default `false`) |
+| `web_search.url` | string | SearXNG URL — host+port pushed to generated settings.yml (default `http://localhost:1237`) |
 | `web_search.max_results` | number | Results per search (default `5`) |
-| `web_search.searxng.engines` | array | Engines to enable. Default: `startpage`, `bing news`, `wikipedia`, `wiktionary`, `reddit`, `stackoverflow`, `github`, `mdn`, `semantic scholar` |
-| `web_search.searxng.safesearch` | number | 0=off, 1=moderate, 2=strict (default `0`) |
+| `web_search.searxng.engines` | array | SearXNG engines to enable (default: `startpage`, `bing news`, `wikipedia`, `wiktionary`, `reddit`, `stackoverflow`, `askubuntu`, `github`, `mdn`, `semantic scholar`, `photon`) |
+| `web_search.searxng.safesearch` | number | 0/1/2 (default `0`) |
 | `web_search.searxng.language` | string | Language code (default `en`) |
 
-When `web_search.enabled` is on with the `searxng` provider, Telecode auto-installs `mbaozi/SearXNGforWindows` on first boot: clones into `data/searxng/repo/`, creates `.venv/`, pip-installs, generates `config/settings.yml` from telecode's overrides, spawns `python -m searx.webapp` as a managed child bound to a Windows Job Object so it dies with Telecode. Requires `git` on PATH. To re-provision: delete `data/searxng/` and restart.
+**Managed tools** (`proxy/managed_tools.py`): the proxy strips CC's versions of these tools and injects its own schemas. When the model calls them, the proxy intercepts (CC never sees the call), executes locally, and round-trips. Visibility: a `🔍` summary line is prepended to the SSE response so the user sees what was searched. Currently registered: `WebSearch` (SearXNG, with categories enum: general/news/code/science/discussion/map), `speak` (Kokoro TTS), `transcribe` (Whisper STT). Adding a new tool = `register(name, schema, handler)` in `managed_tools.py`, zero changes to `server.py`.
 
-Engines were picked by enabling all 25+ candidates and probing each — only the listed defaults work reliably from a residential IP. Notable: `startpage` is preferred over `bing` (which serves decoy spam to SearXNG scrapers); google/ddg/mojeek/brave fail with CAPTCHAs or stale HTML parsers. SearXNG only routes queries to engines whose `categories` match the request, so general queries hit `startpage`/`wikipedia`/`wiktionary` only — the specialized engines fire via `!shortcut` bangs (e.g. `!gh flask`, `!st python`, `!bin trump`).
+**SearXNG auto-setup**: when `web_search.enabled` is on, Telecode clones `mbaozi/SearXNGforWindows` into `data/searxng/`, creates a `.venv`, pip-installs, generates `settings.yml` with engine overrides, and spawns `python -m searx.webapp` as a managed child (Job Object + PID file for lifecycle). Requires `git` on PATH. Delete `data/searxng/` to re-provision.
 
-**`proxy_system.md` conditional sections.** The proxy system instruction loaded into requests is `proxy_system.md`, preprocessed at request time. Wrap any block in `<if dotted.settings.path="value">…</if>` (tags on their own lines) and the preprocessor keeps the inner content only when the named setting matches. Example: paragraphs documenting reminder types stripped by `proxy.strip_reminders` are wrapped in `<if proxy.strip_reminders="false">…</if>` so they vanish from the model's prompt when stripping is on. Single source of truth, one file to maintain.
-
-When enabled, the proxy starts automatically with Telecode. Point your `claude-local` tool's `ANTHROPIC_BASE_URL` at `http://localhost:<port>` to route through it. Also works standalone with Claude Code by setting `ANTHROPIC_BASE_URL=http://localhost:1235`.
-
-**Run standalone** (without Telegram bot):
-```bash
-python -m proxy
-```
+Point `ANTHROPIC_BASE_URL=http://localhost:1235`. Also runs standalone: `python -m proxy`.
 
 ### `tools.<key>`
 
