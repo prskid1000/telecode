@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from config import get_nested as _settings_get
-from proxy.config import core_tools, strip_reminders
+from proxy.config import core_tools, strip_reminders, web_search_enabled
 
 # ── ToolSearch meta-tool definition ──────────────────────────────────────────
 
@@ -56,30 +56,94 @@ TOOL_SEARCH_TOOL: dict[str, Any] = {
 }
 
 
+# ── WebSearch tool definition (replaces CC's built-in WebSearch) ───────────
+
+CATEGORY_DESCRIPTIONS = {
+    "general": "General web search (startpage, wikipedia, wiktionary)",
+    "news": "Current news (bing news)",
+    "code": "Code repos, Q&A, docs (github, stackoverflow, askubuntu, mdn)",
+    "science": "Academic papers (semantic scholar)",
+    "discussion": "Forums and discussions (reddit)",
+    "map": "Locations and geocoding (photon/OpenStreetMap)",
+}
+
+# Maps our clean enum to SearXNG's actual category param values.
+CATEGORY_TO_SEARXNG = {
+    "general": "general",
+    "news": "news",
+    "code": "it",
+    "science": "science",
+    "discussion": "social media",
+    "map": "map",
+}
+
+WEB_SEARCH_TOOL: dict[str, Any] = {
+    "name": "WebSearch",
+    "description": (
+        "Search the web for current information. Returns ranked results with "
+        "titles, URLs, and snippets. Always cite source URLs as markdown links "
+        "in your reply.\n\n"
+        "Categories control which sources are searched:\n"
+        + "\n".join(f"- {k}: {v}" for k, v in CATEGORY_DESCRIPTIONS.items())
+        + "\n\nYou can combine categories (e.g. [\"general\", \"news\"] for "
+        "broad coverage). Default is [\"general\"]."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "The search query.",
+                "minLength": 2,
+            },
+            "categories": {
+                "type": "array",
+                "description": (
+                    "Which source types to search. Default: [\"general\"]. "
+                    "Pick the smallest set that fits the query."
+                ),
+                "items": {
+                    "type": "string",
+                    "enum": list(CATEGORY_DESCRIPTIONS.keys()),
+                },
+                "default": ["general"],
+            },
+        },
+        "required": ["query"],
+    },
+}
+
+
 def split_tools(
     tools: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Split into (core_tools_list, deferred_tools_list).
 
     Core tools are forwarded as-is. ToolSearch is injected into core.
+    Managed tools (WebSearch, speak, transcribe, etc.) are stripped from
+    CC's tool list and replaced with our proxy-handled versions — the
+    model calls them, the proxy intercepts and executes locally.
     """
+    from proxy.managed_tools import get_schemas, get_strip_names
+
     core_names = set(core_tools())
+    strip_names = get_strip_names() | {"ToolSearch"}
     core: list[dict[str, Any]] = []
     deferred: list[dict[str, Any]] = []
 
     for tool in tools:
         name = tool.get("name", "")
+        if name in strip_names:
+            continue
         if name in core_names:
             core.append(tool)
-        elif name == "ToolSearch":
-            # Already injected — skip duplicate
-            continue
         else:
             deferred.append(tool)
 
-    # Inject ToolSearch as FIRST tool if we have deferred tools
     if deferred:
         core.insert(0, TOOL_SEARCH_TOOL)
+    for schema in get_schemas():
+        core.insert(0, schema)
 
     return core, deferred
 

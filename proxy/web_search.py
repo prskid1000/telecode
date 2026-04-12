@@ -34,7 +34,6 @@ from typing import Any
 import aiohttp
 
 from proxy import config as proxy_config
-from proxy.tool_result_rewriters import make_rewriter
 
 log = logging.getLogger("telecode.proxy.web_search")
 
@@ -124,14 +123,17 @@ _SEARXNG_HEADERS = {
 async def _search_searxng(
     query: str,
     max_results: int,
+    categories: str = "",
 ) -> tuple[list[dict[str, Any]], str, list[dict[str, Any]]]:
     base = proxy_config.web_search_url()
-    params = {
+    params: dict[str, str] = {
         "q": query,
         "format": "json",
         "safesearch": "0",
         "language": "en",
     }
+    if categories:
+        params["categories"] = categories
     timeout = aiohttp.ClientTimeout(total=20)
     async with aiohttp.ClientSession(timeout=timeout, headers=_SEARXNG_HEADERS) as session:
         async with session.get(f"{base}/search", params=params) as resp:
@@ -199,68 +201,55 @@ def _cache_put(key: str, value: str) -> None:
 
 # ── Public search entrypoint ───────────────────────────────────────────────
 
-async def search(query: str, max_results: int | None = None) -> str:
-    """Run a web search and return a formatted Anthropic-style result string.
+async def search(
+    query: str,
+    categories: list[str] | None = None,
+    max_results: int | None = None,
+) -> tuple[str, int]:
+    """Run a web search and return (formatted_result_string, result_count).
+
+    `categories` maps to SearXNG's `&categories=` param via the
+    `CATEGORY_TO_SEARXNG` dict in `proxy.tool_registry`. Multiple
+    categories are joined with `,` so SearXNG fans out to all matched
+    engines in one call.
 
     Always returns a string (never raises) — errors become a visible error
     message in the tool_result so the model can keep going.
     """
+    from proxy.tool_registry import CATEGORY_TO_SEARXNG
+
     query = (query or "").strip()
     if not query:
-        return _format_error("", "empty query")
+        return _format_error("", "empty query"), 0
     n = int(max_results if max_results is not None else proxy_config.web_search_max_results())
+    cats = categories or ["general"]
+    searxng_cats = ",".join(
+        CATEGORY_TO_SEARXNG.get(c, c) for c in cats
+    )
 
-    cache_key = f"{n}:{query}"
+    cache_key = f"{n}:{searxng_cats}:{query}"
     cached = _cache_get(cache_key)
     if cached is not None:
-        return cached
+        count = cached.count("\nURL: ")
+        return cached, count
 
     provider_name = proxy_config.web_search_provider()
     fn = _PROVIDERS.get(provider_name)
     if fn is None:
-        return _format_error(query, f"unknown provider {provider_name!r}")
+        return _format_error(query, f"unknown provider {provider_name!r}"), 0
 
     try:
-        results, answer, infoboxes = await fn(query, n)
+        results, answer, infoboxes = await fn(query, n, categories=searxng_cats)
     except Exception as exc:
         log.warning("WebSearch %s failed: %s", provider_name, exc)
-        return _format_error(query, str(exc))
+        return _format_error(query, str(exc)), 0
 
-    # Treat the response as "no results" only if all three channels are empty.
-    # currency / wikidata-entity queries return empty `results` but populated
-    # `answer` / `infoboxes`, and we still want to surface those.
     if not results and not answer and not infoboxes:
-        out = _format_error(query, "no results")
-    else:
-        out = _format_results(query, results, answer, infoboxes)
+        return _format_error(query, "no results"), 0
+
+    out = _format_results(query, results, answer, infoboxes)
     _cache_put(cache_key, out)
-    return out
-
-
-# ── Tool-result rewriter (registered with the framework) ───────────────────
-
-def _looks_empty(content: Any) -> bool:
-    """Detect Claude Code's empty WebSearch placeholder.
-
-    Real results always contain at least one URL — that's the cheapest
-    fingerprint that distinguishes a populated result from the stub.
-    """
-    if not isinstance(content, str):
-        return False
-    if not content.startswith("Web search results for query:"):
-        return False
-    return "http://" not in content and "https://" not in content
-
-
-def _should_replace(original: Any) -> bool:
-    return proxy_config.web_search_enabled() and _looks_empty(original)
-
-
-async def _replace(tool_input: dict[str, Any], _original: Any) -> Any:
-    return await search(tool_input.get("query", ""))
-
-
-make_rewriter("WebSearch", _should_replace, _replace)
+    return out, len(results)
 
 
 # ── Auto-setup: clone, venv, generate config, launch as managed child ─────
