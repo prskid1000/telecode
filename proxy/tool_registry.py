@@ -17,10 +17,10 @@ from proxy.config import core_tools, strip_reminders
 TOOL_SEARCH_TOOL: dict[str, Any] = {
     "name": "ToolSearch",
     "description": (
-        "Fetches full schema definitions for deferred tools so they can be called.\n\n"
-        "Deferred tools appear by name in <system-reminder> messages. Until fetched, "
+        "Fetches full schema definitions for unloaded tools so they can be called.\n\n"
+        "Unloaded tools appear by name in <system-reminder> messages. Until fetched, "
         "only the name is known \u2014 there is no parameter schema, so the tool cannot "
-        "be invoked. This tool takes a query, matches it against the deferred tool list, "
+        "be invoked. This tool takes a query, matches it against the unloaded tool list, "
         "and returns the matched tools' complete JSONSchema definitions inside a "
         "<functions> block. Once a tool's schema appears in that result, it is callable "
         "exactly like any tool defined at the top of the prompt.\n\n"
@@ -41,7 +41,7 @@ TOOL_SEARCH_TOOL: dict[str, Any] = {
             "query": {
                 "type": "string",
                 "description": (
-                    'Query to find deferred tools. Use "select:<tool_name>" '
+                    'Query to find unloaded tools. Use "select:<tool_name>" '
                     "for direct selection, or keywords to search."
                 ),
             },
@@ -138,11 +138,11 @@ def proxy_system_instruction(filename: str = "system.md") -> str:
 
 
 def build_deferred_listing(deferred: list[dict[str, Any]]) -> str:
-    """Build a deferred tool name list for injection into messages."""
+    """Build an unloaded tool name list for injection into messages."""
     names = [t["name"] for t in deferred]
     lines = [
         "<system-reminder>",
-        "Deferred tools (call ToolSearch to load schema before use):",
+        "Unloaded tools (call ToolSearch to load schema before use):",
     ]
     for name in names:
         lines.append(name)
@@ -173,7 +173,7 @@ _SKILLS_REMINDER_RE = re.compile(
 )
 _DEFERRED_KEEP_RE = re.compile(
     r"<system-reminder>\s*\n?"
-    r"Deferred tools \(call ToolSearch.*?"
+    r"Unloaded tools \(call ToolSearch.*?"
     r"</system-reminder>",
     re.DOTALL,
 )
