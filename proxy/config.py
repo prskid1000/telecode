@@ -83,5 +83,38 @@ def cors_origins() -> list[str]:
     return app_config.get_nested("proxy.cors_origins", [])
 
 
+def client_profiles() -> list[dict]:
+    """Header-based client profiles for per-client request handling.
+
+    Example (settings.json):
+        "proxy": {
+          "client_profiles": [
+            {
+              "name": "office",
+              "match": {"header": "Referer", "contains": "pivot.claude.ai"},
+              "system_instruction": "proxy_office.md",
+              "tool_splitting": false,
+              "intercept": false,
+              "inject_date_location": false
+            }
+          ]
+        }
+
+    First profile whose `match` matches wins. If no match, default behavior applies.
+    """
+    return app_config.get_nested("proxy.client_profiles", []) or []
+
+
+def model_mapping() -> dict[str, str]:
+    """Map client-facing model names to upstream model names.
+
+    e.g. {"claude-opus-4-6": "qwen3.5-35b-a3b"}
+
+    - /v1/models response lists the keys (client-facing names) alongside real models
+    - /v1/messages rewrites request's `model` field from key → value before forwarding
+    """
+    return app_config.get_nested("proxy.model_mapping", {}) or {}
+
+
 def web_search_enabled() -> bool:
     return bool(app_config.get_nested("proxy.web_search.enabled", False))

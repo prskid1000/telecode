@@ -163,12 +163,13 @@ _FALLBACK_INSTRUCTION = (
 )
 
 
-def proxy_system_instruction() -> str:
-    """Load proxy_system.md and resolve `<if>` conditionals against current settings.
+def proxy_system_instruction(filename: str = "system.md") -> str:
+    """Load a proxy system instruction markdown file and resolve `<if>` conditionals.
 
     Re-read each call so settings hot-reload and doc edits both take effect.
+    `filename` is relative to `proxy/instructions/` (e.g. "system.md", "office.md").
     """
-    md_path = Path(__file__).resolve().parent.parent / "proxy_system.md"
+    md_path = Path(__file__).resolve().parent / "instructions" / filename
     try:
         text = md_path.read_text(encoding="utf-8")
     except FileNotFoundError:
