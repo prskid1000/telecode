@@ -110,5 +110,3 @@ def model_mapping() -> dict[str, str]:
     return app_config.get_nested("proxy.model_mapping", {}) or {}
 
 
-def web_search_enabled() -> bool:
-    return bool(app_config.get_nested("proxy.web_search.enabled", False))

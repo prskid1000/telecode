@@ -367,7 +367,6 @@ Sits between Claude Code (or any Anthropic-API client) and LM Studio / Ollama / 
 | `cors_origins` | CORS allowed origins |
 | `model_mapping` | Rewrite model IDs: `{"claude-opus-4-6": "qwen3.5-35b-a3b"}` — applied to `/v1/messages` and `/v1/models` |
 | `client_profiles` | Per-client behavior routing — see below |
-| `web_search.enabled` | Enable the Brave Search scraper as a managed tool |
 
 Point `ANTHROPIC_BASE_URL=http://localhost:1235` at the proxy. Also runs standalone: `python -m proxy`.
 

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from config import get_nested as _settings_get
-from proxy.config import core_tools, strip_reminders, web_search_enabled
+from proxy.config import core_tools, strip_reminders
 
 # ── ToolSearch meta-tool definition ──────────────────────────────────────────
 
