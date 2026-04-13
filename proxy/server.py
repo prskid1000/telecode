@@ -512,8 +512,6 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
     if use_lift_images:
         body["messages"] = _lift_tool_result_images(body.get("messages", []))
 
-    await _dump_request(body, "OUTGOING")
-
     # Forward auth headers
     headers = {}
     for h in ("x-api-key", "anthropic-version", "authorization", "content-type"):
@@ -531,6 +529,8 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
     #  2. Normalize message content to list-of-blocks form so CC's string↔list
     #     flip-flopping doesn't bust cache.
     body = _canonicalize_body(body)
+
+    await _dump_request(body, "OUTGOING")
 
     if body.get("stream", False):
         return await _handle_streaming(upstream, body, headers, deferred, request,
