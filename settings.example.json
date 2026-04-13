@@ -56,8 +56,15 @@
         "system_instruction": "office.md",
         "tool_search": false,
         "inject_date_location": false,
+        "strip_reminders": false,
+        "lift_tool_result_images": false,
+        "auto_load_tools": false,
+        "core_tools": [],
         "inject_managed": ["code_execution"],
-        "strip_tool_types": ["web_search_*", "code_execution_*"]
+        "strip_tool_names": [],
+        "strip_tool_types": ["web_search_*", "code_execution_*"],
+        "drop_non_custom_tools": false,
+        "strip_cache_control": true
       },
       {
         "name": "claude-code",
@@ -65,8 +72,14 @@
         "system_instruction": "system.md",
         "tool_search": true,
         "inject_date_location": true,
+        "strip_reminders": false,
+        "lift_tool_result_images": false,
+        "auto_load_tools": false,
         "core_tools": ["Bash", "Edit", "Read", "Write", "Glob", "Grep", "Agent", "Skill"],
         "inject_managed": ["WebSearch", "speak", "transcribe"],
+        "strip_tool_names": [],
+        "strip_tool_types": [],
+        "drop_non_custom_tools": false,
         "strip_cache_control": false
       }
     ],
