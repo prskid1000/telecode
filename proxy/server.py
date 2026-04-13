@@ -401,13 +401,32 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
             system.append({"type": "text", "text": context})
 
     if use_tool_splitting:
+        from proxy.managed_tools import _REGISTRY as _MANAGED_REG
+
+        # Profile-configured sets (all optional; fall back to globals)
+        _core_list = profile.get("core_tools") if profile and "core_tools" in profile else proxy_config.core_tools()
+        core_names: set[str] = set(_core_list or [])
+        inject_managed: list[str] = (profile.get("inject_managed") if profile and "inject_managed" in profile else list(_MANAGED_REG.keys())) or []
+
+        # Compute managed tool names to strip + schemas to inject
+        extra_strip = {"ToolSearch"}
+        inject_schemas: list[dict[str, Any]] = []
+        for mname in inject_managed:
+            mt = _MANAGED_REG.get(mname)
+            if not mt:
+                log.warning("Profile references unknown managed tool: %s", mname)
+                continue
+            extra_strip.add(mt.name)
+            extra_strip.update(mt.strip_from_cc)
+            inject_schemas.append(mt.schema)
+
         tools = body.get("tools", [])
-        core, deferred = split_tools(tools)
+        core, deferred = split_tools(tools, core_names, extra_strip, inject_schemas)
         body["tools"] = core
 
         log.info(
-            "Proxy: %d tools -> %d core + %d deferred",
-            len(tools), len(core), len(deferred),
+            "Proxy: %d tools -> %d core + %d deferred (managed injected: %d)",
+            len(tools), len(core), len(deferred), len(inject_schemas),
         )
 
         # Inject deferred tools instruction into system, tool names into messages

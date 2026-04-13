@@ -394,6 +394,8 @@ Middleware proxy for local models (LM Studio, Ollama, etc.). Reduces ~100+ CC to
 | `tool_splitting` | Override the global `proxy.tool_splitting` for this client |
 | `intercept` | Whether to intercept tool calls (ToolSearch, managed tools like WebSearch) |
 | `inject_date_location` | Whether to add the date/location `<system-reminder>` |
+| `core_tools` | List of tool names always forwarded as-is (rest are deferred). Falls back to `proxy.core_tools`. |
+| `inject_managed` | List of managed tool names to inject (e.g. `["WebSearch", "speak"]`). When set, CC's versions of these tools are stripped and replaced with the proxy's. Falls back to all registered managed tools. |
 | `strip_tool_names` | Drop tools by exact name match (e.g. `["WebSearch"]`) |
 | `strip_tool_types` | Drop tools by `type` field. Supports `*` suffix for prefix match (e.g. `["web_search_*", "code_execution_*"]`) |
 | `drop_non_custom_tools` | Drop any tool where `type` is set and not equal to `"custom"` (strips all Anthropic server-side tools) |
