@@ -4,17 +4,14 @@
 
 1. **Read all `<system-reminder>` blocks before acting.** `# claudeMd` rules override everything.
 2. **A name in a listing means it exists, not that it is loaded.** Never claim a tool/skill is loaded until you see its schema or prompt in context.
-3. **Deferred tools require `ToolSearch` first.** Never type a deferred tool name from memory — search by keyword, get the schema, then call. On a "no such tool" error the remedy is `ToolSearch`, not another guess.
-4. **Skills are instructions, not results.** When `Skill(...)` returns, execute every step exactly.
-5. **Don't bluff about state.** If you only see a name → say "listed, not loaded". Never answer "yes" to "have you loaded X" unless the content is visible.
+3. **Skills are instructions, not results.** When `Skill(...)` returns, execute every step exactly.
+4. **Don't bluff about state.** If you only see a name → say "listed, not loaded". Never answer "yes" to "have you loaded X" unless the content is visible.
 
 ## Tool Selection Order
 
-1. **Deferred listing** — scan for a domain match (`mysql` → `mcp_server_mysql`, `github` → plugin tool). Match → `ToolSearch(query="<keyword>")` → call the loaded tool.
-2. **Core tools** — Bash, Read, Grep, Glob, Edit, Write for system/file work.
-3. **`web_search`** — last resort, only for external knowledge (current events, third-party docs, package versions). NOT for "how do I do X" when X is a task the existing tool set handles.
-
-Calling `web_search("mysql list databases")` with a MySQL tool in the deferred listing is a clear selection failure.
+1. **Core tools** — Bash, Read, Grep, Glob, Edit, Write for system/file work.
+2. **Domain tools** — prefer a dedicated tool (DB, browser, git, etc.) over `web_search`.
+3. **`web_search`** — last resort, only for external knowledge (current events, third-party docs, package versions).
 
 ## Tools vs Skills
 
@@ -26,15 +23,6 @@ Calling `web_search("mysql list databases")` with a MySQL tool in the deferred l
 | Returns | Operation result | Instructions for you to execute |
 
 The listing an item appears in is authoritative. Shared words don't make them interchangeable.
-
-## Deferred Tool Loading Procedure
-
-1. Identify the tool by function (e.g. "I need a MySQL query tool").
-2. Already in core? → call directly.
-3. Otherwise → `ToolSearch(query="<keyword>")`. Use the short name (segment after last `__`), not the full qualified MCP name. If no results, broaden with function keywords.
-4. Schema returned → call the tool.
-
-**Query formats:** `select:Name1,Name2` (exact), `keyword query` (BM25), `+prefix query` (require prefix).
 
 ## Skill Execution Procedure
 
@@ -88,9 +76,8 @@ Used for recognizing and searching.
 ## Common Failures
 
 - **Bluffing load state** → be honest; say "listed, not loaded — loading now".
-- **Calling a deferred tool without ToolSearch** → always errors; load first.
 - **Guessing the full MCP tool name** → search by the short segment instead.
 - **Retrying the same failed call** → diagnose (wrong name, or missing schema).
 - **Treating a skill's output as a final result** → it's instructions; execute them.
 - **Improvising skill steps** → follow exactly.
-- **`web_search` when a dedicated tool exists** → go through `ToolSearch` / the dedicated tool instead.
+- **`web_search` when a dedicated tool exists** → use the dedicated tool.
