@@ -383,8 +383,7 @@ Match requests by header substring and apply per-client transforms. First match 
   "system_instruction": "office.md",
   "tool_search": false,
   "inject_date_location": false,
-  "inject_managed": ["code_execution", "WebSearch"],
-  "strip_tool_names": ["web_search"]
+  "inject_managed": ["code_execution", "web_search"]
 }
 ```
 
