@@ -370,7 +370,40 @@ Sits between Claude Code (or any Anthropic-API client) and LM Studio / Ollama / 
 
 Point `ANTHROPIC_BASE_URL=http://localhost:1235` at the proxy. Also runs standalone: `python -m proxy`.
 
-**Managed tools** (`proxy/managed_tools.py`): schemas injected into the model's tool list; intercepted on `tool_use`, executed locally, looped up to 15 rounds per turn. Currently registered: `WebSearch` (Brave scraper), `speak` (Kokoro TTS), `transcribe` (Whisper STT). Optional `pre_llm`/`post_llm` `LLMHook`s for arg enrichment / result post-processing via `proxy/llm.py`.
+**Managed tools** — schemas injected into the model's tool list; intercepted on `tool_use`, executed locally, looped up to 15 rounds per turn. Two drop-in locations:
+
+- **`mcp_server/tools/*.py`** — tools safe for any MCP client. Auto-discovered by the MCP server *and* auto-bridged into the proxy's managed registry via `proxy/managed/_mcp_bridge.py`. Single source of truth. Currently: `speak`, `transcribe`, `web_search`.
+- **`proxy/managed/*.py`** — proxy-only tools (don't expose capabilities you wouldn't give an external MCP client). Currently: `code_execution` (unsandboxed Python subprocess).
+
+**Adding a tool:**
+
+```python
+# mcp_server/tools/my_tool.py   ← MCP + proxy
+from mcp_server.app import mcp_app
+
+@mcp_app.tool()
+async def my_tool(query: str, limit: int = 10) -> str:
+    """One-line description.
+
+    Args:
+        query: what to look up
+        limit: max results
+    """
+    return do_thing(query, limit)
+```
+
+```python
+# proxy/managed/my_tool.py   ← proxy only, supports pre_llm/post_llm hooks
+from proxy.managed_tools import register, LLMHook
+
+async def _handle(args):
+    return ("summary", "result")
+
+register("my_tool", {"name": "my_tool", "description": "...", "input_schema": {...}},
+         _handle, strip=["my_tool"], primary_arg="query")
+```
+
+No other code changes needed. Drop in, restart.
 
 #### Client profiles (`proxy.client_profiles`)
 
@@ -401,7 +434,7 @@ Match requests by header substring and apply per-client transforms. First match 
 | `lift_tool_result_images` | Lift image blocks out of array-form tool_results (LM Studio workaround) |
 | `auto_load_tools` | When `tool_search` defers tools, auto-load a deferred tool's schema if the model calls it blindly |
 | `core_tools` | Tool names that stay core when splitting. Falls back to `proxy.core_tools` |
-| `inject_managed` | List of managed tools to inject (e.g. `["WebSearch", "speak"]`). Strips CC's same-name versions and replaces them. Default = all registered |
+| `inject_managed` | List of managed-tool names to inject (e.g. `["web_search", "speak", "code_execution"]`). Strips client's same-name versions and replaces them. Default = all registered managed tools |
 | `strip_tool_names` | Drop tools by exact name. For Anthropic server-side tools, the name is stable across versions (`web_search`, `code_execution`) so one entry catches every version |
 | `strip_cache_control` | Remove `cache_control` keys (defaults to `true` — LM Studio rejects the field) |
 
@@ -580,6 +613,9 @@ proxy/                 Anthropic-API-compatible middleware (port 1235)
   tool_registry.py     split_tools + proxy_system_instruction loader
   tool_search.py       BM25 + regex search engine
   managed_tools.py     Registry of proxy-handled tools (+ LLM hooks)
+  managed/             Drop-in managed-tool modules (auto-discovered)
+    _mcp_bridge.py     Auto-wraps every mcp_server/tools/* into the registry
+    code_execution.py  Python-subprocess sandbox (proxy-only, not via MCP)
   web_search.py        Brave Search scraper
   llm.py               structured_call(prompt, schema) utility
   config.py            Profile + global proxy settings accessors
