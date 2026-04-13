@@ -147,7 +147,10 @@ async def _forward_stream(
                 body = await upstream_resp.text()
                 if not resp.prepared:
                     resp.set_status(upstream_resp.status)
-                    await resp.prepare(resp._req if hasattr(resp, '_req') else None)
+                    req = resp._req if hasattr(resp, '_req') else None
+                    if req is not None:
+                        _apply_cors_to_stream(resp, req)
+                    await resp.prepare(req)
                 await resp.write(body.encode())
                 return None, []
 
@@ -205,6 +208,19 @@ async def _forward_stream(
     return tool_use_block, buffered_lines
 
 
+def _apply_cors_to_stream(resp: web.StreamResponse, request: web.Request) -> None:
+    """Set CORS headers on a StreamResponse before prepare() — middleware can't
+    reach headers after prepare() has committed them."""
+    origins = proxy_config.cors_origins()
+    if not origins:
+        return
+    origin = request.headers.get("Origin", "")
+    allowed = "*" in origins or origin in origins
+    if allowed:
+        resp.headers["Access-Control-Allow-Origin"] = origin or "*"
+        resp.headers["Access-Control-Allow-Private-Network"] = "true"
+
+
 async def _flush_sse(
     resp: web.StreamResponse,
     request: web.Request,
@@ -217,6 +233,7 @@ async def _flush_sse(
         resp.content_type = "text/event-stream"
         resp.headers["Cache-Control"] = "no-cache"
         resp.headers["Connection"] = "keep-alive"
+        _apply_cors_to_stream(resp, request)
         await resp.prepare(request)
     for line in lines:
         await resp.write(line.encode())
@@ -573,6 +590,7 @@ async def _handle_streaming(
         # Continue loop — next iteration calls upstream again
 
     if not resp.prepared:
+        _apply_cors_to_stream(resp, request)
         await resp.prepare(request)
     await resp.write_eof()
     return resp
