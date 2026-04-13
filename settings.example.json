@@ -36,6 +36,14 @@
     "enabled": false,
     "host": "127.0.0.1",
     "port": 1235,
+    "upstream_url": "http://localhost:1234",
+    "debug": false,
+    "tool_splitting": false,
+    "strip_reminders": false,
+    "auto_load_tools": false,
+    "lift_tool_result_images": false,
+    "location": "",
+    "core_tools": ["Bash", "Edit", "Read", "Write", "Glob", "Grep", "Agent", "Skill"],
     "cors_origins": [],
     "model_mapping": {
       "claude-opus-4-6": "your-local-model-id",
@@ -49,7 +57,11 @@
         "tool_splitting": false,
         "intercept": false,
         "inject_date_location": false,
+        "core_tools": [],
+        "inject_managed": [],
+        "strip_tool_names": [],
         "strip_tool_types": ["web_search_*", "code_execution_*"],
+        "drop_non_custom_tools": false,
         "strip_cache_control": true
       },
       {
@@ -67,14 +79,6 @@
         "strip_cache_control": false
       }
     ],
-    "upstream_url": "http://localhost:1234",
-    "debug": false,
-    "tool_splitting": false,
-    "strip_reminders": false,
-    "auto_load_tools": false,
-    "lift_tool_result_images": false,
-    "location": "",
-    "core_tools": ["Bash", "Edit", "Read", "Write", "Glob", "Grep", "Agent", "Skill"],
     "web_search": {
       "enabled": false
     }
@@ -107,10 +111,34 @@
         "resume_id": ""
       }
     },
+    "codex": {
+      "name": "Codex CLI",
+      "icon": "\ud83d\udfe2",
+      "startup_cmd": ["codex"],
+      "flags": [],
+      "env": {"OPENAI_API_KEY": ""},
+      "session": {}
+    },
+    "codex-local": {
+      "name": "Codex CLI (Local)",
+      "icon": "\ud83d\udfe0",
+      "startup_cmd": ["codex"],
+      "flags": ["--oss", "-m", "qwen3.5-9b"],
+      "env": {},
+      "session": {}
+    },
     "shell": {
       "name": "Bash",
       "icon": "\ud83d\udc1a",
       "startup_cmd": ["bash", "--norc", "--noprofile"],
+      "flags": [],
+      "env": {},
+      "session": {}
+    },
+    "powershell": {
+      "name": "PowerShell",
+      "icon": "\ud83d\udd37",
+      "startup_cmd": ["powershell.exe", "-NoProfile", "-NoLogo"],
       "flags": [],
       "env": {},
       "session": {}
