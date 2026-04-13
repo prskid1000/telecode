@@ -383,12 +383,13 @@ Match requests by header substring and apply per-client transforms. First match 
   "match": {"header": "Referer", "contains": "pivot.claude.ai"},
   "system_instruction": "office.md",
   "tool_search": false,
-  "intercept": false,
   "inject_date_location": false,
-  "strip_tool_types": ["web_search_*", "code_execution_*"],
-  "strip_cache_control": true
+  "inject_managed": ["code_execution"],
+  "strip_tool_types": ["web_search_*", "code_execution_*"]
 }
 ```
+
+(`strip_cache_control` defaults to `true` globally — LM Studio rejects the field — so it's omitted here.)
 
 | Key | Description |
 |---|---|
@@ -406,7 +407,7 @@ Match requests by header substring and apply per-client transforms. First match 
 | `strip_tool_names` | Drop tools by exact name (e.g. `["WebSearch"]`) |
 | `strip_tool_types` | Drop tools by `type` field. Supports `"prefix_*"` wildcards |
 | `drop_non_custom_tools` | Drop any tool with `type != "custom"` (strips Anthropic server-side tools) |
-| `strip_cache_control` | Remove `cache_control` keys (LM Studio rejects unknown fields) |
+| `strip_cache_control` | Remove `cache_control` keys (defaults to `true` — LM Studio rejects the field) |
 
 The **office** profile unlocks Claude for Excel/PowerPoint/Word against a local model — Office add-ins silently retry unless every turn returns a `tool_use` block, so this profile preserves their tools, strips Anthropic-hosted ones (`web_search_20250305`, `code_execution_20250825`), and swaps in an Office-aware system prompt.
 
