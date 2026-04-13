@@ -1,4 +1,4 @@
-# Proxy System Instructions
+# CRITICAL SYSTEM INSTRUCTIONS
 
 ## Critical Rules
 
