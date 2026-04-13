@@ -212,6 +212,52 @@ async def _forward_stream(
     return tool_use_block, buffered_lines
 
 
+def _canonicalize_body(body: dict[str, Any]) -> dict[str, Any]:
+    """Rebuild the upstream body with a cache-friendly key order and
+    normalized message content.
+
+    Why: LM Studio's prefix cache keys on the exact serialized token stream.
+    CC puts `messages` near the start of the JSON body, so a new user turn
+    breaks the prefix after ~100 chars. By placing stable fields (system,
+    tools) first, the cache hits cover the entire system prompt and tool
+    definitions — only the growing messages tail needs re-processing.
+
+    Also normalizes message content: CC sometimes emits `content: "text"`
+    (plain string), sometimes `content: [{"type":"text","text":"..."}]`.
+    Each flip between forms costs a cache miss. We always use list form.
+    """
+    # 1) Normalize message content
+    msgs = body.get("messages", [])
+    normalized: list[dict[str, Any]] = []
+    for m in msgs:
+        if not isinstance(m, dict):
+            normalized.append(m)
+            continue
+        content = m.get("content")
+        if isinstance(content, str):
+            new = dict(m)
+            new["content"] = [{"type": "text", "text": content}]
+            normalized.append(new)
+        else:
+            normalized.append(m)
+
+    # 2) Rebuild body with stable-first key order
+    preferred_order = ("model", "system", "tools", "max_tokens", "temperature",
+                       "top_p", "top_k", "stop_sequences", "stream", "metadata",
+                       "tool_choice", "messages")
+    out: dict[str, Any] = {}
+    for key in preferred_order:
+        if key == "messages":
+            out[key] = normalized
+        elif key in body:
+            out[key] = body[key]
+    # Preserve any fields we didn't anticipate, placed AFTER messages (harmless)
+    for key, val in body.items():
+        if key not in out:
+            out[key] = val
+    return out
+
+
 def _apply_cors_to_stream(resp: web.StreamResponse, request: web.Request) -> None:
     """Set CORS headers on a StreamResponse before prepare() — middleware can't
     reach headers after prepare() has committed them."""
@@ -478,6 +524,13 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
     # Which managed tools to intercept for THIS request = whatever the profile injected.
     # (Injecting without intercepting is broken; intercepting without injecting is a no-op.)
     managed_intercept: set[str] = {mt.name for mt in (_MANAGED_REG.get(n) for n in inject_managed) if mt}
+
+    # Prefix-cache optimization for LM Studio:
+    #  1. Reorder keys so stable fields (system, tools) come before the growing
+    #     `messages` list — keeps the serialized prefix identical across turns.
+    #  2. Normalize message content to list-of-blocks form so CC's string↔list
+    #     flip-flopping doesn't bust cache.
+    body = _canonicalize_body(body)
 
     if body.get("stream", False):
         return await _handle_streaming(upstream, body, headers, deferred, request,
