@@ -290,136 +290,150 @@ Send a voice message in a session topic -- transcribed via STT and sent as text.
 
 ## Settings reference
 
-All options in `settings.json`. Use `TELECODE_SETTINGS` env var to point to a different file.
+All options live in `settings.json`. See [`settings.example.json`](settings.example.json) for a complete template. Use the `TELECODE_SETTINGS` env var to point to a different file. Every optional feature is gated by its own `enabled` flag — nothing turns on unless you flip it.
 
-### `telegram`
+### `telegram` — bot credentials & access control
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `bot_token` | string | Token from @BotFather |
-| `group_id` | number | Forum supergroup id (starts with `-100`) |
-| `allowed_user_ids` | array | User ids allowed to use the bot. Empty = open to all |
+| Key | Description |
+|---|---|
+| `bot_token` | Token from @BotFather |
+| `group_id` | Forum supergroup ID (starts with `-100`) |
+| `allowed_user_ids` | List of Telegram user IDs allowed to use the bot. Empty = open to all |
 
-### `paths`
+### `paths` — state storage
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `store_path` | string | JSON file for topic-session mapping (default `./data/telecode.json`) |
-| `logs_dir` | string | Log directory (default `./data/logs`) |
+| Key | Description |
+|---|---|
+| `store_path` | JSON file for topic↔session mapping (default `./data/telecode.json`) |
+| `logs_dir` | Log directory (default `./data/logs`) |
 
-### `streaming`
+### `streaming` — Telegram live-message tuning
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `interval_sec` | number | Live message update interval (seconds) |
-| `max_message_length` | number | Max chars before splitting to a new message |
-| `idle_timeout_sec` | number | Auto-stop after this many idle seconds (0 = off) |
+| Key | Description |
+|---|---|
+| `interval_sec` | Seconds between live-message edits (default `0.8`) |
+| `max_message_length` | Max chars before splitting into a new message (default `3800`) |
+| `idle_timeout_sec` | Auto-stop a session after N idle seconds (`0` = off) |
 
-### `voice.stt`
+### `voice.stt` — transcribe Telegram voice messages
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `enabled` | boolean | Enable STT and voice message transcription |
-| `base_url` | string | OpenAI-compatible STT endpoint |
-| `model` | string | Model name (e.g. `whisper-1`) |
+| Key | Description |
+|---|---|
+| `enabled` | Turn on voice-to-text |
+| `base_url` | OpenAI-compatible STT endpoint (e.g. `http://localhost:6600/v1`) |
+| `model` | STT model name (e.g. `whisper-1`) |
 
-### `capture`
+Users toggle per-user with `/voice`.
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `image_interval` | number | Seconds between image capture sends (default 15) |
-| `video_interval` | number | Seconds per video chunk / recording length per segment (default 60) |
+### `capture` — screen capture cadence
 
-### `mcp_server`
+| Key | Description |
+|---|---|
+| `image_interval` | Seconds between image capture sends (default `15`) |
+| `video_interval` | Seconds per video chunk (default `60`) |
 
-Streamable HTTP MCP server for Claude Code or any MCP client. For local models routed through the proxy, these tools are injected automatically via `managed_tools.py` — no MCP connection needed.
+### `mcp_server` — expose tools over MCP
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `enabled` | boolean | Enable the MCP server (default `true`) |
-| `host` | string | Listen address (default `127.0.0.1`) |
-| `port` | number | Listen port (default `1236`) |
-| `tts_url` | string | Kokoro TTS base URL (default `http://127.0.0.1:6500`) |
-| `stt_url` | string | Whisper STT base URL (default `http://127.0.0.1:6600`) |
-| `cors_origins` | array | CORS allowed origins (e.g. `["https://pivot.claude.ai"]`). Empty = disabled |
+| Key | Description |
+|---|---|
+| `enabled` | Start the MCP server |
+| `host` | Listen address (default `127.0.0.1`) |
+| `port` | Listen port (default `1236`) |
+| `tts_url` | Kokoro TTS base URL for the `speak` tool (default `http://127.0.0.1:6500`) |
+| `stt_url` | Whisper STT base URL for the `transcribe` tool (default `http://127.0.0.1:6600`) |
+| `cors_origins` | CORS allowed origins — empty = disabled |
 
-**Tools:** `speak` (TTS), `transcribe` (STT), `web_search` (Brave scraper). Drop-in: add a `.py` file in `mcp_server/tools/`.
+Ships with `speak`, `transcribe`, `web_search`. Add new tools by dropping a `.py` file under `mcp_server/tools/`.
 
-`claude mcp add telecode --transport streamable-http --url http://127.0.0.1:1236/mcp`
+Register with CC: `claude mcp add telecode --transport streamable-http --url http://127.0.0.1:1236/mcp`
 
-### `proxy`
+### `proxy` — middleware for local models
 
-Middleware proxy for local models (LM Studio, Ollama, etc.). Reduces ~100+ CC tools to ~9 core, provides on-demand ToolSearch, and injects **managed tools** (WebSearch, speak, transcribe) that the proxy intercepts and executes locally — the model calls them like any other tool, and the proxy handles multi-round tool sequences automatically (up to 15 round-trips per turn).
+Sits between Claude Code (or any Anthropic-API client) and LM Studio / Ollama / any OpenAI-compatible backend. Strips tools to keep the context small, injects managed tools the proxy executes locally, and routes per-client via profiles.
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `enabled` | boolean | Enable the proxy (default `false`) |
-| `host` | string | Listen address (default `127.0.0.1`, set `0.0.0.0` for external/Tailscale access) |
-| `port` | number | Listen port (default `1235`) |
-| `upstream_url` | string | LM Studio URL (default `http://localhost:1234`) |
-| `debug` | boolean | Dump full request bodies to `data/logs/proxy_full_*.json` for debugging (default `false`) |
-| `tool_splitting` | boolean | Split tools into core/deferred + inject ToolSearch (default `false`) |
-| `strip_reminders` | boolean | Strip `<system-reminder>` blocks (default `false`) |
-| `auto_load_tools` | boolean | Auto-load deferred tool schemas on first call (default `false`) |
-| `lift_tool_result_images` | boolean | Lift image blocks out of array-form tool_results for LM Studio (default `false`) |
-| `location` | string | User location for context injection (e.g. `Kolkata, India`). Empty = auto-detect via IP geolocation |
-| `core_tools` | array | Tools always forwarded (default: Bash, Edit, Read, Write, Glob, Grep, Agent, Skill) |
-| `cors_origins` | array | CORS allowed origins (e.g. `["https://pivot.claude.ai"]`). Empty = disabled |
-| `model_mapping` | object | Map client-facing model names to upstream model names (e.g. `{"claude-opus-4-6": "qwen3.5-35b-a3b"}`). Applied to both `/v1/messages` requests and `/v1/models` responses |
-| `client_profiles` | array | Header-based per-client behavior routing — see below |
-| `web_search.enabled` | boolean | Enable WebSearch managed tool (default `false`) |
+| Key | Description |
+|---|---|
+| `enabled` | Start the proxy |
+| `host` | Listen address (default `127.0.0.1`; use `0.0.0.0` for Tailscale Funnel) |
+| `port` | Listen port (default `1235`) |
+| `upstream_url` | Backend URL (default `http://localhost:1234` — LM Studio) |
+| `debug` | Dump every request body to `data/logs/proxy_full_*.json` |
+| `tool_splitting` | Split incoming tools into core (always forwarded) + deferred (searchable via ToolSearch) |
+| `strip_reminders` | Drop `<system-reminder>` blocks from messages |
+| `auto_load_tools` | Auto-load a deferred tool's schema the first time the model calls it blindly |
+| `lift_tool_result_images` | Lift images out of array-form `tool_result` content — LM Studio workaround |
+| `location` | User location for the date/location system-reminder (empty = auto-detect via IP) |
+| `core_tools` | Default list of tool names that stay core when splitting (profiles can override) |
+| `cors_origins` | CORS allowed origins |
+| `model_mapping` | Rewrite model IDs: `{"claude-opus-4-6": "qwen3.5-35b-a3b"}` — applied to `/v1/messages` and `/v1/models` |
+| `client_profiles` | Per-client behavior routing — see below |
+| `web_search.enabled` | Enable the Brave Search scraper as a managed tool |
 
-**Managed tools** (`proxy/managed_tools.py`): the proxy strips CC's versions of these tools and injects its own schemas. When the model calls them, the proxy intercepts (CC never sees the call), executes locally, and round-trips — looping up to 15 rounds for multi-tool sequences. Tools can declare `pre_llm`/`post_llm` hooks (`LLMHook`) for automatic pre/post-processing via `proxy/llm.py`. Visibility: a summary is prepended into the model's own text output (preserves LM Studio's prefix cache). Currently registered: `WebSearch` (Brave scraper — `{query, max_results?}`, no key needed, only `data-type="web"` results parsed — video/image clusters excluded), `speak` (Kokoro TTS), `transcribe` (Whisper STT). Adding a new tool = `register(name, schema, handler)` in `managed_tools.py`.
+Point `ANTHROPIC_BASE_URL=http://localhost:1235` at the proxy. Also runs standalone: `python -m proxy`.
 
-**Client profiles** (`proxy.client_profiles`): route different clients to different behaviors without code changes. Each profile matches a request header substring and applies its own transforms. First matching profile wins; no match falls back to global `proxy.*` settings. System instructions live under `proxy/instructions/` as markdown files.
+**Managed tools** (`proxy/managed_tools.py`): schemas injected into the model's tool list; intercepted on `tool_use`, executed locally, looped up to 15 rounds per turn. Currently registered: `WebSearch` (Brave scraper), `speak` (Kokoro TTS), `transcribe` (Whisper STT). Optional `pre_llm`/`post_llm` `LLMHook`s for arg enrichment / result post-processing via `proxy/llm.py`.
+
+#### Client profiles (`proxy.client_profiles`)
+
+Match requests by header substring and apply per-client transforms. First match wins; no match = global `proxy.*` defaults. System instruction markdown files live under `proxy/instructions/`.
 
 ```json
-"client_profiles": [
-  {
-    "name": "office",
-    "match": {"header": "Referer", "contains": "pivot.claude.ai"},
-    "system_instruction": "office.md",
-    "tool_splitting": false,
-    "intercept": false,
-    "inject_date_location": false
-  }
-]
+{
+  "name": "office",
+  "match": {"header": "Referer", "contains": "pivot.claude.ai"},
+  "system_instruction": "office.md",
+  "tool_splitting": false,
+  "intercept": false,
+  "inject_date_location": false,
+  "strip_tool_types": ["web_search_*", "code_execution_*"],
+  "strip_cache_control": true
+}
 ```
 
-| Profile field | Description |
+| Key | Description |
 |---|---|
 | `name` | Label for logging |
-| `match.header` / `match.contains` | Matches if `contains` is a case-insensitive substring of the named header |
+| `match.header` | Header name to check (case-insensitive) |
+| `match.contains` | Substring that must appear in the header value |
 | `system_instruction` | Markdown file in `proxy/instructions/` — prepended to the client's system prompt |
-| `tool_splitting` | Override the global `proxy.tool_splitting` for this client |
-| `intercept` | Whether to intercept tool calls (ToolSearch, managed tools like WebSearch) |
-| `inject_date_location` | Whether to add the date/location `<system-reminder>` |
-| `core_tools` | List of tool names always forwarded as-is (rest are deferred). Falls back to `proxy.core_tools`. |
-| `inject_managed` | List of managed tool names to inject (e.g. `["WebSearch", "speak"]`). When set, CC's versions of these tools are stripped and replaced with the proxy's. Falls back to all registered managed tools. |
-| `strip_tool_names` | Drop tools by exact name match (e.g. `["WebSearch"]`) |
-| `strip_tool_types` | Drop tools by `type` field. Supports `*` suffix for prefix match (e.g. `["web_search_*", "code_execution_*"]`) |
-| `drop_non_custom_tools` | Drop any tool where `type` is set and not equal to `"custom"` (strips all Anthropic server-side tools) |
-| `strip_cache_control` | Remove `cache_control` keys from tool definitions (LM Studio errors on unknown fields) |
+| `tool_splitting` | Override global tool splitting for this client |
+| `intercept` | Intercept tool calls locally (ToolSearch, managed tools) |
+| `inject_date_location` | Add the date/location `<system-reminder>` |
+| `core_tools` | Tool names that stay core when splitting. Falls back to `proxy.core_tools` |
+| `inject_managed` | List of managed tools to inject (e.g. `["WebSearch", "speak"]`). Strips CC's same-name versions and replaces them. Default = all registered |
+| `strip_tool_names` | Drop tools by exact name (e.g. `["WebSearch"]`) |
+| `strip_tool_types` | Drop tools by `type` field. Supports `"prefix_*"` wildcards |
+| `drop_non_custom_tools` | Drop any tool with `type != "custom"` (strips Anthropic server-side tools) |
+| `strip_cache_control` | Remove `cache_control` keys (LM Studio rejects unknown fields) |
 
-Built-in: the **office** profile solves the Claude for Excel/PowerPoint/Word gateway — Office add-ins require a `tool_use` block on every turn and silently retry on plain-text responses. The `office.md` instruction plus preserved tools plus skipped interception makes the add-in work against a local model.
+The **office** profile unlocks Claude for Excel/PowerPoint/Word against a local model — Office add-ins silently retry unless every turn returns a `tool_use` block, so this profile preserves their tools, strips Anthropic-hosted ones (`web_search_20250305`, `code_execution_20250825`), and swaps in an Office-aware system prompt.
 
-Point `ANTHROPIC_BASE_URL=http://localhost:1235`. Also runs standalone: `python -m proxy`.
+### `tools.<key>` — CLI backends
 
-### `tools.<key>`
+Each key under `tools` becomes a backend available via `/new <key>`. No code changes needed.
 
-Each key under `tools` becomes a backend available via `/new <key>`. Add any tool — no code changes needed.
+| Key | Description |
+|---|---|
+| `name` | Display name (defaults to title-cased key) |
+| `icon` | Emoji icon (defaults to 🔧) |
+| `startup_cmd` | Command array run inside the PTY (e.g. `["claude"]`) |
+| `flags` | Extra CLI arguments appended to the command |
+| `env` | Environment variables (empty values are omitted) |
+| `session` | Backend-specific options (e.g. `resume_id` → `--resume`) |
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `name` | string | Display name (optional — defaults to title-cased key) |
-| `icon` | string | Emoji icon (optional — defaults to 🔧) |
-| `startup_cmd` | array | Command to run in the PTY |
-| `flags` | array | Extra CLI arguments |
-| `env` | object | Environment variables (empty values are omitted) |
-| `session` | object | Backend-specific options (e.g. `resume_id` → `--resume`) |
+Built-in keys: `claude`, `claude-local`, `codex`, `codex-local`, `shell`, `powershell`. Internal non-PTY backends: `screen` (image capture), `video` (recording), `computer` (vision-LLM control).
 
-Built-in backends: `claude`, `claude-local`, `codex`, `codex-local`, `shell`, `powershell`.
-Screen image capture (`screen`), video recording (`video`), and computer control (`computer`) are internal non-PTY backends.
+### `tools.computer` — vision-LLM computer control
+
+| Key | Description |
+|---|---|
+| `api.base_url` | API endpoint (HTTP URL for `openai`/`anthropic`; sets `ANTHROPIC_BASE_URL` env var for `claude-code`) |
+| `api.api_key` | API key (or `ANTHROPIC_AUTH_TOKEN` for `claude-code`) |
+| `api.model` | Vision-capable model name |
+| `api.format` | `"openai"` (default), `"anthropic"`, or `"claude-code"` |
+| `capture_interval` | Seconds between captures (default `3`) |
+| `max_history` | Conversation turns retained (default `20`) |
+| `system_prompt` | Override the built-in prompt (empty = default) |
 
 ### `tools.computer`
 
