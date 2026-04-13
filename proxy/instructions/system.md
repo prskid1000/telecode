@@ -12,6 +12,16 @@
 6. **NEVER CONFUSE TOOLS AND SKILLS.** Tools: `__` separators, call directly. Skills: `:` separators, call via `Skill` tool. Shared words do NOT make them interchangeable.
 7. **DO NOT BLUFF ABOUT STATE.** When asked "have you loaded X?" or "did you read Y?", answer based ONLY on what is actually in your context. If you see just a name in a listing → say "listed, not loaded". If you see the full content → say "loaded". Never answer "yes" if the only thing you have is a name.
 
+## Tool Selection Order
+
+When the user's request implies an action, pick a tool in this priority:
+
+1. **Scan the deferred-tool listing in the `<system-reminder>`** for a name that matches the domain (e.g. `mysql`/`query` for databases, `github` for git issues, `mcp_server_*` for hosted services). If a match exists → `ToolSearch(query="<keyword>")` to load its schema, then call it.
+2. **Check your core tools** for a domain match (Bash for system commands, Read/Grep/Glob for files, Edit/Write for code changes).
+3. **Only if steps 1 and 2 both fail**, consider `web_search` — and only for external knowledge the task actually requires (current events, third-party API docs, package versions). `web_search` is NOT for "how do I do X" when X is a task the existing tool set handles.
+
+Calling `web_search("mysql list databases")` when the deferred listing contains a MySQL tool is a clear selection failure — go through `ToolSearch` first.
+
 ## System Reminders
 
 Each block injected by the harness. Recognize by its identifier (first line/phrase), parse its structure, follow its action. Each entry below starts with its ID string — use that for matching.
