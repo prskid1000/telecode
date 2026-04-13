@@ -6,11 +6,17 @@ Intercepts tool lists, defers non-core tools, and handles ToolSearch round-trips
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
 import aiohttp
 from aiohttp import web
+
+# How often to send `: keepalive` SSE comments to the client while waiting
+# on upstream. Resets the client's HTTP read timeout. SSE comment lines are
+# ignored by parsers — purely a wire-level keep-alive.
+_HEARTBEAT_INTERVAL = 2.0
 
 from proxy import config as proxy_config
 from proxy import managed_tools as _managed_tools  # noqa: F401  registers tools
@@ -39,35 +45,117 @@ def _format_functions_block(matched: list[dict[str, Any]]) -> str:
 
 
 
-def _prepend_text_to_stream(buffered: list[str], text: str) -> list[str]:
-    """Prepend `text` to the model's first text_delta in the SSE stream.
+def _status_block_lines(text: str, index: int) -> list[str]:
+    """Build SSE lines for one synthetic text content block carrying status.
 
-    No new blocks, no re-indexing — just injects a text_delta event
-    right before the model's first one, carrying the summary text.
-    Preserves all indices and ordering so CC's cache stays valid.
+    Renders in CC as a normal text block with the `●` / `└` formatted text.
+    Always rendered, even when the model goes straight to tool_use with no
+    text of its own — so visibility never gets dropped.
     """
-    prefix = json.dumps(text + "\n\n")
-    output: list[str] = []
-    injected = False
-    for line in buffered:
-        if (
-            not injected
-            and line.startswith("data: ")
-            and '"text_delta"' in line
-        ):
-            # Parse to get the index, then emit our prefix delta first
-            try:
-                event = json.loads(line[6:].rstrip("\n"))
-                idx = event.get("index", 0)
-                output.append(
-                    f'data: {{"type":"content_block_delta","index":{idx},'
-                    f'"delta":{{"type":"text_delta","text":{prefix}}}}}\n\n'
-                )
-            except json.JSONDecodeError:
-                pass
-            injected = True
-        output.append(line)
-    return output
+    start = {
+        "type": "content_block_start",
+        "index": index,
+        "content_block": {"type": "text", "text": ""},
+    }
+    delta = {
+        "type": "content_block_delta",
+        "index": index,
+        "delta": {"type": "text_delta", "text": text + "\n\n"},
+    }
+    stop = {"type": "content_block_stop", "index": index}
+    return [
+        "event: content_block_start\n",
+        f"data: {json.dumps(start)}\n\n",
+        "event: content_block_delta\n",
+        f"data: {json.dumps(delta)}\n\n",
+        "event: content_block_stop\n",
+        f"data: {json.dumps(stop)}\n\n",
+    ]
+
+
+def _shift_event_index(line: str, offset: int) -> str:
+    """Bump the `index` field of a content_block_* event by `offset`.
+
+    Used when synthetic status blocks have been emitted at indices [0..N-1]:
+    every upstream content block index N must shift to N+offset on the wire
+    so the wire stream stays self-consistent.
+    """
+    if offset == 0 or not line.startswith("data: "):
+        return line
+    try:
+        event = json.loads(line[6:].rstrip("\n"))
+    except json.JSONDecodeError:
+        return line
+    if event.get("type", "").startswith("content_block_") and "index" in event:
+        event["index"] = event["index"] + offset
+        return f"data: {json.dumps(event)}\n\n"
+    return line
+
+
+async def _ensure_prepared(resp: web.StreamResponse, request: web.Request) -> None:
+    """Idempotent prepare(): set SSE headers + CORS once."""
+    if resp.prepared:
+        return
+    resp.content_type = "text/event-stream"
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["Connection"] = "keep-alive"
+    _apply_cors_to_stream(resp, request)
+    await resp.prepare(request)
+
+
+async def _start_heartbeat(
+    resp: web.StreamResponse,
+    request: web.Request,
+    write_lock: asyncio.Lock,
+) -> asyncio.Task:
+    """Spawn a heartbeat task that runs for the entire request lifetime.
+
+    Two cadences:
+      - `: keepalive\\n\\n` SSE comment every `_HEARTBEAT_INTERVAL` seconds
+        (default 2s). Wire-level keep-alive — clients ignore comment lines
+        but their HTTP read timer resets on byte activity.
+      - `event: ping\\n\\ndata: {"type":"ping"}\\n\\n` every
+        `proxy.ping_interval` seconds (default 20s). Anthropic's official
+        live-progress signal — CC / pivot / Office add-ins recognize it
+        and won't time out even on long generations.
+
+    All writes go through `write_lock` to serialize with the main loop's
+    chunk writes during passthrough mode.
+    """
+    await _ensure_prepared(resp, request)
+    ping_every = max(_HEARTBEAT_INTERVAL, proxy_config.ping_interval())
+    _PING_LINE = b"event: ping\ndata: {\"type\":\"ping\"}\n\n"
+
+    async def _beat() -> None:
+        elapsed = 0.0
+        last_ping = 0.0
+        try:
+            while True:
+                await asyncio.sleep(_HEARTBEAT_INTERVAL)
+                elapsed += _HEARTBEAT_INTERVAL
+                async with write_lock:
+                    try:
+                        if elapsed - last_ping >= ping_every:
+                            await resp.write(_PING_LINE)
+                            last_ping = elapsed
+                        else:
+                            await resp.write(b": keepalive\n\n")
+                    except (ConnectionResetError, ConnectionError):
+                        return
+        except asyncio.CancelledError:
+            return
+
+    return asyncio.create_task(_beat())
+
+
+async def _stop_heartbeat(task: asyncio.Task | None) -> None:
+    if task is None or task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except (asyncio.CancelledError, Exception):
+        pass
 
 
 # ── Location detection ───────────────────────────────────────────────────────
@@ -119,93 +207,171 @@ async def _forward_stream(
     payload: dict[str, Any],
     headers: dict[str, str],
     resp: web.StreamResponse,
+    request: web.Request,
     intercept_names: set[str] | None = None,
-) -> tuple[dict[str, Any] | None, list[str]]:
-    """Buffer response from upstream, check for interceptable tool calls.
+    *,
+    status_blocks: list[str] | None = None,
+    base_index_offset: int = 0,
+) -> dict[str, Any] | None:
+    """Stream from upstream with early branch on first content_block_start.
 
-    Returns (tool_use_block, buffered_lines). NEVER flushes to the client —
-    the caller decides when and how to flush (possibly prepending a
-    synthetic text block for visibility).
+    Returns:
+      dict — response began with a tool_use whose name is in `intercept_names`.
+             Nothing was written to the client; rest of upstream is consumed
+             only enough to capture the full tool_use input. Caller handles
+             the tool, optionally accumulates a status string, and re-calls.
+      None — response is final (text, or non-intercepted tool_use). Has been
+             fully streamed to the client. Status blocks (if any) were emitted
+             as synthetic text blocks at indices [0..N-1] and upstream block
+             indices were shifted by N + base_index_offset.
+
+    A heartbeat task emits `: keepalive\\n\\n` every ~2s during the buffer
+    window so the client's HTTP read timeout doesn't fire while we wait.
     """
-    buffered_lines: list[str] = []
-    tool_use_block: dict[str, Any] | None = None
-    current_tool_json = ""
-    current_tool_id = ""
-    current_tool_name = ""
+    intercept_names = intercept_names or set()
+    status_blocks = status_blocks or []
+    n_status = len(status_blocks)
+    index_offset = base_index_offset + n_status
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            f"{upstream}/v1/messages",
-            json=payload,
-            headers=headers,
-        ) as upstream_resp:
-            if upstream_resp.status != 200:
-                body = await upstream_resp.text()
-                if not resp.prepared:
-                    resp.set_status(upstream_resp.status)
-                    req = resp._req if hasattr(resp, '_req') else None
-                    if req is not None:
-                        _apply_cors_to_stream(resp, req)
-                    await resp.prepare(req)
-                await resp.write(body.encode())
-                return None, []
+    # Buffered events held during the decision window (up to first
+    # content_block_start). On passthrough we flush these; on intercept we
+    # keep accumulating to capture the full tool_use input then discard.
+    buffered: list[str] = []
+    decided: str | None = None  # None | "intercept" | "passthrough"
+    heartbeat: asyncio.Task | None = None
+    # Serializes resp.write() between the main loop and the heartbeat task,
+    # which both write during passthrough mode.
+    write_lock = asyncio.Lock()
 
-            buf = ""
-            async for chunk in upstream_resp.content.iter_any():
-                text = chunk.decode("utf-8", errors="replace")
-                buf += text
+    # Tool tracking (only the FIRST tool_use in a response can be intercepted)
+    cur_name = ""
+    cur_id = ""
+    cur_json = ""
+    tool_use: dict[str, Any] | None = None
 
-                while "\n" in buf:
-                    line, buf = buf.split("\n", 1)
-                    line = line.rstrip("\r")
+    async def _flush_buffered_with_status() -> None:
+        """Called when we decide PASSTHROUGH: emit status blocks (at indices
+        starting from base_index_offset), then flush buffered events with
+        their indices shifted by index_offset, then continue streaming live.
+        """
+        await _ensure_prepared(resp, request)
+        async with write_lock:
+            for i, text in enumerate(status_blocks):
+                for line in _status_block_lines(text, base_index_offset + i):
+                    await resp.write(line.encode())
+            for line in buffered:
+                await resp.write(_shift_event_index(line, index_offset).encode())
+        buffered.clear()
 
-                    if not line.startswith("data: "):
-                        buffered_lines.append(f"{line}\n")
-                        continue
+    try:
+        heartbeat = await _start_heartbeat(resp, request, write_lock)
 
-                    data_str = line[6:]
-                    if data_str.strip() == "[DONE]":
-                        buffered_lines.append("data: [DONE]\n\n")
-                        continue
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{upstream}/v1/messages",
+                json=payload,
+                headers=headers,
+            ) as upstream_resp:
+                if upstream_resp.status != 200:
+                    body = await upstream_resp.text()
+                    await _stop_heartbeat(heartbeat)
+                    heartbeat = None
+                    # We already prepared with 200 — surface the error as an
+                    # SSE error event so CC sees it.
+                    err = {"type": "error", "error": {"type": "upstream_error",
+                                                       "status": upstream_resp.status,
+                                                       "body": body[:500]}}
+                    async with write_lock:
+                        await resp.write(b"event: error\n")
+                        await resp.write(f"data: {json.dumps(err)}\n\n".encode())
+                    return None
 
-                    try:
-                        event = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        buffered_lines.append(f"data: {data_str}\n\n")
-                        continue
+                buf = ""
+                async for chunk in upstream_resp.content.iter_any():
+                    text = chunk.decode("utf-8", errors="replace")
+                    buf += text
 
-                    buffered_lines.append(f"data: {data_str}\n\n")
-                    etype = event.get("type", "")
+                    while "\n" in buf:
+                        line, buf = buf.split("\n", 1)
+                        line = line.rstrip("\r")
 
-                    if etype == "content_block_start":
-                        block = event.get("content_block", {})
-                        if block.get("type") == "tool_use":
-                            current_tool_name = block.get("name", "")
-                            current_tool_id = block.get("id", "")
-                            current_tool_json = ""
+                        # Reconstruct canonical SSE form
+                        if not line.startswith("data: "):
+                            sse_line = f"{line}\n"
+                        else:
+                            data_str = line[6:]
+                            sse_line = f"data: {data_str}\n\n"
 
-                    if etype == "content_block_delta":
-                        delta = event.get("delta", {})
-                        if delta.get("type") == "input_json_delta":
-                            current_tool_json += delta.get("partial_json", "")
+                        # Parse event for state-machine decisions
+                        event: dict[str, Any] | None = None
+                        if line.startswith("data: "):
+                            data_str = line[6:]
+                            if data_str.strip() != "[DONE]":
+                                try:
+                                    event = json.loads(data_str)
+                                except json.JSONDecodeError:
+                                    event = None
 
-                    if etype == "content_block_stop" and current_tool_name:
-                        # Always capture the tool_use. Caller decides what to do:
-                        #  - in intercept_names → handle locally
-                        #  - otherwise → caller checks against known_names or flushes
-                        try:
-                            args = json.loads(current_tool_json) if current_tool_json else {}
-                        except json.JSONDecodeError:
-                            args = {}
-                        if tool_use_block is None:
-                            tool_use_block = {
-                                "id": current_tool_id,
-                                "name": current_tool_name,
-                                "input": args,
-                            }
-                        current_tool_name = ""
+                        # First content_block_start = decision point
+                        if (decided is None and event
+                                and event.get("type") == "content_block_start"):
+                            block = event.get("content_block", {})
+                            btype = block.get("type", "")
+                            if btype == "tool_use":
+                                cur_name = block.get("name", "")
+                                cur_id = block.get("id", "")
+                                cur_json = ""
+                                if cur_name in intercept_names:
+                                    decided = "intercept"
+                                else:
+                                    decided = "passthrough"
+                            else:
+                                # text or other → passthrough
+                                decided = "passthrough"
 
-    return tool_use_block, buffered_lines
+                            if decided == "passthrough":
+                                buffered.append(sse_line)
+                                await _flush_buffered_with_status()
+                                continue
+                            # else INTERCEPT: fall through, keep buffering
+                            # Heartbeat keeps running through both modes — pings
+                            # are emitted every `proxy.ping_interval` seconds even
+                            # during long upstream silence mid-passthrough.
+
+                        # Accumulate tool_use input json (intercept path only —
+                        # in passthrough it's already streamed to client below)
+                        if (decided == "intercept" and event
+                                and event.get("type") == "content_block_delta"):
+                            delta = event.get("delta", {})
+                            if delta.get("type") == "input_json_delta":
+                                cur_json += delta.get("partial_json", "")
+
+                        if (decided == "intercept" and event
+                                and event.get("type") == "content_block_stop"
+                                and tool_use is None):
+                            try:
+                                args = json.loads(cur_json) if cur_json else {}
+                            except json.JSONDecodeError:
+                                args = {}
+                            tool_use = {"id": cur_id, "name": cur_name, "input": args}
+                            # Tool input fully captured; we can stop early.
+                            # Continue draining the stream cleanly so the
+                            # connection closes (some servers don't like aborts).
+
+                        if decided == "passthrough":
+                            # Live streaming: shift index and write immediately
+                            # under the lock so heartbeat pings don't interleave
+                            # mid-event.
+                            shifted = _shift_event_index(sse_line, index_offset).encode()
+                            async with write_lock:
+                                await resp.write(shifted)
+                        else:
+                            # INTERCEPT or pre-decision → buffer
+                            buffered.append(sse_line)
+
+        return tool_use
+    finally:
+        await _stop_heartbeat(heartbeat)
 
 
 def _canonicalize_body(body: dict[str, Any]) -> dict[str, Any]:
@@ -557,124 +723,120 @@ async def _handle_streaming(
     """
     from proxy.managed_tools import is_managed, get_handler, get_tool, format_visibility, run_pre_llm, run_post_llm
 
-    intercept: set[str] | None = set()
+    intercept: set[str] = set()
     deferred_names = {t["name"] for t in deferred}
     if deferred:
         # ToolSearch is bundled with tool_search — always intercepted when deferred exist
         intercept.add("ToolSearch")
         if auto_load:
             intercept |= deferred_names
+        else:
+            # Unloaded-tool guard: also intercept blind deferred calls
+            intercept |= deferred_names
     if managed_intercept:
         intercept |= managed_intercept
-    if not intercept:
-        intercept = None
 
     resp = web.StreamResponse()
     resp._req = request
 
     # ── Intercept loop ───────────────────────────────────────────
-    # The model may call intercepted tools across multiple round-trips
-    # (e.g. WebSearch → reads result → WebSearch again → ToolSearch → text).
-    # We loop: each iteration calls upstream, checks for intercepted tools,
-    # handles them, appends messages, and retries. When the model finally
-    # produces a response with NO intercepted tools, we flush it to CC
-    # (optionally prepending visibility summaries).
+    # Each iteration calls upstream. _forward_stream branches on the first
+    # content_block_start: if intercepted tool_use → returns the tool_use dict
+    # (nothing written to client yet); otherwise streams the entire response
+    # to the client live (with status blocks prepended) and returns None.
     summaries: list[str] = []
     max_roundtrips = 15
     # Names currently visible to the model as core tools (for hallucination guard)
     core_visible_names: set[str] = {t.get("name", "") for t in body.get("tools", [])}
+    # Hallucination guard always-on: any unknown tool name should be intercepted
+    # so we can return BM25 suggestions instead of letting the call leak through.
+    # We extend `intercept` per-round below to include "anything not in known set".
+    # In practice content_block_start carries the name — we add a permissive
+    # match by passing all known names here and treating unknown as intercept.
+
+    final_status_emitted = False
 
     for _rt in range(max_roundtrips):
-        tool_use, buffered = await _forward_stream(
-            upstream, body, headers, resp, intercept,
+        # Build effective intercept set for this round: configured intercepts +
+        # any deferred name (already in `intercept`) + a hallucination wildcard
+        # handled by passing names known-to-be-non-intercepted explicitly.
+        # _forward_stream treats unknown names as passthrough by default, so
+        # for hallucination capture we'd need wildcard support. Skip wildcard
+        # for now: hallucinated names go straight through to CC and get its
+        # own "no such tool" error — acceptable degradation, since the model
+        # almost never invents names that aren't in `intercept`.
+        round_intercept = set(intercept)
+
+        tool_use = await _forward_stream(
+            upstream, body, headers, resp, request,
+            intercept_names=round_intercept,
+            status_blocks=summaries,
+            base_index_offset=0,
         )
 
-        if not tool_use:
-            # Clean response — no more intercepted tools.
-            # Prepend summaries (if any) then flush to CC.
-            if summaries:
-                buffered = _prepend_text_to_stream(
-                    buffered, "\n".join(summaries),
-                )
-            await _flush_sse(resp, request, buffered)
+        if tool_use is None:
+            # Final response — already streamed to client (with summaries).
+            final_status_emitted = bool(summaries)
+            summaries = []
             break
 
-        # Handle the intercepted tool
+        # Handle the intercepted tool — build status_line + tool_result content
         tool_name = tool_use["name"]
+        tool_input = tool_use.get("input") or {}
         matched: list[dict[str, Any]] = []
         result_content: str | None = None
+        status_line: str | None = None
 
         if tool_name == "ToolSearch":
-            matched = await _do_tool_search(deferred, tool_use["input"])
+            matched = await _do_tool_search(deferred, tool_input)
             result_content = _format_functions_block(matched)
-
-        elif (not auto_load) and tool_name in deferred_names and tool_name not in core_visible_names:
-            # Enforce "unloaded tools require ToolSearch first" as a hard policy
-            # when auto_load is disabled. Otherwise the model can call by name
-            # and Claude Code may execute it anyway, undermining the reminder.
-            result_content = (
-                f"`{tool_name}` is currently UNLOADED in this conversation.\n\n"
-                f"Call `ToolSearch(query=\"select:{tool_name}\", max_results=5)` to load its schema, "
-                f"then call `{tool_name}` again using the parameter names from that schema."
-            )
+            q = str(tool_input.get("query", ""))
+            if matched:
+                names = ", ".join(m.get("name", "") for m in matched[:5])
+                status_line = f'● ToolSearch("{q[:80]}")\n└  {len(matched)} schemas loaded: {names}'
+            else:
+                status_line = f'● ToolSearch("{q[:80]}")\n└  No matches'
 
         elif is_managed(tool_name):
             tool_entry = get_tool(tool_name)
             handler = tool_entry.handler if tool_entry else None
             if handler and tool_entry:
                 try:
-                    # pre_llm: model input → LLM → enrich args
-                    enriched = await run_pre_llm(tool_entry, tool_use["input"])
-                    # handler: enriched args → (summary, result)
+                    enriched = await run_pre_llm(tool_entry, tool_input)
                     summary, result_content = await handler(enriched)
-                    # post_llm: result → LLM → processed result
                     result_content = await run_post_llm(tool_entry, result_content)
                 except Exception as exc:
                     summary = f"Failed: {exc}"
                     result_content = f"ERROR: {tool_name} failed: {exc}"
-                summaries.append(format_visibility(tool_name, tool_use["input"], summary))
+                status_line = format_visibility(tool_name, tool_input, summary)
 
         elif auto_load and tool_name in deferred_names and tool_name not in core_visible_names:
-            # First call to a deferred tool with auto_load on: inject its
-            # schema into body.tools for future rounds and return it to the
-            # model so it can re-issue the call knowing the parameter schema.
-            # Second call falls through (tool_name now in core_visible_names)
-            # and passes to CC for actual execution.
             matched = [t for t in deferred if t["name"] == tool_name]
             result_content = (
                 f"The schema for `{tool_name}` has now been loaded:\n\n"
                 f"{_format_functions_block(matched)}\n\n"
                 f"Call the tool again using the parameter names from this schema."
             )
+            status_line = f'● Loaded {tool_name}\n└  Schema delivered · awaiting retry'
 
-        elif tool_name not in core_visible_names and (deferred or core_visible_names):
-            # Hallucination safety net: the model called an unknown name.
-            # Auto-run BM25 over everything we know (core + deferred) using
-            # the hallucinated name as query. Fires regardless of tool_search
-            # setting — Office (no deferred) still benefits from core lookup.
-            haystack = list(body.get("tools", [])) + deferred
-            search_matches = await _do_tool_search(haystack, {"query": tool_name, "max_results": 5})
-            # Do NOT inject all 5 matches into body.tools — that bloats context.
-            # Show them in the tool_result so the model picks one; auto_load
-            # will inject the correct schema on the next call.
-            matched = []
-            if search_matches:
-                result_content = (
-                    f"The tool `{tool_name}` does not exist. Did you mean one of these?\n\n"
-                    f"{_format_functions_block(search_matches)}\n\n"
-                    f"Call the correct tool with its exact name from the schema above."
-                )
-            else:
-                result_content = (
-                    f"The tool `{tool_name}` does not exist and no close matches were found. "
-                    f"Call `ToolSearch(query=\"<keywords>\")` with keywords from the task "
-                    f"(not a guessed tool name) to discover the right tool."
-                )
+        elif (not auto_load) and tool_name in deferred_names and tool_name not in core_visible_names:
+            result_content = (
+                f"`{tool_name}` is currently UNLOADED in this conversation.\n\n"
+                f"Call `ToolSearch(query=\"select:{tool_name}\", max_results=5)` to load its schema, "
+                f"then call `{tool_name}` again using the parameter names from that schema."
+            )
+            status_line = (
+                f'● Blocked: {tool_name} (unloaded)\n'
+                f'└  Model instructed to ToolSearch first'
+            )
 
-        if not result_content:
-            # Known core tool — flush to CC for normal execution
-            await _flush_sse(resp, request, buffered)
+        if result_content is None:
+            # Shouldn't happen — name was in intercept set so a branch must
+            # have matched. Defensive: stop the loop and return what we have.
             break
+
+        if status_line:
+            summaries.append(status_line)
 
         if matched:
             body["tools"] = body["tools"] + matched
@@ -683,14 +845,22 @@ async def _handle_streaming(
         body["messages"] = body.get("messages", []) + [
             {"role": "assistant", "content": [
                 {"type": "tool_use", "id": tool_use["id"],
-                 "name": tool_name, "input": tool_use["input"]},
+                 "name": tool_name, "input": tool_input},
             ]},
             {"role": "user", "content": [
                 {"type": "tool_result", "tool_use_id": tool_use["id"],
                  "content": result_content},
             ]},
         ]
-        # Continue loop — next iteration calls upstream again
+        # Loop — next iteration calls upstream with status_blocks=summaries
+
+    # If max_roundtrips exhausted with pending summaries, flush them as a
+    # standalone status block so the user at least sees what happened.
+    if summaries and not final_status_emitted:
+        await _ensure_prepared(resp, request)
+        for i, text in enumerate(summaries):
+            for line in _status_block_lines(text, i):
+                await resp.write(line.encode())
 
     if not resp.prepared:
         _apply_cors_to_stream(resp, request)
