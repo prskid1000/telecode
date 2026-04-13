@@ -186,6 +186,11 @@ def _register_all() -> None:
 
     from proxy.tool_registry import WEB_SEARCH_TOOL
     from proxy import config as proxy_config
+    from proxy.code_exec import CODE_EXEC_SCHEMA, handler as code_exec_handler
+
+    # ── code_execution (Python sandbox) ────────────────────────────────
+    register("code_execution", CODE_EXEC_SCHEMA, code_exec_handler,
+             strip=["code_execution"], primary_arg="code")
 
     # ── WebSearch ──────────────────────────────────────────────────────
     if proxy_config.web_search_enabled():
