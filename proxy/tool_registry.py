@@ -98,18 +98,18 @@ WEB_SEARCH_TOOL: dict[str, Any] = {
 
 def split_tools(
     tools: list[dict[str, Any]],
+    core_names: set[str],
+    strip_names: set[str],
+    inject_schemas: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Split into (core_tools_list, deferred_tools_list).
 
-    Core tools are forwarded as-is. ToolSearch is injected into core.
-    Managed tools (WebSearch, speak, transcribe, etc.) are stripped from
-    CC's tool list and replaced with our proxy-handled versions — the
-    model calls them, the proxy intercepts and executes locally.
-    """
-    from proxy.managed_tools import get_schemas, get_strip_names
+    - core_names: tool names always forwarded as-is
+    - strip_names: tool names dropped entirely (e.g. CC versions of managed tools)
+    - inject_schemas: schemas injected into the core list (managed tools)
 
-    core_names = set(core_tools())
-    strip_names = get_strip_names() | {"ToolSearch"}
+    ToolSearch is injected when any tools end up deferred.
+    """
     core: list[dict[str, Any]] = []
     deferred: list[dict[str, Any]] = []
 
@@ -124,7 +124,7 @@ def split_tools(
 
     if deferred:
         core.insert(0, TOOL_SEARCH_TOOL)
-    for schema in get_schemas():
+    for schema in inject_schemas:
         core.insert(0, schema)
 
     return core, deferred

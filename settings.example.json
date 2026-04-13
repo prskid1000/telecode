@@ -59,6 +59,8 @@
         "tool_splitting": true,
         "intercept": true,
         "inject_date_location": true,
+        "core_tools": ["Bash", "Edit", "Read", "Write", "Glob", "Grep", "Agent", "Skill"],
+        "inject_managed": ["WebSearch", "speak", "transcribe"],
         "strip_tool_names": [],
         "strip_tool_types": [],
         "drop_non_custom_tools": false,
