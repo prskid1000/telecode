@@ -304,8 +304,8 @@ All options live in `settings.json`. See [`settings.example.json`](settings.exam
 
 | Key | Description |
 |---|---|
-| `store_path` | JSON file for topic↔session mapping (default `./data/telecode.json`) |
-| `logs_dir` | Log directory (default `./data/logs`) |
+| `store_path` | JSON file for topic↔session mapping (default `./data/telecode.json`). Relative paths are resolved from the directory that contains `settings.json` (or `TELECODE_SETTINGS`), not from the process current working directory. |
+| `logs_dir` | Log directory (default `./data/logs`). Same resolution rule as `store_path` — keeps `telecode.log` next to `proxy_full_*.json` even when the bot is started from another folder (e.g. `pythonw` / Scheduled Task). |
 
 ### `streaming` — Telegram live-message tuning
 

@@ -58,10 +58,14 @@ def _setup_logging() -> None:
         os.path.join(config.logs_dir(), "telecode.log"), encoding="utf-8"
     )
     handlers.append(file_handler)
+    # A dependency may install a handler on the root logger during imports
+    # (e.g. RichHandler). plain basicConfig() is then a no-op and telecode.log
+    # never receives records — force=True replaces the root configuration.
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         handlers=handlers,
+        force=True,
     )
 
 
