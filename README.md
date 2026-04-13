@@ -439,6 +439,29 @@ Match requests by header substring and apply per-client transforms. First match 
 
 The **office** profile unlocks Claude for Excel/PowerPoint/Word against a local model — Office add-ins silently retry unless every turn returns a `tool_use` block, so this profile preserves their tools, strips Anthropic-hosted ones (`web_search_20250305`, `code_execution_20250825`), and swaps in an Office-aware system prompt.
 
+#### Auto-load flow (`auto_load_tools: true`)
+
+When `tool_search` splits tools into core + deferred, the model sees only the 13 core schemas plus a `<system-reminder>` listing the 47 deferred tool names. If it wants a deferred tool it would normally call `ToolSearch(query="...")` first. With `auto_load_tools` on, the model can skip that — call the deferred tool by name directly and the proxy handles the schema round-trip:
+
+```
+Round 1:
+  Model → tool_use: mcp__mcp_server_mysql__mysql_query({sql: "SHOW DATABASES;"})
+  Proxy → intercepts (name is in deferred_names, not yet in core_visible_names)
+          injects the schema into body.tools for future rounds
+          adds the name to core_visible_names (loop guard)
+          returns tool_result: "schema loaded, call again using these params"
+
+Round 2:
+  Model → tool_use: mcp__mcp_server_mysql__mysql_query({sql: "SHOW DATABASES;"})
+  Proxy → name IS in core_visible_names now → auto-load skipped
+          no branch handles it → flushes the tool_use to CC
+  CC    → executes the MCP tool → returns real results
+```
+
+The `tool_name not in core_visible_names` guard prevents an earlier infinite-loop bug where auto-load re-fired on every call of the same name.
+
+**Hallucination guard (always on):** if the model calls a name that's not core, not deferred, not a managed tool (i.e. typo or fabricated name), the proxy runs BM25 over `core + deferred` with the bad name as query and returns the top-5 matches — pointing the model at the right name and schema. Fires for Office too, so typos of `set_cell_range` etc. get caught.
+
 ### `tools.<key>` — CLI backends
 
 Each key under `tools` becomes a backend available via `/new <key>`. No code changes needed.
