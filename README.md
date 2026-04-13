@@ -385,7 +385,7 @@ Match requests by header substring and apply per-client transforms. First match 
   "tool_search": false,
   "inject_date_location": false,
   "inject_managed": ["code_execution"],
-  "strip_tool_types": ["web_search_*", "code_execution_*"]
+  "strip_tool_names": ["web_search", "code_execution"]
 }
 ```
 
@@ -404,9 +404,7 @@ Match requests by header substring and apply per-client transforms. First match 
 | `auto_load_tools` | When `tool_search` defers tools, auto-load a deferred tool's schema if the model calls it blindly |
 | `core_tools` | Tool names that stay core when splitting. Falls back to `proxy.core_tools` |
 | `inject_managed` | List of managed tools to inject (e.g. `["WebSearch", "speak"]`). Strips CC's same-name versions and replaces them. Default = all registered |
-| `strip_tool_names` | Drop tools by exact name (e.g. `["WebSearch"]`) |
-| `strip_tool_types` | Drop tools by `type` field. Supports `"prefix_*"` wildcards |
-| `drop_non_custom_tools` | Drop any tool with `type != "custom"` (strips Anthropic server-side tools) |
+| `strip_tool_names` | Drop tools by exact name. For Anthropic server-side tools, the name is stable across versions (`web_search`, `code_execution`) so one entry catches every version |
 | `strip_cache_control` | Remove `cache_control` keys (defaults to `true` — LM Studio rejects the field) |
 
 The **office** profile unlocks Claude for Excel/PowerPoint/Word against a local model — Office add-ins silently retry unless every turn returns a `tool_use` block, so this profile preserves their tools, strips Anthropic-hosted ones (`web_search_20250305`, `code_execution_20250825`), and swaps in an Office-aware system prompt.
