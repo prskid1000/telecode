@@ -388,8 +388,8 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
 
     # Apply model mapping (e.g. claude-opus-4-6 -> qwen3.5-35b-a3b)
     mapping = proxy_config.model_mapping()
+    requested_model = body.get("model", "")
     if mapping:
-        requested_model = body.get("model", "")
         if requested_model in mapping:
             body["model"] = mapping[requested_model]
             log.info("Proxy: mapped model %s -> %s", requested_model, body["model"])
@@ -488,7 +488,9 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
 
         # Inject deferred tools instruction into system, tool names into messages
         if deferred:
-            instruction = proxy_system_instruction()
+            # IMPORTANT: don't prepend the full profile system.md again.
+            # Only inject the deferred-tools specific ToolSearch rules.
+            instruction = proxy_system_instruction("tool_search.md")
             system = body.get("system", "")
             if isinstance(system, str):
                 body["system"] = f"{instruction}\n\n{system}" if system else instruction
@@ -518,6 +520,34 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
         if h in request.headers:
             headers[h] = request.headers[h]
     headers.setdefault("content-type", "application/json")
+
+    # Lightweight request fingerprinting for cache-debugging:
+    # shows which client/profile is evicting LM Studio's prefix cache.
+    try:
+        ua = request.headers.get("User-Agent", "") or ""
+        ref = request.headers.get("Referer", "") or ""
+        prof_name = (profile.get("name") if profile else None) or "-"
+        mapped_model = body.get("model", "") or ""
+        sys = body.get("system", "")
+        sys0 = ""
+        if isinstance(sys, str):
+            sys0 = sys.strip().splitlines()[0] if sys.strip() else ""
+        elif isinstance(sys, list):
+            for blk in sys:
+                if isinstance(blk, dict) and blk.get("type") == "text":
+                    txt = (blk.get("text") or "").strip()
+                    if txt:
+                        sys0 = txt.splitlines()[0]
+                        break
+        sys0 = sys0[:120]
+        ua = ua[:120]
+        ref = ref[:120]
+        log.info(
+            "Proxy: client=%s model=%s->%s ua=%r referer=%r sys0=%r",
+            prof_name, requested_model, mapped_model, ua, ref, sys0,
+        )
+    except Exception:
+        pass
 
     # Which managed tools to intercept for THIS request = whatever the profile injected.
     # (Injecting without intercepting is broken; intercepting without injecting is a no-op.)
