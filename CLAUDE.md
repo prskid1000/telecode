@@ -222,21 +222,34 @@ Anthropic-API-compatible middleware for local models (LM Studio, Ollama, etc.). 
    - `strip_reminders`: strip `<system-reminder>` blocks from message history.
    - `lift_tool_result_images`: lift image blocks out of array-form tool_results (LM Studio array-form workaround).
 
-9. **Intercept loop** (`_handle_streaming` / `_handle_non_streaming`): buffers upstream SSE, detects tool calls, executes locally when needed, appends `[tool_use, tool_result]` to messages, retries upstream. Loops up to 15 rounds.
-   - Always intercepted/handled: `ToolSearch` (when deferred tools exist) and any injected managed tools (e.g. `web_search`, `code_execution`).
-   - **Auto-load** (`auto_load_tools: true`): deferred tool names are handled on first blind call to inject schema and request a retry.
-   - **Unloaded-tool guard** (`auto_load_tools: false`): direct calls to deferred (unloaded) tools are blocked and the model is instructed to run `ToolSearch(select:...)` first.
-   - Unknown tool names trigger the hallucination guard (BM25 suggestions over core+deferred).
+9. **Intercept loop** (`_handle_streaming`): each round-trip calls `_forward_stream`, which **branches on the first `content_block_start`**:
+   - **Tool name in intercept set** → keep buffering only enough to capture the full tool_use input, then return it. Loop runs the handler, appends `[tool_use, tool_result]` to messages, and re-calls upstream.
+   - **Tool name not in intercept set, or text block** → emit any pending status blocks as synthetic text content blocks at indices `0..N-1`, flush buffered events with their indices shifted by `N`, then **stream the rest live** to the client. No buffering of the final response — large tool_use payloads (e.g. `execute_office_js` story drafts) flow through with zero added latency.
 
-   On clean response, flushes with visibility summaries prepended into the first text_delta — no new SSE blocks, no index changes, preserves prefix cache.
+   `_start_heartbeat` runs for the full request lifetime (both buffering and passthrough). Two cadences, both serialized with main-loop writes via an `asyncio.Lock`:
+   - `: keepalive\n\n` SSE comment every 2s — wire-level keep-alive, ignored by SSE parsers, resets HTTP read timer.
+   - `event: ping\ndata: {"type":"ping"}\n\n` every `proxy.ping_interval` seconds (default 10s) — Anthropic's official live-progress signal that CC / pivot / Office add-ins recognize, so even minute-long generations don't trigger client timeouts.
 
-10. **Managed tools registry** (`proxy/managed_tools.py`): each `ManagedTool` has an Anthropic-format schema, async handler returning `(summary, result)`, optional `strip_from_cc` list, and optional `pre_llm`/`post_llm` `LLMHook`s that call `structured_call()` (`proxy/llm.py`) for arg enrichment / result post-processing. Currently registered: `WebSearch` (Brave scraper), `speak` (Kokoro TTS), `transcribe` (Whisper STT), `code_execution` (Python 3 subprocess sandbox — 30s timeout, `-I` isolated mode, no network, used by Office add-ins for PTC-style data work). Add a tool = `register(name, schema, handler, strip=[...], pre_llm=..., post_llm=...)` — zero changes to `server.py`.
+   `prepare()` is called immediately on upstream connect so the socket goes live before any decision.
 
-11. **Web search** (`proxy/web_search.py`): scrapes `search.brave.com/search?q=...&source=web` directly. Parser targets stable CSS selectors (`div.snippet[data-type="web"]`, `div.title`, `div.content`). Only `data-type="web"` snippets — video/image clusters excluded. No cache, browser-realistic headers.
+   Loops up to 15 rounds. Always intercepted: `ToolSearch` (when deferred tools exist), all injected managed tools, and all deferred names (auto-load or unloaded-tool guard depending on `auto_load_tools`).
 
-12. **CORS**: `cors_origins` list gates middleware. Streaming responses set headers via `_apply_cors_to_stream()` before `resp.prepare()` (aiohttp middleware can't mutate headers after prepare commits them — this was needed for Office add-ins in browser sandboxes).
+10. **Visibility status blocks**: each intercept handler builds a CC-native two-line string (`● Tool("arg")\n└  summary`) appended to the round's `summaries` list. On the final non-intercepted round, `_forward_stream` emits each summary as its own synthetic text content block before relaying upstream content. Renders even when the model jumps straight to tool_use (no text). Status format auto-derived from the handler — adding a new managed tool needs zero status-rendering code.
 
-13. **Passthrough:** non-`/v1/messages`, non-`/v1/models` requests forwarded unchanged. `/v1/models` fetches upstream (OpenAI format), converts to Anthropic format, prepends any `model_mapping` aliases.
+   Status formats (all driven by `format_visibility()` + per-handler strings):
+   - `● ToolSearch("query")` / `└  N schemas loaded: A, B, C` (or `└  No matches`)
+   - `● WebSearch("query")` / `└  5 results from brave.com`
+   - `● code_execution()` / `└  Exited 0 in 1.2s · 4 lines stdout`
+   - `● Loaded ToolName` / `└  Schema delivered · awaiting retry` (auto-load)
+   - `● Blocked: ToolName (unloaded)` / `└  Model instructed to ToolSearch first` (unloaded guard)
+
+11. **Managed tools registry** (`proxy/managed_tools.py`): each `ManagedTool` has an Anthropic-format schema, async handler returning `(summary, result)`, optional `strip_from_cc` list, and optional `pre_llm`/`post_llm` `LLMHook`s that call `structured_call()` (`proxy/llm.py`) for arg enrichment / result post-processing. Currently registered: `WebSearch` (Brave scraper), `speak` (Kokoro TTS), `transcribe` (Whisper STT), `code_execution` (Python 3 subprocess sandbox — 30s timeout, `-I` isolated mode, no network, used by Office add-ins for PTC-style data work). Add a tool = `register(name, schema, handler, strip=[...], pre_llm=..., post_llm=...)` — zero changes to `server.py`.
+
+12. **Web search** (`proxy/web_search.py`): scrapes `search.brave.com/search?q=...&source=web` directly. Parser targets stable CSS selectors (`div.snippet[data-type="web"]`, `div.title`, `div.content`). Only `data-type="web"` snippets — video/image clusters excluded. No cache, browser-realistic headers.
+
+13. **CORS**: `cors_origins` list gates middleware. Streaming responses set headers via `_apply_cors_to_stream()` before `resp.prepare()` (aiohttp middleware can't mutate headers after prepare commits them — this was needed for Office add-ins in browser sandboxes).
+
+14. **Passthrough:** non-`/v1/messages`, non-`/v1/models` requests forwarded unchanged. `/v1/models` fetches upstream (OpenAI format), converts to Anthropic format, prepends any `model_mapping` aliases.
 
 To use: set `proxy.enabled: true` and point `ANTHROPIC_BASE_URL` at `http://localhost:1235`.
 

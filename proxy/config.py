@@ -43,6 +43,15 @@ def debug() -> bool:
     return bool(app_config.get_nested("proxy.debug", False))
 
 
+def ping_interval() -> float:
+    """Seconds between `event: ping` heartbeats sent to the client during
+    long-running streams. Anthropic-aware clients (CC, pivot.claude.ai,
+    Office add-ins) treat these as live-progress signals and won't time out.
+    The faster `: keepalive` SSE comments still go out every 2s.
+    """
+    return float(app_config.get_nested("proxy.ping_interval", 10))
+
+
 def tool_search() -> bool:
     """Enable tool splitting, ToolSearch injection, and deferred tool handling."""
     return bool(app_config.get_nested("proxy.tool_search", False))

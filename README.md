@@ -358,6 +358,7 @@ Sits between Claude Code (or any Anthropic-API client) and LM Studio / Ollama / 
 | `port` | Listen port (default `1235`) |
 | `upstream_url` | Backend URL (default `http://localhost:1234` — LM Studio) |
 | `debug` | Dump every request body to `data/logs/proxy_full_*.json` |
+| `ping_interval` | Seconds between `event: ping` heartbeats sent to the client during long streams (default `10`). `: keepalive` SSE comments still go out every 2s. |
 | `tool_search` | Split incoming tools into core (always forwarded) + deferred (searchable via ToolSearch) |
 | `strip_reminders` | Drop `<system-reminder>` blocks from messages |
 | `auto_load_tools` | Auto-load a deferred tool's schema the first time the model calls it blindly |
@@ -442,6 +443,28 @@ The **office** profile unlocks Claude for Excel/PowerPoint/Word against a local 
 **Auto-load** (`auto_load_tools: true`): on first call to a deferred tool the proxy injects its schema and asks the model to retry; the second call passes through to CC for execution. **Hallucination guard** (always on): calling an unknown name triggers BM25 over core+deferred and returns the top matches as suggestions — no schemas injected, so context stays minimal. Model picks the right name, retries, and auto-load handles that single schema.
 
 **Unloaded-tool guard** (`auto_load_tools: false`): if the model calls a deferred (unloaded) tool directly by name, the proxy blocks the call and returns a tool_result instructing it to run `ToolSearch(query="select:<tool>", max_results=5)` first.
+
+**Streaming behaviour** — the intercept loop branches on the first `content_block_start`. Intercepted tool names (ToolSearch, managed tools, deferred names) → buffer + handle + retry. Anything else (text, non-intercepted tool_use) → flush live to the client with zero added latency. Large final tool_use payloads (e.g. `execute_office_js` story drafts) stream through the wire as they arrive — no end-of-response timeout.
+
+A heartbeat task runs for the entire request (both buffer + passthrough): `: keepalive` SSE comments every 2s for wire-level liveness, plus `event: ping` every `proxy.ping_interval` seconds (default `10`) as Anthropic's official live-progress signal. CC / pivot / Office add-ins recognize the pings and won't time out even on minute-long generations. Set `proxy.ping_interval` in `settings.json` to tune.
+
+**Visibility status blocks** — every intercept appends a CC-style `● Tool("arg")\n└  summary` line to a `summaries` list. On the final response, each becomes a synthetic text content block before upstream content (indices shifted accordingly). Renders even when the model jumps straight to `tool_use`. Examples:
+
+```
+● ToolSearch("notebook jupyter")
+└  3 schemas loaded: NotebookEdit, ReadNotebook, ConvertNotebook
+
+● WebSearch("dark fantasy 1692")
+└  5 results from brave.com
+
+● Loaded mcp__chrome__take_snapshot
+└  Schema delivered · awaiting retry
+
+● Blocked: NotebookEdit (unloaded)
+└  Model instructed to ToolSearch first
+```
+
+Adding a new managed tool needs zero status-rendering code — `format_visibility()` derives the line from the tool's `primary_arg` and the handler's returned summary.
 
 ### `tools.<key>` — CLI backends
 
