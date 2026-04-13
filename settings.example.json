@@ -37,6 +37,20 @@
     "host": "127.0.0.1",
     "port": 1235,
     "cors_origins": [],
+    "model_mapping": {
+      "claude-opus-4-6": "your-local-model-id",
+      "claude-sonnet-4-6": "your-local-model-id"
+    },
+    "client_profiles": [
+      {
+        "name": "office",
+        "match": {"header": "Referer", "contains": "pivot.claude.ai"},
+        "system_instruction": "office.md",
+        "tool_splitting": false,
+        "intercept": false,
+        "inject_date_location": false
+      }
+    ],
     "upstream_url": "http://localhost:1234",
     "debug": false,
     "tool_splitting": false,

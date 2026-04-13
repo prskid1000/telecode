@@ -105,7 +105,9 @@ Tool-search proxy (for local models):
 | `proxy/llm.py` | Generic `structured_call(prompt, schema)` — upstream LLM via `/v1/chat/completions` for proxy-internal use |
 | `proxy/managed_tools.py` | Registry of proxy-handled tools (WebSearch, speak, transcribe); schemas + handlers + LLM hooks |
 | `proxy/web_search.py` | Brave Search scraper + result formatter |
-| `proxy/config.py` | Proxy settings (port, upstream, upstream_model, core tools, BM25 params, web_search) |
+| `proxy/config.py` | Proxy settings (port, upstream, upstream_model, core tools, BM25 params, web_search, client_profiles, model_mapping) |
+| `proxy/instructions/system.md` | Default Claude Code system instruction (tool_splitting path) |
+| `proxy/instructions/office.md` | Office add-in profile system instruction |
 | `mcp_server/app.py` | FastMCP instance (stateless streamable HTTP) |
 | `mcp_server/server.py` | Background startup (daemon thread, like proxy) |
 | `mcp_server/__main__.py` | Standalone entry: `python -m mcp_server` |
@@ -200,7 +202,9 @@ Middleware proxy for local models (LM Studio, Ollama, etc.). Reduces ~100+ CC to
 4. **Managed tools** (`managed_tools.py`): generic registry. Each `ManagedTool` has an Anthropic-format schema, async handler, and optional `pre_llm`/`post_llm` hooks (`LLMHook` dataclass). Hooks call `structured_call()` (`proxy/llm.py`) against the upstream model via `/v1/chat/completions` with JSON structured output. `run_pre_llm()` merges LLM output into handler args as `_pre_llm` dict; `run_post_llm()` replaces the tool result with LLM output. Currently registered: `WebSearch` (Brave scraper — `{query, max_results?}`, no API key), `speak` (Kokoro TTS), `transcribe` (Whisper STT). Adding a new tool = `register(name, schema, handler, strip=[...], pre_llm=..., post_llm=...)` — zero changes to `server.py`.
 5. **Web search** (`proxy/web_search.py`): scrapes `search.brave.com/search?q=...&source=web` directly — no API key, no self-hosted engine. Parser targets stable CSS selectors (`div.snippet[data-type="web"]`, `div.title`, `div.content`) that survive Brave's Svelte deploys. Only `data-type="web"` snippets are parsed — video/image clusters are excluded. No cache (every search is fresh). Browser-realistic headers (`Sec-Fetch-*`, DNT) to avoid bot detection.
 6. **Context injection**: every request gets a `<system-reminder>` appended with current date + user location (auto-detected via `ip-api.com` on first request, cached for session; override via `proxy.location` setting).
-7. **Other transforms**: `lift_tool_result_images` (LM Studio array-form workaround), `strip_reminders`, `proxy_system.md` conditional preprocessor (`<if>` tags).
+7. **Other transforms**: `lift_tool_result_images` (LM Studio array-form workaround), `strip_reminders`, `proxy/instructions/*.md` conditional preprocessor (`<if>` tags).
+8. **Client profiles** (`proxy.client_profiles` in settings): header-based routing for per-client behavior. Each profile has a `match` rule (header + substring), a `system_instruction` (markdown file under `proxy/instructions/`), and four transform toggles (`tool_splitting`, `intercept`, `inject_date_location`). First matching profile wins; no match = global defaults. Used to distinguish Claude Code (default path) from Office add-ins (`pivot.claude.ai` Referer → `office.md`, no tool splitting, no intercept — Office's UI requires tool_use on turn 1).
+9. **Model mapping** (`proxy.model_mapping`): client-facing model name → upstream model name (e.g. `claude-opus-4-6` → `qwen3.5-35b-a3b`). Applied to both incoming `/v1/messages` requests and outgoing `/v1/models` responses (mapped aliases are listed first).
 7. **Passthrough:** all non-`/v1/messages` requests forwarded unchanged.
 
 To use: set `proxy.enabled: true` and point `ANTHROPIC_BASE_URL` at `http://localhost:1235`.

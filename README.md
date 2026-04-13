@@ -365,9 +365,37 @@ Middleware proxy for local models (LM Studio, Ollama, etc.). Reduces ~100+ CC to
 | `location` | string | User location for context injection (e.g. `Kolkata, India`). Empty = auto-detect via IP geolocation |
 | `core_tools` | array | Tools always forwarded (default: Bash, Edit, Read, Write, Glob, Grep, Agent, Skill) |
 | `cors_origins` | array | CORS allowed origins (e.g. `["https://pivot.claude.ai"]`). Empty = disabled |
+| `model_mapping` | object | Map client-facing model names to upstream model names (e.g. `{"claude-opus-4-6": "qwen3.5-35b-a3b"}`). Applied to both `/v1/messages` requests and `/v1/models` responses |
+| `client_profiles` | array | Header-based per-client behavior routing — see below |
 | `web_search.enabled` | boolean | Enable WebSearch managed tool (default `false`) |
 
 **Managed tools** (`proxy/managed_tools.py`): the proxy strips CC's versions of these tools and injects its own schemas. When the model calls them, the proxy intercepts (CC never sees the call), executes locally, and round-trips — looping up to 15 rounds for multi-tool sequences. Tools can declare `pre_llm`/`post_llm` hooks (`LLMHook`) for automatic pre/post-processing via `proxy/llm.py`. Visibility: a summary is prepended into the model's own text output (preserves LM Studio's prefix cache). Currently registered: `WebSearch` (Brave scraper — `{query, max_results?}`, no key needed, only `data-type="web"` results parsed — video/image clusters excluded), `speak` (Kokoro TTS), `transcribe` (Whisper STT). Adding a new tool = `register(name, schema, handler)` in `managed_tools.py`.
+
+**Client profiles** (`proxy.client_profiles`): route different clients to different behaviors without code changes. Each profile matches a request header substring and applies its own transforms. First matching profile wins; no match falls back to global `proxy.*` settings. System instructions live under `proxy/instructions/` as markdown files.
+
+```json
+"client_profiles": [
+  {
+    "name": "office",
+    "match": {"header": "Referer", "contains": "pivot.claude.ai"},
+    "system_instruction": "office.md",
+    "tool_splitting": false,
+    "intercept": false,
+    "inject_date_location": false
+  }
+]
+```
+
+| Profile field | Description |
+|---|---|
+| `name` | Label for logging |
+| `match.header` / `match.contains` | Matches if `contains` is a case-insensitive substring of the named header |
+| `system_instruction` | Markdown file in `proxy/instructions/` — prepended to the client's system prompt |
+| `tool_splitting` | Override the global `proxy.tool_splitting` for this client |
+| `intercept` | Whether to intercept tool calls (ToolSearch, managed tools like WebSearch) |
+| `inject_date_location` | Whether to add the date/location `<system-reminder>` |
+
+Built-in: the **office** profile solves the Claude for Excel/PowerPoint/Word gateway — Office add-ins require a `tool_use` block on every turn and silently retry on plain-text responses. The `office.md` instruction plus preserved tools plus skipped interception makes the add-in work against a local model.
 
 Point `ANTHROPIC_BASE_URL=http://localhost:1235`. Also runs standalone: `python -m proxy`.
 

@@ -211,6 +211,8 @@ async def _flush_sse(
     lines: list[str],
 ) -> None:
     """Flush buffered SSE lines to the client."""
+    if proxy_config.debug():
+        await _dump_request({"sse_lines": lines, "total_bytes": sum(len(l) for l in lines)}, "RESPONSE")
     if not resp.prepared:
         resp.content_type = "text/event-stream"
         resp.headers["Cache-Control"] = "no-cache"
@@ -286,6 +288,23 @@ async def _dump_request(body: dict[str, Any], label: str) -> None:
             pass
 
 
+def _match_profile(headers) -> dict | None:
+    """Return the first client profile whose match condition is satisfied.
+
+    Match spec: {"header": "<Name>", "contains": "<substring>"} (case-insensitive).
+    """
+    for profile in proxy_config.client_profiles():
+        match = profile.get("match", {})
+        hdr = match.get("header", "")
+        needle = match.get("contains", "")
+        if not hdr or not needle:
+            continue
+        value = headers.get(hdr, "") or ""
+        if needle.lower() in value.lower():
+            return profile
+    return None
+
+
 async def handle_messages(request: web.Request) -> web.StreamResponse:
     """Main proxy endpoint: POST /v1/messages"""
     try:
@@ -295,24 +314,54 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
 
     await _dump_request(body, "INCOMING")
 
-    # Inject current date + location as a system-reminder (same format CC uses)
-    from datetime import datetime
-    date_str = datetime.now().strftime("%Y-%m-%d (%A)")
-    location = await _get_location()
-    parts = [f"Current date: {date_str}."]
-    if location:
-        parts.append(f"User location: {location}.")
-    context = "<system-reminder>\n" + " ".join(parts) + "\n</system-reminder>"
-    system = body.get("system", "")
-    if isinstance(system, str):
-        body["system"] = f"{system}\n\n{context}" if system else context
-    elif isinstance(system, list):
-        system.append({"type": "text", "text": context})
+    # Match request against configured client profiles (first match wins).
+    profile = _match_profile(request.headers)
+    if profile:
+        log.info("Proxy: matched client profile %r", profile.get("name", "?"))
+
+    # Apply model mapping (e.g. claude-opus-4-6 -> qwen3.5-35b-a3b)
+    mapping = proxy_config.model_mapping()
+    if mapping:
+        requested_model = body.get("model", "")
+        if requested_model in mapping:
+            body["model"] = mapping[requested_model]
+            log.info("Proxy: mapped model %s -> %s", requested_model, body["model"])
 
     upstream = proxy_config.upstream_url()
     deferred: list[dict[str, Any]] = []
 
-    if proxy_config.tool_splitting():
+    # Profile settings (fall back to global proxy settings)
+    use_tool_splitting = profile.get("tool_splitting", proxy_config.tool_splitting()) if profile else proxy_config.tool_splitting()
+    use_intercept = profile.get("intercept", True) if profile else True
+    inject_date_loc = profile.get("inject_date_location", True) if profile else True
+    system_md = profile.get("system_instruction") if profile else None
+
+    # Inject profile-specific system instruction (prepended to client's system)
+    if system_md:
+        instruction = proxy_system_instruction(system_md)
+        if instruction:
+            system = body.get("system", "")
+            if isinstance(system, str):
+                body["system"] = f"{instruction}\n\n{system}" if system else instruction
+            elif isinstance(system, list):
+                system.insert(0, {"type": "text", "text": instruction})
+
+    # Inject current date + location as a system-reminder (unless disabled)
+    if inject_date_loc:
+        from datetime import datetime
+        date_str = datetime.now().strftime("%Y-%m-%d (%A)")
+        location = await _get_location()
+        parts = [f"Current date: {date_str}."]
+        if location:
+            parts.append(f"User location: {location}.")
+        context = "<system-reminder>\n" + " ".join(parts) + "\n</system-reminder>"
+        system = body.get("system", "")
+        if isinstance(system, str):
+            body["system"] = f"{system}\n\n{context}" if system else context
+        elif isinstance(system, list):
+            system.append({"type": "text", "text": context})
+
+    if use_tool_splitting:
         tools = body.get("tools", [])
         core, deferred = split_tools(tools)
         body["tools"] = core
@@ -349,9 +398,9 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
     headers.setdefault("content-type", "application/json")
 
     if body.get("stream", False):
-        return await _handle_streaming(upstream, body, headers, deferred, request)
+        return await _handle_streaming(upstream, body, headers, deferred, request, skip_intercept=not use_intercept)
     else:
-        return await _handle_non_streaming(upstream, body, headers, deferred)
+        return await _handle_non_streaming(upstream, body, headers, deferred, skip_intercept=not use_intercept)
 
 
 async def _handle_streaming(
@@ -360,23 +409,25 @@ async def _handle_streaming(
     headers: dict[str, str],
     deferred: list[dict[str, Any]],
     request: web.Request,
+    skip_intercept: bool = False,
 ) -> web.StreamResponse:
     """Handle streaming request with managed tools, ToolSearch, and auto-load interception."""
     from proxy.managed_tools import is_managed, get_handler, get_tool, format_visibility, run_pre_llm, run_post_llm
 
-    # Build set of tool names to intercept
+    # Build set of tool names to intercept (Office add-ins skip all intercept)
     intercept: set[str] | None = None
     deferred_names = {t["name"] for t in deferred}
-    if deferred:
-        intercept = {"ToolSearch"}
-        if proxy_config.auto_load_tools():
-            intercept |= deferred_names
+    if not skip_intercept:
+        if deferred:
+            intercept = {"ToolSearch"}
+            if proxy_config.auto_load_tools():
+                intercept |= deferred_names
 
-    # Add all managed tools (WebSearch, speak, transcribe, etc.) to intercept set
-    from proxy.managed_tools import _REGISTRY
-    managed_names = set(_REGISTRY.keys())
-    if managed_names:
-        intercept = (intercept or set()) | managed_names
+        # Add all managed tools (WebSearch, speak, transcribe, etc.) to intercept set
+        from proxy.managed_tools import _REGISTRY
+        managed_names = set(_REGISTRY.keys())
+        if managed_names:
+            intercept = (intercept or set()) | managed_names
 
     resp = web.StreamResponse()
     resp._req = request
@@ -474,13 +525,14 @@ async def _handle_non_streaming(
     body: dict[str, Any],
     headers: dict[str, str],
     deferred: list[dict[str, Any]],
+    skip_intercept: bool = False,
 ) -> web.Response:
     """Handle non-streaming request with the same intercept loop as streaming."""
     from proxy.managed_tools import get_handler, get_tool, format_visibility, run_pre_llm, run_post_llm
     from proxy.managed_tools import _REGISTRY
 
-    deferred_names = {t["name"] for t in deferred}
-    managed_names = set(_REGISTRY.keys())
+    deferred_names = set() if skip_intercept else {t["name"] for t in deferred}
+    managed_names = set() if skip_intercept else set(_REGISTRY.keys())
     summaries: list[str] = []
 
     max_roundtrips = 15
@@ -564,10 +616,26 @@ async def _handle_non_streaming(
 # ── /v1/models — convert OpenAI format from LM Studio to Anthropic format ──
 
 def _openai_models_to_anthropic(openai_data: dict) -> dict:
-    """Convert OpenAI /v1/models response to Anthropic format."""
+    """Convert OpenAI /v1/models response to Anthropic format.
+
+    Prepends any client-facing aliases from proxy.model_mapping so clients
+    (e.g. Office add-ins) see familiar Claude model names.
+    """
     from datetime import datetime, timezone
 
     models = []
+
+    # Prepend mapped aliases (claude-opus-4-6, etc.) so they appear first
+    mapping = proxy_config.model_mapping()
+    for alias, real in mapping.items():
+        display = alias.replace("-", " ").replace("_", " ").title()
+        models.append({
+            "id": alias,
+            "type": "model",
+            "display_name": display,
+            "created_at": "2024-01-01T00:00:00Z",
+        })
+
     for m in openai_data.get("data", []):
         created_ts = m.get("created", 0)
         try:
