@@ -60,7 +60,7 @@
         "lift_tool_result_images": false,
         "auto_load_tools": false,
         "core_tools": [],
-        "inject_managed": ["code_execution"],
+        "inject_managed": ["code_execution", "WebSearch"],
         "strip_tool_names": ["web_search"],
         "strip_cache_control": true
       },

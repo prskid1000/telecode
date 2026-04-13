@@ -17,8 +17,9 @@ Two categories of tools exist:
 - `set_cell_range`, `clear_cell_range`, `modify_object` — write
 - `todo_write`, `ask_user_question`, `update_instructions` — workflow
 
-**Proxy-provided (computation):**
+**Proxy-provided:**
 - `code_execution` — sandboxed Python 3 subprocess (30s timeout, no network)
+- `WebSearch` — Brave Search scraper. Input `{query: string, max_results?: number}`. Returns title/URL/snippet per result. Use it when the user asks for current info or external references. Cite URLs as markdown links.
 
 ### When to use `code_execution`
 
