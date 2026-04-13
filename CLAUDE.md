@@ -192,20 +192,39 @@ Tunables near top of `process.py`: idle interval, max wait, screen rows/history 
 
 ---
 
-## Tool-search proxy pipeline (`proxy/`)
+## Proxy pipeline (`proxy/`)
 
-Middleware proxy for local models (LM Studio, Ollama, etc.). Reduces ~100+ CC tool definitions to ~9 core tools, provides on-demand ToolSearch, and injects + intercepts managed tools (WebSearch, speak, transcribe) so the model can use them without a separate MCP connection.
+Anthropic-API-compatible middleware for local models (LM Studio, Ollama, etc.). Every transform is an independent flag; profiles override per-client.
 
 1. **Startup:** `start_proxy_background()` from `main.py:_post_init`. Port 1235 by default. Also runs standalone via `python -m proxy`.
-2. **Tool splitting** (`split_tools()` in `tool_registry.py`): takes explicit `(tools, core_names, strip_names, inject_schemas)` — no hardcoded lists. Matched profile (or global `proxy.core_tools` + full managed registry) supplies the sets. Tools in `core_names` are forwarded as-is; `strip_names` are dropped; everything else is deferred. ToolSearch meta-tool is injected when anything is deferred. `inject_schemas` (managed tool schemas) are prepended to core — CC's same-name tools already stripped via `strip_names`.
-3. **Intercept loop** (`_handle_streaming` / `_handle_non_streaming`): buffers upstream response via `_forward_stream()`. If the model calls an intercepted tool (ToolSearch, WebSearch, speak, transcribe, or any auto-loaded deferred tool), the proxy executes it locally, appends `[tool_use, tool_result]` to messages, and retries upstream. Loops up to 15 rounds — handles multi-search sequences where the model searches → reads → searches again. When the model finally produces a non-tool response, it flushes to CC with `🔍` visibility summaries prepended into the model's first text_delta (streaming) or first text content block (non-streaming) — no new blocks, no index changes, preserves LM Studio's prefix cache.
-4. **Managed tools** (`managed_tools.py`): generic registry. Each `ManagedTool` has an Anthropic-format schema, async handler, and optional `pre_llm`/`post_llm` hooks (`LLMHook` dataclass). Hooks call `structured_call()` (`proxy/llm.py`) against the upstream model via `/v1/chat/completions` with JSON structured output. `run_pre_llm()` merges LLM output into handler args as `_pre_llm` dict; `run_post_llm()` replaces the tool result with LLM output. Currently registered: `WebSearch` (Brave scraper — `{query, max_results?}`, no API key), `speak` (Kokoro TTS), `transcribe` (Whisper STT). Adding a new tool = `register(name, schema, handler, strip=[...], pre_llm=..., post_llm=...)` — zero changes to `server.py`.
-5. **Web search** (`proxy/web_search.py`): scrapes `search.brave.com/search?q=...&source=web` directly — no API key, no self-hosted engine. Parser targets stable CSS selectors (`div.snippet[data-type="web"]`, `div.title`, `div.content`) that survive Brave's Svelte deploys. Only `data-type="web"` snippets are parsed — video/image clusters are excluded. No cache (every search is fresh). Browser-realistic headers (`Sec-Fetch-*`, DNT) to avoid bot detection.
-6. **Context injection**: every request gets a `<system-reminder>` appended with current date + user location (auto-detected via `ip-api.com` on first request, cached for session; override via `proxy.location` setting).
-7. **Other transforms**: `lift_tool_result_images` (LM Studio array-form workaround), `strip_reminders`, `proxy/instructions/*.md` conditional preprocessor (`<if>` tags).
-8. **Client profiles** (`proxy.client_profiles` in settings): header-based routing — first profile whose `match.header` contains `match.contains` wins. Each profile can override every transform: `system_instruction` (md file in `proxy/instructions/`), `tool_search`, `intercept`, `inject_date_location`, `core_tools`, `inject_managed`, `strip_tool_names`, `strip_tool_types` (with `*` wildcards), `drop_non_custom_tools`, `strip_cache_control`. No hardcoded behavior — profile fields drive everything, with fallback to global `proxy.*`. Used to distinguish Claude Code (default path) from Office add-ins (`pivot.claude.ai` Referer → `office.md`, no tool splitting, no intercept — Office's UI requires tool_use on turn 1).
-9. **Model mapping** (`proxy.model_mapping`): client-facing model name → upstream model name (e.g. `claude-opus-4-6` → `qwen3.5-35b-a3b`). Applied to both incoming `/v1/messages` requests and outgoing `/v1/models` responses (mapped aliases are listed first).
-7. **Passthrough:** all non-`/v1/messages` requests forwarded unchanged.
+
+2. **Profile matching:** `_match_profile(headers)` — first `client_profile` whose `match.header` contains `match.contains` wins. Each profile independently overrides any feature flag; unset fields fall back to global `proxy.*`.
+
+3. **Model mapping** (`proxy.model_mapping`): rewrites `body.model` (e.g. `claude-opus-4-6` → `qwen3.5-35b-a3b`). Applied to both `/v1/messages` and `/v1/models`.
+
+4. **Tool filtering** (profile-driven): `strip_tool_names`, `strip_tool_types` (with `*` prefix wildcards), `drop_non_custom_tools`, `strip_cache_control`. Runs unconditionally when configured — generic per-request filter before any splitting.
+
+5. **Managed-tool injection** (`inject_managed`): list of names from the managed-tool registry. For each, the matching name + its `strip_from_cc` list are added to the strip set; its schema is injected into `body.tools`. Works whether or not `tool_search` is on. Managed tools are always intercepted in the loop (no separate flag — interception is the proxy's job).
+
+6. **Tool search** (`tool_search: true`): self-contained feature. `split_tools()` in `tool_registry.py` takes `(tools, core_names, strip_names, inject_schemas)`. Tools in `core_names` stay core; `strip_names` are dropped; everything else becomes deferred. ToolSearch meta-tool is injected when deferred is non-empty, and is always intercepted by the loop. Deferred names are listed in a `<system-reminder>` injected into the first user message. `auto_load_tools` additionally lets the model call a deferred tool blind — on first call, the proxy returns the schema and retries.
+
+7. **System prompts** — two independent injections:
+   - `system_instruction` (profile): prepends a markdown file from `proxy/instructions/` to `body.system`. Supports `<if dotted.key="value">...</if>` conditional blocks.
+   - `inject_date_location`: appends current date + auto-detected location as a `<system-reminder>` to `body.system` (location from `proxy.location` override or `ip-api.com`).
+
+8. **Message transforms** (independent flags):
+   - `strip_reminders`: strip `<system-reminder>` blocks from message history.
+   - `lift_tool_result_images`: lift image blocks out of array-form tool_results (LM Studio array-form workaround).
+
+9. **Intercept loop** (`_handle_streaming` / `_handle_non_streaming`): buffers upstream SSE, detects intercepted tool calls, executes locally, appends `[tool_use, tool_result]` to messages, retries upstream. Loops up to 15 rounds. Intercepted names = `{"ToolSearch"}` (if deferred) ∪ `managed_intercept` (injected managed tool names) ∪ deferred names (if `auto_load_tools`). On clean response, flushes with visibility summaries prepended into the first text_delta — no new SSE blocks, no index changes, preserves prefix cache.
+
+10. **Managed tools registry** (`proxy/managed_tools.py`): each `ManagedTool` has an Anthropic-format schema, async handler returning `(summary, result)`, optional `strip_from_cc` list, and optional `pre_llm`/`post_llm` `LLMHook`s that call `structured_call()` (`proxy/llm.py`) for arg enrichment / result post-processing. Currently registered: `WebSearch` (Brave scraper), `speak` (Kokoro TTS), `transcribe` (Whisper STT), `code_execution` (Python 3 subprocess sandbox — 30s timeout, `-I` isolated mode, no network, used by Office add-ins for PTC-style data work). Add a tool = `register(name, schema, handler, strip=[...], pre_llm=..., post_llm=...)` — zero changes to `server.py`.
+
+11. **Web search** (`proxy/web_search.py`): scrapes `search.brave.com/search?q=...&source=web` directly. Parser targets stable CSS selectors (`div.snippet[data-type="web"]`, `div.title`, `div.content`). Only `data-type="web"` snippets — video/image clusters excluded. No cache, browser-realistic headers.
+
+12. **CORS**: `cors_origins` list gates middleware. Streaming responses set headers via `_apply_cors_to_stream()` before `resp.prepare()` (aiohttp middleware can't mutate headers after prepare commits them — this was needed for Office add-ins in browser sandboxes).
+
+13. **Passthrough:** non-`/v1/messages`, non-`/v1/models` requests forwarded unchanged. `/v1/models` fetches upstream (OpenAI format), converts to Anthropic format, prepends any `model_mapping` aliases.
 
 To use: set `proxy.enabled: true` and point `ANTHROPIC_BASE_URL` at `http://localhost:1235`.
 

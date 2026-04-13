@@ -352,7 +352,9 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
     strip_names = set(profile.get("strip_tool_names", [])) if profile else set()
     strip_types = profile.get("strip_tool_types", []) if profile else []
     drop_non_custom = profile.get("drop_non_custom_tools", False) if profile else False
-    strip_cc = profile.get("strip_cache_control", False) if profile else False
+    # strip_cache_control defaults to True globally — LM Studio rejects the field.
+    # Profiles can opt out by setting strip_cache_control: false.
+    strip_cc = profile.get("strip_cache_control", True) if profile else True
 
     def _type_matches(ttype: str) -> bool:
         for pattern in strip_types:
