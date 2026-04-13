@@ -185,7 +185,6 @@ def _register_all() -> None:
     """Register all proxy-managed tools. Called once on module load."""
 
     from proxy.tool_registry import WEB_SEARCH_TOOL
-    from proxy import config as proxy_config
     from proxy.code_exec import CODE_EXEC_SCHEMA, handler as code_exec_handler
 
     # ── code_execution (Python sandbox) ────────────────────────────────
@@ -193,16 +192,15 @@ def _register_all() -> None:
              strip=["code_execution"], primary_arg="code")
 
     # ── WebSearch ──────────────────────────────────────────────────────
-    if proxy_config.web_search_enabled():
-        async def _handle_web_search(args: dict[str, Any]) -> tuple[str, str]:
-            from proxy.web_search import search as ws_search
-            query = (args.get("query") or "").strip()
-            max_results = args.get("max_results")
-            result_str, count = await ws_search(query, max_results=max_results)
-            return f"Found {count} results", result_str
+    async def _handle_web_search(args: dict[str, Any]) -> tuple[str, str]:
+        from proxy.web_search import search as ws_search
+        query = (args.get("query") or "").strip()
+        max_results = args.get("max_results")
+        result_str, count = await ws_search(query, max_results=max_results)
+        return f"Found {count} results", result_str
 
-        register("WebSearch", WEB_SEARCH_TOOL, _handle_web_search,
-                 strip=["WebSearch"], primary_arg="query")
+    register("WebSearch", WEB_SEARCH_TOOL, _handle_web_search,
+             strip=["WebSearch"], primary_arg="query")
 
     # ── speak (TTS) ───────────────────────────────────────────────────
     speak_schema: dict[str, Any] = {
