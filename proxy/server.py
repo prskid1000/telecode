@@ -193,16 +193,20 @@ async def _forward_stream(
                         if delta.get("type") == "input_json_delta":
                             current_tool_json += delta.get("partial_json", "")
 
-                    if etype == "content_block_stop" and intercept_names and current_tool_name in intercept_names:
+                    if etype == "content_block_stop" and current_tool_name:
+                        # Always capture the tool_use. Caller decides what to do:
+                        #  - in intercept_names → handle locally
+                        #  - otherwise → caller checks against known_names or flushes
                         try:
                             args = json.loads(current_tool_json) if current_tool_json else {}
                         except json.JSONDecodeError:
                             args = {}
-                        tool_use_block = {
-                            "id": current_tool_id,
-                            "name": current_tool_name,
-                            "input": args,
-                        }
+                        if tool_use_block is None:
+                            tool_use_block = {
+                                "id": current_tool_id,
+                                "name": current_tool_name,
+                                "input": args,
+                            }
                         current_tool_name = ""
 
     return tool_use_block, buffered_lines
@@ -527,6 +531,8 @@ async def _handle_streaming(
     # (optionally prepending visibility summaries).
     summaries: list[str] = []
     max_roundtrips = 15
+    # Names currently visible to the model as core tools (for hallucination guard)
+    core_visible_names: set[str] = {t.get("name", "") for t in body.get("tools", [])}
 
     for _rt in range(max_roundtrips):
         tool_use, buffered = await _forward_stream(
@@ -580,8 +586,28 @@ async def _handle_streaming(
                 f"Call the tool again with the correct parameter names from the schema above."
             )
 
+        elif deferred and tool_name not in core_visible_names:
+            # Hallucination safety net: tool_search is on and the model called
+            # a name that's not a core tool and not in the deferred listing.
+            # Auto-run ToolSearch over deferred tools using the name itself as query.
+            matched = await _do_tool_search(deferred, {"query": tool_name, "max_results": 5})
+            log.info("Hallucination guard: %r not found — auto ToolSearch returned %d matches",
+                     tool_name, len(matched))
+            if matched:
+                result_content = (
+                    f"The tool `{tool_name}` does not exist. Did you mean one of these?\n\n"
+                    f"{_format_functions_block(matched)}\n\n"
+                    f"Call the correct tool with its exact name from the schema above."
+                )
+            else:
+                result_content = (
+                    f"The tool `{tool_name}` does not exist and no close matches were found. "
+                    f"Call `ToolSearch(query=\"<keywords>\")` with keywords from the task "
+                    f"(not a guessed tool name) to discover the right tool."
+                )
+
         if not result_content:
-            # Unhandled tool — flush as-is and break
+            # Known core tool — flush to CC for normal execution
             await _flush_sse(resp, request, buffered)
             break
 
@@ -623,6 +649,8 @@ async def _handle_non_streaming(
 
     deferred_names = {t["name"] for t in deferred}
     managed_names = managed_intercept or set()
+    # Names currently visible to the model as core tools (for hallucination guard)
+    core_visible_names: set[str] = {t.get("name", "") for t in body.get("tools", [])}
     summaries: list[str] = []
 
     max_roundtrips = 15
@@ -681,6 +709,27 @@ async def _handle_non_streaming(
                     f"{_format_functions_block(matched)}\n\n"
                     f"Call the tool again with the correct parameter names."
                 )
+
+            elif deferred and tool_name not in core_visible_names:
+                # Hallucination guard: tool_search is on, name isn't a core tool
+                # and isn't in the deferred listing → fuzzy-match via ToolSearch.
+                matched = await _do_tool_search(
+                    deferred, {"query": tool_name, "max_results": 5}
+                )
+                log.info("Hallucination guard: %r not found — auto ToolSearch returned %d matches",
+                         tool_name, len(matched))
+                if matched:
+                    result_text = (
+                        f"The tool `{tool_name}` does not exist. Did you mean one of these?\n\n"
+                        f"{_format_functions_block(matched)}\n\n"
+                        f"Call the correct tool with its exact name from the schema above."
+                    )
+                else:
+                    result_text = (
+                        f"The tool `{tool_name}` does not exist and no close matches were found. "
+                        f"Call `ToolSearch(query=\"<keywords>\")` with task-related keywords "
+                        f"to discover the right tool."
+                    )
 
             if not result_text:
                 continue
