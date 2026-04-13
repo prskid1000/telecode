@@ -202,7 +202,7 @@ Anthropic-API-compatible middleware for local models (LM Studio, Ollama, etc.). 
 
 3. **Model mapping** (`proxy.model_mapping`): rewrites `body.model` (e.g. `claude-opus-4-6` → `qwen3.5-35b-a3b`). Applied to both `/v1/messages` and `/v1/models`.
 
-4. **Tool filtering** (profile-driven): `strip_tool_names`, `strip_tool_types` (with `*` prefix wildcards), `drop_non_custom_tools`, `strip_cache_control`. Runs unconditionally when configured — generic per-request filter before any splitting.
+4. **Tool filtering** (profile-driven): `strip_tool_names` drops tools by exact name (Anthropic's hosted tool names are stable across versions, so `["web_search", "code_execution"]` catches every version). `strip_cache_control` (default `true`) removes the `cache_control` key LM Studio rejects. Runs before any splitting.
 
 5. **Managed-tool injection** (`inject_managed`): list of names from the managed-tool registry. For each, the matching name + its `strip_from_cc` list are added to the strip set; its schema is injected into `body.tools`. Works whether or not `tool_search` is on. Managed tools are always intercepted in the loop (no separate flag — interception is the proxy's job).
 

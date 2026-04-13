@@ -345,40 +345,18 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
             log.info("Proxy: mapped model %s -> %s", requested_model, body["model"])
 
     # Profile-driven tool filtering:
-    #  - strip_tool_names: drop tools whose name matches any entry
-    #  - strip_tool_types: drop tools whose type matches any entry (supports "*" suffix for prefix match)
-    #  - drop_non_custom_tools: drop anything with type != "custom" and no type != None
-    #  - strip_cache_control: remove `cache_control` key from each tool
+    #  - strip_tool_names: drop tools whose name matches any entry (hosted or custom)
+    #  - strip_cache_control: remove `cache_control` key from each tool (LM Studio rejects it)
     strip_names = set(profile.get("strip_tool_names", [])) if profile else set()
-    strip_types = profile.get("strip_tool_types", []) if profile else []
-    drop_non_custom = profile.get("drop_non_custom_tools", False) if profile else False
-    # strip_cache_control defaults to True globally — LM Studio rejects the field.
-    # Profiles can opt out by setting strip_cache_control: false.
     strip_cc = profile.get("strip_cache_control", True) if profile else True
 
-    def _type_matches(ttype: str) -> bool:
-        for pattern in strip_types:
-            if pattern.endswith("*"):
-                if ttype.startswith(pattern[:-1]):
-                    return True
-            elif ttype == pattern:
-                return True
-        return False
-
     tools = body.get("tools", [])
-    if tools and (strip_names or strip_types or drop_non_custom or strip_cc):
+    if tools and (strip_names or strip_cc):
         filtered = []
         for t in tools:
             name = t.get("name", "")
-            ttype = t.get("type", "")
             if name in strip_names:
                 log.info("Proxy: dropping tool %s (by name)", name)
-                continue
-            if _type_matches(ttype):
-                log.info("Proxy: dropping tool %s (type=%s)", name, ttype)
-                continue
-            if drop_non_custom and ttype and ttype != "custom":
-                log.info("Proxy: dropping non-custom tool %s (type=%s)", name, ttype)
                 continue
             if strip_cc:
                 t = {k: v for k, v in t.items() if k != "cache_control"}

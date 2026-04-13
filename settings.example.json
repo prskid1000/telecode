@@ -61,9 +61,7 @@
         "auto_load_tools": false,
         "core_tools": [],
         "inject_managed": ["code_execution"],
-        "strip_tool_names": [],
-        "strip_tool_types": ["web_search_*", "code_execution_*"],
-        "drop_non_custom_tools": false,
+        "strip_tool_names": ["web_search", "code_execution"],
         "strip_cache_control": true
       },
       {
@@ -78,8 +76,6 @@
         "core_tools": ["Bash", "Edit", "Read", "Write", "Glob", "Grep", "Agent", "Skill"],
         "inject_managed": ["WebSearch", "speak", "transcribe"],
         "strip_tool_names": [],
-        "strip_tool_types": [],
-        "drop_non_custom_tools": false,
         "strip_cache_control": false
       }
     ],
