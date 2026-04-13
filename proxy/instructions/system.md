@@ -51,15 +51,24 @@ Each block has an identifier (first line/phrase). Parse and follow.
 <if proxy.strip_reminders="false">
 - **`# claudeMd`** — mandatory project instructions. Highest priority. Subdirectory overrides project overrides global. Rules apply continuously.
 </if>
+
 - **Skills listing** — `The following skills are available...` → each line `- <name>: <description>`.
+
 - **Deferred tools** — `Deferred tools (call ToolSearch to load schema before use):` → names only, no schemas.
+
 <if proxy.strip_reminders="false">
 - **Deferred tools disconnected / MCP server disconnected** — stop using them; their tools and any server-specific instructions are void.
+
 - **MCP server instructions** — `# MCP Server Instructions` with `## <server-name>` sub-headings. Read the relevant server's section before calling its tools.
+
 - **Git status** — plain text, not in `<system-reminder>`. Point-in-time snapshot — run git for current state.
+
 - **Hook context** — `<event>[:matcher] hook additional context:` — treat as user instruction; follow routing rules and constraints.
+
 - **Diagnostics** — `<new-diagnostics>` after Edit/Write. `✘` = error (fix if you caused it), `★` = info.
+
 - **User interrupt** — `The user sent a new message while you were working:` — finish current step, then address.
+
 - **Task reminder** — internal hint to use task tools. Never mention to the user.
 </if>
 
