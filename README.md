@@ -439,7 +439,7 @@ Match requests by header substring and apply per-client transforms. First match 
 
 The **office** profile unlocks Claude for Excel/PowerPoint/Word against a local model — Office add-ins silently retry unless every turn returns a `tool_use` block, so this profile preserves their tools, strips Anthropic-hosted ones (`web_search_20250305`, `code_execution_20250825`), and swaps in an Office-aware system prompt.
 
-**Auto-load** (`auto_load_tools: true`): on first call to a deferred tool the proxy injects its schema and asks the model to retry; the second call passes through to CC for execution. **Hallucination guard** (always on): calling an unknown name triggers BM25 over core+deferred and returns the top matches — catches typos without blowing up the conversation.
+**Auto-load** (`auto_load_tools: true`): on first call to a deferred tool the proxy injects its schema and asks the model to retry; the second call passes through to CC for execution. **Hallucination guard** (always on): calling an unknown name triggers BM25 over core+deferred and returns the top matches as suggestions — no schemas injected, so context stays minimal. Model picks the right name, retries, and auto-load handles that single schema.
 
 ### `tools.<key>` — CLI backends
 
