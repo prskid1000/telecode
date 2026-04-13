@@ -55,8 +55,8 @@ def strip_reminders() -> bool:
 
 def auto_load_tools() -> bool:
     """Auto-load deferred tool schemas when model calls them without loading first.
-    Only effective when tool_search is enabled."""
-    return tool_search() and bool(app_config.get_nested("proxy.auto_load_tools", False))
+    Only takes effect for requests where tool_search produced deferred tools."""
+    return bool(app_config.get_nested("proxy.auto_load_tools", False))
 
 
 def lift_tool_result_images() -> bool:
