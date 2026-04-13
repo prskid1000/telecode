@@ -83,7 +83,7 @@ Tool-search proxy (for local models):
 | Path | Role |
 |------|------|
 | `settings.json` | Only config source |
-| `config.py` | Read/write accessors (must be **functions** for hot-reload) |
+| `config.py` | Read/write accessors (must be **functions** for hot-reload). `store_path` / `logs_dir` resolve relative paths against the `settings.json` directory (not cwd). |
 | `main.py` | App startup, handlers, `set_my_commands`, voice probe loop (no background stale checker) |
 | `store.py` | Topics + voice prefs JSON |
 | `sessions/process.py` | PTY + pyte + snapshot diff + timers |

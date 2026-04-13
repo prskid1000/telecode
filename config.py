@@ -16,6 +16,25 @@ from typing import Any
 _SETTINGS_PATH = Path(os.environ.get("TELECODE_SETTINGS", "settings.json"))
 
 
+def _settings_dir() -> Path:
+    """Directory containing the active settings.json (for resolving relative paths)."""
+    return _SETTINGS_PATH.resolve().parent
+
+
+def _resolve_path(path_str: str) -> str:
+    """Resolve `store_path` / `logs_dir`: absolute paths unchanged; relative paths
+    are anchored to the directory containing settings.json (not process cwd).
+
+    This matches how `proxy/server.py` resolves `data/logs` for debug dumps, so
+    `telecode.log` and `proxy_full_*.json` stay in the same folder when cwd differs
+    (e.g. Scheduled Task, `pythonw` from another working directory).
+    """
+    p = Path(path_str)
+    if p.is_absolute():
+        return str(p)
+    return str((_settings_dir() / p).resolve())
+
+
 def _load() -> dict[str, Any]:
     if not _SETTINGS_PATH.exists():
         raise FileNotFoundError(
@@ -75,8 +94,12 @@ def allowed_user_ids()  -> set[int]:
 
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-def store_path() -> str: return _raw["paths"]["store_path"]
-def logs_dir()     -> str: return _raw["paths"].get("logs_dir", "./data/logs")
+def store_path() -> str:
+    return _resolve_path(_raw["paths"]["store_path"])
+
+
+def logs_dir() -> str:
+    return _resolve_path(_raw["paths"].get("logs_dir", "./data/logs"))
 
 
 def pty_cwd() -> str:
