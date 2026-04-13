@@ -586,11 +586,11 @@ async def _handle_streaming(
                 f"Call the tool again with the correct parameter names from the schema above."
             )
 
-        elif deferred and tool_name not in core_visible_names:
-            # Hallucination safety net: tool_search is on and the model called
-            # a name that's not a core tool and not in the deferred listing.
-            # Auto-run ToolSearch over ALL known tools (core + deferred) using
-            # the hallucinated name as query.
+        elif tool_name not in core_visible_names and (deferred or core_visible_names):
+            # Hallucination safety net: the model called an unknown name.
+            # Auto-run BM25 over everything we know (core + deferred) using
+            # the hallucinated name as query. Fires regardless of tool_search
+            # setting — Office (no deferred) still benefits from core lookup.
             haystack = list(body.get("tools", [])) + deferred
             matched = await _do_tool_search(haystack, {"query": tool_name, "max_results": 5})
             log.info("Hallucination guard: %r not found — auto ToolSearch returned %d matches",
@@ -712,10 +712,10 @@ async def _handle_non_streaming(
                     f"Call the tool again with the correct parameter names."
                 )
 
-            elif deferred and tool_name not in core_visible_names:
-                # Hallucination guard: tool_search is on, name isn't a core tool
-                # and isn't in the deferred listing → fuzzy-match via ToolSearch
-                # over ALL known tools (core + deferred).
+            elif tool_name not in core_visible_names and (deferred or core_visible_names):
+                # Hallucination guard: unknown name → fuzzy-match via BM25
+                # over all known tools (core + deferred). Fires for both
+                # tool_search-on (has deferred) and tool_search-off (Office).
                 haystack = list(body.get("tools", [])) + deferred
                 matched = await _do_tool_search(
                     haystack, {"query": tool_name, "max_results": 5}
