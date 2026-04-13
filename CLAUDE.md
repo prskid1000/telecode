@@ -106,7 +106,7 @@ Tool-search proxy (for local models):
 | `proxy/managed_tools.py` | Registry of proxy-handled tools (WebSearch, speak, transcribe); schemas + handlers + LLM hooks |
 | `proxy/web_search.py` | Brave Search scraper + result formatter |
 | `proxy/config.py` | Proxy settings (port, upstream, upstream_model, core tools, BM25 params, web_search, client_profiles, model_mapping) |
-| `proxy/instructions/system.md` | Default Claude Code system instruction (tool_splitting path) |
+| `proxy/instructions/system.md` | Default Claude Code system instruction (tool_search path) |
 | `proxy/instructions/office.md` | Office add-in profile system instruction |
 | `mcp_server/app.py` | FastMCP instance (stateless streamable HTTP) |
 | `mcp_server/server.py` | Background startup (daemon thread, like proxy) |
@@ -203,7 +203,7 @@ Middleware proxy for local models (LM Studio, Ollama, etc.). Reduces ~100+ CC to
 5. **Web search** (`proxy/web_search.py`): scrapes `search.brave.com/search?q=...&source=web` directly — no API key, no self-hosted engine. Parser targets stable CSS selectors (`div.snippet[data-type="web"]`, `div.title`, `div.content`) that survive Brave's Svelte deploys. Only `data-type="web"` snippets are parsed — video/image clusters are excluded. No cache (every search is fresh). Browser-realistic headers (`Sec-Fetch-*`, DNT) to avoid bot detection.
 6. **Context injection**: every request gets a `<system-reminder>` appended with current date + user location (auto-detected via `ip-api.com` on first request, cached for session; override via `proxy.location` setting).
 7. **Other transforms**: `lift_tool_result_images` (LM Studio array-form workaround), `strip_reminders`, `proxy/instructions/*.md` conditional preprocessor (`<if>` tags).
-8. **Client profiles** (`proxy.client_profiles` in settings): header-based routing — first profile whose `match.header` contains `match.contains` wins. Each profile can override every transform: `system_instruction` (md file in `proxy/instructions/`), `tool_splitting`, `intercept`, `inject_date_location`, `core_tools`, `inject_managed`, `strip_tool_names`, `strip_tool_types` (with `*` wildcards), `drop_non_custom_tools`, `strip_cache_control`. No hardcoded behavior — profile fields drive everything, with fallback to global `proxy.*`. Used to distinguish Claude Code (default path) from Office add-ins (`pivot.claude.ai` Referer → `office.md`, no tool splitting, no intercept — Office's UI requires tool_use on turn 1).
+8. **Client profiles** (`proxy.client_profiles` in settings): header-based routing — first profile whose `match.header` contains `match.contains` wins. Each profile can override every transform: `system_instruction` (md file in `proxy/instructions/`), `tool_search`, `intercept`, `inject_date_location`, `core_tools`, `inject_managed`, `strip_tool_names`, `strip_tool_types` (with `*` wildcards), `drop_non_custom_tools`, `strip_cache_control`. No hardcoded behavior — profile fields drive everything, with fallback to global `proxy.*`. Used to distinguish Claude Code (default path) from Office add-ins (`pivot.claude.ai` Referer → `office.md`, no tool splitting, no intercept — Office's UI requires tool_use on turn 1).
 9. **Model mapping** (`proxy.model_mapping`): client-facing model name → upstream model name (e.g. `claude-opus-4-6` → `qwen3.5-35b-a3b`). Applied to both incoming `/v1/messages` requests and outgoing `/v1/models` responses (mapped aliases are listed first).
 7. **Passthrough:** all non-`/v1/messages` requests forwarded unchanged.
 

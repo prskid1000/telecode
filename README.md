@@ -358,7 +358,7 @@ Sits between Claude Code (or any Anthropic-API client) and LM Studio / Ollama / 
 | `port` | Listen port (default `1235`) |
 | `upstream_url` | Backend URL (default `http://localhost:1234` — LM Studio) |
 | `debug` | Dump every request body to `data/logs/proxy_full_*.json` |
-| `tool_splitting` | Split incoming tools into core (always forwarded) + deferred (searchable via ToolSearch) |
+| `tool_search` | Split incoming tools into core (always forwarded) + deferred (searchable via ToolSearch) |
 | `strip_reminders` | Drop `<system-reminder>` blocks from messages |
 | `auto_load_tools` | Auto-load a deferred tool's schema the first time the model calls it blindly |
 | `lift_tool_result_images` | Lift images out of array-form `tool_result` content — LM Studio workaround |
@@ -382,7 +382,7 @@ Match requests by header substring and apply per-client transforms. First match 
   "name": "office",
   "match": {"header": "Referer", "contains": "pivot.claude.ai"},
   "system_instruction": "office.md",
-  "tool_splitting": false,
+  "tool_search": false,
   "intercept": false,
   "inject_date_location": false,
   "strip_tool_types": ["web_search_*", "code_execution_*"],
@@ -396,7 +396,7 @@ Match requests by header substring and apply per-client transforms. First match 
 | `match.header` | Header name to check (case-insensitive) |
 | `match.contains` | Substring that must appear in the header value |
 | `system_instruction` | Markdown file in `proxy/instructions/` — prepended to the client's system prompt |
-| `tool_splitting` | Override global tool splitting for this client |
+| `tool_search` | Override global tool splitting for this client |
 | `intercept` | Intercept tool calls locally (ToolSearch, managed tools) |
 | `inject_date_location` | Add the date/location `<system-reminder>` |
 | `core_tools` | Tool names that stay core when splitting. Falls back to `proxy.core_tools` |
