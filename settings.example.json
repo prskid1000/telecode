@@ -61,7 +61,7 @@
         "auto_load_tools": false,
         "core_tools": [],
         "inject_managed": ["code_execution"],
-        "strip_tool_names": ["web_search", "code_execution"],
+        "strip_tool_names": ["web_search"],
         "strip_cache_control": true
       },
       {
