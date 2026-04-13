@@ -385,11 +385,11 @@ Match requests by header substring and apply per-client transforms. First match 
   "tool_search": false,
   "inject_date_location": false,
   "inject_managed": ["code_execution"],
-  "strip_tool_names": ["web_search", "code_execution"]
+  "strip_tool_names": ["web_search"]
 }
 ```
 
-(`strip_cache_control` defaults to `true` globally — LM Studio rejects the field — so it's omitted here.)
+(`inject_managed: ["code_execution"]` already strips the client's `code_execution` and replaces it with our sandbox-backed version — so `strip_tool_names` only needs to cover what we're *not* injecting a replacement for, here `web_search`. `strip_cache_control` defaults to `true` globally — LM Studio rejects the field — so it's omitted here.)
 
 | Key | Description |
 |---|---|
