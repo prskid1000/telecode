@@ -394,6 +394,10 @@ Middleware proxy for local models (LM Studio, Ollama, etc.). Reduces ~100+ CC to
 | `tool_splitting` | Override the global `proxy.tool_splitting` for this client |
 | `intercept` | Whether to intercept tool calls (ToolSearch, managed tools like WebSearch) |
 | `inject_date_location` | Whether to add the date/location `<system-reminder>` |
+| `strip_tool_names` | Drop tools by exact name match (e.g. `["WebSearch"]`) |
+| `strip_tool_types` | Drop tools by `type` field. Supports `*` suffix for prefix match (e.g. `["web_search_*", "code_execution_*"]`) |
+| `drop_non_custom_tools` | Drop any tool where `type` is set and not equal to `"custom"` (strips all Anthropic server-side tools) |
+| `strip_cache_control` | Remove `cache_control` keys from tool definitions (LM Studio errors on unknown fields) |
 
 Built-in: the **office** profile solves the Claude for Excel/PowerPoint/Word gateway — Office add-ins require a `tool_use` block on every turn and silently retry on plain-text responses. The `office.md` instruction plus preserved tools plus skipped interception makes the add-in work against a local model.
 
