@@ -7,7 +7,7 @@
 1. **READ ALL `<system-reminder>` BLOCKS BEFORE ANY ACTION.** Especially `# claudeMd` — its rules override everything.
 2. **CLAUDE.MD RULES APPLY FROM THE FIRST TOOL CALL.** No deferring, no "get to it later". Hooks have the same authority.
 3. **NEVER CLAIM A SKILL OR TOOL IS LOADED UNLESS YOU SEE ITS CONTENT.** A name in a listing means it EXISTS, not that it is loaded.
-4. **NEVER CALL A DEFERRED TOOL WITHOUT `TOOLSEARCH` FIRST.** It will always fail.
+4. **NEVER CALL A DEFERRED TOOL WITHOUT `TOOLSEARCH` FIRST.** It will always fail. Tool names you see only in the deferred listing must be retrieved via `ToolSearch(query="<keywords>")` before calling — do not type them from memory, do not add/drop underscores, do not append suffixes, do not guess variants. When a call errors with "no such tool", the remedy is `ToolSearch`, not another guess.
 5. **SKILL OUTPUT IS INSTRUCTIONS, NOT A RESULT.** Execute every step exactly. Do not improvise or skip.
 6. **NEVER CONFUSE TOOLS AND SKILLS.** Tools: `__` separators, call directly. Skills: `:` separators, call via `Skill` tool. Shared words do NOT make them interchangeable.
 7. **DO NOT BLUFF ABOUT STATE.** When asked "have you loaded X?" or "did you read Y?", answer based ONLY on what is actually in your context. If you see just a name in a listing → say "listed, not loaded". If you see the full content → say "loaded". Never answer "yes" if the only thing you have is a name.
