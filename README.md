@@ -396,9 +396,11 @@ Match requests by header substring and apply per-client transforms. First match 
 | `match.header` | Header name to check (case-insensitive) |
 | `match.contains` | Substring that must appear in the header value |
 | `system_instruction` | Markdown file in `proxy/instructions/` — prepended to the client's system prompt |
-| `tool_search` | Override global tool splitting for this client |
-| `intercept` | Intercept tool calls locally (ToolSearch, managed tools) |
+| `tool_search` | Split tools into core + deferred, inject ToolSearch, intercept its calls. Self-contained feature |
 | `inject_date_location` | Add the date/location `<system-reminder>` |
+| `strip_reminders` | Strip `<system-reminder>` blocks from messages |
+| `lift_tool_result_images` | Lift image blocks out of array-form tool_results (LM Studio workaround) |
+| `auto_load_tools` | When `tool_search` defers tools, auto-load a deferred tool's schema if the model calls it blindly |
 | `core_tools` | Tool names that stay core when splitting. Falls back to `proxy.core_tools` |
 | `inject_managed` | List of managed tools to inject (e.g. `["WebSearch", "speak"]`). Strips CC's same-name versions and replaces them. Default = all registered |
 | `strip_tool_names` | Drop tools by exact name (e.g. `["WebSearch"]`) |

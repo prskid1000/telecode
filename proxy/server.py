@@ -386,10 +386,17 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
     upstream = proxy_config.upstream_url()
     deferred: list[dict[str, Any]] = []
 
-    # Profile settings (fall back to global proxy settings)
-    use_tool_search = profile.get("tool_search", proxy_config.tool_search()) if profile else proxy_config.tool_search()
-    use_intercept = profile.get("intercept", True) if profile else True
-    inject_date_loc = profile.get("inject_date_location", True) if profile else True
+    # Profile settings (fall back to global proxy settings) — every feature independently togglable
+    def _pget(key: str, default):
+        if profile and key in profile:
+            return profile[key]
+        return default
+
+    use_tool_search = _pget("tool_search", proxy_config.tool_search())
+    inject_date_loc = _pget("inject_date_location", True)
+    use_strip_reminders = _pget("strip_reminders", proxy_config.strip_reminders())
+    use_lift_images = _pget("lift_tool_result_images", proxy_config.lift_tool_result_images())
+    use_auto_load = _pget("auto_load_tools", proxy_config.auto_load_tools())
     system_md = profile.get("system_instruction") if profile else None
 
     # Inject profile-specific system instruction (prepended to client's system)
@@ -469,10 +476,10 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
             len(tools), len(body["tools"]), len(inject_schemas), len(tools) - len(kept),
         )
 
-    if profile and proxy_config.strip_reminders() and not use_tool_search:
+    if use_strip_reminders:
         body["messages"] = strip_all_reminders(body.get("messages", []))
 
-    if proxy_config.lift_tool_result_images():
+    if use_lift_images:
         body["messages"] = _lift_tool_result_images(body.get("messages", []))
 
     await _dump_request(body, "OUTGOING")
@@ -484,16 +491,18 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
             headers[h] = request.headers[h]
     headers.setdefault("content-type", "application/json")
 
-    # Which managed tools to actually intercept (names that were injected for THIS request).
-    # Separate from ToolSearch, which is always intercepted when tool_search produced deferred tools.
-    managed_intercept: set[str] = {mt.name for mt in (_MANAGED_REG.get(n) for n in inject_managed) if mt} if use_intercept else set()
+    # Which managed tools to intercept for THIS request = whatever the profile injected.
+    # (Injecting without intercepting is broken; intercepting without injecting is a no-op.)
+    managed_intercept: set[str] = {mt.name for mt in (_MANAGED_REG.get(n) for n in inject_managed) if mt}
 
     if body.get("stream", False):
         return await _handle_streaming(upstream, body, headers, deferred, request,
-                                       managed_intercept=managed_intercept)
+                                       managed_intercept=managed_intercept,
+                                       auto_load=use_auto_load)
     else:
         return await _handle_non_streaming(upstream, body, headers, deferred,
-                                           managed_intercept=managed_intercept)
+                                           managed_intercept=managed_intercept,
+                                           auto_load=use_auto_load)
 
 
 async def _handle_streaming(
@@ -503,6 +512,7 @@ async def _handle_streaming(
     deferred: list[dict[str, Any]],
     request: web.Request,
     managed_intercept: set[str] | None = None,
+    auto_load: bool = False,
 ) -> web.StreamResponse:
     """Handle streaming request. Two independent intercept behaviors:
 
@@ -518,7 +528,7 @@ async def _handle_streaming(
     if deferred:
         # ToolSearch is bundled with tool_search — always intercepted when deferred exist
         intercept.add("ToolSearch")
-        if proxy_config.auto_load_tools():
+        if auto_load:
             intercept |= deferred_names
     if managed_intercept:
         intercept |= managed_intercept
@@ -581,7 +591,7 @@ async def _handle_streaming(
                     result_content = f"ERROR: {tool_name} failed: {exc}"
                 summaries.append(format_visibility(tool_name, tool_use["input"], summary))
 
-        elif proxy_config.auto_load_tools() and tool_name in deferred_names:
+        elif auto_load and tool_name in deferred_names:
             matched = [t for t in deferred if t["name"] == tool_name]
             log.info("Auto-loading schema for deferred tool: %s", tool_name)
             result_content = (
@@ -623,6 +633,7 @@ async def _handle_non_streaming(
     headers: dict[str, str],
     deferred: list[dict[str, Any]],
     managed_intercept: set[str] | None = None,
+    auto_load: bool = False,
 ) -> web.Response:
     """Handle non-streaming request. Same intercept model as streaming:
     ToolSearch+deferred always intercepted when deferred exist;
@@ -682,7 +693,7 @@ async def _handle_non_streaming(
                         result_text = f"ERROR: {tool_name} failed: {exc}"
                     summaries.append(format_visibility(tool_name, block.get("input", {}), summary))
 
-            elif proxy_config.auto_load_tools() and tool_name in deferred_names:
+            elif auto_load and tool_name in deferred_names:
                 matched = [t for t in deferred if t["name"] == tool_name]
                 log.info("Auto-loading schema for deferred tool: %s", tool_name)
                 result_text = (
