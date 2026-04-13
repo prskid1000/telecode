@@ -304,7 +304,7 @@ Streamable HTTP MCP server (FastMCP, port 1236). Drop-in tools/resources/prompts
 | Computer control LLM error | Check LM Studio is running, model is loaded, base_url/model in settings |
 | Voice not working | Run `/voice`; start STT service, bot detects within 60s |
 | Proxy not starting | Check `proxy.enabled` is `true` in settings.json; check port not in use |
-| ToolSearch not triggered | Model may not call it; check upstream is reachable; check logs for "Proxy:" lines |
+| ToolSearch not triggered | Model may not call it; check upstream is reachable; with `proxy.debug` on, inspect `data/logs/proxy_full_*.json` dumps |
 | Tools missing after search | Tool may not match query; try regex with `re:` prefix; check `MAX_SEARCH_RESULTS` |
 | MCP server not starting | Check `mcp_server.enabled` is `true`; check port 1236 not in use |
 | MCP speak fails | Kokoro TTS must be running on `mcp_server.tts_url` (default :6500) |

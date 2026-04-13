@@ -31,10 +31,6 @@ async def _run() -> None:
     site = web.TCPSite(runner, "127.0.0.1", port)
     await site.start()
 
-    log = logging.getLogger("proxy")
-    log.info("Tool-search proxy listening on http://127.0.0.1:%d -> %s", port, upstream)
-    log.info("Press Ctrl+C to stop.")
-
     try:
         await asyncio.Event().wait()  # run forever
     except asyncio.CancelledError:

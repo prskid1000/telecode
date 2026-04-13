@@ -10,14 +10,11 @@ recursion). Typically <1s with ~100 tokens in, ~20 out.
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any
 
 import aiohttp
 
 from proxy import config as proxy_config
-
-log = logging.getLogger("telecode.proxy.llm")
 
 
 async def structured_call(
@@ -73,6 +70,5 @@ async def structured_call(
         content = data["choices"][0]["message"]["content"]
         parsed = json.loads(content) if isinstance(content, str) else content
         return parsed if isinstance(parsed, dict) else {}
-    except Exception as exc:
-        log.warning("structured_call failed: %s", exc)
+    except Exception:
         return {}

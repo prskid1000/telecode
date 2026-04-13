@@ -13,13 +13,10 @@ Stable CSS selectors used (not svelte-XXXXX build hashes):
 from __future__ import annotations
 
 import html as _html
-import logging
 import re
 from typing import Any
 
 import aiohttp
-
-log = logging.getLogger("telecode.proxy.web_search")
 
 _BRAVE_URL = "https://search.brave.com/search"
 _HEADERS = {
@@ -142,7 +139,6 @@ async def search(
                     return _format_error(query, f"Brave HTTP {resp.status}: {body[:200]}"), 0
                 html = await resp.text()
     except Exception as exc:
-        log.warning("Brave search failed: %s", exc)
         return _format_error(query, str(exc)), 0
 
     results = _parse_brave_html(html, n)
