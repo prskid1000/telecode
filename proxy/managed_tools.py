@@ -13,11 +13,8 @@ Adding a new managed tool:
 """
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
-
-log = logging.getLogger("telecode.proxy.managed_tools")
 
 # Handler returns (summary_line, tool_result_content).
 # summary_line is displayed to the user (e.g. "Found 5 results (general)").
@@ -70,12 +67,6 @@ def register(
         pre_llm=pre_llm,
         post_llm=post_llm,
     )
-    hooks = []
-    if pre_llm:
-        hooks.append("pre_llm")
-    if post_llm:
-        hooks.append("post_llm")
-    log.info("Registered managed tool: %s (hooks: %s)", name, hooks or "none")
 
 
 def get_schemas() -> list[dict[str, Any]]:
@@ -114,8 +105,7 @@ async def run_pre_llm(tool: ManagedTool, tool_input: dict[str, Any]) -> dict[str
     from proxy.llm import structured_call
     try:
         prompt = tool.pre_llm.prompt_template.format(**tool_input)
-    except KeyError as exc:
-        log.warning("pre_llm prompt_template missing key: %s", exc)
+    except KeyError:
         return tool_input
     full_prompt = f"{tool.pre_llm.system}\n\n{prompt}" if tool.pre_llm.system else prompt
     result = await structured_call(
@@ -125,7 +115,6 @@ async def run_pre_llm(tool: ManagedTool, tool_input: dict[str, Any]) -> dict[str
     )
     enriched = dict(tool_input)
     enriched["_pre_llm"] = result
-    log.info("pre_llm %s: %s", tool.name, result)
     return enriched
 
 
@@ -142,8 +131,7 @@ async def run_post_llm(tool: ManagedTool, tool_result: str) -> str:
     import json
     try:
         prompt = tool.post_llm.prompt_template.format(result=tool_result)
-    except KeyError as exc:
-        log.warning("post_llm prompt_template missing key: %s", exc)
+    except KeyError:
         return tool_result
     full_prompt = f"{tool.post_llm.system}\n\n{prompt}" if tool.post_llm.system else prompt
     result = await structured_call(
@@ -152,7 +140,6 @@ async def run_post_llm(tool: ManagedTool, tool_result: str) -> str:
         schema_name=f"{tool.name}_post",
     )
     if result:
-        log.info("post_llm %s: %s", tool.name, result)
         return json.dumps(result, indent=2)
     return tool_result
 

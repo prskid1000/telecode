@@ -7,7 +7,6 @@ Intercepts tool lists, defers non-core tools, and handles ToolSearch round-trips
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any
 
 import aiohttp
@@ -20,8 +19,6 @@ from proxy.tool_registry import (
     lift_tool_result_images as _lift_tool_result_images,
 )
 from proxy.tool_search import BM25Index
-
-log = logging.getLogger("telecode.proxy")
 
 
 def _format_functions_block(matched: list[dict[str, Any]]) -> str:
@@ -107,7 +104,6 @@ async def _get_location() -> str:
                         _location_cache = country
                     else:
                         _location_cache = ""
-                    log.info("Auto-detected location: %s", _location_cache)
                 else:
                     _location_cache = ""
     except Exception:
@@ -347,7 +343,6 @@ async def _dump_request(body: dict[str, Any], label: str, meta: dict[str, Any] |
         if meta:
             payload["meta"] = meta
         await f.write(json.dumps(payload, indent=2, ensure_ascii=False))
-    log.info("Proxy debug #%d: %s -> %s", _dump_counter, label, full_path)
 
     # Rotate: keep only last _MAX_DUMP_FILES
     files = sorted(globmod.glob(os.path.join(dump_dir, "proxy_full_*.json")))
@@ -395,8 +390,6 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
 
     # Match request against configured client profiles (first match wins).
     profile = _match_profile(request.headers)
-    if profile:
-        log.info("Proxy: matched client profile %r", profile.get("name", "?"))
 
     # Apply model mapping (e.g. claude-opus-4-6 -> qwen3.5-35b-a3b)
     mapping = proxy_config.model_mapping()
@@ -404,7 +397,6 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
     if mapping:
         if requested_model in mapping:
             body["model"] = mapping[requested_model]
-            log.info("Proxy: mapped model %s -> %s", requested_model, body["model"])
 
     # Profile-driven tool filtering:
     #  - strip_tool_names: drop tools whose name matches any entry (hosted or custom)
@@ -418,7 +410,6 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
         for t in tools:
             name = t.get("name", "")
             if name in strip_names:
-                log.info("Proxy: dropping tool %s (by name)", name)
                 continue
             if strip_cc:
                 t = {k: v for k, v in t.items() if k != "cache_control"}
@@ -478,7 +469,6 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
     for mname in inject_managed:
         mt = _MANAGED_REG.get(mname)
         if not mt:
-            log.warning("Profile references unknown managed tool: %s", mname)
             continue
         managed_strip_names.add(mt.name)
         managed_strip_names.update(mt.strip_from_cc)
@@ -493,11 +483,6 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
         core, deferred = split_tools(tools, core_names, extra_strip, inject_schemas)
         body["tools"] = core
 
-        log.info(
-            "Proxy: %d tools -> %d core + %d deferred (managed injected: %d)",
-            len(tools), len(core), len(deferred), len(inject_schemas),
-        )
-
         # Inject deferred tools instruction into system, tool names into messages
         if deferred:
             body["messages"] = rewrite_messages(body.get("messages", []), deferred)
@@ -507,10 +492,6 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
         tools = body.get("tools", [])
         kept = [t for t in tools if t.get("name", "") not in managed_strip_names]
         body["tools"] = inject_schemas + kept
-        log.info(
-            "Proxy: inject_managed only — %d tools -> %d (injected %d, stripped %d)",
-            len(tools), len(body["tools"]), len(inject_schemas), len(tools) - len(kept),
-        )
 
     if use_strip_reminders:
         body["messages"] = strip_all_reminders(body.get("messages", []))
@@ -524,34 +505,6 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
         if h in request.headers:
             headers[h] = request.headers[h]
     headers.setdefault("content-type", "application/json")
-
-    # Lightweight request fingerprinting for cache-debugging:
-    # shows which client/profile is evicting LM Studio's prefix cache.
-    try:
-        ua = request.headers.get("User-Agent", "") or ""
-        ref = request.headers.get("Referer", "") or ""
-        prof_name = (profile.get("name") if profile else None) or "-"
-        mapped_model = body.get("model", "") or ""
-        sys = body.get("system", "")
-        sys0 = ""
-        if isinstance(sys, str):
-            sys0 = sys.strip().splitlines()[0] if sys.strip() else ""
-        elif isinstance(sys, list):
-            for blk in sys:
-                if isinstance(blk, dict) and blk.get("type") == "text":
-                    txt = (blk.get("text") or "").strip()
-                    if txt:
-                        sys0 = txt.splitlines()[0]
-                        break
-        sys0 = sys0[:120]
-        ua = ua[:120]
-        ref = ref[:120]
-        log.info(
-            "Proxy: client=%s model=%s->%s ua=%r referer=%r sys0=%r",
-            prof_name, requested_model, mapped_model, ua, ref, sys0,
-        )
-    except Exception:
-        pass
 
     # Which managed tools to intercept for THIS request = whatever the profile injected.
     # (Injecting without intercepting is broken; intercepting without injecting is a no-op.)
@@ -653,14 +606,12 @@ async def _handle_streaming(
 
         if tool_name == "ToolSearch":
             matched = await _do_tool_search(deferred, tool_use["input"])
-            log.info("ToolSearch matched %d tools for query=%r", len(matched), tool_use["input"].get("query"))
             result_content = _format_functions_block(matched)
 
         elif (not auto_load) and tool_name in deferred_names and tool_name not in core_visible_names:
             # Enforce "unloaded tools require ToolSearch first" as a hard policy
             # when auto_load is disabled. Otherwise the model can call by name
             # and Claude Code may execute it anyway, undermining the reminder.
-            log.info("Guard: blocked unloaded tool call to %s (auto_load_tools=false)", tool_name)
             result_content = (
                 f"`{tool_name}` is currently UNLOADED in this conversation.\n\n"
                 f"Call `ToolSearch(query=\"select:{tool_name}\", max_results=5)` to load its schema, "
@@ -678,9 +629,7 @@ async def _handle_streaming(
                     summary, result_content = await handler(enriched)
                     # post_llm: result → LLM → processed result
                     result_content = await run_post_llm(tool_entry, result_content)
-                    log.info("Managed tool %s: %s", tool_name, summary)
                 except Exception as exc:
-                    log.warning("Managed tool %s failed: %s", tool_name, exc)
                     summary = f"Failed: {exc}"
                     result_content = f"ERROR: {tool_name} failed: {exc}"
                 summaries.append(format_visibility(tool_name, tool_use["input"], summary))
@@ -692,7 +641,6 @@ async def _handle_streaming(
             # Second call falls through (tool_name now in core_visible_names)
             # and passes to CC for actual execution.
             matched = [t for t in deferred if t["name"] == tool_name]
-            log.info("Auto-loading schema for deferred tool: %s", tool_name)
             result_content = (
                 f"The schema for `{tool_name}` has now been loaded:\n\n"
                 f"{_format_functions_block(matched)}\n\n"
@@ -706,8 +654,6 @@ async def _handle_streaming(
             # setting — Office (no deferred) still benefits from core lookup.
             haystack = list(body.get("tools", [])) + deferred
             search_matches = await _do_tool_search(haystack, {"query": tool_name, "max_results": 5})
-            log.info("Hallucination guard: %r not found — auto ToolSearch returned %d matches",
-                     tool_name, len(search_matches))
             # Do NOT inject all 5 matches into body.tools — that bloats context.
             # Show them in the tool_result so the model picks one; auto_load
             # will inject the correct schema on the next call.
@@ -803,11 +749,9 @@ async def _handle_non_streaming(
 
             if tool_name == "ToolSearch":
                 matched = await _do_tool_search(deferred, block.get("input", {}))
-                log.info("ToolSearch matched %d tools", len(matched))
                 result_text = _format_functions_block(matched)
 
             elif (not auto_load) and tool_name in deferred_names and tool_name not in core_visible_names:
-                log.info("Guard: blocked unloaded tool call to %s (auto_load_tools=false)", tool_name)
                 result_text = (
                     f"`{tool_name}` is currently UNLOADED in this conversation.\n\n"
                     f"Call `ToolSearch(query=\"select:{tool_name}\", max_results=5)` to load its schema, "
@@ -822,9 +766,7 @@ async def _handle_non_streaming(
                         enriched = await run_pre_llm(tool_entry, block.get("input", {}))
                         summary, result_text = await handler(enriched)
                         result_text = await run_post_llm(tool_entry, result_text)
-                        log.info("Managed tool %s (non-streaming): %s", tool_name, summary)
                     except Exception as exc:
-                        log.warning("Managed tool %s failed: %s", tool_name, exc)
                         summary = f"Failed: {exc}"
                         result_text = f"ERROR: {tool_name} failed: {exc}"
                     summaries.append(format_visibility(tool_name, block.get("input", {}), summary))
@@ -833,7 +775,6 @@ async def _handle_non_streaming(
                 # Only fire on the FIRST call — after injection the tool joins
                 # core_visible_names and subsequent calls pass through to CC.
                 matched = [t for t in deferred if t["name"] == tool_name]
-                log.info("Auto-loading schema for deferred tool: %s", tool_name)
                 result_text = (
                     f"This tool's schema was not loaded. Here is the schema:\n\n"
                     f"{_format_functions_block(matched)}\n\n"
@@ -846,8 +787,6 @@ async def _handle_non_streaming(
                 search_matches = await _do_tool_search(
                     haystack, {"query": tool_name, "max_results": 5}
                 )
-                log.info("Hallucination guard: %r not found — auto ToolSearch returned %d matches",
-                         tool_name, len(search_matches))
                 matched = []
                 if search_matches:
                     result_text = (
@@ -941,8 +880,7 @@ async def handle_models(request: web.Request) -> web.Response:
             async with session.get(f"{upstream}/v1/models", headers=headers) as resp:
                 data = await resp.json()
                 return web.json_response(_openai_models_to_anthropic(data))
-    except Exception as exc:
-        log.warning("Failed to fetch models from upstream: %s", exc)
+    except Exception:
         return web.json_response({"data": [], "has_more": False, "first_id": "", "last_id": ""})
 
 
@@ -1013,7 +951,6 @@ def create_app() -> web.Application:
 async def start_proxy_background() -> aiohttp.web.AppRunner | None:
     """Start proxy as a background task (non-blocking). Returns runner for cleanup."""
     if not proxy_config.enabled():
-        log.info("Proxy disabled in settings")
         return None
 
     port = proxy_config.proxy_port()
@@ -1023,5 +960,4 @@ async def start_proxy_background() -> aiohttp.web.AppRunner | None:
     host = proxy_config.proxy_host()
     site = web.TCPSite(runner, host, port)
     await site.start()
-    log.info("Tool-search proxy listening on http://%s:%d -> %s", host, port, proxy_config.upstream_url())
     return runner
