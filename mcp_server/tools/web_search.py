@@ -14,16 +14,24 @@ log = logging.getLogger("telecode.mcp_server.web_search")
 
 @mcp_app.tool()
 async def web_search(query: str) -> str:
-    """Search the web via Brave Search.
+    """Search the public web via Brave Search. Returns titles, URLs, snippets.
 
-    Returns ranked results with titles, URLs, and snippets. Always cite
-    the URLs returned as markdown links in your reply.
+    USE when the user needs information that lives on external websites:
+    current events, third-party API docs, package versions, tutorials for
+    unfamiliar tech, facts newer than your training cutoff.
+
+    DO NOT USE for:
+      - tasks a dedicated tool can do (databases, files, git, local commands)
+      - things you already know confidently
+      - "how do I do X" when X is something the existing tool set handles
+
+    Before calling, check if a deferred or core tool matches the domain. If
+    one does, call `ToolSearch` or that tool directly — not web_search.
+
+    Cite returned URLs as markdown links in your reply.
 
     Args:
         query: The search query (2+ characters).
-
-    Returns:
-        Formatted multi-line string with search results.
     """
     query = (query or "").strip()
     if len(query) < 2:
