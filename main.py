@@ -26,8 +26,26 @@ from proxy.server import start_proxy_background
 from mcp_server.server import start_mcp_background
 
 
+def _clear_previous_logs() -> None:
+    """Delete telecode.log and proxy_full_*.json from the logs dir so every
+    run starts with a clean slate. Best-effort — skips files held by other
+    processes."""
+    import glob
+    logs_dir = config.logs_dir()
+    if not os.path.isdir(logs_dir):
+        return
+    targets = [os.path.join(logs_dir, "telecode.log")]
+    targets.extend(glob.glob(os.path.join(logs_dir, "proxy_full_*.json")))
+    for path in targets:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass  # file locked or doesn't exist
+
+
 def _setup_logging() -> None:
     os.makedirs(config.logs_dir(), exist_ok=True)
+    _clear_previous_logs()
     handlers = []
     # Stream handler — only if stdout is available (not pythonw)
     if sys.stdout is not None:
