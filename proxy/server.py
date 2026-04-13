@@ -589,8 +589,10 @@ async def _handle_streaming(
         elif deferred and tool_name not in core_visible_names:
             # Hallucination safety net: tool_search is on and the model called
             # a name that's not a core tool and not in the deferred listing.
-            # Auto-run ToolSearch over deferred tools using the name itself as query.
-            matched = await _do_tool_search(deferred, {"query": tool_name, "max_results": 5})
+            # Auto-run ToolSearch over ALL known tools (core + deferred) using
+            # the hallucinated name as query.
+            haystack = list(body.get("tools", [])) + deferred
+            matched = await _do_tool_search(haystack, {"query": tool_name, "max_results": 5})
             log.info("Hallucination guard: %r not found — auto ToolSearch returned %d matches",
                      tool_name, len(matched))
             if matched:
@@ -712,9 +714,11 @@ async def _handle_non_streaming(
 
             elif deferred and tool_name not in core_visible_names:
                 # Hallucination guard: tool_search is on, name isn't a core tool
-                # and isn't in the deferred listing → fuzzy-match via ToolSearch.
+                # and isn't in the deferred listing → fuzzy-match via ToolSearch
+                # over ALL known tools (core + deferred).
+                haystack = list(body.get("tools", [])) + deferred
                 matched = await _do_tool_search(
-                    deferred, {"query": tool_name, "max_results": 5}
+                    haystack, {"query": tool_name, "max_results": 5}
                 )
                 log.info("Hallucination guard: %r not found — auto ToolSearch returned %d matches",
                          tool_name, len(matched))
