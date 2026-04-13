@@ -176,7 +176,79 @@ def format_visibility(name: str, tool_input: dict[str, Any], summary: str) -> st
     return f"● {name}(\"{arg_val}\")\n└  {summary}"
 
 
-# ── Tool auto-discovery ────────────────────────────────────────────────
-# Drop a .py file in proxy/managed/ calling register(...) at module level
-# and it's picked up here. No changes needed in this file to add a new tool.
-import proxy.managed  # noqa: F401  triggers pkgutil import of all modules
+# ── MCP bridge: every mcp_server/tools/*.py is also a managed tool ─────
+# Single source of truth. Drop a file in mcp_server/tools/, it's auto-exposed
+# via MCP streamable-HTTP AND auto-registered here as a managed tool the
+# proxy intercepts locally.
+#
+# Optional module-level attributes on an MCP tool module customize the bridge:
+#   _primary_arg     : str  — which arg to show in the visibility line
+#   _strip_from_cc   : list[str] — CC tool names to drop before injecting
+#   _pre_llm         : LLMHook  — enrich args via LLM before handler runs
+#   _post_llm        : LLMHook  — rewrite result via LLM before returning
+#
+# Without any of these, sane defaults are inferred from the tool schema.
+
+_PRIMARY_HINTS = {"query", "text", "audio_path", "code", "url", "path"}
+
+
+def _default_primary_arg(params: dict[str, Any]) -> str:
+    props = (params or {}).get("properties", {})
+    required = (params or {}).get("required", [])
+    for k in required:
+        if k in _PRIMARY_HINTS:
+            return k
+    return required[0] if required else next(iter(props), "")
+
+
+def _bridge_mcp_tools() -> None:
+    import sys
+    from mcp_server.app import mcp_app, register_all
+    register_all()
+
+    mgr = mcp_app._tool_manager
+
+    for info in mgr.list_tools():
+        name = info.name
+        module = sys.modules.get(f"mcp_server.tools.{name}")
+        # Fall back: lookup by iterating, since function name may differ
+        if module is None:
+            for modname, mod in list(sys.modules.items()):
+                if modname.startswith("mcp_server.tools.") and hasattr(mod, name):
+                    module = mod
+                    break
+
+        primary = getattr(module, "_primary_arg", None) or _default_primary_arg(info.parameters or {})
+        strip = getattr(module, "_strip_from_cc", None) or [name]
+        pre_llm = getattr(module, "_pre_llm", None)
+        post_llm = getattr(module, "_post_llm", None)
+
+        schema = {
+            "name": name,
+            "description": (info.description or "").strip(),
+            "input_schema": info.parameters or {"type": "object", "properties": {}},
+        }
+
+        def _make_handler(tool_name: str):
+            async def _handle(args: dict[str, Any]) -> tuple[str, str]:
+                result = await mgr.call_tool(tool_name, args)
+                if isinstance(result, list):
+                    parts = []
+                    for block in result:
+                        text = getattr(block, "text", None)
+                        parts.append(text if text is not None else str(block))
+                    text_out = "\n".join(parts)
+                elif isinstance(result, str):
+                    text_out = result
+                else:
+                    text_out = str(result)
+                preview = text_out.splitlines()[0][:80] if text_out else "(no output)"
+                return preview, text_out
+            return _handle
+
+        register(name, schema, _make_handler(name),
+                 strip=list(strip), primary_arg=primary,
+                 pre_llm=pre_llm, post_llm=post_llm)
+
+
+_bridge_mcp_tools()
