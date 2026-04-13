@@ -370,15 +370,14 @@ Sits between Claude Code (or any Anthropic-API client) and LM Studio / Ollama / 
 
 Point `ANTHROPIC_BASE_URL=http://localhost:1235` at the proxy. Also runs standalone: `python -m proxy`.
 
-**Managed tools** — schemas injected into the model's tool list; intercepted on `tool_use`, executed locally, looped up to 15 rounds per turn. Two drop-in locations:
+**Managed tools** — a single drop-in folder, two transports:
 
-- **`mcp_server/tools/*.py`** — tools safe for any MCP client. Auto-discovered by the MCP server *and* auto-bridged into the proxy's managed registry via `proxy/managed/_mcp_bridge.py`. Single source of truth. Currently: `speak`, `transcribe`, `web_search`.
-- **`proxy/managed/*.py`** — proxy-only tools (don't expose capabilities you wouldn't give an external MCP client). Currently: `code_execution` (unsandboxed Python subprocess).
+- Drop a `.py` in **`mcp_server/tools/`** and it's exposed via both the MCP streamable-HTTP endpoint AND the proxy's intercept loop (auto-bridged by `proxy/managed_tools.py`). Currently registered: `code_execution`, `speak`, `transcribe`, `web_search`.
 
 **Adding a tool:**
 
 ```python
-# mcp_server/tools/my_tool.py   ← MCP + proxy
+# mcp_server/tools/my_tool.py
 from mcp_server.app import mcp_app
 
 @mcp_app.tool()
@@ -392,18 +391,18 @@ async def my_tool(query: str, limit: int = 10) -> str:
     return do_thing(query, limit)
 ```
 
+That's it. FastMCP derives the schema from your type hints + docstring.
+
+**Optional module attributes** — set any of these at module level to customize bridge behavior:
+
 ```python
-# proxy/managed/my_tool.py   ← proxy only, supports pre_llm/post_llm hooks
-from proxy.managed_tools import register, LLMHook
-
-async def _handle(args):
-    return ("summary", "result")
-
-register("my_tool", {"name": "my_tool", "description": "...", "input_schema": {...}},
-         _handle, strip=["my_tool"], primary_arg="query")
+_primary_arg = "query"              # which arg to show in the visibility line
+_strip_from_cc = ["my_tool", "MyTool"]  # client tool names to replace
+_pre_llm = LLMHook(...)             # enrich args via LLM before handler runs
+_post_llm = LLMHook(...)            # rewrite result via LLM before returning
 ```
 
-No other code changes needed. Drop in, restart.
+Defaults are inferred from the schema if unset.
 
 #### Client profiles (`proxy.client_profiles`)
 
@@ -612,10 +611,7 @@ proxy/                 Anthropic-API-compatible middleware (port 1235)
   server.py            aiohttp request handler + intercept loop
   tool_registry.py     split_tools + proxy_system_instruction loader
   tool_search.py       BM25 + regex search engine
-  managed_tools.py     Registry of proxy-handled tools (+ LLM hooks)
-  managed/             Drop-in managed-tool modules (auto-discovered)
-    _mcp_bridge.py     Auto-wraps every mcp_server/tools/* into the registry
-    code_execution.py  Python-subprocess sandbox (proxy-only, not via MCP)
+  managed_tools.py     Managed-tool registry + MCP→proxy auto-bridge
   web_search.py        Brave Search scraper
   llm.py               structured_call(prompt, schema) utility
   config.py            Profile + global proxy settings accessors
@@ -626,7 +622,7 @@ proxy/                 Anthropic-API-compatible middleware (port 1235)
 mcp_server/            Streamable-HTTP MCP server (port 1236)
   app.py               FastMCP instance + CORS wrapper
   server.py            Background thread launcher
-  tools/               Drop-in tool modules (tts, stt, web_search)
+  tools/               Drop-in tool modules (tts, stt, web_search, code_execution)
   resources/           Drop-in resource modules
   prompts/             Drop-in prompt modules
 
