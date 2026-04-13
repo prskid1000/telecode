@@ -387,7 +387,7 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
     deferred: list[dict[str, Any]] = []
 
     # Profile settings (fall back to global proxy settings)
-    use_tool_splitting = profile.get("tool_splitting", proxy_config.tool_splitting()) if profile else proxy_config.tool_splitting()
+    use_tool_search = profile.get("tool_search", proxy_config.tool_search()) if profile else proxy_config.tool_search()
     use_intercept = profile.get("intercept", True) if profile else True
     inject_date_loc = profile.get("inject_date_location", True) if profile else True
     system_md = profile.get("system_instruction") if profile else None
@@ -417,7 +417,7 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
         elif isinstance(system, list):
             system.append({"type": "text", "text": context})
 
-    # Resolve managed tool injection (works with or without tool_splitting)
+    # Resolve managed tool injection (works with or without tool_search)
     from proxy.managed_tools import _REGISTRY as _MANAGED_REG
     inject_managed: list[str] = (
         profile.get("inject_managed") if profile and "inject_managed" in profile
@@ -435,7 +435,7 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
         managed_strip_names.update(mt.strip_from_cc)
         inject_schemas.append(mt.schema)
 
-    if use_tool_splitting:
+    if use_tool_search:
         _core_list = profile.get("core_tools") if profile and "core_tools" in profile else proxy_config.core_tools()
         core_names: set[str] = set(_core_list or [])
         extra_strip = {"ToolSearch"} | managed_strip_names
@@ -469,7 +469,7 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
             len(tools), len(body["tools"]), len(inject_schemas), len(tools) - len(kept),
         )
 
-    if profile and proxy_config.strip_reminders() and not use_tool_splitting:
+    if profile and proxy_config.strip_reminders() and not use_tool_search:
         body["messages"] = strip_all_reminders(body.get("messages", []))
 
     if proxy_config.lift_tool_result_images():
@@ -484,10 +484,16 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
             headers[h] = request.headers[h]
     headers.setdefault("content-type", "application/json")
 
+    # Which managed tools to actually intercept (names that were injected for THIS request).
+    # Separate from ToolSearch, which is always intercepted when tool_search produced deferred tools.
+    managed_intercept: set[str] = {mt.name for mt in (_MANAGED_REG.get(n) for n in inject_managed) if mt} if use_intercept else set()
+
     if body.get("stream", False):
-        return await _handle_streaming(upstream, body, headers, deferred, request, skip_intercept=not use_intercept)
+        return await _handle_streaming(upstream, body, headers, deferred, request,
+                                       managed_intercept=managed_intercept)
     else:
-        return await _handle_non_streaming(upstream, body, headers, deferred, skip_intercept=not use_intercept)
+        return await _handle_non_streaming(upstream, body, headers, deferred,
+                                           managed_intercept=managed_intercept)
 
 
 async def _handle_streaming(
@@ -496,25 +502,28 @@ async def _handle_streaming(
     headers: dict[str, str],
     deferred: list[dict[str, Any]],
     request: web.Request,
-    skip_intercept: bool = False,
+    managed_intercept: set[str] | None = None,
 ) -> web.StreamResponse:
-    """Handle streaming request with managed tools, ToolSearch, and auto-load interception."""
+    """Handle streaming request. Two independent intercept behaviors:
+
+    - ToolSearch + deferred tools: always intercepted when `deferred` is non-empty
+      (tool_search produced them — ToolSearch is how the model loads them).
+    - Managed tools (WebSearch, code_execution, speak, ...): intercepted when the
+      request's profile injected them (`managed_intercept` names).
+    """
     from proxy.managed_tools import is_managed, get_handler, get_tool, format_visibility, run_pre_llm, run_post_llm
 
-    # Build set of tool names to intercept (Office add-ins skip all intercept)
-    intercept: set[str] | None = None
+    intercept: set[str] | None = set()
     deferred_names = {t["name"] for t in deferred}
-    if not skip_intercept:
-        if deferred:
-            intercept = {"ToolSearch"}
-            if proxy_config.auto_load_tools():
-                intercept |= deferred_names
-
-        # Add all managed tools (WebSearch, speak, transcribe, etc.) to intercept set
-        from proxy.managed_tools import _REGISTRY
-        managed_names = set(_REGISTRY.keys())
-        if managed_names:
-            intercept = (intercept or set()) | managed_names
+    if deferred:
+        # ToolSearch is bundled with tool_search — always intercepted when deferred exist
+        intercept.add("ToolSearch")
+        if proxy_config.auto_load_tools():
+            intercept |= deferred_names
+    if managed_intercept:
+        intercept |= managed_intercept
+    if not intercept:
+        intercept = None
 
     resp = web.StreamResponse()
     resp._req = request
@@ -613,14 +622,16 @@ async def _handle_non_streaming(
     body: dict[str, Any],
     headers: dict[str, str],
     deferred: list[dict[str, Any]],
-    skip_intercept: bool = False,
+    managed_intercept: set[str] | None = None,
 ) -> web.Response:
-    """Handle non-streaming request with the same intercept loop as streaming."""
+    """Handle non-streaming request. Same intercept model as streaming:
+    ToolSearch+deferred always intercepted when deferred exist;
+    managed tools intercepted only when `managed_intercept` names are set.
+    """
     from proxy.managed_tools import get_handler, get_tool, format_visibility, run_pre_llm, run_post_llm
-    from proxy.managed_tools import _REGISTRY
 
-    deferred_names = set() if skip_intercept else {t["name"] for t in deferred}
-    managed_names = set() if skip_intercept else set(_REGISTRY.keys())
+    deferred_names = {t["name"] for t in deferred}
+    managed_names = managed_intercept or set()
     summaries: list[str] = []
 
     max_roundtrips = 15

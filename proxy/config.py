@@ -11,7 +11,7 @@ MAX_SEARCH_RESULTS = 5
 
 def core_tools() -> list[str]:
     """Global default core tool names. Profiles may override via profile.core_tools.
-    Empty = no core tools (everything is deferred when tool_splitting is on)."""
+    Empty = no core tools (everything is deferred when tool_search is on)."""
     return app_config.get_nested("proxy.core_tools", []) or []
 
 
@@ -43,20 +43,20 @@ def debug() -> bool:
     return bool(app_config.get_nested("proxy.debug", False))
 
 
-def tool_splitting() -> bool:
+def tool_search() -> bool:
     """Enable tool splitting, ToolSearch injection, and deferred tool handling."""
-    return bool(app_config.get_nested("proxy.tool_splitting", False))
+    return bool(app_config.get_nested("proxy.tool_search", False))
 
 
 def strip_reminders() -> bool:
-    """Strip all system-reminder blocks from messages. Works independently or with tool_splitting."""
+    """Strip all system-reminder blocks from messages. Works independently or with tool_search."""
     return bool(app_config.get_nested("proxy.strip_reminders", False))
 
 
 def auto_load_tools() -> bool:
     """Auto-load deferred tool schemas when model calls them without loading first.
-    Only effective when tool_splitting is enabled."""
-    return tool_splitting() and bool(app_config.get_nested("proxy.auto_load_tools", False))
+    Only effective when tool_search is enabled."""
+    return tool_search() and bool(app_config.get_nested("proxy.auto_load_tools", False))
 
 
 def lift_tool_result_images() -> bool:
@@ -87,7 +87,7 @@ def client_profiles() -> list[dict]:
               "name": "office",
               "match": {"header": "Referer", "contains": "pivot.claude.ai"},
               "system_instruction": "proxy_office.md",
-              "tool_splitting": false,
+              "tool_search": false,
               "intercept": false,
               "inject_date_location": false
             }
