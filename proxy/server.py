@@ -577,13 +577,18 @@ async def _handle_streaming(
                     result_content = f"ERROR: {tool_name} failed: {exc}"
                 summaries.append(format_visibility(tool_name, tool_use["input"], summary))
 
-        elif auto_load and tool_name in deferred_names:
+        elif auto_load and tool_name in deferred_names and tool_name not in core_visible_names:
+            # First call to a deferred tool with auto_load on: inject its
+            # schema into body.tools for future rounds and return it to the
+            # model so it can re-issue the call knowing the parameter schema.
+            # Second call falls through (tool_name now in core_visible_names)
+            # and passes to CC for actual execution.
             matched = [t for t in deferred if t["name"] == tool_name]
             log.info("Auto-loading schema for deferred tool: %s", tool_name)
             result_content = (
-                f"This tool's schema was not loaded. Here is the schema:\n\n"
+                f"The schema for `{tool_name}` has now been loaded:\n\n"
                 f"{_format_functions_block(matched)}\n\n"
-                f"Call the tool again with the correct parameter names from the schema above."
+                f"Call the tool again using the parameter names from this schema."
             )
 
         elif tool_name not in core_visible_names and (deferred or core_visible_names):
@@ -615,6 +620,7 @@ async def _handle_streaming(
 
         if matched:
             body["tools"] = body["tools"] + matched
+            core_visible_names |= {t.get("name", "") for t in matched}
 
         body["messages"] = body.get("messages", []) + [
             {"role": "assistant", "content": [
@@ -703,7 +709,9 @@ async def _handle_non_streaming(
                         result_text = f"ERROR: {tool_name} failed: {exc}"
                     summaries.append(format_visibility(tool_name, block.get("input", {}), summary))
 
-            elif auto_load and tool_name in deferred_names:
+            elif auto_load and tool_name in deferred_names and tool_name not in core_visible_names:
+                # Only fire on the FIRST call — after injection the tool joins
+                # core_visible_names and subsequent calls pass through to CC.
                 matched = [t for t in deferred if t["name"] == tool_name]
                 log.info("Auto-loading schema for deferred tool: %s", tool_name)
                 result_text = (
