@@ -592,7 +592,9 @@ settings.json          Your config (gitignored)
 settings.example.json  Full settings template
 
 backends/              CLI backend system (data-driven from settings.json/tools)
+  base.py              CLIBackend abstract base
   registry.py          Auto-builds GenericCLIBackend for each tools.<key>
+  params.py            Per-tool param accessors
   implementations.py   Screen / Video / Computer (non-PTY) + GenericCLIBackend
 
 sessions/              Session lifecycle
@@ -608,25 +610,34 @@ bot/                   Telegram layer
   rate.py              Stale session cleanup + topic probing
 
 proxy/                 Anthropic-API-compatible middleware (port 1235)
+  __main__.py          Standalone entry: python -m proxy
   server.py            aiohttp request handler + intercept loop
+  config.py            Profile + global proxy settings accessors
   tool_registry.py     split_tools + proxy_system_instruction loader
   tool_search.py       BM25 + regex search engine
   managed_tools.py     Managed-tool registry + MCP→proxy auto-bridge
   web_search.py        Brave Search scraper
   llm.py               structured_call(prompt, schema) utility
-  config.py            Profile + global proxy settings accessors
   instructions/        Profile system prompts
     system.md          Default Claude Code path
     office.md          Office add-in profile
 
 mcp_server/            Streamable-HTTP MCP server (port 1236)
+  __main__.py          Standalone entry: python -m mcp_server
   app.py               FastMCP instance + CORS wrapper
   server.py            Background thread launcher
-  tools/               Drop-in tool modules (tts, stt, web_search, code_execution)
-  resources/           Drop-in resource modules
-  prompts/             Drop-in prompt modules
+  tools/               Drop-in tool modules (auto-discovered)
+    tts.py             speak — Kokoro TTS
+    stt.py             transcribe — Whisper STT
+    web_search.py      web_search — Brave scraper
+    code_execution.py  code_execution — sandboxed Python subprocess
+  resources/           Drop-in resource modules (auto-discovered)
+  prompts/             Drop-in prompt modules (auto-discovered)
 
 voice/                 STT probe + per-user prefs
+  health.py            STT availability probe
+  prefs.py             Per-user STT toggle storage
+  stt.py               Speech-to-text transcription client
 ```
 
 ---
