@@ -48,7 +48,9 @@
         "system_instruction": "office.md",
         "tool_splitting": false,
         "intercept": false,
-        "inject_date_location": false
+        "inject_date_location": false,
+        "strip_tool_types": ["web_search_*", "code_execution_*"],
+        "strip_cache_control": true
       },
       {
         "name": "claude-code",
@@ -56,7 +58,11 @@
         "system_instruction": "system.md",
         "tool_splitting": true,
         "intercept": true,
-        "inject_date_location": true
+        "inject_date_location": true,
+        "strip_tool_names": [],
+        "strip_tool_types": [],
+        "drop_non_custom_tools": false,
+        "strip_cache_control": false
       }
     ],
     "upstream_url": "http://localhost:1234",
