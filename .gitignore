@@ -4,7 +4,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Local sessions, store, logs, secrets
+# Local sessions, store, logs (telecode.log + proxy_full_*.json), secrets
 data/
 settings.json
 .claude/
