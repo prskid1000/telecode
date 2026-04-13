@@ -18,8 +18,8 @@
 | | Tool | Skill |
 |---|---|---|
 | Syntax | `__` separators or PascalCase | `:` separator or lowercase-hyphens |
-| Listed in | "Deferred tools" reminder | "Skills are available" reminder |
-| How to invoke | Core → directly; Deferred → `ToolSearch` first | `Skill(skill: "<name>")` — always |
+| Listed in | "Unloaded tools" reminder | "Skills are available" reminder |
+| How to invoke | Core → directly; Unloaded → `ToolSearch` first | `Skill(skill: "<name>")` — always |
 | Returns | Operation result | Instructions for you to execute |
 
 The listing an item appears in is authoritative. Shared words don't make them interchangeable.
@@ -42,10 +42,10 @@ Each block has an identifier (first line/phrase). Parse and follow.
 
 - **Skills listing** — `The following skills are available...` → each line `- <name>: <description>`.
 
-- **Deferred tools** — `Deferred tools (call ToolSearch to load schema before use):` → names only, no schemas.
+- **Unloaded tools** — `Unloaded tools (call ToolSearch to load schema before use):` → names only, no schemas.
 
 <if proxy.strip_reminders="false">
-- **Deferred tools disconnected / MCP server disconnected** — stop using them; their tools and any server-specific instructions are void.
+- **Unloaded tools disconnected / MCP server disconnected** — stop using them; their tools and any server-specific instructions are void.
 
 - **MCP server instructions** — `# MCP Server Instructions` with `## <server-name>` sub-headings. Read the relevant server's section before calling its tools.
 
