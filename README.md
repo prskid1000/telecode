@@ -449,59 +449,153 @@ Built-in keys: `claude`, `claude-local`, `codex`, `codex-local`, `shell`, `power
 
 ---
 
-## Project structure
+## Architecture & flows
+
+Three services run inside the same process, all launched by `main.py:_post_init`:
 
 ```
-settings.json          Configuration
-main.py                Entry point
-config.py              Settings accessors
-store.py               JSON persistence
+                              ┌──────────────────────────────┐
+                              │        main.py               │
+                              │   (single process, asyncio)  │
+                              └──────────────────────────────┘
+                                   │         │         │
+                 ┌─────────────────┘         │         └──────────────────┐
+                 ▼                           ▼                            ▼
+        ┌──────────────┐          ┌──────────────────┐         ┌──────────────────┐
+        │ Telegram bot │          │   Proxy (1235)   │         │  MCP server (1236)│
+        │              │          │   aiohttp        │         │  FastMCP ASGI     │
+        │ handlers.py  │          │   server.py      │         │  app.py           │
+        └──────────────┘          └──────────────────┘         └──────────────────┘
+                 │                           │                            │
+                 ▼                           ▼                            ▼
+        ┌──────────────┐          ┌──────────────────┐         ┌──────────────────┐
+        │  sessions/   │          │  Local backend   │         │  External MCP    │
+        │  PTY, screen │          │  (LM Studio etc.)│         │  clients         │
+        │  video, LLM  │          └──────────────────┘         └──────────────────┘
+        └──────────────┘
+```
 
-backends/
-  base.py              CLIBackend base class
-  implementations.py   GenericCLIBackend (data-driven) + Screen, Video, Computer
-  registry.py          Auto-built from settings.json tools
-  params.py            Load params from settings
+### 1. Telegram bot flow
 
-sessions/
-  process.py           PTY process + pyte screen diffing
-  screen.py            Screen image capture (PrintWindow/mss) + video recording (ffmpeg)
-  computer.py          Vision LLM computer control (capture + actions)
-  manager.py           Session lifecycle manager
+```
+User sends message in topic thread
+    │
+    ▼
+bot/handlers.py:handle_text / handle_voice / handle_document
+    │
+    ▼
+sessions/manager.py:SessionManager.get_session_by_thread
+    │
+    ▼              (by backend type)
+    ├──► sessions/process.py    → PTY + pyte screen-diff → _LiveMessage.append → editMessageText
+    ├──► sessions/screen.py     → PrintWindow / mss    → _FrameSender → send_photo / send_video
+    └──► sessions/computer.py   → capture + vision LLM → pyautogui → edit_message_media
 
-bot/
-  handlers.py          Telegram handlers + LiveMessage + LivePhoto
-  topic_manager.py     Forum topic creation
-  settings_handler.py  /settings command
+Backends built from settings.json/tools.<key> by backends/registry.py
+Topic ↔ session map persisted in store.py (JSON)
+```
 
-proxy/
-  __main__.py          Standalone entry: python -m proxy
-  server.py            aiohttp streaming proxy with ToolSearch interception
+### 2. Proxy flow
+
+```
+Claude Code / Office add-in / any client
+    │ POST /v1/messages  (Anthropic format)
+    ▼
+proxy/server.py:handle_messages
+    │
+    ├─► _match_profile(headers)                         ← first profile match wins
+    ├─► model_mapping (rewrite `model`)
+    ├─► profile-driven tool filter                       ← strip_tool_names/types, cache_control
+    ├─► inject system_instruction (proxy/instructions/)  ← office.md | system.md
+    ├─► inject date + location system-reminder           ← optional
+    ├─► split_tools(core, strip, inject_managed)         ← tool_registry.py
+    │                                                      injects ToolSearch + managed schemas
+    ▼
+_handle_streaming (intercept loop, up to 15 rounds)
+    │
+    ├─► upstream POST /v1/messages (to LM Studio)
+    ├─► buffer SSE, detect intercepted tool_use
+    │     ├─► ToolSearch       → BM25 search over deferred tools (tool_search.py)
+    │     ├─► WebSearch        → Brave scraper (web_search.py)
+    │     ├─► speak/transcribe → MCP-style handlers (managed_tools.py)
+    │     └─► auto_load_tools  → return schema; retry
+    ├─► append [tool_use, tool_result]; loop
+    └─► final response → flush SSE to client
+          (visibility summaries prepended to first text_delta)
+
+GET /v1/models → converts OpenAI list → Anthropic list; model_mapping aliases listed first
+Everything else → passthrough to upstream
+```
+
+### 3. MCP server flow
+
+```
+External MCP client (e.g. real CC via `claude mcp add telecode ...`)
+    │ Streamable HTTP POST /mcp
+    ▼
+mcp_server/app.py (FastMCP + Starlette + CORS middleware)
+    │
+    ▼
+mcp_server/tools/*.py   (auto-discovered via pkgutil)
+    ├── tts.py         → Kokoro TTS (speak)
+    ├── stt.py         → Whisper STT (transcribe)
+    └── web_search.py  → Brave scraper (same backend as proxy's WebSearch)
+
+mcp_server/resources/  ← drop-in auto-discover (empty by default)
+mcp_server/prompts/    ← drop-in auto-discover (empty by default)
+```
+
+### How the three connect
+
+- **Proxy and MCP share tool implementations** (Brave scraper, TTS, STT) but expose them via different protocols. Local models route through the proxy; external MCP clients connect to the MCP server.
+- **Bot sessions can use the proxy as their backend** via `tools.claude-local.env.ANTHROPIC_BASE_URL=http://localhost:1235`.
+- **Tailscale Funnel** (optional, auto-started by `main.py`) exposes both proxy and MCP over HTTPS — lets browser-sandboxed clients (Office add-ins) reach the proxy.
+
+### File map
+
+```
+main.py                Entry point — launches bot + proxy + MCP + Tailscale Funnel
+config.py              Settings accessors (hot-reloadable)
+store.py               JSON persistence for topic↔session map + voice prefs
+settings.json          Your config (gitignored)
+settings.example.json  Full settings template
+
+backends/              CLI backend system (data-driven from settings.json/tools)
+  registry.py          Auto-builds GenericCLIBackend for each tools.<key>
+  implementations.py   Screen / Video / Computer (non-PTY) + GenericCLIBackend
+
+sessions/              Session lifecycle
+  manager.py           Start/kill sessions, route messages by thread_id
+  process.py           PTY + pyte screen-diff (Unix openpty / Windows pywinpty)
+  screen.py            Image capture (PrintWindow/mss) + video (ffmpeg)
+  computer.py          Vision-LLM computer control (pyautogui)
+
+bot/                   Telegram layer
+  handlers.py          Commands, callbacks, _LiveMessage, _FrameSender
+  topic_manager.py     Create/reuse forum topics
+  settings_handler.py  /settings command parser
+  rate.py              Stale session cleanup + topic probing
+
+proxy/                 Anthropic-API-compatible middleware (port 1235)
+  server.py            aiohttp request handler + intercept loop
+  tool_registry.py     split_tools + proxy_system_instruction loader
   tool_search.py       BM25 + regex search engine
-  tool_registry.py     Core/deferred tool splitting
-  managed_tools.py     Managed tool registry + LLM hooks
-  llm.py               Upstream LLM structured_call utility
-  web_search.py        Brave Search scraper + result formatter
-  config.py            Proxy settings
+  managed_tools.py     Registry of proxy-handled tools (+ LLM hooks)
+  web_search.py        Brave Search scraper
+  llm.py               structured_call(prompt, schema) utility
+  config.py            Profile + global proxy settings accessors
+  instructions/        Profile system prompts
+    system.md          Default Claude Code path
+    office.md          Office add-in profile
 
-mcp_server/
-  app.py               FastMCP instance (stateless streamable HTTP)
-  server.py            Background startup for telecode integration
-  __main__.py           Standalone entry: python -m mcp_server
-  tools/
-    __init__.py        Auto-discovers tool modules (drop-in)
-    tts.py             speak tool (Kokoro TTS)
-    stt.py             transcribe tool (Whisper STT)
-    web_search.py      web_search tool (Brave scraper)
-  resources/
-    __init__.py        Auto-discovers resource modules (drop-in)
-  prompts/
-    __init__.py        Auto-discovers prompt modules (drop-in)
+mcp_server/            Streamable-HTTP MCP server (port 1236)
+  app.py               FastMCP instance + CORS wrapper
+  server.py            Background thread launcher
+  tools/               Drop-in tool modules (tts, stt, web_search)
+  resources/           Drop-in resource modules
+  prompts/             Drop-in prompt modules
 
-voice/
-  health.py            STT availability probe
-  prefs.py             Per-user STT toggle
-  stt.py               Speech-to-text
+voice/                 STT probe + per-user prefs
 ```
 
 ---
