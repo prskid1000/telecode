@@ -49,6 +49,14 @@
         "tool_splitting": false,
         "intercept": false,
         "inject_date_location": false
+      },
+      {
+        "name": "claude-code",
+        "match": {"header": "User-Agent", "contains": "claude-cli"},
+        "system_instruction": "system.md",
+        "tool_splitting": true,
+        "intercept": true,
+        "inject_date_location": true
       }
     ],
     "upstream_url": "http://localhost:1234",
