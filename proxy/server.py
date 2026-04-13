@@ -597,13 +597,17 @@ async def _handle_streaming(
             # the hallucinated name as query. Fires regardless of tool_search
             # setting — Office (no deferred) still benefits from core lookup.
             haystack = list(body.get("tools", [])) + deferred
-            matched = await _do_tool_search(haystack, {"query": tool_name, "max_results": 5})
+            search_matches = await _do_tool_search(haystack, {"query": tool_name, "max_results": 5})
             log.info("Hallucination guard: %r not found — auto ToolSearch returned %d matches",
-                     tool_name, len(matched))
-            if matched:
+                     tool_name, len(search_matches))
+            # Do NOT inject all 5 matches into body.tools — that bloats context.
+            # Show them in the tool_result so the model picks one; auto_load
+            # will inject the correct schema on the next call.
+            matched = []
+            if search_matches:
                 result_content = (
                     f"The tool `{tool_name}` does not exist. Did you mean one of these?\n\n"
-                    f"{_format_functions_block(matched)}\n\n"
+                    f"{_format_functions_block(search_matches)}\n\n"
                     f"Call the correct tool with its exact name from the schema above."
                 )
             else:
@@ -721,19 +725,18 @@ async def _handle_non_streaming(
                 )
 
             elif tool_name not in core_visible_names and (deferred or core_visible_names):
-                # Hallucination guard: unknown name → fuzzy-match via BM25
-                # over all known tools (core + deferred). Fires for both
-                # tool_search-on (has deferred) and tool_search-off (Office).
+                # Hallucination guard — show top matches, don't inject schemas.
                 haystack = list(body.get("tools", [])) + deferred
-                matched = await _do_tool_search(
+                search_matches = await _do_tool_search(
                     haystack, {"query": tool_name, "max_results": 5}
                 )
                 log.info("Hallucination guard: %r not found — auto ToolSearch returned %d matches",
-                         tool_name, len(matched))
-                if matched:
+                         tool_name, len(search_matches))
+                matched = []
+                if search_matches:
                     result_text = (
                         f"The tool `{tool_name}` does not exist. Did you mean one of these?\n\n"
-                        f"{_format_functions_block(matched)}\n\n"
+                        f"{_format_functions_block(search_matches)}\n\n"
                         f"Call the correct tool with its exact name from the schema above."
                     )
                 else:
