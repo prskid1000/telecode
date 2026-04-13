@@ -431,7 +431,7 @@ Match requests by header substring and apply per-client transforms. First match 
 | `inject_date_location` | Add the date/location `<system-reminder>` |
 | `strip_reminders` | Strip `<system-reminder>` blocks from messages |
 | `lift_tool_result_images` | Lift image blocks out of array-form tool_results (LM Studio workaround) |
-| `auto_load_tools` | When `tool_search` defers tools, auto-load a deferred tool's schema if the model calls it blindly |
+| `auto_load_tools` | When `tool_search` defers tools: if `true`, auto-load a deferred tool's schema on first blind call; if `false`, deferred tools must be loaded via ToolSearch first |
 | `core_tools` | Tool names that stay core when splitting. Falls back to `proxy.core_tools` |
 | `inject_managed` | List of managed-tool names to inject (e.g. `["web_search", "speak", "code_execution"]`). Strips client's same-name versions and replaces them. Default = all registered managed tools |
 | `strip_tool_names` | Drop tools by exact name. For Anthropic server-side tools, the name is stable across versions (`web_search`, `code_execution`) so one entry catches every version |
@@ -440,6 +440,8 @@ Match requests by header substring and apply per-client transforms. First match 
 The **office** profile unlocks Claude for Excel/PowerPoint/Word against a local model — Office add-ins silently retry unless every turn returns a `tool_use` block, so this profile preserves their tools, strips Anthropic-hosted ones (`web_search_20250305`, `code_execution_20250825`), and swaps in an Office-aware system prompt.
 
 **Auto-load** (`auto_load_tools: true`): on first call to a deferred tool the proxy injects its schema and asks the model to retry; the second call passes through to CC for execution. **Hallucination guard** (always on): calling an unknown name triggers BM25 over core+deferred and returns the top matches as suggestions — no schemas injected, so context stays minimal. Model picks the right name, retries, and auto-load handles that single schema.
+
+**Unloaded-tool guard** (`auto_load_tools: false`): if the model calls a deferred (unloaded) tool directly by name, the proxy blocks the call and returns a tool_result instructing it to run `ToolSearch(query="select:<tool>", max_results=5)` first.
 
 ### `tools.<key>` — CLI backends
 

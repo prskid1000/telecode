@@ -329,7 +329,7 @@ _dump_counter = 0
 _MAX_DUMP_FILES = 50
 
 
-async def _dump_request(body: dict[str, Any], label: str) -> None:
+async def _dump_request(body: dict[str, Any], label: str, meta: dict[str, Any] | None = None) -> None:
     """Dump request to log file. Enable via proxy.debug in settings.json.
 
     Rotates to keep only the last _MAX_DUMP_FILES files.
@@ -343,7 +343,10 @@ async def _dump_request(body: dict[str, Any], label: str) -> None:
     os.makedirs(dump_dir, exist_ok=True)
     full_path = os.path.join(dump_dir, f"proxy_full_{_dump_counter}.json")
     async with aiofiles.open(full_path, "w", encoding="utf-8") as f:
-        await f.write(json.dumps({"label": label, "body": body}, indent=2, ensure_ascii=False))
+        payload: dict[str, Any] = {"label": label, "body": body}
+        if meta:
+            payload["meta"] = meta
+        await f.write(json.dumps(payload, indent=2, ensure_ascii=False))
     log.info("Proxy debug #%d: %s -> %s", _dump_counter, label, full_path)
 
     # Rotate: keep only last _MAX_DUMP_FILES
@@ -379,7 +382,16 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
     except json.JSONDecodeError:
         return web.json_response({"error": "Invalid JSON"}, status=400)
 
-    await _dump_request(body, "INCOMING")
+    # Dump the raw incoming body plus minimal client metadata for cache debugging.
+    # (Do NOT mutate the real request body with debug-only fields.)
+    await _dump_request(
+        body,
+        "INCOMING",
+        meta={
+            "user_agent": (request.headers.get("User-Agent", "") or "")[:200],
+            "referer": (request.headers.get("Referer", "") or "")[:200],
+        },
+    )
 
     # Match request against configured client profiles (first match wins).
     profile = _match_profile(request.headers)
@@ -488,14 +500,6 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
 
         # Inject deferred tools instruction into system, tool names into messages
         if deferred:
-            # IMPORTANT: don't prepend the full profile system.md again.
-            # Only inject the deferred-tools specific ToolSearch rules.
-            instruction = proxy_system_instruction("tool_search.md")
-            system = body.get("system", "")
-            if isinstance(system, str):
-                body["system"] = f"{instruction}\n\n{system}" if system else instruction
-            elif isinstance(system, list):
-                system.insert(0, {"type": "text", "text": instruction})
             body["messages"] = rewrite_messages(body.get("messages", []), deferred)
 
     elif inject_schemas or managed_strip_names:
@@ -560,7 +564,17 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
     #     flip-flopping doesn't bust cache.
     body = _canonicalize_body(body)
 
-    await _dump_request(body, "OUTGOING")
+    await _dump_request(
+        body,
+        "OUTGOING",
+        meta={
+            "profile": (profile.get("name") if profile else None) or "-",
+            "model_before": requested_model,
+            "model_after": body.get("model", "") or "",
+            "user_agent": (request.headers.get("User-Agent", "") or "")[:200],
+            "referer": (request.headers.get("Referer", "") or "")[:200],
+        },
+    )
 
     if body.get("stream", False):
         return await _handle_streaming(upstream, body, headers, deferred, request,
@@ -641,6 +655,17 @@ async def _handle_streaming(
             matched = await _do_tool_search(deferred, tool_use["input"])
             log.info("ToolSearch matched %d tools for query=%r", len(matched), tool_use["input"].get("query"))
             result_content = _format_functions_block(matched)
+
+        elif (not auto_load) and tool_name in deferred_names and tool_name not in core_visible_names:
+            # Enforce "unloaded tools require ToolSearch first" as a hard policy
+            # when auto_load is disabled. Otherwise the model can call by name
+            # and Claude Code may execute it anyway, undermining the reminder.
+            log.info("Guard: blocked unloaded tool call to %s (auto_load_tools=false)", tool_name)
+            result_content = (
+                f"`{tool_name}` is currently UNLOADED in this conversation.\n\n"
+                f"Call `ToolSearch(query=\"select:{tool_name}\", max_results=5)` to load its schema, "
+                f"then call `{tool_name}` again using the parameter names from that schema."
+            )
 
         elif is_managed(tool_name):
             tool_entry = get_tool(tool_name)
@@ -780,6 +805,14 @@ async def _handle_non_streaming(
                 matched = await _do_tool_search(deferred, block.get("input", {}))
                 log.info("ToolSearch matched %d tools", len(matched))
                 result_text = _format_functions_block(matched)
+
+            elif (not auto_load) and tool_name in deferred_names and tool_name not in core_visible_names:
+                log.info("Guard: blocked unloaded tool call to %s (auto_load_tools=false)", tool_name)
+                result_text = (
+                    f"`{tool_name}` is currently UNLOADED in this conversation.\n\n"
+                    f"Call `ToolSearch(query=\"select:{tool_name}\", max_results=5)` to load its schema, "
+                    f"then call `{tool_name}` again using the parameter names from that schema."
+                )
 
             elif tool_name in managed_names:
                 tool_entry = get_tool(tool_name)
