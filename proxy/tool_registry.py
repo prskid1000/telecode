@@ -56,46 +56,6 @@ TOOL_SEARCH_TOOL: dict[str, Any] = {
 }
 
 
-# ── WebSearch tool definition (replaces CC's built-in WebSearch) ───────────
-
-WEB_SEARCH_TOOL: dict[str, Any] = {
-    "name": "WebSearch",
-    "description": (
-        "Search the web via Brave Search. Use this whenever you need information "
-        "that might be outdated in your training data, or when the user explicitly "
-        "asks you to search/look up something. Returns titles, URLs, and snippets "
-        "— always cite the URLs as markdown links in your response.\n\n"
-        "Just provide the query. If your first search doesn't find what you need, "
-        "try different keywords before giving up. You can use WebFetch on any "
-        "returned URL to read the full page content if the snippet isn't enough."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "The search query.",
-                "minLength": 2,
-            },
-            "max_results": {
-                "type": "integer",
-                "description": (
-                    "Number of results to return (1-20, default 5). "
-                    "Start with 3-5 for quick lookups. "
-                    "Use 10-15 for broad research. "
-                    "If initial results are insufficient, refine the query "
-                    "rather than requesting 20 upfront."
-                ),
-                "default": 5,
-                "minimum": 1,
-                "maximum": 20,
-            },
-        },
-        "required": ["query"],
-    },
-}
-
-
 def split_tools(
     tools: list[dict[str, Any]],
     core_names: set[str],

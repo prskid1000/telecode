@@ -60,8 +60,8 @@
         "lift_tool_result_images": false,
         "auto_load_tools": false,
         "core_tools": [],
-        "inject_managed": ["code_execution", "WebSearch"],
-        "strip_tool_names": ["web_search"],
+        "inject_managed": ["code_execution", "web_search"],
+        "strip_tool_names": [],
         "strip_cache_control": true
       },
       {
@@ -74,7 +74,7 @@
         "lift_tool_result_images": false,
         "auto_load_tools": false,
         "core_tools": ["Bash", "Edit", "Read", "Write", "Glob", "Grep", "Agent", "Skill"],
-        "inject_managed": ["WebSearch", "speak", "transcribe"],
+        "inject_managed": ["web_search", "speak", "transcribe"],
         "strip_tool_names": [],
         "strip_cache_control": false
       }
