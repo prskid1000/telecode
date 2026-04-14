@@ -359,6 +359,7 @@ Sits between Claude Code (or any Anthropic-API client) and LM Studio / Ollama / 
 | `upstream_url` | Backend URL (default `http://localhost:1234` — LM Studio) |
 | `debug` | Dump every request body to `data/logs/proxy_full_*.json` |
 | `ping_interval` | Seconds between `event: ping` heartbeats sent to the client during long streams (default `10`). `: keepalive` SSE comments still go out every 2s. |
+| `max_roundtrips` | Max intercept round-trips per request before giving up (default `15`). Each ToolSearch / managed tool / auto-load / unloaded-guard consumes one. |
 | `tool_search` | Split incoming tools into core (always forwarded) + deferred (searchable via ToolSearch) |
 | `strip_reminders` | Drop `<system-reminder>` blocks from messages |
 | `auto_load_tools` | Auto-load a deferred tool's schema the first time the model calls it blindly |
@@ -569,17 +570,35 @@ proxy/server.py:handle_messages
     ├─► split_tools(core, strip, inject_managed)         ← tool_registry.py
     │                                                      injects ToolSearch + managed schemas
     ▼
-_handle_streaming (intercept loop, up to 15 rounds)
+_handle_streaming (intercept loop, up to proxy.max_roundtrips rounds)
+    │  · prepares resp + starts heartbeat (: keepalive 2s, event: ping 10s)
+    │  · write_lock shared across the whole request
     │
-    ├─► upstream POST /v1/messages (to LM Studio)
-    ├─► buffer SSE, detect intercepted tool_use
+    ├─► _forward_stream → upstream POST /v1/messages (to LM Studio)
+    │     │  branches on FIRST content_block_start:
+    │     │
+    │     ├─► tool name in intercept set  →  buffer only the tool_use input,
+    │     │     return it (nothing written to client yet)
+    │     │
+    │     └─► text / non-intercepted tool →  flush buffered + stream rest LIVE
+    │           to client, indices shifted past any emitted status blocks
+    │
+    ├─► intercept handler runs:
     │     ├─► ToolSearch       → BM25 search over deferred tools (tool_search.py)
     │     ├─► WebSearch        → Brave scraper (web_search.py)
+    │     ├─► code_execution   → Python sandbox (managed_tools.py)
     │     ├─► speak/transcribe → MCP-style handlers (managed_tools.py)
-    │     └─► auto_load_tools  → return schema; retry
-    ├─► append [tool_use, tool_result]; loop
-    └─► final response → flush SSE to client
-          (visibility summaries prepended to first text_delta)
+    │     ├─► auto_load_tools  → inject schema, request retry
+    │     └─► unloaded guard   → block, instruct ToolSearch first
+    │
+    ├─► _emit_live_status(status_line) → writes `● Tool(arg)` + `└ summary`
+    │     synthetic text block to the wire NOW (user sees it immediately),
+    │     increments status_emitted counter
+    │
+    ├─► append [tool_use, tool_result] to body.messages; loop
+    │
+    └─► final upstream response → _forward_stream streams live to client,
+          upstream indices shifted by status_emitted
 
 GET /v1/models → converts OpenAI list → Anthropic list; model_mapping aliases listed first
 Everything else → passthrough to upstream

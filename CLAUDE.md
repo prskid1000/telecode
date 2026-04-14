@@ -43,14 +43,22 @@ Tool-search proxy (for local models):
     Claude Code request (with ~100+ tools)
     -> proxy intercepts on http://127.0.0.1:1235/v1/messages
     -> split_tools(): core tools forwarded, rest stored as deferred
-    -> inject ToolSearch meta-tool into core tools
+    -> inject ToolSearch meta-tool + managed-tool schemas into core tools
+    -> _handle_streaming owns the response:
+        · resp.prepare() + _start_heartbeat(: keepalive 2s, event: ping 10s)
+        · write_lock shared across all round-trips (heartbeat + main loop)
     -> forward to LM Studio (http://localhost:1234)
-    -> if model calls ToolSearch:
-        -> BM25/regex search over deferred tools
-        -> inject matched tool definitions into request
-        -> transparent round-trip to LM Studio
-        -> stream second response to Claude Code
-    -> else: stream response through unchanged
+    -> _forward_stream branches on first content_block_start:
+        * intercepted tool_use → buffer just the input, return tool_use dict
+        * anything else → flush + stream rest LIVE to client
+          (upstream indices shifted past status blocks already emitted)
+    -> intercept handler runs (ToolSearch BM25 / web_search / code_exec /
+       auto_load / unloaded-guard)
+    -> _emit_live_status writes `● Tool(arg)` + `└ summary` synthetic text
+       block to the wire IMMEDIATELY (user sees it now, not at end)
+    -> append [tool_use, tool_result] to messages; loop up to
+       proxy.max_roundtrips rounds
+    -> final clean response streams live to client
 ```
 
 - **Session key:** `{backend}:{name}` -- colon is the separator; do not use colons in names.
@@ -230,11 +238,11 @@ Anthropic-API-compatible middleware for local models (LM Studio, Ollama, etc.). 
    - `: keepalive\n\n` SSE comment every 2s — wire-level keep-alive, ignored by SSE parsers, resets HTTP read timer.
    - `event: ping\ndata: {"type":"ping"}\n\n` every `proxy.ping_interval` seconds (default 10s) — Anthropic's official live-progress signal that CC / pivot / Office add-ins recognize, so even minute-long generations don't trigger client timeouts.
 
-   `prepare()` is called immediately on upstream connect so the socket goes live before any decision.
+   `prepare()` is called immediately on upstream connect so the socket goes live before any decision. Heartbeat + `write_lock` are request-scoped (owned by `_handle_streaming`), so pings keep flowing **across round-trip boundaries and during local tool-handler execution** (e.g. a 30s `code_execution` call — no gap where the client gets no bytes).
 
-   Loops up to 15 rounds. Always intercepted: `ToolSearch` (when deferred tools exist), all injected managed tools, and all deferred names (auto-load or unloaded-tool guard depending on `auto_load_tools`).
+   Loops up to `proxy.max_roundtrips` rounds (default 15, settings-configurable). Always intercepted: `ToolSearch` (when deferred tools exist), all injected managed tools, and all deferred names (auto-load or unloaded-tool guard depending on `auto_load_tools`).
 
-10. **Visibility status blocks**: each intercept handler builds a CC-native two-line string (`● Tool("arg")\n└  summary`) appended to the round's `summaries` list. On the final non-intercepted round, `_forward_stream` emits each summary as its own synthetic text content block before relaying upstream content. Renders even when the model jumps straight to tool_use (no text). Status format auto-derived from the handler — adding a new managed tool needs zero status-rendering code.
+10. **Visibility status blocks**: each intercept handler builds a CC-native two-line string (`● Tool("arg")\n└  summary`). `_handle_streaming` calls `_emit_live_status(text)` **immediately after the handler returns** — the synthetic text content block is written to the wire right then, before the next upstream call even starts. User sees the tool line first, then waits, then the model's reply streams. A `status_emitted` counter passes to `_forward_stream` as `base_index_offset` so upstream's block indices shift past the already-emitted status blocks on the wire. Renders even when the model jumps straight to tool_use (no text). Format auto-derived from the handler — adding a new managed tool needs zero status-rendering code.
 
    Status formats (all driven by `format_visibility()` + per-handler strings):
    - `● ToolSearch("query")` / `└  N schemas loaded: A, B, C` (or `└  No matches`)

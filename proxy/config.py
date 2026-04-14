@@ -43,6 +43,14 @@ def debug() -> bool:
     return bool(app_config.get_nested("proxy.debug", False))
 
 
+def max_roundtrips() -> int:
+    """Maximum number of intercept round-trips for a single request before
+    giving up. One round-trip = one upstream call. ToolSearch, managed tools,
+    auto-load schema injection, and unloaded-tool guards each consume one.
+    """
+    return int(app_config.get_nested("proxy.max_roundtrips", 15))
+
+
 def ping_interval() -> float:
     """Seconds between `event: ping` heartbeats sent to the client during
     long-running streams. Anthropic-aware clients (CC, pivot.claude.ai,
