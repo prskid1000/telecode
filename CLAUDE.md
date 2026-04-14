@@ -208,7 +208,7 @@ Anthropic-API-compatible middleware for local models (LM Studio, Ollama, etc.). 
 
 2. **Profile matching:** `_match_profile(headers)` — first `client_profile` whose `match.header` contains `match.contains` wins. Each profile independently overrides any feature flag; unset fields fall back to global `proxy.*`.
 
-3. **Model mapping** (`proxy.model_mapping`): rewrites `body.model` (e.g. `claude-opus-4-6` → `qwen3.5-35b-a3b`). Applied to both `/v1/messages` and `/v1/models`.
+3. **Model mapping** (`proxy.model_mapping`): rewrites `body.model` (e.g. `claude-opus-4-6` → `qwen3.5-35b-a3b`). Applied to both `/v1/messages` and `/v1/models`. The response `model` field is **reverse-mapped** back to the client-facing alias (in `message_start` for streaming, in the JSON body for non-streaming), so clients tracking request/response model IDs see what they sent.
 
 4. **Tool filtering** (profile-driven): `strip_tool_names` drops tools by exact name (Anthropic's hosted tool names are stable across versions, so `["web_search", "code_execution"]` catches every version). `strip_cache_control` (default `true`) removes the `cache_control` key LM Studio rejects. Runs before any splitting.
 

@@ -335,6 +335,14 @@ async def _forward_stream(
                         if etype == "message_start":
                             if not getattr(resp, "_message_start_sent", False):
                                 resp._message_start_sent = True
+                                # Reverse model mapping: client expects the
+                                # alias it sent, not the upstream model name.
+                                client_model = getattr(resp, "_client_model", None)
+                                if client_model and event:
+                                    msg = event.get("message")
+                                    if isinstance(msg, dict) and "model" in msg:
+                                        msg["model"] = client_model
+                                        sse_line = f"data: {json.dumps(event)}\n\n"
                                 # Synthesize the SSE event header too (clients
                                 # may rely on it; original header was appended
                                 # to `buffered` on the preceding line but would
@@ -748,14 +756,20 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
         },
     )
 
+    # If we rewrote `model` above, reverse-map in responses so the client
+    # sees the alias it asked for (not the upstream model name).
+    client_model = requested_model if (mapping and requested_model in mapping) else None
+
     if body.get("stream", False):
         return await _handle_streaming(upstream, body, headers, deferred, request,
                                        managed_intercept=managed_intercept,
-                                       auto_load=use_auto_load)
+                                       auto_load=use_auto_load,
+                                       client_model=client_model)
     else:
         return await _handle_non_streaming(upstream, body, headers, deferred,
                                            managed_intercept=managed_intercept,
-                                           auto_load=use_auto_load)
+                                           auto_load=use_auto_load,
+                                           client_model=client_model)
 
 
 async def _handle_streaming(
@@ -766,6 +780,7 @@ async def _handle_streaming(
     request: web.Request,
     managed_intercept: set[str] | None = None,
     auto_load: bool = False,
+    client_model: str | None = None,
 ) -> web.StreamResponse:
     """Handle streaming request. Two independent intercept behaviors:
 
@@ -780,6 +795,7 @@ async def _handle_streaming(
 
     resp = web.StreamResponse()
     resp._req = request
+    resp._client_model = client_model
     # Request-scoped write lock + heartbeat so pings keep flowing across
     # intercept round-trips AND during local tool-handler execution (e.g.
     # code_execution can take 30s — without this, no bytes would hit the
@@ -985,6 +1001,7 @@ async def _handle_non_streaming(
     deferred: list[dict[str, Any]],
     managed_intercept: set[str] | None = None,
     auto_load: bool = False,
+    client_model: str | None = None,
 ) -> web.Response:
     """Handle non-streaming request. Same intercept model as streaming:
     ToolSearch+deferred always intercepted when deferred exist;
@@ -998,7 +1015,13 @@ async def _handle_non_streaming(
     core_visible_names: set[str] = {t.get("name", "") for t in body.get("tools", [])}
     summaries: list[str] = []
 
+    def _reverse_model(r: dict[str, Any]) -> dict[str, Any]:
+        if client_model and isinstance(r, dict) and "model" in r:
+            r["model"] = client_model
+        return r
+
     max_roundtrips = proxy_config.max_roundtrips()
+    result: dict[str, Any] = {}
     for _rt in range(max_roundtrips):
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -1016,7 +1039,7 @@ async def _handle_non_streaming(
                     if block.get("type") == "text":
                         block["text"] = prefix + block.get("text", "")
                         break
-            return web.json_response(result, status=200)
+            return web.json_response(_reverse_model(result), status=200)
 
         handled = False
         for block in result.get("content", []):
@@ -1096,9 +1119,9 @@ async def _handle_non_streaming(
             break
 
         if not handled:
-            return web.json_response(result, status=200)
+            return web.json_response(_reverse_model(result), status=200)
 
-    return web.json_response(result, status=200)
+    return web.json_response(_reverse_model(result), status=200)
 
 
 # ── /v1/models — convert OpenAI format from LM Studio to Anthropic format ──

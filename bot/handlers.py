@@ -29,6 +29,23 @@ from voice.stt import transcribe
 
 log = logging.getLogger("telecode.handlers")
 
+
+def _fire(coro) -> asyncio.Task:
+    """Fire-and-forget a coroutine, logging any unhandled exception.
+
+    Plain asyncio.ensure_future loses exceptions to GC warnings only;
+    this surfaces them in the app log instead.
+    """
+    task = asyncio.ensure_future(coro)
+    def _log_exc(t: asyncio.Task) -> None:
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc is not None:
+            log.error("Background task failed: %s", exc, exc_info=exc)
+    task.add_done_callback(_log_exc)
+    return task
+
 _TG_HARD_LIMIT = 4096  # Telegram's absolute limit (post-HTML)
 
 
@@ -793,7 +810,7 @@ async def _start_session_core(ctx, user_id: int, backend_key: str, session_name:
         chat_id = config.telegram_group_id()
 
         def on_output(text: str) -> None:
-            asyncio.ensure_future(_send_output(bot, chat_id, tid, text))
+            _fire(_send_output(bot, chat_id, tid, text))
 
         await _mgr(ctx).start_session(
             user_id=user_id, session_key=session_key, backend=backend,
@@ -902,7 +919,7 @@ class _LiveMessage:
             log.warning("LiveMessage flood control — backing off %ds", e.retry_after)
         except BadRequest as e:
             if is_thread_not_found(e):
-                asyncio.ensure_future(handle_topic_gone(self.thread_id))
+                _fire(handle_topic_gone(self.thread_id))
                 return
             log.warning("LiveMessage: failed to create message: %s", e)
         except TelegramError as e:
@@ -918,7 +935,7 @@ class _LiveMessage:
         if not self._edit_scheduled:
             self._edit_scheduled = True
             self._edit_handle = self._loop.call_later(
-                _EDIT_INTERVAL, lambda: asyncio.ensure_future(self._do_edit())
+                _EDIT_INTERVAL, lambda: _fire(self._do_edit())
             )
 
     async def _do_edit(self) -> None:
@@ -977,7 +994,7 @@ class _LiveMessage:
             log.warning("LiveMessage flood control — backing off %ds", e.retry_after)
         except BadRequest as e:
             if is_thread_not_found(e):
-                asyncio.ensure_future(handle_topic_gone(self.thread_id))
+                _fire(handle_topic_gone(self.thread_id))
                 return
             if "not modified" not in str(e).lower():
                 log.warning("LiveMessage edit failed: %s", e)
@@ -1095,7 +1112,7 @@ async def _start_screen_session(ctx, user_id: int, session_name: str, hwnd: int)
                             await handle_topic_gone(tid)
                     except TelegramError:
                         pass
-                asyncio.ensure_future(_notify_closed())
+                _fire(_notify_closed())
                 return
             lp.set_frame(jpeg_bytes)
 
@@ -1158,7 +1175,7 @@ async def _start_video_session(ctx, user_id: int, session_name: str, hwnd: int) 
                     log.warning("Video text send failed: %s", e)
                 except TelegramError as e:
                     log.warning("Video text send failed: %s", e)
-            asyncio.ensure_future(_send_text())
+            _fire(_send_text())
 
         def on_video(video_bytes: bytes) -> None:
             async def _send():
@@ -1182,7 +1199,7 @@ async def _start_video_session(ctx, user_id: int, session_name: str, hwnd: int) 
                     log.warning("Failed to send video: %s", e)
                 except TelegramError as e:
                     log.warning("Failed to send video: %s", e)
-            asyncio.ensure_future(_send())
+            _fire(_send())
 
         vc.subscribe_text(on_text)
         vc.subscribe(on_video)
@@ -1231,7 +1248,7 @@ async def _start_computer_session(ctx, user_id: int, session_name: str, hwnd: in
         chat_id = config.telegram_group_id()
 
         def on_text(text: str) -> None:
-            asyncio.ensure_future(_send_output(bot, chat_id, tid, text))
+            _fire(_send_output(bot, chat_id, tid, text))
 
         # Track the current screenshot message so we can edit it in place
         _photo_msg_id: dict[str, int | None] = {"id": None}
@@ -1269,12 +1286,12 @@ async def _start_computer_session(ctx, user_id: int, session_name: str, hwnd: in
                     log.warning("Computer photo flood control — backing off %ds", e.retry_after)
                 except BadRequest as e:
                     if is_thread_not_found(e):
-                        asyncio.ensure_future(handle_topic_gone(tid))
+                        _fire(handle_topic_gone(tid))
                         return
                     log.warning("Computer photo send failed: %s", e)
                 except TelegramError as e:
                     log.warning("Computer photo send failed: %s", e)
-            asyncio.ensure_future(_send_or_edit_photo())
+            _fire(_send_or_edit_photo())
 
         await _mgr(ctx).start_computer_session(
             user_id=user_id, session_key=session_key, backend=backend,
@@ -1323,7 +1340,7 @@ class _FrameSender:
             self._send_scheduled = True
             self._send_handle = self._loop.call_later(
                 config.image_interval(),
-                lambda: asyncio.ensure_future(self._do_send()),
+                lambda: _fire(self._do_send()),
             )
 
     async def _do_send(self) -> None:
@@ -1353,7 +1370,7 @@ class _FrameSender:
             log.warning("FrameSender flood control — backing off %ds", e.retry_after)
         except BadRequest as e:
             if is_thread_not_found(e):
-                asyncio.ensure_future(handle_topic_gone(self.thread_id))
+                _fire(handle_topic_gone(self.thread_id))
                 return
             log.warning("FrameSender send failed: %s", e)
         except TelegramError as e:

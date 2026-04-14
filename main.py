@@ -93,8 +93,9 @@ def _start_tailscale_funnels(log: logging.Logger) -> list[subprocess.Popen]:
             import json
             status = json.loads(result.stdout)
             ts_domain = status.get("Self", {}).get("DNSName", "").rstrip(".")
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("Could not resolve Tailscale FQDN (%s: %s); funnels will still start.",
+                    type(exc).__name__, exc)
 
     funnels: list[subprocess.Popen] = []
     # Each entry: (https_port, local_port, label)
@@ -136,27 +137,39 @@ async def _post_init(app) -> None:
     for w in warnings:
         log.warning(w)
 
-    await app.bot.set_my_commands(BOT_COMMANDS)
-    log.info("Registered %d commands with Telegram", len(BOT_COMMANDS))
+    try:
+        await app.bot.set_my_commands(BOT_COMMANDS)
+        log.info("Registered %d commands with Telegram", len(BOT_COMMANDS))
+    except Exception as exc:
+        log.error("set_my_commands failed: %s", exc, exc_info=True)
 
-    vs = await probe()
-    log.info("Voice: STT=%s", "OK" if vs.stt_available else "unavailable")
-    app.bot_data["_probe_task"] = asyncio.ensure_future(probe_loop(60))
+    try:
+        vs = await probe()
+        log.info("Voice: STT=%s", "OK" if vs.stt_available else "unavailable")
+        app.bot_data["_probe_task"] = asyncio.ensure_future(probe_loop(60))
+    except Exception as exc:
+        log.error("Voice probe init failed: %s", exc, exc_info=True)
 
-    # Start tool-search proxy
-    runner = await start_proxy_background()
-    if runner:
-        app.bot_data["_proxy_runner"] = runner
+    try:
+        runner = await start_proxy_background()
+        if runner:
+            app.bot_data["_proxy_runner"] = runner
+    except Exception as exc:
+        log.error("Proxy startup failed: %s", exc, exc_info=True)
 
-    # Start MCP audio server
-    mcp_thread = start_mcp_background(config.mcp_server_host(), config.mcp_server_port())
-    if mcp_thread:
-        app.bot_data["_mcp_thread"] = mcp_thread
+    try:
+        mcp_thread = start_mcp_background(config.mcp_server_host(), config.mcp_server_port())
+        if mcp_thread:
+            app.bot_data["_mcp_thread"] = mcp_thread
+    except Exception as exc:
+        log.error("MCP server startup failed: %s", exc, exc_info=True)
 
-    # Start Tailscale Funnel if available
-    funnels = _start_tailscale_funnels(log)
-    if funnels:
-        app.bot_data["_tailscale_funnels"] = funnels
+    try:
+        funnels = _start_tailscale_funnels(log)
+        if funnels:
+            app.bot_data["_tailscale_funnels"] = funnels
+    except Exception as exc:
+        log.error("Tailscale funnel startup failed: %s", exc, exc_info=True)
 
 
 async def _post_shutdown(app) -> None:
@@ -165,9 +178,17 @@ async def _post_shutdown(app) -> None:
     if runner:
         await runner.cleanup()
 
-    # Stop Tailscale Funnel subprocesses
+    # Stop Tailscale Funnel subprocesses — terminate then wait (with kill fallback).
     for proc in app.bot_data.get("_tailscale_funnels", []):
-        proc.terminate()
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=2)
+        except Exception:
+            pass
 
     for key in ("_probe_task", "_stale_check_task"):
         task = app.bot_data.get(key)
