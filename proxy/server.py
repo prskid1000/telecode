@@ -776,18 +776,7 @@ async def _handle_streaming(
     """
     from proxy.managed_tools import is_managed, get_handler, get_tool, format_visibility, run_pre_llm, run_post_llm
 
-    intercept: set[str] = set()
     deferred_names = {t["name"] for t in deferred}
-    if deferred:
-        # ToolSearch is bundled with tool_search — always intercepted when deferred exist
-        intercept.add("ToolSearch")
-        if auto_load:
-            intercept |= deferred_names
-        else:
-            # Unloaded-tool guard: also intercept blind deferred calls
-            intercept |= deferred_names
-    if managed_intercept:
-        intercept |= managed_intercept
 
     resp = web.StreamResponse()
     resp._req = request
@@ -837,7 +826,19 @@ async def _handle_streaming(
         heartbeat = await _start_heartbeat(resp, request, write_lock)
 
         for _rt in range(max_roundtrips):
-            round_intercept = set(intercept)
+            # Rebuild intercept set each round so names promoted to core by
+            # auto_load (or ToolSearch) stop being intercepted on retry — the
+            # model's second call must pass through to CC for execution.
+            round_intercept: set[str] = set()
+            if deferred:
+                round_intercept.add("ToolSearch")
+                # Only deferred names NOT YET LOADED stay intercepted. Once a
+                # name is in core_visible_names, auto_load and unloaded-guard
+                # are done with it and CC should execute it.
+                round_intercept |= (deferred_names - core_visible_names)
+            if managed_intercept:
+                round_intercept |= managed_intercept
+
             # Hallucination guard: everything the model is allowed to call
             # without interception. Anything outside this set AND outside
             # `intercept_names` is treated as a made-up name and caught.
