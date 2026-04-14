@@ -210,6 +210,7 @@ async def _forward_stream(
     request: web.Request,
     intercept_names: set[str] | None = None,
     *,
+    known_names: set[str] | None = None,
     status_blocks: list[str] | None = None,
     base_index_offset: int = 0,
 ) -> dict[str, Any] | None:
@@ -229,6 +230,11 @@ async def _forward_stream(
     window so the client's HTTP read timeout doesn't fire while we wait.
     """
     intercept_names = intercept_names or set()
+    # Hallucination guard: when `known_names` is provided, any tool_use whose
+    # name is neither in `intercept_names` nor in `known_names` is treated as
+    # intercepted (returned to caller with _hallucinated=True) so the proxy
+    # can return BM25 suggestions instead of letting the bogus call leak to CC.
+    known_names = known_names or set()
     status_blocks = status_blocks or []
     n_status = len(status_blocks)
     index_offset = base_index_offset + n_status
@@ -365,6 +371,10 @@ async def _forward_stream(
                                 cur_id = block.get("id", "")
                                 cur_json = ""
                                 if cur_name in intercept_names:
+                                    decided = "intercept"
+                                elif known_names and cur_name not in known_names:
+                                    # Hallucinated — unknown tool name.
+                                    # Intercept so caller returns BM25 suggestions.
                                     decided = "intercept"
                                 else:
                                     decided = "passthrough"
@@ -828,10 +838,19 @@ async def _handle_streaming(
 
         for _rt in range(max_roundtrips):
             round_intercept = set(intercept)
+            # Hallucination guard: everything the model is allowed to call
+            # without interception. Anything outside this set AND outside
+            # `intercept_names` is treated as a made-up name and caught.
+            known_names = (
+                core_visible_names
+                | deferred_names
+                | round_intercept
+            )
 
             tool_use = await _forward_stream(
                 upstream, body, headers, resp, request,
                 intercept_names=round_intercept,
+                known_names=known_names,
                 status_blocks=[],  # status now emitted live, not batched
                 base_index_offset=status_emitted,
             )
@@ -890,8 +909,42 @@ async def _handle_streaming(
                     f'└  Model instructed to ToolSearch first'
                 )
 
+            else:
+                # Hallucination guard: unknown tool name (not core, not deferred,
+                # not managed, not ToolSearch). Run BM25 over everything known
+                # with the bogus name as query and return the top matches as
+                # suggestions — no schemas injected (that would bloat context).
+                # Auto-load / ToolSearch handle the next call for the real name.
+                haystack = list(body.get("tools", [])) + deferred
+                search_matches = await _do_tool_search(
+                    haystack, {"query": tool_name, "max_results": 5}
+                )
+                if search_matches:
+                    suggestion_names = ", ".join(
+                        m.get("name", "") for m in search_matches[:5]
+                    )
+                    result_content = (
+                        f"The tool `{tool_name}` does not exist. Did you mean one of these?\n\n"
+                        f"{_format_functions_block(search_matches)}\n\n"
+                        f"Call the correct tool with its exact name from the schema above."
+                    )
+                    status_line = (
+                        f'● Unknown tool: {tool_name}\n'
+                        f'└  Suggested: {suggestion_names}'
+                    )
+                else:
+                    result_content = (
+                        f"The tool `{tool_name}` does not exist and no close matches were found. "
+                        f"Call `ToolSearch(query=\"<keywords>\")` with keywords from the task "
+                        f"(not a guessed tool name) to discover the right tool."
+                    )
+                    status_line = (
+                        f'● Unknown tool: {tool_name}\n'
+                        f'└  No close matches · model told to ToolSearch with keywords'
+                    )
+
             if result_content is None:
-                # Defensive: intercepted name didn't match any branch. Stop.
+                # Defensive: should be unreachable now. Stop the loop.
                 break
 
             # Write the status block to the wire NOW so the user sees the tool
