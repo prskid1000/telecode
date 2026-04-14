@@ -441,14 +441,13 @@ Match requests by header substring and apply per-client transforms. First match 
 
 The **office** profile unlocks Claude for Excel/PowerPoint/Word against a local model — Office add-ins silently retry unless every turn returns a `tool_use` block, so this profile preserves their tools, strips Anthropic-hosted ones (`web_search_20250305`, `code_execution_20250825`), and swaps in an Office-aware system prompt.
 
-**Intercepts** — four active branches, each produces a `tool_result` for the model plus a live status line for the user:
+**Intercepts** — five active branches, each produces a `tool_result` for the model plus a live status line for the user:
 
 1. **`ToolSearch`** — BM25 over deferred tools (`select:Name,Name` / `+prefix rest` / keyword search). Returns matching `<functions>` block.
 2. **Managed tools** — `web_search`, `code_execution`, `speak`, `transcribe`, plus any `mcp_server/tools/*.py` drop-in (auto-bridged via `managed_tools.py`). Runs `pre_llm → handler → post_llm`.
 3. **Auto-load** (`auto_load_tools: true`) — first blind call to a deferred tool injects its schema and asks the model to retry; the second call passes through to CC for execution.
 4. **Unloaded-tool guard** (`auto_load_tools: false`) — if the model calls a deferred tool directly by name, blocks it and instructs `ToolSearch(select:<tool>)` first.
-
-(Hallucination guard — BM25 suggestions for unknown tool names — is currently NOT wired into the intercept loop; unknown names fall through to the client. Re-adding requires wildcard intercept support in `_forward_stream`.)
+5. **Hallucination guard** (always on) — any tool_use name outside the known set (core visible ∪ deferred ∪ managed ∪ ToolSearch) triggers BM25 over core+deferred with the bogus name as query; top 5 matches are returned as suggestions in the tool_result (no schemas injected — that would bloat context). Model picks the right name, retries, and auto-load handles the single matched schema.
 
 **Streaming behaviour** — the intercept loop branches on the first `content_block_start`. Intercepted tool names → buffer + handle + retry. Anything else (text, non-intercepted tool_use) → flush live to the client with zero added latency. Large final tool_use payloads (e.g. `execute_office_js` story drafts) stream through as they arrive — no end-of-response timeout.
 
@@ -470,6 +469,9 @@ A heartbeat task runs for the entire request (both buffer + passthrough, **acros
 
 ● Blocked: NotebookEdit (unloaded)
 └  Model instructed to ToolSearch first
+
+● Unknown tool: read_notebok
+└  Suggested: NotebookEdit, ReadNotebook, ReadFile
 ```
 
 Adding a new managed tool needs zero status-rendering code — `format_visibility()` derives the line from the tool's `primary_arg` and the handler's returned summary.
