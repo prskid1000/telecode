@@ -935,17 +935,42 @@ class ComputerControl:
                     self._trim_history()
                     is_first_turn = False
 
-                    # Call the vision LLM
+                    # Call the vision LLM — raced against the user message queue
+                    # so a new instruction sent mid-call interrupts immediately
+                    # instead of waiting for the LLM response.
                     self._emit_text("Thinking...")
+                    llm_task = asyncio.ensure_future(_call_vision_llm(
+                        messages=self._history,
+                        base_url=config.computer_api_base_url(),
+                        api_key=config.computer_api_key(),
+                        model=config.computer_model(),
+                        api_format=config.computer_api_format(),
+                        session_id=self._llm_session_id,
+                    ))
+                    queue_task = asyncio.ensure_future(self._msg_queue.get())
+                    done, pending = await asyncio.wait(
+                        {llm_task, queue_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if queue_task in done and llm_task not in done:
+                        # User interrupted — cancel LLM, restart with new instruction.
+                        llm_task.cancel()
+                        try:
+                            await llm_task
+                        except BaseException:
+                            pass
+                        user_text = queue_task.result()
+                        self._history.pop()  # drop the user msg for the cancelled turn
+                        is_first_turn = True
+                        continue
+                    # LLM finished first — drain queue_task.
+                    queue_task.cancel()
                     try:
-                        raw_response, new_sid = await _call_vision_llm(
-                            messages=self._history,
-                            base_url=config.computer_api_base_url(),
-                            api_key=config.computer_api_key(),
-                            model=config.computer_model(),
-                            api_format=config.computer_api_format(),
-                            session_id=self._llm_session_id,
-                        )
+                        await queue_task
+                    except BaseException:
+                        pass
+                    try:
+                        raw_response, new_sid = llm_task.result()
                         if new_sid:
                             self._llm_session_id = new_sid
                     except Exception as e:

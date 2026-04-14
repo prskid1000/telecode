@@ -402,6 +402,7 @@ class PTYProcess:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._reader_task: asyncio.Task | None = None
         self._poll_task: asyncio.Task | None = None
+        self._watch_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -415,7 +416,7 @@ class PTYProcess:
 
         self.alive = True
         self._poll_task = asyncio.ensure_future(self._poll_loop())
-        asyncio.ensure_future(self._watch_exit())
+        self._watch_task = asyncio.ensure_future(self._watch_exit())
 
     async def stop(self) -> None:
         self.alive = False
@@ -425,6 +426,8 @@ class PTYProcess:
             self._max_wait_handle.cancel()
         if self._poll_task and not self._poll_task.done():
             self._poll_task.cancel()
+        if self._watch_task and not self._watch_task.done():
+            self._watch_task.cancel()
         if _IS_WIN:
             await self._stop_win()
         else:
