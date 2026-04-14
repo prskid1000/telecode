@@ -441,15 +441,22 @@ Match requests by header substring and apply per-client transforms. First match 
 
 The **office** profile unlocks Claude for Excel/PowerPoint/Word against a local model — Office add-ins silently retry unless every turn returns a `tool_use` block, so this profile preserves their tools, strips Anthropic-hosted ones (`web_search_20250305`, `code_execution_20250825`), and swaps in an Office-aware system prompt.
 
-**Auto-load** (`auto_load_tools: true`): on first call to a deferred tool the proxy injects its schema and asks the model to retry; the second call passes through to CC for execution. **Hallucination guard** (always on): calling an unknown name triggers BM25 over core+deferred and returns the top matches as suggestions — no schemas injected, so context stays minimal. Model picks the right name, retries, and auto-load handles that single schema.
+**Intercepts** — four active branches, each produces a `tool_result` for the model plus a live status line for the user:
 
-**Unloaded-tool guard** (`auto_load_tools: false`): if the model calls a deferred (unloaded) tool directly by name, the proxy blocks the call and returns a tool_result instructing it to run `ToolSearch(query="select:<tool>", max_results=5)` first.
+1. **`ToolSearch`** — BM25 over deferred tools (`select:Name,Name` / `+prefix rest` / keyword search). Returns matching `<functions>` block.
+2. **Managed tools** — `web_search`, `code_execution`, `speak`, `transcribe`, plus any `mcp_server/tools/*.py` drop-in (auto-bridged via `managed_tools.py`). Runs `pre_llm → handler → post_llm`.
+3. **Auto-load** (`auto_load_tools: true`) — first blind call to a deferred tool injects its schema and asks the model to retry; the second call passes through to CC for execution.
+4. **Unloaded-tool guard** (`auto_load_tools: false`) — if the model calls a deferred tool directly by name, blocks it and instructs `ToolSearch(select:<tool>)` first.
 
-**Streaming behaviour** — the intercept loop branches on the first `content_block_start`. Intercepted tool names (ToolSearch, managed tools, deferred names) → buffer + handle + retry. Anything else (text, non-intercepted tool_use) → flush live to the client with zero added latency. Large final tool_use payloads (e.g. `execute_office_js` story drafts) stream through the wire as they arrive — no end-of-response timeout.
+(Hallucination guard — BM25 suggestions for unknown tool names — is currently NOT wired into the intercept loop; unknown names fall through to the client. Re-adding requires wildcard intercept support in `_forward_stream`.)
 
-A heartbeat task runs for the entire request (both buffer + passthrough): `: keepalive` SSE comments every 2s for wire-level liveness, plus `event: ping` every `proxy.ping_interval` seconds (default `10`) as Anthropic's official live-progress signal. CC / pivot / Office add-ins recognize the pings and won't time out even on minute-long generations. Set `proxy.ping_interval` in `settings.json` to tune.
+**Streaming behaviour** — the intercept loop branches on the first `content_block_start`. Intercepted tool names → buffer + handle + retry. Anything else (text, non-intercepted tool_use) → flush live to the client with zero added latency. Large final tool_use payloads (e.g. `execute_office_js` story drafts) stream through as they arrive — no end-of-response timeout.
 
-**Visibility status blocks** — every intercept appends a CC-style `● Tool("arg")\n└  summary` line to a `summaries` list. On the final response, each becomes a synthetic text content block before upstream content (indices shifted accordingly). Renders even when the model jumps straight to `tool_use`. Examples:
+The FIRST `message_start` event is forwarded to the client immediately (even on an intercept round) so the client's SSE parser commits and renders subsequent status blocks live. Subsequent rounds' `message_start` / `message_delta` / `message_stop` on intercept rounds are dropped so there's still exactly one message envelope per request.
+
+A heartbeat task runs for the entire request (both buffer + passthrough, **across round-trips and during local handler execution**): `: keepalive` SSE comments every 2s for wire-level liveness, plus `event: ping` every `proxy.ping_interval` seconds (default `10`) as Anthropic's official live-progress signal. CC / pivot / Office add-ins recognize the pings and won't time out even on minute-long generations or slow `code_execution` calls.
+
+**Visibility status blocks** — every intercept produces a CC-style `● Tool("arg")\n└  summary` line. `_emit_live_status()` writes the block to the wire **immediately after each handler returns** (under a shared write lock, with the payload writer drained) — so the user sees each tool call the moment it happens, not bundled with the final model reply. A `status_emitted` counter shifts upstream's block indices so everything stays self-consistent on the wire. Examples:
 
 ```
 ● ToolSearch("notebook jupyter")
