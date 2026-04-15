@@ -238,10 +238,10 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.StatusUpdate.FORUM_TOPIC_CLOSED, handle_forum_topic_closed))
     app.add_handler(MessageHandler(filters.Document.ALL,           handle_document))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO,  handle_voice_msg))
-    # Drop only OUR registered commands; let unknown /foo (e.g. CC's own
-    # /resume, /clear, /compact, /model) flow through to the CLI via handle_text.
-    _own_cmds = [c.command for c in BOT_COMMANDS]
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.Command(_own_cmds), handle_text))
+    # Register AFTER all CommandHandlers so in group 0 they match their own
+    # commands first and run; anything they don't claim (plain text, unknown
+    # /foo like CC's /resume /clear /compact /model) falls through to here.
+    app.add_handler(MessageHandler(filters.TEXT, handle_text))
 
     log.info("Bot running. Ctrl+C to stop.")
     app.run_polling(drop_pending_updates=True)
