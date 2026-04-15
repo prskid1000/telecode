@@ -516,8 +516,8 @@ class TestCmdHelp:
         update, ctx, _ = _make_update()
         await cmd_help(update, ctx)
         text = update.message.reply_text.call_args[0][0]
-        for cmd in ["/start", "/new", "/stop", "/key", "/pause", "/resume",
-                    "/voice", "/settings", "/help"]:
+        for cmd in ["/start", "/new", "/stop", "/key",
+                    "/settings", "/help"]:
             assert cmd in text
 
 
@@ -865,7 +865,7 @@ class TestFrameSender:
         fs, bot = self._make_fs()
         fs._pending_frame = b"jpeg"
         bot.send_photo = AsyncMock(side_effect=RetryAfter(15))
-        with patch("bot.handlers._screen_controls_kb", return_value=MagicMock()):
+        with patch("bot.handlers._capture_controls_kb", return_value=MagicMock()):
             await fs._do_send()
         assert h._flood_active() is True
 
@@ -914,20 +914,6 @@ class TestStore:
         keys = {it["session_key"] for it in items}
         assert "a:1" in keys
         assert "b:2" in keys
-
-    @pytest.mark.asyncio
-    async def test_voice_prefs_default(self, settings_json):
-        import store
-        prefs = await store.get_voice_prefs(999)
-        assert prefs == {"stt_on": True}
-
-    @pytest.mark.asyncio
-    async def test_set_voice_pref(self, settings_json):
-        import store
-        await store.set_voice_pref(111, "stt_on", False)
-        prefs = await store.get_voice_prefs(111)
-        assert prefs["stt_on"] is False
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 15. Config
@@ -1790,7 +1776,7 @@ class TestTopicDeletion:
 
         fs = _FrameSender(bot, chat_id=-100, thread_id=9042, session_key="screen:x")
         fs._pending_frame = b"\xff\xd8jpeg"
-        with patch("bot.handlers._screen_controls_kb", return_value=MagicMock()), \
+        with patch("bot.handlers._capture_controls_kb", return_value=MagicMock()), \
              patch("bot.handlers.handle_topic_gone", new_callable=AsyncMock) as mock_gone:
             await fs._do_send()
 
