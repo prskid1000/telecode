@@ -55,12 +55,14 @@ async def normalize_mention(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
     msg = update.effective_message
     if not msg or not msg.text:
         return
+    log.info("normalize_mention: raw=%r", msg.text)
     normalized = _strip_bot_mention(msg.text)
     if normalized != msg.text:
         try:
             object.__setattr__(msg, "text", normalized)
+            log.info("normalize_mention: -> %r", normalized)
         except Exception as exc:
-            log.debug("normalize_mention: could not mutate text: %s", exc)
+            log.warning("normalize_mention: could not mutate text: %s", exc)
 
 
 def _fire(coro) -> asyncio.Task:
@@ -702,6 +704,8 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
 # ── Messages ──────────────────────────────────────────────────────────────────
 
 async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    log.info("handle_text fired text=%r thread=%s", update.message.text if update.message else None,
+             update.message.message_thread_id if update.message else None)
     if not await _auth(update, ctx):
         return
     session = _session_for_thread(update, ctx)
