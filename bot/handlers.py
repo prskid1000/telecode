@@ -29,6 +29,21 @@ from voice.stt import transcribe
 log = logging.getLogger("telecode.handlers")
 
 
+def _strip_bot_mention(text: str) -> str:
+    """Strip `@botname` from a leading slash command.
+
+    In groups, Telegram rewrites `/cmd` -> `/cmd@bot_username` on the wire.
+    Unknown commands are forwarded to the CLI by handle_text; the raw form
+    would confuse CC (`/resume@bot` is not a valid CC command).
+    """
+    if not text.startswith("/"):
+        return text
+    first, sep, rest = text.partition(" ")
+    if "@" in first:
+        first = first.split("@", 1)[0]
+    return first + sep + rest
+
+
 def _fire(coro) -> asyncio.Task:
     """Fire-and-forget a coroutine, logging any unhandled exception.
 
@@ -311,6 +326,8 @@ def _picker_kb() -> InlineKeyboardMarkup:
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _auth(update, ctx):
         return
+    if update.message.message_thread_id:
+        return
     user_id = update.effective_user.id
     await full_cleanup(ctx.bot, _mgr(ctx), user_id)
     sessions = _mgr(ctx).user_sessions(user_id)
@@ -367,6 +384,8 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_new(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _auth(update, ctx):
+        return
+    if update.message.message_thread_id:
         return
     args = ctx.args or []
     if not args:
@@ -435,6 +454,8 @@ async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_settings(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _auth(update, ctx):
         return
+    if update.message.message_thread_id:
+        return
     await handle_settings(update, ctx)
 
 
@@ -451,6 +472,8 @@ async def cmd_key(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     /key a              /key 1            (any single character)
     """
     if not await _auth(update, ctx):
+        return
+    if not update.message.message_thread_id:
         return
     session = _session_for_thread(update, ctx)
     if not session:
@@ -691,7 +714,7 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         lm = _LiveMessage(bot, chat_id, thread_id)
         _live_messages[thread_id] = lm
 
-        text = update.message.text.strip()
+        text = _strip_bot_mention(update.message.text.strip())
         log.info("Sending to computer control %s: %.100s", session.session_key, text)
         try:
             await session.process.send(text)
@@ -708,7 +731,7 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     lm = _LiveMessage(bot, chat_id, thread_id)
     _live_messages[thread_id] = lm
 
-    text = update.message.text.strip()
+    text = _strip_bot_mention(update.message.text.strip())
     log.info("Sending to %s: %.100s", session.session_key, text)
     try:
         await _mgr(ctx).send(update.effective_user.id, session.session_key, text)
