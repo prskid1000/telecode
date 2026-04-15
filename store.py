@@ -1,9 +1,8 @@
 """
 JSON persistence store.
 
-Stores two things:
+Stores:
   topics[user_id][session_key] = thread_id
-  voice_prefs[user_id]         = {"stt_on": bool}
 
 File location: settings.paths.store_path (default: ./data/telecode.json)
 """
@@ -24,7 +23,7 @@ def _store_path() -> str:
 def _load() -> dict[str, Any]:
     path = _store_path()
     if not os.path.exists(path):
-        return {"topics": {}, "voice_prefs": {}}
+        return {"topics": {}}
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -71,18 +70,3 @@ async def list_thread_ids(user_id: int) -> list[dict]:
         ]
 
 
-# ── Voice prefs ───────────────────────────────────────────────────────────────
-
-async def get_voice_prefs(user_id: int) -> dict[str, bool]:
-    async with _lock:
-        data = _load()
-        prefs = data["voice_prefs"].get(str(user_id))
-    return prefs if prefs else {"stt_on": True}
-
-
-async def set_voice_pref(user_id: int, key: str, value: bool) -> None:
-    assert key in ("stt_on",)
-    async with _lock:
-        data = _load()
-        data["voice_prefs"].setdefault(str(user_id), {"stt_on": True})[key] = value
-        _save(data)

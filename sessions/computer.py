@@ -901,7 +901,7 @@ class ComputerControl:
                     continue
 
                 if self.paused:
-                    self._emit_text("Session is paused. Use /resume first.")
+                    self._emit_text("Session is paused. Tap Resume first.")
                     continue
 
                 # Action loop — one action at a time until done or interrupted

@@ -164,9 +164,6 @@ Send `/start` in the group, or `/new claude work`.
 | `/new <backend> [name]` | Start a named session (e.g. `/new claude work`) |
 | `/stop [session_key]` | Stop current session, or all from General (e.g. `/stop claude:work`) |
 | `/key <key>` | Send a keyboard key to the terminal |
-| `/pause` | Pause image/video capture |
-| `/resume` | Resume image/video capture |
-| `/voice` | Voice input settings |
 | `/settings` | Configuration |
 | `/help` | List all commands |
 
@@ -178,10 +175,10 @@ Capture any window and stream screenshots to a topic (interval = `capture.image_
 /new screen myapp
 ```
 
-Pick a window from the list. Each frame is sent as a new photo message. Controls:
+Pick a window from the list. Each frame is sent as a new photo message. The inline control buttons follow the **latest** frame — as new photos arrive, buttons are stripped from the previous one so only the most recent message is interactive:
 
-- `/pause` / `/resume` -- pause/resume streaming
-- `/stop screen:myapp` -- stop capture
+- ⏸ Pause / ▶ Resume -- pause/resume streaming
+- ⏹ Stop -- stop capture (or `/stop screen:myapp` from anywhere)
 
 **Platform support:**
 - **Windows**: Uses PrintWindow API -- captures the specific window even if behind other windows
@@ -228,8 +225,8 @@ Works with any OpenAI-compatible or Anthropic-compatible vision API (LM Studio, 
 
 Controls:
 - Send a new message to interrupt and give a new instruction
-- `/pause` / `/resume` -- pause/resume
-- `/stop` -- stop the session
+- ⏸ Pause / ▶ Resume inline buttons under the capture message
+- ⏹ Stop inline button (or `/stop` from anywhere)
 
 **Requirements:** `pyautogui` (included in requirements.txt)
 
@@ -241,10 +238,10 @@ Record a window continuously in video chunks (length = `capture.video_interval` 
 /new video myapp
 ```
 
-Pick a window from the list. The bot records at 3fps, encodes each chunk with ffmpeg (libx264, ultrafast, lightweight), and sends it as a video message. Recording continues until stopped. Controls:
+Pick a window from the list. The bot records at 3fps, encodes each chunk with ffmpeg (libx264, ultrafast, lightweight), and sends it as a video message. Recording continues until stopped. Each chunk carries inline control buttons and buttons are stripped from the previous chunk as the new one arrives (only the latest video is interactive):
 
-- `/pause` / `/resume` -- pause/resume recording (paused time doesn't count)
-- `/stop video:myapp` -- stop recording (encodes and sends any remaining frames)
+- ⏸ Pause / ▶ Resume -- pause/resume recording (paused time doesn't count)
+- ⏹ Stop -- stop recording (or `/stop video:myapp` from anywhere)
 
 ### Terminal keys (`/key`)
 
@@ -284,7 +281,7 @@ Pick a window from the list. The bot records at 3fps, encodes each chunk with ff
 
 ### Voice
 
-Send a voice message in a session topic -- transcribed via STT and sent as text. Toggle with `/voice`. Requires an OpenAI-compatible STT endpoint (default `http://localhost:6600/v1`).
+Send a voice message in a session topic -- transcribed via STT and sent as text. Active whenever the STT endpoint health probe succeeds; silently skipped when the endpoint is down. Requires an OpenAI-compatible STT endpoint (default `http://localhost:6600/v1`).
 
 ---
 
@@ -323,7 +320,7 @@ All options live in `settings.json`. See [`settings.example.json`](settings.exam
 | `base_url` | OpenAI-compatible STT endpoint (e.g. `http://localhost:6600/v1`) |
 | `model` | STT model name (e.g. `whisper-1`) |
 
-Users toggle per-user with `/voice`.
+Activation is automatic: when the endpoint health probe succeeds voice messages are transcribed; otherwise they're silently skipped.
 
 ### `capture` — screen capture cadence
 
@@ -642,7 +639,7 @@ mcp_server/prompts/    ← drop-in auto-discover (empty by default)
 ```
 main.py                Entry point — launches bot + proxy + MCP + Tailscale Funnel
 config.py              Settings accessors (hot-reloadable)
-store.py               JSON persistence for topic↔session map + voice prefs
+store.py               JSON persistence for topic↔session map
 settings.json          Your config (gitignored)
 settings.example.json  Full settings template
 
@@ -689,9 +686,8 @@ mcp_server/            Streamable-HTTP MCP server (port 1236)
   resources/           Drop-in resource modules (auto-discovered)
   prompts/             Drop-in prompt modules (auto-discovered)
 
-voice/                 STT probe + per-user prefs
+voice/                 STT availability + transcription
   health.py            STT availability probe
-  prefs.py             Per-user STT toggle storage
   stt.py               Speech-to-text transcription client
 ```
 
@@ -707,6 +703,6 @@ voice/                 STT probe + per-user prefs
 
 **Screen capture blank/black** -- Window may be on another virtual desktop. Minimized windows are auto-restored.
 
-**Voice not working** -- Run `/voice`. Start your STT service, detected within 60s.
+**Voice not working** -- Start your STT service; the health probe detects it within 60s and voice messages are transcribed automatically.
 
 **Video encoding fails** -- Ensure ffmpeg is installed and on PATH.

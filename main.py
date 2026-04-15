@@ -16,8 +16,7 @@ from sessions.manager import SessionManager
 from voice.health import probe, probe_loop
 from bot.handlers import (
     cmd_start, cmd_help, cmd_new, cmd_stop,
-    cmd_voice, cmd_settings, cmd_key,
-    cmd_pause, cmd_resume,
+    cmd_settings, cmd_key,
     handle_callback, handle_text, handle_voice_msg, handle_document,
     BOT_COMMANDS,
 )
@@ -224,12 +223,9 @@ def main() -> None:
     app.add_handler(CommandHandler("help",     cmd_help))
     app.add_handler(CommandHandler("new",      cmd_new))
     app.add_handler(CommandHandler("stop",     cmd_stop))
-    app.add_handler(CommandHandler("voice",    cmd_voice))
     app.add_handler(CommandHandler("settings", cmd_settings))
 
     app.add_handler(CommandHandler("key", cmd_key))
-    app.add_handler(CommandHandler("pause", cmd_pause))
-    app.add_handler(CommandHandler("resume", cmd_resume))
 
     app.add_handler(CallbackQueryHandler(handle_callback))
 

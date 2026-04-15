@@ -23,8 +23,7 @@ from bot.rate import (
     is_thread_not_found, handle_topic_gone, init_live_refs,
     cleanup_stale_sessions, full_cleanup,
 )
-from voice.health import get_status as voice_status, probe
-from voice.prefs import get_prefs, set_pref, stt_active
+from voice.health import get_status as voice_status
 from voice.stt import transcribe
 
 log = logging.getLogger("telecode.handlers")
@@ -234,9 +233,6 @@ BOT_COMMANDS = [
     BotCommand("new", "Start a named session"),
     BotCommand("stop", "Stop a session"),
     BotCommand("key", "Send key (e.g. /key enter, /key ctrl c)"),
-    BotCommand("pause", "Pause screen image capture"),
-    BotCommand("resume", "Resume screen image capture"),
-    BotCommand("voice", "Voice settings"),
     BotCommand("settings", "Configuration"),
     BotCommand("help", "List commands"),
 ]
@@ -272,6 +268,35 @@ async def _auth(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
     return True
 
 
+# Tracks the most recent message in a thread that carries an inline keyboard,
+# so we can strip buttons from the previous one when a new one arrives —
+# keeping controls only on the latest message. Key is thread_id or 0 (General).
+_latest_controls_msg: dict[int, int] = {}
+
+
+async def _track_controls(bot, msg) -> None:
+    """Strip the inline keyboard from the previously tracked message in this
+    thread, then record `msg` as the active controls message. Safe to call with
+    `msg=None` (e.g. tests where sends are mocked)."""
+    if msg is None:
+        return
+    chat_id = getattr(msg, "chat_id", None)
+    new_msg_id = getattr(msg, "message_id", None)
+    thread_id = getattr(msg, "message_thread_id", None)
+    if not chat_id or not new_msg_id:
+        return
+    key = thread_id or 0
+    prev = _latest_controls_msg.get(key)
+    if prev and prev != new_msg_id:
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=chat_id, message_id=prev, reply_markup=None,
+            )
+        except (BadRequest, TelegramError):
+            pass
+    _latest_controls_msg[key] = new_msg_id
+
+
 def _picker_kb() -> InlineKeyboardMarkup:
     rows = []
     for b in all_backends():
@@ -298,14 +323,18 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         text = "\n".join(lines)
     else:
         text = "Choose an AI to start:"
+    async def _send_picker() -> None:
+        msg = await update.message.reply_text(text, reply_markup=_picker_kb())
+        await _track_controls(ctx.bot, msg)
+
     try:
-        await update.message.reply_text(text, reply_markup=_picker_kb())
+        await _send_picker()
     except RetryAfter as e:
         _set_flood_backoff(e.retry_after)
         log.warning("/start: flood control — retry in %ds", e.retry_after)
         await asyncio.sleep(e.retry_after + 1)
         try:
-            await update.message.reply_text(text, reply_markup=_picker_kb())
+            await _send_picker()
         except TelegramError as e2:
             log.warning("/start: retry also failed: %s", e2)
 
@@ -328,10 +357,8 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "/new screen [name] - Stream window images\n"
         "/new video [name] - Record 1-min window video\n"
         "/new computer [name] - Control a window via vision LLM\n"
-        "/pause - Pause capture\n"
-        "/resume - Resume capture\n\n"
+        "Use the inline buttons under the capture message to pause/resume/stop\n\n"
         "<b>Other</b>\n"
-        "/voice - Voice settings\n"
         "/settings - Configuration\n"
         "/help - This message",
         parse_mode=ParseMode.HTML,
@@ -343,10 +370,11 @@ async def cmd_new(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     args = ctx.args or []
     if not args:
-        await update.message.reply_text(
+        msg = await update.message.reply_text(
             "Usage: /new claude  or  /new claude work",
             reply_markup=_picker_kb(),
         )
+        await _track_controls(ctx.bot, msg)
         return
     backend_key = args[0].lower()
     session_name = args[1] if len(args) > 1 else _next_session_name()
@@ -404,23 +432,6 @@ async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 await update.message.reply_text("No active sessions.")
 
 
-async def cmd_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _auth(update, ctx):
-        return
-    user_id = update.effective_user.id
-    prefs   = await get_prefs(user_id)
-    vs      = voice_status()
-    stt_label = f"STT {'ON' if prefs['stt_on'] else 'OFF'}"
-    await update.message.reply_text(
-        vs.summary(),
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton(stt_label, callback_data="toggle:stt")],
-            [InlineKeyboardButton("Re-check", callback_data="voice:probe")],
-        ]),
-    )
-
-
 async def cmd_settings(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _auth(update, ctx):
         return
@@ -447,10 +458,11 @@ async def cmd_key(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if not session.process.alive:
         await _kill_and_cleanup(ctx, update.effective_user.id, session.session_key)
-        await update.message.reply_text(
+        msg = await update.message.reply_text(
             "Session ended. Start a new one:",
             reply_markup=_picker_kb(),
         )
+        await _track_controls(ctx.bot, msg)
         return
 
     args = ctx.args or []
@@ -624,38 +636,26 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
                 pass
             await _start_computer_session(ctx, user_id, session_name, hwnd)
 
-    elif data.startswith("scr_pause:"):
+    elif data.startswith("cap_pause:"):
         session_key = data.split(":", 1)[1]
         if _mgr(ctx).pause_session(user_id, session_key):
+            # Cancel any pending photo send for screen captures
+            lp = _frame_senders.get(q.message.message_thread_id)
+            if lp:
+                if lp._send_handle:
+                    lp._send_handle.cancel()
+                lp._send_scheduled = False
+                lp._pending_frame = None
             await q.edit_message_reply_markup(
-                _screen_controls_kb(session_key, paused=True)
+                _capture_controls_kb(session_key, paused=True)
             )
 
-    elif data.startswith("scr_resume:"):
+    elif data.startswith("cap_resume:"):
         session_key = data.split(":", 1)[1]
         if _mgr(ctx).resume_session(user_id, session_key):
             await q.edit_message_reply_markup(
-                _screen_controls_kb(session_key, paused=False)
+                _capture_controls_kb(session_key, paused=False)
             )
-
-    elif data.startswith("toggle:"):
-        side  = data.split(":", 1)[1]
-        if side != "stt":
-            return
-        prefs = await get_prefs(user_id)
-        key   = f"{side}_on"
-        await set_pref(user_id, key, not prefs[key])
-        new_prefs = await get_prefs(user_id)
-        stt_label = f"STT {'ON' if new_prefs['stt_on'] else 'OFF'}"
-        await q.edit_message_reply_markup(InlineKeyboardMarkup([
-            [InlineKeyboardButton(stt_label, callback_data="toggle:stt")],
-            [InlineKeyboardButton("Re-check", callback_data="voice:probe")],
-        ]))
-
-    elif data == "voice:probe":
-        st = await probe()
-        await q.message.reply_text(st.summary(), parse_mode=ParseMode.HTML)
-
 
 # ── Messages ──────────────────────────────────────────────────────────────────
 
@@ -722,7 +722,7 @@ async def handle_voice_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
     user_id = update.effective_user.id
     vs      = voice_status()
 
-    if not await stt_active(user_id, vs.stt_available):
+    if not vs.stt_available:
         await update.message.reply_text("Voice input not available right now.")
         return
 
@@ -1032,14 +1032,14 @@ async def cleanup_live_message(thread_id: int) -> None:
 # ── Screen capture — window picker, live photo, pause/resume ──────────────────
 
 
-def _screen_controls_kb(session_key: str, paused: bool) -> InlineKeyboardMarkup:
+def _capture_controls_kb(session_key: str, paused: bool) -> InlineKeyboardMarkup:
     if paused:
         return InlineKeyboardMarkup([[
-            InlineKeyboardButton("\u25b6 Resume", callback_data=f"scr_resume:{session_key}"),
+            InlineKeyboardButton("\u25b6 Resume", callback_data=f"cap_resume:{session_key}"),
             InlineKeyboardButton("\u23f9 Stop", callback_data=f"stop:{session_key}"),
         ]])
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("\u23f8 Pause", callback_data=f"scr_pause:{session_key}"),
+        InlineKeyboardButton("\u23f8 Pause", callback_data=f"cap_pause:{session_key}"),
         InlineKeyboardButton("\u23f9 Stop", callback_data=f"stop:{session_key}"),
     ]])
 
@@ -1065,10 +1065,11 @@ async def _show_window_picker(update: Update, session_name: str, cb_prefix: str 
 
     prompts = {"scr": "Pick a window to capture:", "vid": "Pick a window to record:",
                "cmp": "Pick a window or full screen to control:"}
-    await update.message.reply_text(
+    msg = await update.message.reply_text(
         prompts.get(cb_prefix, "Pick a window:"),
         reply_markup=InlineKeyboardMarkup(rows),
     )
+    await _track_controls(update.get_bot(), msg)
 
 
 async def _start_screen_session(ctx, user_id: int, session_name: str, hwnd: int) -> None:
@@ -1122,10 +1123,12 @@ async def _start_screen_session(ctx, user_id: int, session_name: str, hwnd: int)
             capture_interval=config.image_interval(),
         )
         lp.process = session.process
-        await bot.send_message(
+        msg = await bot.send_message(
             chat_id=chat_id, message_thread_id=tid,
-            text="Capturing\u2026 Use /pause, /resume, or /stop.",
+            text="Capturing\u2026",
+            reply_markup=_capture_controls_kb(session_key, paused=False),
         )
+        await _track_controls(bot, msg)
 
     try:
         await _do_start(thread_id)
@@ -1184,11 +1187,13 @@ async def _start_video_session(ctx, user_id: int, session_name: str, hwnd: int) 
                 try:
                     video_buf = io.BytesIO(video_bytes)
                     video_buf.name = "recording.mp4"
-                    await bot.send_video(
+                    msg = await bot.send_video(
                         chat_id=chat_id, message_thread_id=tid,
                         video=video_buf,
                         supports_streaming=True,
+                        reply_markup=_capture_controls_kb(session_key, paused=False),
                     )
+                    await _track_controls(bot, msg)
                 except RetryAfter as e:
                     _set_flood_backoff(e.retry_after)
                     log.warning("Video send flood control — backing off %ds", e.retry_after)
@@ -1209,10 +1214,12 @@ async def _start_video_session(ctx, user_id: int, session_name: str, hwnd: int) 
             hwnd=hwnd, video_callback=on_video, text_callback=on_text,
             thread_id=tid,
         )
-        await bot.send_message(
+        msg = await bot.send_message(
             chat_id=chat_id, message_thread_id=tid,
-            text=f"🎬 Recording\u2026 Sends a video every {config.video_interval()}s. Use /pause, /resume, or /stop.",
+            text=f"🎬 Recording\u2026 Sends a video every {config.video_interval()}s.",
+            reply_markup=_capture_controls_kb(session_key, paused=False),
         )
+        await _track_controls(bot, msg)
 
     try:
         await _do_start(thread_id)
@@ -1359,12 +1366,13 @@ class _FrameSender:
         try:
             photo_buf = io.BytesIO(frame)
             photo_buf.name = "frame.jpg"
-            await self.bot.send_photo(
+            msg = await self.bot.send_photo(
                 chat_id=self.chat_id,
                 message_thread_id=self.thread_id,
                 photo=photo_buf,
-                reply_markup=_screen_controls_kb(self.session_key, paused=False),
+                reply_markup=_capture_controls_kb(self.session_key, paused=False),
             )
+            await _track_controls(self.bot, msg)
         except RetryAfter as e:
             _set_flood_backoff(e.retry_after)
             log.warning("FrameSender flood control — backing off %ds", e.retry_after)
@@ -1389,35 +1397,6 @@ _frame_senders: dict[int, _FrameSender] = {}
 
 # Give rate module access to live dicts for cleanup on topic deletion
 init_live_refs(_live_messages, _frame_senders)
-
-
-async def cmd_pause(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _auth(update, ctx):
-        return
-    session = _session_for_thread(update, ctx)
-    if not session or not isinstance(session.process, (ScreenCapture, VideoCapture, ComputerControl)):
-        await update.message.reply_text("No capture/control session in this thread.")
-        return
-    _mgr(ctx).pause_session(update.effective_user.id, session.session_key)
-    # Cancel any pending photo send
-    lp = _frame_senders.get(update.message.message_thread_id)
-    if lp:
-        if lp._send_handle:
-            lp._send_handle.cancel()
-        lp._send_scheduled = False
-        lp._pending_frame = None
-    await update.message.reply_text("\u23f8 Paused. /resume to continue.")
-
-
-async def cmd_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _auth(update, ctx):
-        return
-    session = _session_for_thread(update, ctx)
-    if not session or not isinstance(session.process, (ScreenCapture, VideoCapture, ComputerControl)):
-        await update.message.reply_text("No capture/control session in this thread.")
-        return
-    _mgr(ctx).resume_session(update.effective_user.id, session.session_key)
-    await update.message.reply_text("\u25b6 Resumed.")
 
 
 def _session_for_thread(update: Update, ctx: ContextTypes.DEFAULT_TYPE):

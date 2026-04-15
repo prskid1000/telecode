@@ -64,7 +64,7 @@ Tool-search proxy (for local models):
 - **Session key:** `{backend}:{name}` -- colon is the separator; do not use colons in names.
 - **Session naming:** auto-numbered (`claude-1`, `claude-2`) when no name given. Screen/video sessions use the window title.
 - **Routing:** only `message_thread_id` -> session. No other routing.
-- **Persistence:** `store.py` JSON file -- topic id per `(user_id, session_key)`; voice prefs.
+- **Persistence:** `store.py` JSON file -- topic id per `(user_id, session_key)`.
 - **PTY working directory:** always `Path.home()`, resolved via `config.pty_cwd()`.
 
 ---
@@ -93,7 +93,7 @@ Tool-search proxy (for local models):
 | `settings.json` | Only config source |
 | `config.py` | Read/write accessors (must be **functions** for hot-reload). `store_path` / `logs_dir` resolve relative paths against the `settings.json` directory (not cwd). |
 | `main.py` | App startup, handlers, `set_my_commands`, voice probe loop (no background stale checker) |
-| `store.py` | Topics + voice prefs JSON |
+| `store.py` | Topics JSON |
 | `sessions/process.py` | PTY + pyte + snapshot diff + timers |
 | `sessions/screen.py` | Image capture, video recording, window enumeration |
 | `sessions/computer.py` | Vision LLM computer control (capture + actions + LLM loop) |
@@ -105,7 +105,7 @@ Tool-search proxy (for local models):
 | `backends/implementations.py` | `GenericCLIBackend` (data-driven) + Screen, Video (non-PTY) |
 | `backends/registry.py` | Auto-built from `settings.json` tools; `get_backend`, `all_backends`, `refresh` |
 | `backends/params.py` | Load tool params from settings |
-| `voice/*` | STT health, prefs, transcribe |
+| `voice/*` | STT health probe, transcribe |
 | `proxy/__main__.py` | Standalone entry: `python -m proxy` |
 | `proxy/server.py` | aiohttp streaming proxy with intercept loop (ToolSearch + managed tools) |
 | `proxy/tool_search.py` | BM25 + regex search engine (zero deps) |
@@ -173,9 +173,9 @@ Tunables near top of `process.py`: idle interval, max wait, screen rows/history 
 2. Each chunk: captures frames via `capture_window()` at 3fps, saves as numbered JPEGs in a temp dir.
 3. After `capture.video_interval` seconds (default 60), encodes with ffmpeg: `libx264 -preset ultrafast -crf 32 -pix_fmt yuv420p`.
 4. `scale=trunc(iw/2)*2:trunc(ih/2)*2` filter ensures even dimensions for libx264.
-5. Sends encoded MP4 via `send_video`, then starts the next chunk.
-6. Continues until `/stop`. On stop, encodes and sends any remaining frames.
-7. Pause: recording loop sleeps, paused time doesn't count towards chunk duration.
+5. Sends encoded MP4 via `send_video` with `_capture_controls_kb` (⏸/▶/⏹) attached to each chunk, then starts the next chunk.
+6. Continues until the inline ⏹ Stop button or `/stop`. On stop, encodes and sends any remaining frames.
+7. Pause: recording loop sleeps, paused time doesn't count towards chunk duration. Triggered via the ⏸ Pause inline button.
 8. Minimized windows: auto-restored before each frame capture.
 
 ---
@@ -273,7 +273,8 @@ To use: set `proxy.enabled: true` and point `ANTHROPIC_BASE_URL` at `http://loca
 ## Live Telegram messages (`bot/handlers.py`)
 
 - **`_LiveMessage`:** one text message per "turn", updated by `append()`; debounced edits (~1s); overflow opens a new message. Overlap trim skips duplicate tails.
-- **`_FrameSender`:** sends each frame as a **new photo message**. Send interval = `capture.image_interval`. Drops frames while paused. Inline buttons for pause/resume/stop.
+- **`_FrameSender`:** sends each frame as a **new photo message**. Send interval = `capture.image_interval`. Drops frames while paused. Inline buttons (⏸ Pause / ▶ Resume / ⏹ Stop) — callbacks `cap_pause:` / `cap_resume:` / `stop:` (see `_capture_controls_kb`).
+- **Latest-message-only controls:** `_track_controls(bot, msg)` keeps a per-thread pointer (`_latest_controls_msg: dict[thread_id, message_id]`) to the most recent inline-keyboard message. Every site that sends `reply_markup=…` — `/start` picker, `/new` usage picker, dead-session picker, window picker, capture/video startup messages, each `_FrameSender` photo, each video chunk — calls `_track_controls`, which silently strips the keyboard from the previously tracked message via `edit_message_reply_markup(reply_markup=None)` before recording the new one. Pause/Resume callbacks use `q.edit_message_reply_markup` (same message_id) so the tracker is still valid. Errors are swallowed (message gone / too old / unchanged).
 
 ---
 
@@ -330,7 +331,7 @@ Streamable HTTP MCP server (FastMCP, port 1236). Drop-in tools/resources/prompts
 | Video encoding fails | Ensure ffmpeg is on PATH; check logs for ffmpeg stderr |
 | Computer control clicks wrong spot | DPI scaling issue; check `_get_window_rect` returns logical coords |
 | Computer control LLM error | Check LM Studio is running, model is loaded, base_url/model in settings |
-| Voice not working | Run `/voice`; start STT service, bot detects within 60s |
+| Voice not working | Start STT service; health probe detects within 60s and transcription kicks in automatically |
 | Proxy not starting | Check `proxy.enabled` is `true` in settings.json; check port not in use |
 | ToolSearch not triggered | Model may not call it; check upstream is reachable; with `proxy.debug` on, inspect `data/logs/proxy_full_*.json` dumps |
 | Tools missing after search | Tool may not match query; try regex with `re:` prefix; check `MAX_SEARCH_RESULTS` |
