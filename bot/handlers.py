@@ -33,8 +33,8 @@ def _strip_bot_mention(text: str) -> str:
     """Strip `@botname` from a leading slash command.
 
     In groups, Telegram rewrites `/cmd` -> `/cmd@bot_username` on the wire.
-    Unknown commands are forwarded to the CLI by handle_text; the raw form
-    would confuse CC (`/resume@bot` is not a valid CC command).
+    Centralized at update-intake via `normalize_mention_handler`; kept as a
+    pure helper for callers that bypass the update pipeline.
     """
     if not text.startswith("/"):
         return text
@@ -42,6 +42,25 @@ def _strip_bot_mention(text: str) -> str:
     if "@" in first:
         first = first.split("@", 1)[0]
     return first + sep + rest
+
+
+async def normalize_mention(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Pre-handler: strip `/cmd@botname` -> `/cmd` on every incoming message.
+
+    Registered in group -1 so it runs before any CommandHandler / MessageHandler
+    in group 0 sees the update. Mutates Message.text via object.__setattr__
+    since PTB freezes the attribute. Does not raise ApplicationHandlerStop,
+    so downstream handlers run normally against the normalized text.
+    """
+    msg = update.effective_message
+    if not msg or not msg.text:
+        return
+    normalized = _strip_bot_mention(msg.text)
+    if normalized != msg.text:
+        try:
+            object.__setattr__(msg, "text", normalized)
+        except Exception as exc:
+            log.debug("normalize_mention: could not mutate text: %s", exc)
 
 
 def _fire(coro) -> asyncio.Task:
@@ -714,7 +733,7 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         lm = _LiveMessage(bot, chat_id, thread_id)
         _live_messages[thread_id] = lm
 
-        text = _strip_bot_mention(update.message.text.strip())
+        text = update.message.text.strip()
         log.info("Sending to computer control %s: %.100s", session.session_key, text)
         try:
             await session.process.send(text)
@@ -731,7 +750,7 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     lm = _LiveMessage(bot, chat_id, thread_id)
     _live_messages[thread_id] = lm
 
-    text = _strip_bot_mention(update.message.text.strip())
+    text = update.message.text.strip()
     log.info("Sending to %s: %.100s", session.session_key, text)
     try:
         await _mgr(ctx).send(update.effective_user.id, session.session_key, text)

@@ -18,7 +18,7 @@ from bot.handlers import (
     cmd_start, cmd_help, cmd_new, cmd_stop,
     cmd_settings, cmd_key,
     handle_callback, handle_text, handle_voice_msg, handle_document,
-    handle_forum_topic_closed,
+    handle_forum_topic_closed, normalize_mention,
     BOT_COMMANDS,
 )
 from bot.rate import set_session_manager
@@ -219,6 +219,11 @@ def main() -> None:
     mgr = SessionManager()
     app.bot_data["session_manager"] = mgr
     set_session_manager(mgr)
+
+    # Pre-handler in group -1: strips `/cmd@botname` -> `/cmd` on every
+    # incoming message so all downstream handlers (CommandHandler, handle_text,
+    # forwarded-to-CLI text) see a normalized form.
+    app.add_handler(MessageHandler(filters.TEXT, normalize_mention), group=-1)
 
     app.add_handler(CommandHandler("start",    cmd_start))
     app.add_handler(CommandHandler("help",     cmd_help))
