@@ -18,6 +18,7 @@ from bot.handlers import (
     cmd_start, cmd_help, cmd_new, cmd_stop,
     cmd_settings, cmd_key,
     handle_callback, handle_text, handle_voice_msg, handle_document,
+    handle_forum_topic_closed,
     BOT_COMMANDS,
 )
 from bot.rate import set_session_manager
@@ -229,6 +230,7 @@ def main() -> None:
 
     app.add_handler(CallbackQueryHandler(handle_callback))
 
+    app.add_handler(MessageHandler(filters.StatusUpdate.FORUM_TOPIC_CLOSED, handle_forum_topic_closed))
     app.add_handler(MessageHandler(filters.Document.ALL,           handle_document))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO,  handle_voice_msg))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))

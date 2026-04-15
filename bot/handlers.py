@@ -755,6 +755,17 @@ async def handle_voice_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text(str(e))
 
 
+async def handle_forum_topic_closed(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Service message when a user closes a forum topic — auto-stop the session
+    and drop any tracked controls for this thread so trailing frames land
+    button-less."""
+    thread_id = update.message.message_thread_id if update.message else None
+    if not thread_id:
+        return
+    _latest_controls_msg.pop(thread_id, None)
+    await handle_topic_gone(thread_id)
+
+
 async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _auth(update, ctx):
         return
@@ -1187,13 +1198,19 @@ async def _start_video_session(ctx, user_id: int, session_name: str, hwnd: int) 
                 try:
                     video_buf = io.BytesIO(video_bytes)
                     video_buf.name = "recording.mp4"
+                    # Only attach controls if the capture is still alive —
+                    # trailing chunks flushed during stop / closed-topic races
+                    # arrive button-less.
+                    kb = _capture_controls_kb(session_key, paused=False) \
+                        if vc.alive else None
                     msg = await bot.send_video(
                         chat_id=chat_id, message_thread_id=tid,
                         video=video_buf,
                         supports_streaming=True,
-                        reply_markup=_capture_controls_kb(session_key, paused=False),
+                        reply_markup=kb,
                     )
-                    await _track_controls(bot, msg)
+                    if kb is not None:
+                        await _track_controls(bot, msg)
                 except RetryAfter as e:
                     _set_flood_backoff(e.retry_after)
                     log.warning("Video send flood control — backing off %ds", e.retry_after)
@@ -1366,13 +1383,18 @@ class _FrameSender:
         try:
             photo_buf = io.BytesIO(frame)
             photo_buf.name = "frame.jpg"
+            # Only attach controls if the capture is still alive — otherwise
+            # we'd show Pause/Stop on a trailing frame in a closed/stopped topic.
+            kb = _capture_controls_kb(self.session_key, paused=False) \
+                if self.process and self.process.alive else None
             msg = await self.bot.send_photo(
                 chat_id=self.chat_id,
                 message_thread_id=self.thread_id,
                 photo=photo_buf,
-                reply_markup=_capture_controls_kb(self.session_key, paused=False),
+                reply_markup=kb,
             )
-            await _track_controls(self.bot, msg)
+            if kb is not None:
+                await _track_controls(self.bot, msg)
         except RetryAfter as e:
             _set_flood_backoff(e.retry_after)
             log.warning("FrameSender flood control — backing off %ds", e.retry_after)
