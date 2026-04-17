@@ -18,13 +18,17 @@ class BackendParams:
     """
     Runtime parameters for a backend — loaded from settings.json via config module.
 
-    extra_flags   appended to base_cmd at launch
-    env           merged into subprocess environment
-    session_args  backend-specific state (e.g. claude resume_id)
+    extra_flags    appended to base_cmd at launch
+    env            merged into subprocess environment
+    session_args   backend-specific state (e.g. claude resume_id)
+    idle_sec       PTY idle-flush threshold; None = use PTYProcess default
+    max_wait_sec   PTY max-wait flush threshold; None = use PTYProcess default
     """
     extra_flags:  list[str]      = field(default_factory=list)
     env:          dict[str, str] = field(default_factory=dict)
     session_args: dict[str, str] = field(default_factory=dict)
+    idle_sec:     float | None   = None
+    max_wait_sec: float | None   = None
 
     def build_cmd(self, base_cmd: list[str], default_flags: list[str]) -> list[str]:
         return base_cmd + default_flags + self.extra_flags

@@ -380,10 +380,19 @@ def _extract_new_lines(prev: list[str], curr: list[str], *, skip_filter: bool = 
 
 
 class PTYProcess:
-    def __init__(self, cmd: list[str], cwd: str, extra_env: dict[str, str] | None = None):
+    def __init__(
+        self,
+        cmd: list[str],
+        cwd: str,
+        extra_env: dict[str, str] | None = None,
+        idle_sec: float | None = None,
+        max_wait_sec: float | None = None,
+    ):
         self.cmd       = cmd
         self.cwd       = cwd
         self.extra_env = extra_env or {}
+        self.idle_sec  = float(idle_sec) if idle_sec is not None else _IDLE_SEC
+        self.max_wait_sec = float(max_wait_sec) if max_wait_sec is not None else _MAX_WAIT_SEC
         self._subscribers: list[Callable[[str], None]] = []
         self.alive: bool = False
 
@@ -481,21 +490,21 @@ class PTYProcess:
         if not self._loop:
             return
 
-        # Reset idle timer — fires _IDLE_SEC after the LAST data chunk
+        # Reset idle timer — fires self.idle_sec after the LAST data chunk
         if self._idle_handle:
             self._idle_handle.cancel()
-        self._idle_handle = self._loop.call_later(_IDLE_SEC, self._on_idle)
+        self._idle_handle = self._loop.call_later(self.idle_sec, self._on_idle)
 
         # Start max-wait timer on first data of a new streaming burst
         if not self._streaming:
             self._streaming = True
             self._max_wait_handle = self._loop.call_later(
-                _MAX_WAIT_SEC, self._on_max_wait
+                self.max_wait_sec, self._on_max_wait
             )
             log.info("Streaming started")
 
     def _on_idle(self) -> None:
-        """No new data for _IDLE_SEC — streaming is done. Send final output."""
+        """No new data for self.idle_sec — streaming is done. Send final output."""
         log.info("Streaming idle — flushing output")
         self._flush_and_reset()
 
@@ -507,7 +516,7 @@ class PTYProcess:
             # Schedule next max-wait interval
             if self._loop and self._streaming:
                 self._max_wait_handle = self._loop.call_later(
-                    _MAX_WAIT_SEC, self._on_max_wait
+                    self.max_wait_sec, self._on_max_wait
                 )
 
     def _flush_and_reset(self) -> None:

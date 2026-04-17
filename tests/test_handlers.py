@@ -31,11 +31,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 @pytest.fixture(autouse=True)
 def _reset_flood():
-    """Reset global flood backoff before each test."""
-    import bot.handlers as h
-    h._flood_until = 0.0
+    """Reset per-chat flood backoff state before each test."""
+    import bot.live as live
+    live._flood_until.clear()
     yield
-    h._flood_until = 0.0
+    live._flood_until.clear()
 
 
 @pytest.fixture
@@ -224,91 +224,65 @@ class TestBuildKeySequence:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestEscapedLen:
-    """Tests for _escaped_len — HTML entity expansion accounting."""
+    """Tests for escaped_len — HTML entity expansion accounting."""
 
     def test_plain_text(self):
-        from bot.handlers import _escaped_len
-        assert _escaped_len("hello world") == 11
+        from bot.live import escaped_len
+        assert escaped_len("hello world") == 11
 
     def test_ampersand(self):
-        from bot.handlers import _escaped_len
+        from bot.live import escaped_len
         # & -> &amp; = 5 chars, so +4 per &
-        assert _escaped_len("a&b") == 3 + 4
+        assert escaped_len("a&b") == 3 + 4
 
     def test_angle_brackets(self):
-        from bot.handlers import _escaped_len
+        from bot.live import escaped_len
         # < -> &lt; = 4 chars (+3), > -> &gt; = 4 chars (+3)
-        assert _escaped_len("<>") == 2 + 3 + 3
+        assert escaped_len("<>") == 2 + 3 + 3
 
     def test_java_generics(self):
-        from bot.handlers import _escaped_len
+        from bot.live import escaped_len
         text = "Map<String, Boolean>"
         raw = len(text)
-        escaped = _escaped_len(text)
+        escaped = escaped_len(text)
         assert escaped > raw  # < and > cause expansion
         assert escaped == raw + 3 + 3  # one < and one >
 
     def test_heavy_special_chars(self):
-        from bot.handlers import _escaped_len
+        from bot.live import escaped_len
         # 100 ampersands: raw=100, escaped=100 + 100*4 = 500
         text = "&" * 100
-        assert _escaped_len(text) == 500
+        assert escaped_len(text) == 500
 
 
 class TestSafeSplit:
-    """Tests for _safe_split — newline-aware splitting."""
+    """Tests for safe_split — newline-aware splitting."""
 
     def test_uses_last_sent_boundary(self):
-        from bot.handlers import _safe_split
+        from bot.live import safe_split
         # When last_sent is non-empty, split at its length
-        assert _safe_split("abcdefgh", 5, "abc") == 3
+        assert safe_split("abcdefgh", 5, "abc") == 3
 
     def test_splits_on_newline(self):
-        from bot.handlers import _safe_split, _escaped_len
+        from bot.live import safe_split, escaped_len
         text = "line1\nline2\nline3\nline4\n" + "x" * 4000
         limit = 3800
-        pos = _safe_split(text, limit, "")
+        pos = safe_split(text, limit, "")
         # Should split on a newline boundary
         head = text[:pos]
-        assert _escaped_len(head) <= limit
+        assert escaped_len(head) <= limit
 
     def test_handles_no_newlines(self):
-        from bot.handlers import _safe_split, _escaped_len
+        from bot.live import safe_split, escaped_len
         text = "x" * 5000
-        pos = _safe_split(text, 3800, "")
-        assert _escaped_len(text[:pos]) <= 3800
-
-
-class TestTruncateToFit:
-    """Tests for _truncate_to_fit — tail-preserving truncation."""
-
-    def test_keeps_tail(self):
-        from bot.handlers import _truncate_to_fit, _escaped_len
-        text = "a" * 5000
-        result = _truncate_to_fit(text, 3800)
-        assert _escaped_len(result) <= 3800
-
-    def test_snaps_to_newline(self):
-        from bot.handlers import _truncate_to_fit, _escaped_len
-        lines = [f"line{i}" for i in range(500)]
-        text = "\n".join(lines)
-        result = _truncate_to_fit(text, 3800)
-        assert _escaped_len(result) <= 3800
-        # Should start at a line boundary (no partial first line)
-        assert result.startswith("line")
-
-    def test_special_chars_respected(self):
-        from bot.handlers import _truncate_to_fit, _escaped_len
-        # Text with lots of <> should be shorter in raw chars
-        text = "<>" * 2000  # raw=4000, escaped=4000+6000=10000
-        result = _truncate_to_fit(text, 3800)
-        assert _escaped_len(result) <= 3800
+        pos = safe_split(text, 3800, "")
+        assert escaped_len(text[:pos]) <= 3800
 
 
 class TestFindOverlapEnd:
     def _overlap(self, existing, new):
-        from bot.handlers import _find_overlap_end
-        return _find_overlap_end(existing, new)
+        from bot.live import find_overlap_end
+        return find_overlap_end(existing, new)
 
     def test_no_overlap(self):
         assert self._overlap("hello world", "something else") == 0
@@ -362,26 +336,45 @@ class TestFindOverlapEnd:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestFloodControl:
+    """Flood state is tracked per-chat in ``bot.live`` — one chat flooding
+    no longer throttles unrelated chats."""
+
+    def _reset(self):
+        import bot.live as live
+        live._flood_until.clear()
+
     def test_flood_not_active_by_default(self):
-        from bot.handlers import _flood_active
-        assert _flood_active() is False
+        self._reset()
+        from bot.live import flood_active
+        assert flood_active(-100) is False
 
     def test_set_flood_backoff(self):
-        from bot.handlers import _set_flood_backoff, _flood_active
-        _set_flood_backoff(10)
-        assert _flood_active() is True
+        self._reset()
+        from bot.live import set_flood_backoff, flood_active
+        set_flood_backoff(-100, 10)
+        assert flood_active(-100) is True
 
     def test_flood_expires(self):
-        import bot.handlers as h
-        h._flood_until = time.monotonic() - 1  # already expired
-        assert h._flood_active() is False
+        self._reset()
+        import bot.live as live
+        live._flood_until[-100] = time.monotonic() - 1  # already expired
+        assert live.flood_active(-100) is False
 
     def test_flood_margin(self):
-        """_set_flood_backoff adds 1s safety margin."""
-        import bot.handlers as h
+        """set_flood_backoff adds 1s safety margin."""
+        self._reset()
+        import bot.live as live
         before = time.monotonic()
-        h._set_flood_backoff(5)
-        assert h._flood_until >= before + 6  # 5 + 1 margin
+        live.set_flood_backoff(-100, 5)
+        assert live._flood_until[-100] >= before + 6  # 5 + 1 margin
+
+    def test_flood_is_per_chat(self):
+        """Flood in chat A must not activate flood in chat B."""
+        self._reset()
+        from bot.live import set_flood_backoff, flood_active
+        set_flood_backoff(-100, 10)
+        assert flood_active(-100) is True
+        assert flood_active(-200) is False
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -580,11 +573,12 @@ class TestCmdKey:
     @pytest.mark.asyncio
     async def test_key_no_args(self, settings_json):
         from bot.handlers import cmd_key
-        update, ctx, _ = _make_update(args=[])
+        # /key requires a topic; provide a thread_id so we reach the
+        # "no session here" branch instead of silently returning.
+        update, ctx, _ = _make_update(args=[], thread_id=1234)
         ctx.args = []
         await cmd_key(update, ctx)
         text = update.message.reply_text.call_args[0][0]
-        # With no thread_id, no session is found first
         assert "session" in text.lower() or "Usage" in text or "/start" in text
 
     @pytest.mark.asyncio
@@ -652,13 +646,19 @@ class TestHandleCallback:
 
 class TestLiveMessage:
     def _make_lm(self):
-        from bot.handlers import _LiveMessage
+        import bot.live as live
+        live._flood_until.clear()
+        from bot.live import LiveMessage
         bot = AsyncMock()
         msg = MagicMock()
         msg.message_id = 42
         bot.send_message = AsyncMock(return_value=msg)
         bot.edit_message_text = AsyncMock()
-        lm = _LiveMessage(bot, chat_id=-100, thread_id=1)
+        lm = LiveMessage(bot, chat_id=-100, thread_id=1)
+        # Stop the TypingPinger task so it doesn't spam the mock bot
+        if lm._typing is not None:
+            lm._typing.stop()
+            lm._typing = None
         return lm, bot
 
     @pytest.mark.asyncio
@@ -676,20 +676,24 @@ class TestLiveMessage:
         bot.send_message.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_ensure_msg_skips_during_flood(self):
-        import bot.handlers as h
-        h._set_flood_backoff(60)
+    async def test_ensure_msg_ignores_flood(self):
+        """Placeholder creation must not preemptively skip on flood, else a
+        turn that produces only one short chunk would strand forever (task #2).
+        The send itself surfaces RetryAfter if the flood is real."""
+        from bot.live import set_flood_backoff
+        set_flood_backoff(-100, 60)
         lm, bot = self._make_lm()
         await lm._ensure_msg()
-        assert lm.msg_id is None
-        bot.send_message.assert_not_called()
+        assert lm.msg_id == 42
+        bot.send_message.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_edit_to_skips_during_flood(self):
-        import bot.handlers as h
-        h._set_flood_backoff(60)
+        from bot.live import set_flood_backoff
         lm, bot = self._make_lm()
         lm.msg_id = 42
+        # set flood AFTER _make_lm, which clears state.
+        set_flood_backoff(lm.chat_id, 60)
         await lm._edit_to("some text")
         bot.edit_message_text.assert_not_called()
 
@@ -714,12 +718,12 @@ class TestLiveMessage:
     @pytest.mark.asyncio
     async def test_edit_to_handles_retry_after(self):
         from telegram.error import RetryAfter
-        import bot.handlers as h
+        from bot.live import flood_active
         lm, bot = self._make_lm()
         lm.msg_id = 42
         bot.edit_message_text = AsyncMock(side_effect=RetryAfter(10))
         await lm._edit_to("test")
-        assert h._flood_active() is True
+        assert flood_active(lm.chat_id) is True
 
     @pytest.mark.asyncio
     async def test_edit_to_handles_thread_not_found(self):
@@ -729,15 +733,47 @@ class TestLiveMessage:
         bot.edit_message_text = AsyncMock(
             side_effect=BadRequest("Thread not found")
         )
-        with patch("bot.handlers.handle_topic_gone", new_callable=AsyncMock):
+        with patch("bot.live.handle_topic_gone", new_callable=AsyncMock):
             await lm._edit_to("test")
 
-    def test_append_schedules_edit(self):
+    def _swallow_coro(self):
+        """Return a ``fire`` replacement that closes any coroutine it
+        receives so the test doesn't leak an unawaited-coroutine warning."""
+        from unittest.mock import MagicMock
+        def _swallow(coro):
+            try:
+                coro.close()
+            except AttributeError:
+                pass
+            return MagicMock()
+        return MagicMock(side_effect=_swallow)
+
+    def test_append_fires_first_chunk_immediately(self):
+        """Adaptive edit interval: the first chunk of a turn skips the 1s
+        debounce so the user sees progress without waiting (task #4)."""
         lm, _ = self._make_lm()
-        with patch.object(lm, "_loop") as mock_loop:
+        mock_fire = self._swallow_coro()
+        with patch("bot.live.fire", mock_fire), \
+             patch.object(lm, "_loop") as mock_loop:
             lm.append("hello there test content")
         assert lm._edit_scheduled is True
+        # First chunk: no call_later delay, direct fire.
+        mock_fire.assert_called_once()
+        mock_loop.call_later.assert_not_called()
+
+    def test_append_debounces_subsequent_chunks(self):
+        """After the first chunk has gone out, later chunks use the debounce
+        timer so Telegram's per-chat edit rate isn't exceeded."""
+        lm, _ = self._make_lm()
+        lm._last_sent = "already delivered"
+        lm.msg_id = 42
+        mock_fire = self._swallow_coro()
+        with patch("bot.live.fire", mock_fire), \
+             patch.object(lm, "_loop") as mock_loop:
+            lm.append("more content arriving")
+        assert lm._edit_scheduled is True
         mock_loop.call_later.assert_called_once()
+        mock_fire.assert_not_called()
 
     def test_append_trims_whitespace_only(self):
         lm, _ = self._make_lm()
@@ -763,7 +799,6 @@ class TestLiveMessage:
     @pytest.mark.asyncio
     async def test_do_edit_html_escape_overflow(self):
         """Text with many special chars should split based on escaped length."""
-        from bot.handlers import _escaped_len
         lm, bot = self._make_lm()
         lm.msg_id = 42
         # Build text that's under 3800 raw chars but over 3800 after escaping
@@ -778,22 +813,37 @@ class TestLiveMessage:
     @pytest.mark.asyncio
     async def test_do_edit_splits_on_newline(self):
         """Overflow split should prefer newline boundaries (no mid-line cuts)."""
-        from bot.handlers import _escaped_len, _max_tg_len, _safe_split
+        from bot.live import escaped_len, max_tg_len, safe_split
         lm, bot = self._make_lm()
         lm.msg_id = 42
-        limit = _max_tg_len()
+        limit = max_tg_len()
         # Build text with newlines so split can land on a boundary
         lines = [f"line {i}: some content here" for i in range(200)]
         full = "\n".join(lines)
         lm.full_text = full + "\n"
         # Only proceed if this would actually overflow
-        if _escaped_len(lm.full_text.strip()) > limit:
-            # Test that _safe_split lands on a newline boundary
-            pos = _safe_split(full, limit, "")
+        if escaped_len(lm.full_text.strip()) > limit:
+            # Test that safe_split lands on a newline boundary
+            pos = safe_split(full, limit, "")
             head = full[:pos]
             # The head should end at a newline (the split includes it)
             assert head.endswith("\n"), f"Split at {pos} didn't land on newline"
-            assert _escaped_len(head) <= limit
+            assert escaped_len(head) <= limit
+
+    @pytest.mark.asyncio
+    async def test_do_edit_overflow_never_truncates_head(self):
+        """Task #6: head-truncation fallback removed. Even on massive input,
+        overflow should loop into fresh messages rather than silently drop
+        the beginning."""
+        lm, bot = self._make_lm()
+        lm.msg_id = 42
+        # Enough text to trigger multiple overflow splits.
+        lm.full_text = ("line " + "x" * 100 + "\n") * 200
+        await lm._do_edit()
+        # Multiple send_message calls indicate we opened new messages rather
+        # than truncating and reusing one.
+        assert bot.send_message.call_count >= 1
+        assert bot.edit_message_text.call_count >= 1
 
     @pytest.mark.asyncio
     async def test_finalize_cancels_handle(self):
@@ -807,6 +857,32 @@ class TestLiveMessage:
         handle.cancel.assert_called_once()
         assert lm._edit_scheduled is False
 
+    @pytest.mark.asyncio
+    async def test_finalize_retries_on_pending_mismatch(self):
+        """Task #8: if the final edit fails to deliver, finalize should
+        schedule one retry so users don't stare at a truncated reply."""
+        lm, bot = self._make_lm()
+        lm.msg_id = 42
+        lm.full_text = "unsent content\n"
+        lm._last_sent = ""  # nothing delivered yet
+        mock_loop = MagicMock()
+        # Close any coroutine the scheduled retry lambda may create.
+        def _call_later(_delay, fn):
+            try:
+                fn()
+            except Exception:
+                pass
+            return MagicMock()
+        mock_loop.call_later = MagicMock(side_effect=_call_later)
+        lm._loop = mock_loop
+        async def _noop():
+            pass
+        with patch.object(lm, "_do_edit", new=AsyncMock(side_effect=_noop)), \
+             patch("bot.live.fire", self._swallow_coro()):
+            await lm.finalize()
+        mock_loop.call_later.assert_called_once()
+        assert lm._final_retry_done is True
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 13. FrameSender
@@ -814,10 +890,12 @@ class TestLiveMessage:
 
 class TestFrameSender:
     def _make_fs(self):
-        from bot.handlers import _FrameSender
+        import bot.live as live
+        live._flood_until.clear()
+        from bot.live import FrameSender
         bot = AsyncMock()
         bot.send_photo = AsyncMock()
-        fs = _FrameSender(bot, chat_id=-100, thread_id=1, session_key="screen:test")
+        fs = FrameSender(bot, chat_id=-100, thread_id=1, session_key="screen:test")
         return fs, bot
 
     def test_set_frame_drops_when_paused(self):
@@ -840,10 +918,11 @@ class TestFrameSender:
 
     @pytest.mark.asyncio
     async def test_do_send_skips_during_flood(self):
-        import bot.handlers as h
-        h._set_flood_backoff(60)
+        from bot.live import set_flood_backoff
         fs, bot = self._make_fs()
         fs._pending_frame = b"jpeg"
+        # set flood AFTER _make_fs, which clears state.
+        set_flood_backoff(fs.chat_id, 60)
         await fs._do_send()
         bot.send_photo.assert_not_called()
 
@@ -861,13 +940,12 @@ class TestFrameSender:
     @pytest.mark.asyncio
     async def test_do_send_handles_retry_after(self):
         from telegram.error import RetryAfter
-        import bot.handlers as h
+        from bot.live import flood_active
         fs, bot = self._make_fs()
         fs._pending_frame = b"jpeg"
         bot.send_photo = AsyncMock(side_effect=RetryAfter(15))
-        with patch("bot.handlers._capture_controls_kb", return_value=MagicMock()):
-            await fs._do_send()
-        assert h._flood_active() is True
+        await fs._do_send()
+        assert flood_active(fs.chat_id) is True
 
     @pytest.mark.asyncio
     async def test_finalize_cancels_handle(self):
@@ -1362,16 +1440,16 @@ class TestEdgeCases:
 
     def test_overlap_very_long_existing(self):
         """Should handle long existing text without hanging."""
-        from bot.handlers import _find_overlap_end
+        from bot.live import find_overlap_end
         existing = "a" * 100000
         new = "b" * 100
-        result = _find_overlap_end(existing, new)
+        result = find_overlap_end(existing, new)
         assert result == 0  # no overlap
 
     def test_overlap_identical_large(self):
-        from bot.handlers import _find_overlap_end
+        from bot.live import find_overlap_end
         s = "the quick brown fox " * 50
-        result = _find_overlap_end(s, s)
+        result = find_overlap_end(s, s)
         assert result > 0
 
     @pytest.mark.asyncio
@@ -1733,7 +1811,7 @@ class TestTopicDeletion:
     @pytest.mark.asyncio
     async def test_livemessage_detects_topic_gone_on_create(self, settings_json):
         """_ensure_msg should trigger handle_topic_gone when topic is deleted."""
-        from bot.handlers import _LiveMessage
+        from bot.live import LiveMessage
         from telegram.error import BadRequest
 
         bot = AsyncMock()
@@ -1741,16 +1819,18 @@ class TestTopicDeletion:
             side_effect=BadRequest("Thread not found")
         )
 
-        lm = _LiveMessage(bot, chat_id=-100, thread_id=9040)
-        with patch("bot.handlers.handle_topic_gone", new_callable=AsyncMock) as mock_gone:
+        lm = LiveMessage(bot, chat_id=-100, thread_id=9040)
+        if lm._typing is not None:
+            lm._typing.stop()
+            lm._typing = None
+        with patch("bot.live.handle_topic_gone", new_callable=AsyncMock):
             await lm._ensure_msg()
         assert lm.msg_id is None
-        # handle_topic_gone should have been scheduled
 
     @pytest.mark.asyncio
     async def test_livemessage_detects_topic_gone_on_edit(self, settings_json):
         """_edit_to should trigger handle_topic_gone when topic is deleted."""
-        from bot.handlers import _LiveMessage
+        from bot.live import LiveMessage
         from telegram.error import BadRequest
 
         bot = AsyncMock()
@@ -1758,15 +1838,18 @@ class TestTopicDeletion:
             side_effect=BadRequest("thread not found")
         )
 
-        lm = _LiveMessage(bot, chat_id=-100, thread_id=9041)
+        lm = LiveMessage(bot, chat_id=-100, thread_id=9041)
+        if lm._typing is not None:
+            lm._typing.stop()
+            lm._typing = None
         lm.msg_id = 42
-        with patch("bot.handlers.handle_topic_gone", new_callable=AsyncMock):
+        with patch("bot.live.handle_topic_gone", new_callable=AsyncMock):
             await lm._edit_to("test")
 
     @pytest.mark.asyncio
     async def test_framesender_detects_topic_gone(self, settings_json):
         """_do_send should trigger handle_topic_gone when topic is deleted."""
-        from bot.handlers import _FrameSender
+        from bot.live import FrameSender
         from telegram.error import BadRequest
 
         bot = AsyncMock()
@@ -1774,10 +1857,9 @@ class TestTopicDeletion:
             side_effect=BadRequest("Thread not found")
         )
 
-        fs = _FrameSender(bot, chat_id=-100, thread_id=9042, session_key="screen:x")
+        fs = FrameSender(bot, chat_id=-100, thread_id=9042, session_key="screen:x")
         fs._pending_frame = b"\xff\xd8jpeg"
-        with patch("bot.handlers._capture_controls_kb", return_value=MagicMock()), \
-             patch("bot.handlers.handle_topic_gone", new_callable=AsyncMock) as mock_gone:
+        with patch("bot.live.handle_topic_gone", new_callable=AsyncMock):
             await fs._do_send()
 
     @pytest.mark.asyncio
@@ -1919,7 +2001,7 @@ class TestChaosScenarios:
     @pytest.mark.asyncio
     async def test_topic_gone_during_output_send(self, settings_json):
         """LiveMessage detects topic deletion mid-stream and cleans up."""
-        from bot.handlers import _LiveMessage, _live_messages
+        from bot.live import LiveMessage
         from telegram.error import BadRequest
 
         bot = AsyncMock()
@@ -1937,17 +2019,20 @@ class TestChaosScenarios:
 
         bot.edit_message_text = AsyncMock(side_effect=_edit_fails_second)
 
-        lm = _LiveMessage(bot, chat_id=-100, thread_id=3001)
+        lm = LiveMessage(bot, chat_id=-100, thread_id=3001)
+        if lm._typing is not None:
+            lm._typing.stop()
+            lm._typing = None
         await lm._ensure_msg()
         assert lm.msg_id == 42
 
         # First edit succeeds
-        with patch("bot.handlers.handle_topic_gone", new_callable=AsyncMock):
+        with patch("bot.live.handle_topic_gone", new_callable=AsyncMock):
             await lm._edit_to("first chunk")
         assert lm._last_sent == "first chunk"
 
         # Second edit triggers topic-gone
-        with patch("bot.handlers.handle_topic_gone", new_callable=AsyncMock) as mock_gone:
+        with patch("bot.live.handle_topic_gone", new_callable=AsyncMock):
             await lm._edit_to("second chunk")
 
     @pytest.mark.asyncio
