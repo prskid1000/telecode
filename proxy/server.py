@@ -597,24 +597,18 @@ def _match_profile(headers) -> dict | None:
     return None
 
 
-async def handle_messages(request: web.Request) -> web.StreamResponse:
-    """Main proxy endpoint: POST /v1/messages"""
-    try:
-        body = await request.json()
-    except json.JSONDecodeError:
-        return web.json_response({"error": "Invalid JSON"}, status=400)
+async def _prepare_request(
+    body: dict[str, Any],
+    request: web.Request,
+) -> dict[str, Any]:
+    """Apply all proxy transforms to a request body.
 
-    # Dump the raw incoming body plus minimal client metadata for cache debugging.
-    # (Do NOT mutate the real request body with debug-only fields.)
-    await _dump_request(
-        body,
-        "INCOMING",
-        meta={
-            "user_agent": (request.headers.get("User-Agent", "") or "")[:200],
-            "referer": (request.headers.get("Referer", "") or "")[:200],
-        },
-    )
+    Shared by handle_messages and handle_count_tokens so the token count
+    reflects exactly what the model would see on a real request.
 
+    Returns a dict with keys:
+      body, deferred, headers, managed_intercept, auto_load, client_model
+    """
     # Match request against configured client profiles (first match wins).
     profile = _match_profile(request.headers)
 
@@ -643,7 +637,6 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
             filtered.append(t)
         body["tools"] = filtered
 
-    upstream = proxy_config.upstream_url()
     deferred: list[dict[str, Any]] = []
 
     # Profile settings (fall back to global proxy settings) — every feature independently togglable
@@ -734,14 +727,9 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
     headers.setdefault("content-type", "application/json")
 
     # Which managed tools to intercept for THIS request = whatever the profile injected.
-    # (Injecting without intercepting is broken; intercepting without injecting is a no-op.)
     managed_intercept: set[str] = {mt.name for mt in (_MANAGED_REG.get(n) for n in inject_managed) if mt}
 
-    # Prefix-cache optimization for LM Studio:
-    #  1. Reorder keys so stable fields (system, tools) come before the growing
-    #     `messages` list — keeps the serialized prefix identical across turns.
-    #  2. Normalize message content to list-of-blocks form so CC's string↔list
-    #     flip-flopping doesn't bust cache.
+    # Prefix-cache optimization for LM Studio
     body = _canonicalize_body(body)
 
     await _dump_request(
@@ -759,6 +747,42 @@ async def handle_messages(request: web.Request) -> web.StreamResponse:
     # If we rewrote `model` above, reverse-map in responses so the client
     # sees the alias it asked for (not the upstream model name).
     client_model = requested_model if (mapping and requested_model in mapping) else None
+
+    return {
+        "body": body,
+        "deferred": deferred,
+        "headers": headers,
+        "managed_intercept": managed_intercept,
+        "auto_load": use_auto_load,
+        "client_model": client_model,
+    }
+
+
+async def handle_messages(request: web.Request) -> web.StreamResponse:
+    """Main proxy endpoint: POST /v1/messages"""
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+
+    # Dump the raw incoming body plus minimal client metadata for cache debugging.
+    await _dump_request(
+        body,
+        "INCOMING",
+        meta={
+            "user_agent": (request.headers.get("User-Agent", "") or "")[:200],
+            "referer": (request.headers.get("Referer", "") or "")[:200],
+        },
+    )
+
+    prep = await _prepare_request(body, request)
+    body = prep["body"]
+    headers = prep["headers"]
+    deferred = prep["deferred"]
+    managed_intercept = prep["managed_intercept"]
+    use_auto_load = prep["auto_load"]
+    client_model = prep["client_model"]
+    upstream = proxy_config.upstream_url()
 
     if body.get("stream", False):
         return await _handle_streaming(upstream, body, headers, deferred, request,
@@ -1171,19 +1195,51 @@ def _openai_models_to_anthropic(openai_data: dict) -> dict:
     }
 
 
-async def handle_models(request: web.Request) -> web.Response:
-    """GET /v1/models — fetch from LM Studio (OpenAI format), return Anthropic format."""
+async def _fetch_anthropic_models(request: web.Request) -> list[dict]:
+    """Fetch models from LM Studio and return as Anthropic-format model list."""
     upstream = proxy_config.upstream_url()
     headers = {k: v for k, v in request.headers.items()
                if k.lower() not in ("host", "transfer-encoding")}
 
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"{upstream}/v1/models", headers=headers) as resp:
+            data = await resp.json()
+            return _openai_models_to_anthropic(data).get("data", [])
+
+
+async def handle_models(request: web.Request) -> web.Response:
+    """GET /v1/models — fetch from LM Studio (OpenAI format), return Anthropic format."""
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{upstream}/v1/models", headers=headers) as resp:
-                data = await resp.json()
-                return web.json_response(_openai_models_to_anthropic(data))
+        models = await _fetch_anthropic_models(request)
     except Exception:
-        return web.json_response({"data": [], "has_more": False, "first_id": "", "last_id": ""})
+        models = []
+
+    return web.json_response({
+        "data": models,
+        "has_more": False,
+        "first_id": models[0]["id"] if models else "",
+        "last_id": models[-1]["id"] if models else "",
+    })
+
+
+async def handle_model_by_id(request: web.Request) -> web.Response:
+    """GET /v1/models/{model_id} — return a single model in Anthropic format."""
+    model_id = request.match_info["model_id"]
+
+    try:
+        models = await _fetch_anthropic_models(request)
+    except Exception:
+        models = []
+
+    for m in models:
+        if m["id"] == model_id:
+            return web.json_response(m)
+
+    return web.json_response(
+        {"type": "error", "error": {"type": "not_found_error",
+                                     "message": f"model: {model_id}"}},
+        status=404,
+    )
 
 
 # ── Passthrough for non-messages endpoints ───────────────────────────────────
@@ -1210,6 +1266,48 @@ async def handle_passthrough(request: web.Request) -> web.Response:
                 status=upstream_resp.status,
                 content_type=upstream_resp.content_type,
             )
+
+
+# ── Token counting ──────────────────────────────────────────────────────────
+
+async def handle_count_tokens(request: web.Request) -> web.Response:
+    """POST /v1/messages/count_tokens — count input tokens.
+
+    LM Studio has no native count_tokens endpoint, so we run the full
+    _prepare_request pipeline (model mapping, tool search, system prompt
+    injection, etc.) then forward to /v1/messages with max_tokens=1.
+    The usage.input_tokens in the response reflects exactly what the model
+    would see on a real request.
+    """
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+
+    prep = await _prepare_request(body, request)
+    body = prep["body"]
+    headers = prep["headers"]
+
+    # Force minimal generation — we only care about usage.input_tokens
+    body["max_tokens"] = 1
+    body["stream"] = False
+
+    upstream = proxy_config.upstream_url()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{upstream}/v1/messages",
+                json=body,
+                headers=headers,
+            ) as upstream_resp:
+                result = await upstream_resp.json()
+                input_tokens = result.get("usage", {}).get("input_tokens", 0)
+                return web.json_response({"input_tokens": input_tokens})
+    except Exception as exc:
+        return web.json_response(
+            {"error": {"type": "proxy_error", "message": str(exc)}},
+            status=502,
+        )
 
 
 # ── App factory ──────────────────────────────────────────────────────────────
@@ -1243,8 +1341,10 @@ async def cors_middleware(request: web.Request, handler):
 
 def create_app() -> web.Application:
     app = web.Application(middlewares=[cors_middleware])
+    app.router.add_post("/v1/messages/count_tokens", handle_count_tokens)
     app.router.add_post("/v1/messages", handle_messages)
     app.router.add_get("/v1/models", handle_models)
+    app.router.add_get("/v1/models/{model_id}", handle_model_by_id)
     # Passthrough everything else (health, etc.)
     app.router.add_route("*", "/{path:.*}", handle_passthrough)
     return app
