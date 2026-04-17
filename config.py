@@ -113,6 +113,32 @@ def max_msg_length()  -> int:   return int(_raw["streaming"]["max_message_length
 def idle_timeout()    -> int:   return int(_raw["streaming"]["idle_timeout_sec"])
 
 
+def _streaming_cfg() -> dict[str, Any]:
+    return _raw.get("streaming", {}) or {}
+
+
+def stream_idle_sec() -> float:
+    """Seconds of PTY silence before treating a streaming burst as complete."""
+    return float(_streaming_cfg().get("idle_sec", 2.0))
+
+
+def stream_max_wait_sec() -> float:
+    """Upper bound on how long to buffer a continuous stream before forcing a flush."""
+    return float(_streaming_cfg().get("max_wait_sec", 5.0))
+
+
+def tool_stream_idle_sec(key: str) -> float:
+    """Per-tool override for PTY idle flush; falls back to the global default."""
+    override = tool_cfg(key).get("streaming", {}).get("idle_sec")
+    return float(override) if override is not None else stream_idle_sec()
+
+
+def tool_stream_max_wait_sec(key: str) -> float:
+    """Per-tool override for PTY max-wait flush; falls back to the global default."""
+    override = tool_cfg(key).get("streaming", {}).get("max_wait_sec")
+    return float(override) if override is not None else stream_max_wait_sec()
+
+
 # ── STT ───────────────────────────────────────────────────────────────────────
 def stt_enabled()  -> bool: return bool(_raw["voice"]["stt"]["enabled"])
 def stt_base_url() -> str:  return _raw["voice"]["stt"]["base_url"]

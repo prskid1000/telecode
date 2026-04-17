@@ -98,7 +98,8 @@ Tool-search proxy (for local models):
 | `sessions/screen.py` | Image capture, video recording, window enumeration |
 | `sessions/computer.py` | Vision LLM computer control (capture + actions + LLM loop) |
 | `sessions/manager.py` | Start/kill sessions, send, send_raw, interrupt, pause/resume |
-| `bot/handlers.py` | Commands, callbacks, `_LiveMessage`, `_FrameSender` |
+| `bot/handlers.py` | Commands, callbacks, window pickers, capture controls |
+| `bot/live.py` | `LiveMessage`, `FrameSender`, `TypingPinger`, per-chat flood backoff, overlap detection, HTML-escape-aware splitting |
 | `bot/rate.py` | Stale session cleanup, topic probing, topic-gone detection |
 | `bot/topic_manager.py` | Create/reuse forum topics |
 | `bot/settings_handler.py` | `/settings` parsing |

@@ -11,6 +11,8 @@ def load_params(backend_key: str) -> BackendParams:
         extra_flags=config.tool_flags(backend_key),
         env=config.tool_env(backend_key),
         session_args=config.tool_session_args(backend_key),
+        idle_sec=config.tool_stream_idle_sec(backend_key),
+        max_wait_sec=config.tool_stream_max_wait_sec(backend_key),
     )
 
 

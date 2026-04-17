@@ -23,6 +23,16 @@ from bot.rate import (
     is_thread_not_found, handle_topic_gone, init_live_refs,
     cleanup_stale_sessions, full_cleanup,
 )
+from bot.live import (
+    fire as _fire,
+    flood_active, set_flood_backoff,
+    LiveMessage as _LiveMessage,
+    FrameSender as _FrameSender,
+    live_messages as _live_messages,
+    frame_senders as _frame_senders,
+    send_output as _send_output,
+    cleanup_live_message,
+)
 from voice.health import get_status as voice_status
 from voice.stt import transcribe
 
@@ -64,103 +74,6 @@ async def normalize_mention(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
         except Exception as exc:
             log.warning("normalize_mention: could not mutate text: %s", exc)
 
-
-def _fire(coro) -> asyncio.Task:
-    """Fire-and-forget a coroutine, logging any unhandled exception.
-
-    Plain asyncio.ensure_future loses exceptions to GC warnings only;
-    this surfaces them in the app log instead.
-    """
-    task = asyncio.ensure_future(coro)
-    def _log_exc(t: asyncio.Task) -> None:
-        if t.cancelled():
-            return
-        exc = t.exception()
-        if exc is not None:
-            log.error("Background task failed: %s", exc, exc_info=exc)
-    task.add_done_callback(_log_exc)
-    return task
-
-_TG_HARD_LIMIT = 4096  # Telegram's absolute limit (post-HTML)
-
-
-def _max_tg_len() -> int:
-    """Effective max length from config, capped to Telegram's hard limit."""
-    try:
-        return min(config.max_msg_length(), _TG_HARD_LIMIT)
-    except Exception:
-        return 3800
-
-
-def _escaped_len(text: str) -> int:
-    """Approximate length after HTML escaping (& < > expand).
-
-    Telegram counts the *escaped* HTML text against its 4096-char limit,
-    so we must account for entity expansion when deciding where to split.
-    """
-    extra = text.count("&") * 4 + text.count("<") * 3 + text.count(">") * 3
-    return len(text) + extra
-
-
-def _safe_split(text: str, limit: int, last_sent: str) -> int:
-    """Find a split point in *text* so the first part fits within *limit* after escaping.
-
-    Prefers splitting on a newline boundary to avoid cutting mid-line.
-    If *last_sent* is non-empty, splits at that boundary instead (the part already
-    delivered stays, the rest overflows to a new message).
-    """
-    if last_sent:
-        return len(last_sent)
-
-    # Binary-ish search: walk backwards from a generous estimate to find
-    # the last newline where escaped length fits within limit.
-    # Start estimate: limit minus some headroom for escaping
-    estimate = min(len(text), limit)
-    while estimate > 0 and _escaped_len(text[:estimate]) > limit:
-        estimate -= 200
-
-    # Find the last newline at or before estimate
-    nl = text.rfind("\n", 0, max(estimate, 1))
-    if nl > 0:
-        return nl + 1  # include the newline in the head
-
-    # No newline found — just use the estimate
-    return max(estimate, 1)
-
-
-def _truncate_to_fit(text: str, limit: int) -> str:
-    """Truncate *text* from the HEAD so it fits within *limit* after escaping.
-
-    Keeps the most recent output (tail) which is usually most relevant.
-    Tries to break on a newline boundary.
-    """
-    # Walk from the end to find how much tail fits
-    start = len(text)
-    while start > 0 and _escaped_len(text[start:]) < limit:
-        start -= 200
-    # Went too far back — step forward
-    while start < len(text) and _escaped_len(text[start:]) > limit:
-        start += 50
-    # Snap to next newline for a clean break
-    nl = text.find("\n", start)
-    if nl != -1 and _escaped_len(text[nl + 1:]) <= limit:
-        return text[nl + 1:]
-    return text[start:]
-
-# ── Flood-control backoff ────────────────────────────────────────────────────
-
-import time as _time
-
-_flood_until: float = 0.0  # monotonic time until which we should back off
-
-
-def _set_flood_backoff(retry_after: float) -> None:
-    global _flood_until
-    _flood_until = _time.monotonic() + retry_after + 1  # +1s safety margin
-
-
-def _flood_active() -> bool:
-    return _time.monotonic() < _flood_until
 
 # ── Generic key map (VT100 / xterm escape sequences) ─────────────────────────
 
@@ -368,7 +281,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         await _send_picker()
     except RetryAfter as e:
-        _set_flood_backoff(e.retry_after)
+        set_flood_backoff(update.effective_chat.id, e.retry_after)
         log.warning("/start: flood control — retry in %ds", e.retry_after)
         await asyncio.sleep(e.retry_after + 1)
         try:
@@ -892,200 +805,6 @@ async def _start_session_core(ctx, user_id: int, backend_key: str, session_name:
         await _do_start(thread_id)
 
 
-# ── Overlap detection (two-pointer, whitespace-insensitive) ───────────────────
-
-_MIN_OVERLAP = 8  # min non-ws chars to count as genuine overlap
-
-
-def _find_overlap_end(existing: str, new: str) -> int:
-    """Two forward-moving pointers to find overlap between end of existing and start of new.
-
-    For each candidate start position in existing, pointer i moves right
-    through existing and pointer j moves right through new (both skipping
-    whitespace). If i reaches the end of existing while still matching,
-    then new[0..j] is the overlapping prefix we should skip.
-
-    Returns the index in *new* where truly new content begins (0 = no overlap).
-    """
-    if not existing or not new:
-        return 0
-
-    # Only inspect the tail of existing (overlap can't exceed length of new)
-    tail = existing[-(len(new) * 3):] if len(existing) > len(new) * 3 else existing
-
-    ex = [c for c in tail if not c.isspace()]
-    nw = [(i, c) for i, c in enumerate(new) if not c.isspace()]
-
-    if not ex or not nw:
-        return 0
-
-    # Earliest start where remaining existing chars <= new chars
-    min_start = max(0, len(ex) - len(nw))
-
-    for start in range(min_start, len(ex) - _MIN_OVERLAP + 1):
-        i = start   # forward pointer in existing
-        j = 0       # forward pointer in new
-        while i < len(ex) and j < len(nw):
-            if ex[i] != nw[j][1]:
-                break
-            i += 1
-            j += 1
-
-        # i reached the end of existing → suffix/prefix overlap found
-        if i == len(ex) and j >= _MIN_OVERLAP:
-            return nw[j - 1][0] + 1
-
-    return 0
-
-
-# ── Live message (edit-in-place streaming) ────────────────────────────────────
-
-_EDIT_INTERVAL = 1.0  # min seconds between edits (Telegram rate limit safety)
-
-
-class _LiveMessage:
-    """One bot message that keeps getting edited as output streams in."""
-
-    def __init__(self, bot, chat_id: int, thread_id: int):
-        self.bot = bot
-        self.chat_id = chat_id
-        self.thread_id = thread_id
-        self.msg_id: int | None = None
-        self.full_text = ""
-        self._last_sent = ""
-        self._edit_scheduled = False
-        self._edit_handle: asyncio.TimerHandle | None = None
-        self._loop = asyncio.get_event_loop()
-
-    async def _ensure_msg(self) -> None:
-        """Create the placeholder message if it doesn't exist yet."""
-        if self.msg_id is not None:
-            return
-        if _flood_active():
-            return
-        try:
-            msg = await self.bot.send_message(
-                chat_id=self.chat_id,
-                message_thread_id=self.thread_id,
-                text="<pre>\u2026</pre>",
-                parse_mode=ParseMode.HTML,
-            )
-            self.msg_id = msg.message_id
-        except RetryAfter as e:
-            _set_flood_backoff(e.retry_after)
-            log.warning("LiveMessage flood control — backing off %ds", e.retry_after)
-        except BadRequest as e:
-            if is_thread_not_found(e):
-                _fire(handle_topic_gone(self.thread_id))
-                return
-            log.warning("LiveMessage: failed to create message: %s", e)
-        except TelegramError as e:
-            log.warning("LiveMessage: failed to create message: %s", e)
-
-    def append(self, text: str) -> None:
-        """Append new output, trimming any overlap with what we already have."""
-        skip = _find_overlap_end(self.full_text, text)
-        trimmed = text[skip:] if skip > 0 else text
-        if not trimmed.strip():
-            return
-        self.full_text += trimmed + "\n"
-        if not self._edit_scheduled:
-            self._edit_scheduled = True
-            self._edit_handle = self._loop.call_later(
-                _EDIT_INTERVAL, lambda: _fire(self._do_edit())
-            )
-
-    async def _do_edit(self) -> None:
-        """Edit the message with current accumulated text."""
-        self._edit_scheduled = False
-        await self._ensure_msg()
-
-        display = self.full_text.strip()
-        if not display or display == self._last_sent:
-            return
-
-        limit = _max_tg_len()
-
-        # Use escaped length to account for HTML entity expansion
-        if _escaped_len(display) > limit:
-            # Find a safe split point that fits after escaping
-            split_at = _safe_split(display, limit, self._last_sent)
-            head = display[:split_at].strip()
-            # Finalize current message with what fits
-            await self._edit_to(self._last_sent or head)
-            # Start a new message for the overflow
-            overflow = display[split_at:].strip()
-            self.full_text = overflow + "\n"
-            self.msg_id = None
-            self._last_sent = ""
-            await self._ensure_msg()
-            display = overflow
-            if not display:
-                return
-
-        # Final safety: if still over limit after split, truncate from head
-        if _escaped_len(display) > limit:
-            display = _truncate_to_fit(display, limit)
-
-        await self._edit_to(display)
-
-    async def _edit_to(self, text: str) -> None:
-        """Perform the actual editMessageText API call."""
-        if not self.msg_id or not text.strip():
-            return
-        if text == self._last_sent:
-            return
-        if _flood_active():
-            # Skip this edit — will catch up on the next one
-            return
-        try:
-            await self.bot.edit_message_text(
-                chat_id=self.chat_id,
-                message_id=self.msg_id,
-                text=f"<pre>{_esc(text)}</pre>",
-                parse_mode=ParseMode.HTML,
-            )
-            self._last_sent = text
-        except RetryAfter as e:
-            _set_flood_backoff(e.retry_after)
-            log.warning("LiveMessage flood control — backing off %ds", e.retry_after)
-        except BadRequest as e:
-            if is_thread_not_found(e):
-                _fire(handle_topic_gone(self.thread_id))
-                return
-            if "not modified" not in str(e).lower():
-                log.warning("LiveMessage edit failed: %s", e)
-        except TelegramError as e:
-            log.warning("LiveMessage edit failed: %s", e)
-
-    async def finalize(self) -> None:
-        """Final edit — flush everything left."""
-        if self._edit_handle:
-            self._edit_handle.cancel()
-        self._edit_scheduled = False
-        await self._do_edit()
-
-
-# One LiveMessage per thread — replaced when user sends a new message
-_live_messages: dict[int, _LiveMessage] = {}
-
-
-async def _send_output(bot, chat_id: int, thread_id: int, text: str) -> None:
-    """Called by the PTY output callback — append to the live message."""
-    lm = _live_messages.get(thread_id)
-    if not lm:
-        lm = _LiveMessage(bot, chat_id, thread_id)
-        _live_messages[thread_id] = lm
-    lm.append(text)
-
-
-async def cleanup_live_message(thread_id: int) -> None:
-    """Finalize and remove a live message for a stopped session."""
-    lm = _live_messages.pop(thread_id, None)
-    if lm:
-        await lm.finalize()
-
-
 # ── Screen capture — window picker, live photo, pause/resume ──────────────────
 
 
@@ -1153,7 +872,11 @@ async def _start_screen_session(ctx, user_id: int, session_name: str, hwnd: int)
         if old_lp:
             await old_lp.finalize()
 
-        lp = _FrameSender(bot, chat_id, tid, session_key)
+        lp = _FrameSender(
+            bot, chat_id, tid, session_key,
+            controls_kb_factory=_capture_controls_kb,
+            track_controls=_track_controls,
+        )
         _frame_senders[tid] = lp
 
         def on_frame(jpeg_bytes: bytes) -> None:
@@ -1221,12 +944,12 @@ async def _start_video_session(ctx, user_id: int, session_name: str, hwnd: int) 
 
         def on_text(text: str) -> None:
             async def _send_text():
-                if _flood_active():
+                if flood_active(chat_id):
                     return
                 try:
                     await bot.send_message(chat_id=chat_id, message_thread_id=tid, text=text)
                 except RetryAfter as e:
-                    _set_flood_backoff(e.retry_after)
+                    set_flood_backoff(chat_id, e.retry_after)
                     log.warning("Video text flood control — backing off %ds", e.retry_after)
                 except BadRequest as e:
                     if is_thread_not_found(e):
@@ -1239,7 +962,7 @@ async def _start_video_session(ctx, user_id: int, session_name: str, hwnd: int) 
 
         def on_video(video_bytes: bytes) -> None:
             async def _send():
-                if _flood_active():
+                if flood_active(chat_id):
                     return
                 try:
                     video_buf = io.BytesIO(video_bytes)
@@ -1258,7 +981,7 @@ async def _start_video_session(ctx, user_id: int, session_name: str, hwnd: int) 
                     if kb is not None:
                         await _track_controls(bot, msg)
                 except RetryAfter as e:
-                    _set_flood_backoff(e.retry_after)
+                    set_flood_backoff(chat_id, e.retry_after)
                     log.warning("Video send flood control — backing off %ds", e.retry_after)
                 except BadRequest as e:
                     if is_thread_not_found(e):
@@ -1325,7 +1048,7 @@ async def _start_computer_session(ctx, user_id: int, session_name: str, hwnd: in
 
         def on_frame(jpeg_bytes: bytes) -> None:
             async def _send_or_edit_photo():
-                if _flood_active():
+                if flood_active(chat_id):
                     return
                 try:
                     photo_buf = io.BytesIO(jpeg_bytes)
@@ -1341,8 +1064,17 @@ async def _start_computer_session(ctx, user_id: int, session_name: str, hwnd: in
                             )
                             return
                         except BadRequest:
-                            # Edit failed — fall through to send new
+                            # Edit failed (e.g. message too old). Best-effort
+                            # delete the stale photo so the thread doesn't
+                            # accumulate orphans, then send a fresh one.
+                            stale_id = _photo_msg_id["id"]
                             _photo_msg_id["id"] = None
+                            try:
+                                await bot.delete_message(
+                                    chat_id=chat_id, message_id=stale_id,
+                                )
+                            except TelegramError:
+                                pass
                             photo_buf.seek(0)
                     # Send new photo
                     msg = await bot.send_photo(
@@ -1352,7 +1084,7 @@ async def _start_computer_session(ctx, user_id: int, session_name: str, hwnd: in
                     )
                     _photo_msg_id["id"] = msg.message_id
                 except RetryAfter as e:
-                    _set_flood_backoff(e.retry_after)
+                    set_flood_backoff(chat_id, e.retry_after)
                     log.warning("Computer photo flood control — backing off %ds", e.retry_after)
                 except BadRequest as e:
                     if is_thread_not_found(e):
@@ -1387,83 +1119,9 @@ async def _start_computer_session(ctx, user_id: int, session_name: str, hwnd: in
         await _do_start(thread_id)
 
 
-class _FrameSender:
-    """Sends each JPEG frame as a new photo message in a topic."""
-
-    def __init__(self, bot, chat_id: int, thread_id: int, session_key: str):
-        self.bot = bot
-        self.chat_id = chat_id
-        self.thread_id = thread_id
-        self.session_key = session_key
-        self.process = None  # set after session starts, used to check paused
-        self._pending_frame: bytes | None = None
-        self._send_scheduled = False
-        self._send_handle: asyncio.TimerHandle | None = None
-        self._loop = asyncio.get_event_loop()
-
-    def set_frame(self, jpeg_bytes: bytes) -> None:
-        """Buffer the latest frame; schedule a send if not already pending."""
-        if self.process and self.process.paused:
-            return  # drop frames while paused
-        self._pending_frame = jpeg_bytes
-        if not self._send_scheduled:
-            self._send_scheduled = True
-            self._send_handle = self._loop.call_later(
-                config.image_interval(),
-                lambda: _fire(self._do_send()),
-            )
-
-    async def _do_send(self) -> None:
-        self._send_scheduled = False
-        # Check paused again — pause may have happened after scheduling
-        if self.process and self.process.paused:
-            self._pending_frame = None
-            return
-        frame = self._pending_frame
-        if not frame:
-            return
-        self._pending_frame = None
-
-        if _flood_active():
-            return
-        try:
-            photo_buf = io.BytesIO(frame)
-            photo_buf.name = "frame.jpg"
-            # Only attach controls if the capture is still alive — otherwise
-            # we'd show Pause/Stop on a trailing frame in a closed/stopped topic.
-            kb = _capture_controls_kb(self.session_key, paused=False) \
-                if self.process and self.process.alive else None
-            msg = await self.bot.send_photo(
-                chat_id=self.chat_id,
-                message_thread_id=self.thread_id,
-                photo=photo_buf,
-                reply_markup=kb,
-            )
-            if kb is not None:
-                await _track_controls(self.bot, msg)
-        except RetryAfter as e:
-            _set_flood_backoff(e.retry_after)
-            log.warning("FrameSender flood control — backing off %ds", e.retry_after)
-        except BadRequest as e:
-            if is_thread_not_found(e):
-                _fire(handle_topic_gone(self.thread_id))
-                return
-            log.warning("FrameSender send failed: %s", e)
-        except TelegramError as e:
-            log.warning("FrameSender send failed: %s", e)
-        except Exception as e:
-            log.error("FrameSender unexpected error: %s", e, exc_info=True)
-
-    async def finalize(self) -> None:
-        if self._send_handle:
-            self._send_handle.cancel()
-        self._send_scheduled = False
-
-
-# One FrameSender per screen-capture thread
-_frame_senders: dict[int, _FrameSender] = {}
-
-# Give rate module access to live dicts for cleanup on topic deletion
+# Give rate module access to live dicts for cleanup on topic deletion.
+# The dicts live in bot.live; handlers just re-exports them under the local
+# aliases above so historic call sites keep working without churn.
 init_live_refs(_live_messages, _frame_senders)
 
 

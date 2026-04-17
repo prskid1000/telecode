@@ -75,6 +75,8 @@ class SessionManager:
                 cmd=backend.build_launch_cmd(params),
                 cwd=workdir,
                 extra_env=backend.resolve_env(params),
+                idle_sec=params.idle_sec,
+                max_wait_sec=params.max_wait_sec,
             )
             process.subscribe(output_callback)
             await process.start()
