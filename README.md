@@ -304,13 +304,17 @@ All options live in `settings.json`. See [`settings.example.json`](settings.exam
 | `store_path` | JSON file for topic↔session mapping (default `./data/telecode.json`). Relative paths are resolved from the directory that contains `settings.json` (or `TELECODE_SETTINGS`), not from the process current working directory. |
 | `logs_dir` | Log directory (default `./data/logs`). Same resolution rule as `store_path` — keeps `telecode.log` next to `proxy_full_*.json` even when the bot is started from another folder (e.g. `pythonw` / Scheduled Task). |
 
-### `streaming` — Telegram live-message tuning
+### `streaming` — Telegram live-message + PTY flush tuning
 
 | Key | Description |
 |---|---|
 | `interval_sec` | Seconds between live-message edits (default `0.8`) |
 | `max_message_length` | Max chars before splitting into a new message (default `3800`) |
 | `idle_timeout_sec` | Auto-stop a session after N idle seconds (`0` = off) |
+| `idle_sec` | PTY idle-flush threshold — seconds of silence before emitting buffered output (default `2.0`). Per-tool override: `tools.<key>.streaming.idle_sec` |
+| `max_wait_sec` | PTY max-wait flush — upper bound on how long to buffer a continuous stream (default `5.0`). Per-tool override: `tools.<key>.streaming.max_wait_sec` |
+
+Short-output shells like `shell` or `powershell` can use tighter values (e.g. `0.5` / `2.5`) so output appears promptly; TUIs like Claude Code benefit from the defaults so spinners/status lines don't spam.
 
 ### `voice.stt` — transcribe Telegram voice messages
 
@@ -485,6 +489,8 @@ Each key under `tools` becomes a backend available via `/new <key>`. No code cha
 | `flags` | Extra CLI arguments appended to the command |
 | `env` | Environment variables (empty values are omitted) |
 | `session` | Backend-specific options (e.g. `resume_id` → `--resume`) |
+| `streaming.idle_sec` | Per-tool override for the PTY idle-flush threshold (falls back to `streaming.idle_sec`) |
+| `streaming.max_wait_sec` | Per-tool override for the PTY max-wait flush (falls back to `streaming.max_wait_sec`) |
 
 Built-in keys: `claude`, `claude-local`, `codex`, `codex-local`, `shell`, `powershell`. Internal non-PTY backends: `screen` (image capture), `video` (recording), `computer` (vision-LLM control).
 
@@ -552,8 +558,8 @@ bot/handlers.py:handle_text / handle_voice / handle_document
 sessions/manager.py:SessionManager.get_session_by_thread
     │
     ▼              (by backend type)
-    ├──► sessions/process.py    → PTY + pyte screen-diff → _LiveMessage.append → editMessageText
-    ├──► sessions/screen.py     → PrintWindow / mss    → _FrameSender → send_photo / send_video
+    ├──► sessions/process.py    → PTY + pyte screen-diff → bot/live.py:LiveMessage.append → editMessageText
+    ├──► sessions/screen.py     → PrintWindow / mss    → bot/live.py:FrameSender → send_photo / send_video
     └──► sessions/computer.py   → capture + vision LLM → pyautogui → edit_message_media
 
 Backends built from settings.json/tools.<key> by backends/registry.py
@@ -656,7 +662,9 @@ sessions/              Session lifecycle
   computer.py          Vision-LLM computer control (pyautogui)
 
 bot/                   Telegram layer
-  handlers.py          Commands, callbacks, _LiveMessage, _FrameSender
+  handlers.py          Commands, callbacks, window pickers, capture controls
+  live.py              LiveMessage, FrameSender, TypingPinger, per-chat flood backoff,
+                       overlap detection, HTML-escape-aware splitting
   topic_manager.py     Create/reuse forum topics
   settings_handler.py  /settings command parser
   rate.py              Stale session cleanup + topic probing
@@ -696,6 +704,8 @@ voice/                 STT availability + transcription
 ## Troubleshooting
 
 **Bot doesn't respond** -- Check bot_token, ensure bot is admin with Manage Topics.
+
+**Bot stops after a while** -- Read `data/logs/telecode.log.prev`. The log is rotated (not deleted) on every startup, so the previous run's crash trace survives a restart. `sys.excepthook`, a `threading.excepthook`, an asyncio loop exception handler, and a try/except around `run_polling` all route uncaught errors into the log. Under `pythonw` this is the only place the traceback lands.
 
 **CLI exits immediately** -- Missing API key or CLI not installed.
 
