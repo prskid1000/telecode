@@ -26,26 +26,33 @@ from proxy.server import start_proxy_background
 from mcp_server.server import start_mcp_background
 
 
-def _clear_previous_logs() -> None:
-    """Delete telecode.log and proxy_full_*.json from the logs dir so every
-    run starts with a clean slate. Best-effort — skips files held by other
-    processes."""
+def _rotate_previous_logs() -> None:
+    """Rotate telecode.log to telecode.log.prev so crash traces from the
+    previous run survive a restart. Also prunes old proxy_full_*.json dumps.
+    Best-effort — skips files held by other processes."""
     import glob
     logs_dir = config.logs_dir()
     if not os.path.isdir(logs_dir):
         return
-    targets = [os.path.join(logs_dir, "telecode.log")]
-    targets.extend(glob.glob(os.path.join(logs_dir, "proxy_full_*.json")))
-    for path in targets:
+    current = os.path.join(logs_dir, "telecode.log")
+    prev = os.path.join(logs_dir, "telecode.log.prev")
+    if os.path.exists(current):
+        try:
+            if os.path.exists(prev):
+                os.unlink(prev)
+            os.replace(current, prev)
+        except OSError:
+            pass  # locked by another process or filesystem hiccup
+    for path in glob.glob(os.path.join(logs_dir, "proxy_full_*.json")):
         try:
             os.unlink(path)
         except OSError:
-            pass  # file locked or doesn't exist
+            pass
 
 
 def _setup_logging() -> None:
     os.makedirs(config.logs_dir(), exist_ok=True)
-    _clear_previous_logs()
+    _rotate_previous_logs()
     handlers = []
     # Stream handler — only if stdout is available (not pythonw)
     if sys.stdout is not None:
@@ -67,6 +74,48 @@ def _setup_logging() -> None:
         handlers=handlers,
         force=True,
     )
+
+
+def _install_crash_handlers(log: logging.Logger) -> None:
+    """Route uncaught exceptions and unhandled asyncio task exceptions into
+    the log file. Under pythonw (no stderr) this is the only place an
+    unexpected traceback can land — without it a silent crash just stops the
+    process with no trace."""
+    def _sys_excepthook(exc_type, exc_value, exc_tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            return  # normal Ctrl+C exit
+        log.critical("Uncaught exception", exc_info=(exc_type, exc_value, exc_tb))
+    sys.excepthook = _sys_excepthook
+
+    try:
+        import threading
+        def _thread_excepthook(args):
+            log.critical(
+                "Uncaught thread exception in %s",
+                getattr(args.thread, "name", "?"),
+                exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+            )
+        threading.excepthook = _thread_excepthook
+    except Exception:
+        pass
+
+
+def _install_asyncio_exception_handler(log: logging.Logger) -> None:
+    """Attach a loop-level handler so exceptions from tasks scheduled with
+    ensure_future that never get awaited still land in telecode.log."""
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        return
+
+    def _handler(loop, context):
+        exc = context.get("exception")
+        message = context.get("message", "asyncio error")
+        if exc is not None:
+            log.error("Asyncio: %s", message, exc_info=exc)
+        else:
+            log.error("Asyncio: %s (context=%r)", message, context)
+    loop.set_exception_handler(_handler)
 
 
 def _start_tailscale_funnels(log: logging.Logger) -> list[subprocess.Popen]:
@@ -130,6 +179,7 @@ def _start_tailscale_funnels(log: logging.Logger) -> list[subprocess.Popen]:
 
 async def _post_init(app) -> None:
     log = logging.getLogger("telecode.main")
+    _install_asyncio_exception_handler(log)
     os.makedirs(os.path.dirname(config.store_path()) or ".", exist_ok=True)
     log.info("Store path: %s", config.store_path())
 
@@ -203,6 +253,7 @@ async def _post_shutdown(app) -> None:
 def main() -> None:
     _setup_logging()
     log = logging.getLogger("telecode.main")
+    _install_crash_handlers(log)
 
     try:
         token = config.telegram_token()
@@ -244,7 +295,15 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.TEXT, handle_text))
 
     log.info("Bot running. Ctrl+C to stop.")
-    app.run_polling(drop_pending_updates=True)
+    try:
+        app.run_polling(drop_pending_updates=True)
+    except KeyboardInterrupt:
+        log.info("Bot stopped by user.")
+    except Exception as exc:
+        # Capture any crash that bubbles out of the polling loop so pythonw
+        # doesn't silently eat the traceback.
+        log.critical("Bot crashed: %s", exc, exc_info=exc)
+        raise
 
 
 if __name__ == "__main__":
