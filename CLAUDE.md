@@ -144,10 +144,12 @@ Tool-search proxy (for local models):
 1. Raw bytes -> **pyte** `HistoryScreen` + `Stream`.
 2. Each snapshot = **history lines** + **display lines** (one top-to-bottom list).
 3. Compare to **previous** full list: find **new** lines only (patience/histogram anchors + segment diff + "similar line" filter so spinners/status lines do not spam).
-4. Emit chunks to subscribers on **idle** (~2s) or **max wait** (~5s); poll safety net every 5s.
+4. Emit chunks to subscribers on **idle** (defaults 2s) or **max wait** (defaults 5s); poll safety net every 5s.
 5. **Input:** `send()` appends `\r` (not `\n`) so TUIs accept the line.
 
-Tunables near top of `process.py`: idle interval, max wait, screen rows/history size.
+Both thresholds are tunable per-backend via `tools.<key>.streaming.{idle_sec,max_wait_sec}`, falling back to the global `streaming.{idle_sec,max_wait_sec}` in `settings.json`. Loaded by `backends/params.py` → `BackendParams.idle_sec` / `max_wait_sec` → `PTYProcess(..., idle_sec=..., max_wait_sec=...)`. Short-output shells (`shell`, `powershell`) flush faster than TUIs like Claude Code; tune per-tool to taste.
+
+Other tunables near top of `process.py`: screen rows/history size.
 
 ---
 
@@ -271,11 +273,26 @@ To use: set `proxy.enabled: true` and point `ANTHROPIC_BASE_URL` at `http://loca
 
 ---
 
-## Live Telegram messages (`bot/handlers.py`)
+## Live Telegram messages (`bot/live.py`)
 
-- **`_LiveMessage`:** one text message per "turn", updated by `append()`; debounced edits (~1s); overflow opens a new message. Overlap trim skips duplicate tails.
-- **`_FrameSender`:** sends each frame as a **new photo message**. Send interval = `capture.image_interval`. Drops frames while paused. Inline buttons (⏸ Pause / ▶ Resume / ⏹ Stop) — callbacks `cap_pause:` / `cap_resume:` / `stop:` (see `_capture_controls_kb`).
-- **Latest-message-only controls:** `_track_controls(bot, msg)` keeps a per-thread pointer (`_latest_controls_msg: dict[thread_id, message_id]`) to the most recent inline-keyboard message. Every site that sends `reply_markup=…` — `/start` picker, `/new` usage picker, dead-session picker, window picker, capture/video startup messages, each `_FrameSender` photo, each video chunk — calls `_track_controls`, which silently strips the keyboard from the previously tracked message via `edit_message_reply_markup(reply_markup=None)` before recording the new one. Pause/Resume callbacks use `q.edit_message_reply_markup` (same message_id) so the tracker is still valid. Errors are swallowed (message gone / too old / unchanged).
+Delivery layer lives in `bot/live.py`; `bot/handlers.py` only imports and wires.
+
+- **`LiveMessage`:** one text message per "turn", updated by `append()`. First chunk of a turn edits the message immediately (no debounce); subsequent chunks coalesce on a ~1s debounce so Telegram's per-chat edit rate isn't exceeded. Overflow loops into fresh messages — no head-truncation fallback, nothing is ever silently dropped. `_safe_split` uses cumulative escape-count prefix sums + binary search (O(n + log n), not the old quadratic step-back). Overlap with prior text is trimmed by `find_overlap_end`, a Z-algorithm scan over the non-whitespace projection.
+- **`finalize()` retry:** if the last `_do_edit` didn't land (full_text != _last_sent), schedules one more `_do_edit` 2s later so transient Telegram errors don't freeze a turn at a truncated reply.
+- **`TypingPinger`:** started in `LiveMessage.__init__`, re-sends `sendChatAction("typing")` every 4s until the first reply message is created, then stops. Also stops on topic-gone, on `finalize()`, or after a 60s hard cap so a turn with no PTY output can't leak the ping loop.
+- **Placeholder under flood:** `_ensure_msg` does NOT preemptively bail when the chat is flood-backed off — the send attempt either succeeds or surfaces `RetryAfter` (which sets the per-chat backoff). Preemptive bailing was stranding turns that produced only one short chunk.
+- **Per-chat flood:** `flood_active(chat_id)` / `set_flood_backoff(chat_id, retry_after)` — state is `dict[chat_id, float]`. A flood in one chat no longer throttles edits in another.
+- **`FrameSender`:** sends each frame as a **new photo message**. Send interval = `capture.image_interval`. Drops frames while paused. Inline buttons (⏸ Pause / ▶ Resume / ⏹ Stop) — callbacks `cap_pause:` / `cap_resume:` / `stop:` (see `_capture_controls_kb`). `controls_kb_factory` + `track_controls` are passed in at construction so this module doesn't import `bot/handlers.py` back.
+- **Latest-message-only controls** (in `bot/handlers.py`): `_track_controls(bot, msg)` keeps a per-thread pointer (`_latest_controls_msg: dict[thread_id, message_id]`) to the most recent inline-keyboard message. Every site that sends `reply_markup=…` — `/start` picker, `/new` usage picker, dead-session picker, window picker, capture/video startup messages, each `FrameSender` photo, each video chunk — calls `_track_controls`, which silently strips the keyboard from the previously tracked message via `edit_message_reply_markup(reply_markup=None)` before recording the new one. Pause/Resume callbacks use `q.edit_message_reply_markup` (same message_id) so the tracker is still valid. Errors are swallowed (message gone / too old / unchanged).
+
+---
+
+## Logging & crash traces (`main.py`)
+
+- Log file: `data/logs/telecode.log`. On startup it is **rotated to `telecode.log.prev`**, not deleted — so after a crash + restart the previous run's traceback survives in `.prev`.
+- `_install_crash_handlers` installs `sys.excepthook` + `threading.excepthook`; `_install_asyncio_exception_handler` attaches a loop-level handler in `_post_init`. These route uncaught exceptions (including task exceptions that were never awaited) into `telecode.log`. Essential under `pythonw`, where `sys.stderr` goes nowhere.
+- `run_polling` is wrapped in a try/except that logs a `CRITICAL Bot crashed: …` line before re-raising — so a fatal error at the polling layer lands in the log before the process exits.
+- When debugging a crash, always check `data/logs/telecode.log.prev` first; the current `telecode.log` is from *after* the restart and won't have the failing run's trace.
 
 ---
 
@@ -290,12 +307,15 @@ Just add a `tools.<key>` entry in `settings.json`:
   "startup_cmd": ["my-tool"],
   "flags": ["--some-flag"],
   "env": { "API_KEY": "..." },
-  "session": {}
+  "session": {},
+  "streaming": { "idle_sec": 0.5, "max_wait_sec": 2.5 }
 }
 ```
 
 The registry auto-creates a `GenericCLIBackend` for any key that isn't a special non-PTY backend (`screen`, `video`).
 `name` and `icon` are optional — defaults to title-cased key and 🔧.
+`streaming` is optional — overrides the global `streaming.idle_sec` / `streaming.max_wait_sec`. Short-output shells benefit from tighter values (~0.5s / 2.5s) than TUIs like Claude Code (the defaults 2s / 5s).
+
 No code changes needed.
 
 Test: `/settings reload` then `/new <key> test`.
@@ -322,7 +342,8 @@ Streamable HTTP MCP server (FastMCP, port 1236). Drop-in tools/resources/prompts
 
 | Symptom | What to check |
 |--------|----------------|
-| Bot silent | Token, group id, bot admin, Topics on |
+| Bot silent | Token, group id, bot admin, Topics on. Also check `data/logs/telecode.log.prev` for the previous run's crash trace |
+| Bot stops after a while | Read `data/logs/telecode.log.prev` — crash handlers route uncaught exceptions and `run_polling` failures there |
 | "No session for thread" | `/new` again; store may be missing mapping |
 | CLI exits at once | Missing API key, wrong `startup_cmd`, binary not on PATH |
 | Stuck on prompt | User sends `/key enter` or `/key y` |

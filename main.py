@@ -102,13 +102,15 @@ def _install_crash_handlers(log: logging.Logger) -> None:
 
 def _install_asyncio_exception_handler(log: logging.Logger) -> None:
     """Attach a loop-level handler so exceptions from tasks scheduled with
-    ensure_future that never get awaited still land in telecode.log."""
+    ensure_future that never get awaited still land in telecode.log. Must be
+    called from inside a running loop (uses ``get_running_loop`` so we don't
+    accidentally bind to a non-running default loop on 3.12+)."""
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
     except RuntimeError:
         return
 
-    def _handler(loop, context):
+    def _handler(_loop, context):
         exc = context.get("exception")
         message = context.get("message", "asyncio error")
         if exc is not None:
