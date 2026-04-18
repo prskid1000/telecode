@@ -426,6 +426,12 @@ class TypingPinger:
                         return
                 except TelegramError:
                     pass
+                except Exception as exc:
+                    # send_chat_action can raise TypeError on older PTB
+                    # versions missing message_thread_id — log and exit the
+                    # loop rather than poisoning the asyncio task queue.
+                    log.warning("TypingPinger: unexpected %s — stopping", exc)
+                    return
                 await asyncio.sleep(_TYPING_REPING_SEC)
         except asyncio.CancelledError:
             return
