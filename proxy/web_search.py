@@ -168,6 +168,17 @@ _CHROME_TAGS_RE = re.compile(
     r"<(?:nav|header|footer|aside|form|iframe|noscript|script|style|svg|template|picture|figure|dialog)\b[^>]*>.*?</(?:nav|header|footer|aside|form|iframe|noscript|script|style|svg|template|picture|figure|dialog)>",
     re.IGNORECASE | re.DOTALL,
 )
+
+# Strip noise attributes that add zero value once the tag is going to be
+# dropped anyway: inline CSS, class/id hooks, data-*/aria-*, event handlers,
+# image srcset/sizes, tabindex/role. Double- and single-quoted forms plus
+# unquoted. Run this BEFORE <main>/<article> detection so the regex boundaries
+# and lengths reflect the actual content, not the attribute soup.
+_ATTR_NOISE_RE = re.compile(
+    r"""\s+(?:style|class|id|on\w+|data-[\w-]+|aria-[\w-]+|srcset|sizes|tabindex|role)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)""",
+    re.IGNORECASE,
+)
+
 _MAIN_RE = re.compile(
     r"<(?:main|article)\b[^>]*>(.*?)</(?:main|article)>",
     re.IGNORECASE | re.DOTALL,
@@ -177,10 +188,11 @@ _MANY_NL_RE = re.compile(r"\n{3,}")
 
 
 def _extract_readable_text(html: str) -> str:
-    """Strip chrome, prefer <main>/<article>, convert remaining tags to
-    text + newlines. Returns a cleaned, trimmed plain-text blob."""
+    """Strip chrome + inline noise attrs, prefer <main>/<article>, convert
+    remaining tags to text + newlines. Returns a cleaned plain-text blob."""
     html = _COMMENT_RE.sub("", html)
     html = _CHROME_TAGS_RE.sub("", html)
+    html = _ATTR_NOISE_RE.sub("", html)
     # Prefer the largest <main> or <article> block if present
     blocks = _MAIN_RE.findall(html)
     if blocks:
