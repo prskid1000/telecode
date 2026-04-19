@@ -31,8 +31,8 @@ BORDER_SOFT = "#171d28"
 QSS = f"""
 * {{
     color: {FG};
-    font-family: "Segoe UI", Inter, -apple-system, BlinkMacSystemFont, sans-serif;
-    font-size: 12px;
+    font-family: "Inter", "Segoe UI Variable", "Segoe UI", -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    font-size: 13px;
 }}
 
 QWidget#window_root {{
@@ -43,19 +43,19 @@ QWidget#window_root {{
 QMenu {{
     background: {BG_CARD};
     border: 1px solid {BORDER};
-    border-radius: 6px;
-    padding: 4px;
+    border-radius: 8px;
+    padding: 6px;
     color: {FG};
-    font-size: 12px;
+    font-size: 12.5px;
 }}
 QMenu::item {{
-    padding: 5px 18px 5px 10px;
-    border-radius: 3px;
-    margin: 0 2px;
+    padding: 7px 22px 7px 12px;
+    border-radius: 4px;
+    margin: 1px 2px;
 }}
 QMenu::item:selected {{ background: {BG_ROW}; }}
 QMenu::item:disabled {{ color: {FG_MUTE}; }}
-QMenu::separator {{ height: 1px; background: {BORDER}; margin: 3px 4px; }}
+QMenu::separator {{ height: 1px; background: {BORDER}; margin: 4px 6px; }}
 
 /* Sidebar */
 QListWidget#sidebar {{
@@ -63,14 +63,15 @@ QListWidget#sidebar {{
     border: none;
     border-right: 1px solid {BORDER_SOFT};
     outline: 0;
-    padding: 6px 4px;
-    font-size: 12px;
+    padding: 10px 6px;
+    font-size: 13px;
 }}
 QListWidget#sidebar::item {{
-    padding: 6px 10px;
-    border-radius: 4px;
+    padding: 9px 14px;
+    border-radius: 6px;
     color: {FG_DIM};
-    margin-bottom: 1px;
+    margin-bottom: 2px;
+    min-height: 22px;
 }}
 QListWidget#sidebar::item:hover {{
     background: {BG_HOVER};
@@ -80,6 +81,7 @@ QListWidget#sidebar::item:selected {{
     background: {BG_CARD};
     color: {FG};
     border-left: 2px solid {ACCENT};
+    font-weight: 500;
 }}
 
 /* Titlebar */
@@ -88,20 +90,20 @@ QWidget#titlebar {{
     border-bottom: 1px solid {BORDER_SOFT};
 }}
 QLabel#titlebar_title {{
-    font-weight: 500;
-    font-size: 12px;
+    font-weight: 600;
+    font-size: 13px;
     color: {FG};
-    letter-spacing: 0.01em;
+    letter-spacing: 0.02em;
 }}
-QLabel#titlebar_icon {{ font-size: 13px; }}
+QLabel#titlebar_icon {{ font-size: 14px; }}
 QPushButton.tb_btn {{
     background: transparent;
     border: none;
     color: {FG_DIM};
-    padding: 0 14px;
+    padding: 0 16px;
     font-size: 13px;
-    min-height: 30px;
-    max-height: 30px;
+    min-height: 34px;
+    max-height: 34px;
 }}
 QPushButton.tb_btn:hover {{ background: {BG_HOVER}; color: {FG}; }}
 QPushButton.tb_close:hover {{ background: #e81123; color: white; }}
