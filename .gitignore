@@ -8,3 +8,6 @@ __pycache__/
 data/
 settings.json
 .claude/
+
+# setup.ps1 venv
+telecode-venv/
