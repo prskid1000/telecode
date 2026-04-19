@@ -329,6 +329,14 @@ def main() -> None:
     log = logging.getLogger("telecode.main")
     _install_crash_handlers(log)
 
+    # Single-instance guard: named mutex on Windows, flock on Unix. Bails
+    # out before we try to bind the proxy / MCP ports (which would also
+    # fail, but noisily).
+    from single_instance import acquire as _acquire_instance
+    if not _acquire_instance():
+        log.warning("Another telecode instance is already running — exiting")
+        sys.exit(0)
+
     try:
         token = config.telegram_token()
     except (KeyError, FileNotFoundError) as e:
