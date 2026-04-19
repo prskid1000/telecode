@@ -176,7 +176,8 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
     quit_action = QAction("Quit Telecode", menu)
     def _quit():
         log.info("tray: quit requested")
-        # Ask PTB to stop — this returns run_polling on the main thread
+        # Ask PTB to stop — this returns run_polling on the main thread,
+        # which triggers _post_shutdown (stops proxy + supervisor + funnels).
         try:
             schedule(bot_loop, bot_app.stop_running())
         except Exception as exc:
@@ -184,6 +185,15 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
         # Tear down Qt on this thread
         tray.hide()
         app.quit()
+        # Hard-stop watchdog: if graceful shutdown is still hanging after 5 s
+        # (stuck HTTP long-poll, blocked await in _post_shutdown, deadlock,
+        # …) force-exit. os._exit() releases our Windows Job Object handle,
+        # so every child process bound via proc_group (llama-server, Tailscale
+        # funnels, PTY-driven CLIs) is kernel-reaped automatically.
+        def _nuke() -> None:
+            log.warning("tray: graceful shutdown timed out — forcing os._exit(0)")
+            os._exit(0)
+        threading.Timer(5.0, _nuke).start()
     quit_action.triggered.connect(_quit)
     menu.addAction(quit_action)
 
