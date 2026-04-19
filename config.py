@@ -196,7 +196,7 @@ def computer_model() -> str:
 
 def computer_api_format() -> str:
     fmt = _computer_cfg().get("api", {}).get("format", "openai").lower()
-    return fmt if fmt in ("openai", "anthropic", "claude-code") else "openai"
+    return fmt if fmt in ("openai", "anthropic") else "openai"
 
 def computer_capture_interval() -> float:
     return float(_computer_cfg().get("capture_interval", 3))

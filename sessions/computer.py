@@ -293,13 +293,11 @@ async def _call_vision_llm(
     api_format: str = "openai",
     session_id: str | None = None,
 ) -> tuple[str, str | None]:
-    """Call a vision LLM. Supports OpenAI, Anthropic, and Claude Code formats.
+    """Call a vision LLM. Supports OpenAI and Anthropic wire formats.
 
-    Returns (response_text, session_id).  session_id is only set by the
-    ``claude-code`` format; other formats pass through the input value.
+    Returns (response_text, session_id). session_id is passed through for
+    call-site compatibility — the remaining formats are stateless.
     """
-    if api_format == "claude-code":
-        return await _call_vision_llm_claude_code(messages, base_url, api_key, model, session_id)
     if api_format == "anthropic":
         return await _call_vision_llm_anthropic(messages, base_url, api_key, model), session_id
     return await _call_vision_llm_openai(messages, base_url, api_key, model), session_id
@@ -419,115 +417,6 @@ def _to_anthropic_message(msg: dict) -> dict:
                 },
             })
     return {"role": role, "content": anthropic_parts}
-
-
-async def _call_vision_llm_claude_code(
-    messages: list[dict],
-    base_url: str,
-    api_key: str,
-    model: str,
-    session_id: str | None = None,
-) -> tuple[str, str | None]:
-    """Call Claude Code CLI (``claude -p``) with a screenshot and return structured JSON.
-
-    Uses ``--resume`` to maintain conversation continuity across turns.
-    When ``base_url`` / ``api_key`` / ``model`` are provided they are passed
-    as environment variables so the same settings block works for both the
-    cloud Claude Code and a local LM Studio backend.
-    Returns (response_text, session_id).
-    """
-    # Extract latest user text and image from the message list
-    latest_text = ""
-    latest_image_b64: str | None = None
-    system_text = ""
-
-    for msg in messages:
-        if msg["role"] == "system":
-            system_text = msg["content"] if isinstance(msg["content"], str) else ""
-        elif msg["role"] == "user":
-            content = msg.get("content", "")
-            if isinstance(content, str):
-                latest_text = content
-            elif isinstance(content, list):
-                for part in content:
-                    if part.get("type") == "text":
-                        latest_text = part["text"]
-                    elif part.get("type") == "image_url":
-                        data_uri = part["image_url"]["url"]
-                        if data_uri.startswith("data:"):
-                            _, b64data = data_uri.split(",", 1)
-                            latest_image_b64 = b64data
-                        else:
-                            latest_image_b64 = data_uri
-
-    # Save screenshot to a temp file so claude can see it
-    tmp_path: str | None = None
-    try:
-        if latest_image_b64:
-            fd, tmp_path = tempfile.mkstemp(suffix=".jpg")
-            os.write(fd, base64.b64decode(latest_image_b64))
-            os.close(fd)
-
-        # Build the prompt — include system prompt on the first call only
-        if session_id:
-            prompt = latest_text
-        else:
-            prompt = f"{system_text}\n\n{latest_text}" if system_text else latest_text
-
-        # Build command
-        cmd: list[str] = ["claude", "-p", prompt]
-        if tmp_path:
-            cmd.append(tmp_path)
-        cmd += ["--output-format", "json",
-                "--json-schema", json.dumps(_JSON_SCHEMA),
-                "--max-turns", "1"]
-        if session_id:
-            cmd += ["--resume", session_id]
-
-        # Build env — inherit current env, overlay API settings when provided
-        env = os.environ.copy()
-        if base_url:
-            env["ANTHROPIC_BASE_URL"] = base_url
-        if api_key:
-            env["ANTHROPIC_AUTH_TOKEN"] = api_key
-        if model:
-            env["ANTHROPIC_MODEL"] = model
-        # Useful defaults for local backends (no-ops for cloud)
-        env.setdefault("DISABLE_PROMPT_CACHING", "1")
-
-        log.debug("claude-code cmd: %s", " ".join(cmd[:6]) + " ...")
-
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=180,
-        )
-
-        if proc.returncode != 0:
-            err = stderr.decode(errors="replace")[:500]
-            raise RuntimeError(f"Claude Code exited {proc.returncode}: {err}")
-
-        data = json.loads(stdout.decode(errors="replace"))
-        new_session_id = data.get("session_id", session_id)
-
-        # Structured output takes priority, fall back to result text
-        if data.get("structured_output"):
-            result_text = json.dumps(data["structured_output"])
-        else:
-            result_text = data.get("result", "")
-
-        return result_text, new_session_id
-
-    finally:
-        if tmp_path:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
 
 
 def _parse_llm_response(raw: str) -> tuple[str, bool, dict | None]:

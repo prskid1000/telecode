@@ -24,25 +24,29 @@ from bot.handlers import (
 from bot.rate import set_session_manager
 from proxy.server import start_proxy_background
 from mcp_server.server import start_mcp_background
+from llamacpp import config as llama_cfg
+from llamacpp.supervisor import get_supervisor, shutdown_supervisor
+from tray.app import start_tray_in_thread
 
 
 def _rotate_previous_logs() -> None:
-    """Rotate telecode.log to telecode.log.prev so crash traces from the
-    previous run survive a restart. Also prunes old proxy_full_*.json dumps.
+    """Rotate telecode.log AND llama.log to .prev so traces from the previous
+    run survive a restart. Also prunes old proxy_full_*.json dumps.
     Best-effort — skips files held by other processes."""
     import glob
     logs_dir = config.logs_dir()
     if not os.path.isdir(logs_dir):
         return
-    current = os.path.join(logs_dir, "telecode.log")
-    prev = os.path.join(logs_dir, "telecode.log.prev")
-    if os.path.exists(current):
-        try:
-            if os.path.exists(prev):
-                os.unlink(prev)
-            os.replace(current, prev)
-        except OSError:
-            pass  # locked by another process or filesystem hiccup
+    for basename in ("telecode.log", "llama.log"):
+        current = os.path.join(logs_dir, basename)
+        prev = os.path.join(logs_dir, f"{basename}.prev")
+        if os.path.exists(current):
+            try:
+                if os.path.exists(prev):
+                    os.unlink(prev)
+                os.replace(current, prev)
+            except OSError:
+                pass  # locked (e.g. llama-server still writing) — append mode continues
     for path in glob.glob(os.path.join(logs_dir, "proxy_full_*.json")):
         try:
             os.unlink(path)
@@ -161,6 +165,7 @@ def _start_tailscale_funnels(log: logging.Logger) -> list[subprocess.Popen]:
         port = int(config.get_nested("mcp_server.port", 1236))
         routes.append((8443, port, "mcp"))
 
+    from proc_group import bind_to_lifetime_job
     for https_port, local_port, label in routes:
         try:
             cmd = ["tailscale", "funnel", "--bg", "--https", str(https_port), str(local_port)]
@@ -169,6 +174,8 @@ def _start_tailscale_funnels(log: logging.Logger) -> list[subprocess.Popen]:
                                         creationflags=subprocess.CREATE_NO_WINDOW)
             else:
                 proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            # Bind to the kill-on-close job so the OS reaps this if we die.
+            bind_to_lifetime_job(proc.pid, proc=proc)
             funnels.append(proc)
             port_suffix = "" if https_port == 443 else f":{https_port}"
             url = f"https://{ts_domain}{port_suffix}" if ts_domain else f"<tailscale>{port_suffix}"
@@ -177,6 +184,14 @@ def _start_tailscale_funnels(log: logging.Logger) -> list[subprocess.Popen]:
             log.warning("Failed to start Tailscale Funnel for %s: %s", label, exc)
 
     return funnels
+
+
+async def _preload_one(supervisor, model: str, log) -> None:
+    try:
+        active = await supervisor.ensure_model(model)
+        log.info("llama.cpp: preloaded '%s'", active)
+    except Exception as exc:
+        log.error("llama.cpp: preload '%s' failed: %s", model, exc)
 
 
 async def _post_init(app) -> None:
@@ -202,12 +217,57 @@ async def _post_init(app) -> None:
     except Exception as exc:
         log.error("Voice probe init failed: %s", exc, exc_info=True)
 
+    # llama-server is LAZY by default — the proxy's first request triggers
+    # `supervisor.ensure_model()` which spawns llama-server then. This means:
+    #   - telecode boots in seconds, not minutes
+    #   - VRAM stays free until you actually use a local model
+    #   - the idle-unload watcher (llamacpp.idle_unload_sec, default 300s)
+    #     stops the server again after inactivity so VRAM gets released
+    #
+    # Eager paths (only if the user opts in):
+    #   - `llamacpp.auto_start: true`         → load default_model now
+    #   - per-model `preload: true`           → load that model now
+    if llama_cfg.enabled():
+        try:
+            supervisor = await get_supervisor()
+            app.bot_data["_llama_supervisor"] = supervisor
+            preload = list(llama_cfg.preload_models())
+            # Eager-load only if explicitly asked. The "remembered" last-active
+            # model is just used as the implicit default when a request omits
+            # `model` — never auto-loaded on startup. Lazy mode is the default
+            # so VRAM stays free until something actually needs the LLM.
+            if llama_cfg.auto_start():
+                from llamacpp import state as llama_state
+                remembered = llama_state.last_active_model()
+                if remembered and remembered in llama_cfg.models():
+                    preload.insert(0, remembered)
+                    log.info("llama.cpp: auto_start → loading remembered '%s'", remembered)
+                else:
+                    preload.insert(0, llama_cfg.default_model())
+            preload = list(dict.fromkeys(p for p in preload if p))
+            for model in preload:
+                # spawn in background so a slow load doesn't block the bot
+                asyncio.ensure_future(_preload_one(supervisor, model, log))
+            if not preload:
+                log.info("llama.cpp: lazy mode — model loads on first request")
+        except Exception as exc:
+            log.error("llama-server supervisor init failed: %s", exc, exc_info=True)
+
     try:
         runner = await start_proxy_background()
         if runner:
             app.bot_data["_proxy_runner"] = runner
     except Exception as exc:
         log.error("Proxy startup failed: %s", exc, exc_info=True)
+
+    # System tray UI — runs on a daemon thread inside this process.
+    # Menu clicks use run_coroutine_threadsafe() onto the bot's loop for
+    # async calls; sync stuff (settings patches) runs directly.
+    try:
+        loop = asyncio.get_running_loop()
+        app.bot_data["_tray_thread"] = start_tray_in_thread(app, loop)
+    except Exception as exc:
+        log.error("Tray startup failed: %s", exc, exc_info=True)
 
     try:
         mcp_thread = start_mcp_background(config.mcp_server_host(), config.mcp_server_port())
@@ -225,10 +285,18 @@ async def _post_init(app) -> None:
 
 
 async def _post_shutdown(app) -> None:
-    # Stop proxy
+    # Tray is a daemon thread — dies with the interpreter; no explicit stop.
+
+    # Stop proxy first (so no new requests land on a dying llama-server)
     runner = app.bot_data.get("_proxy_runner")
     if runner:
         await runner.cleanup()
+
+    # Stop llama-server AFTER the proxy — the supervisor owns the process.
+    try:
+        await shutdown_supervisor()
+    except Exception:
+        pass
 
     # Stop Tailscale Funnel subprocesses — terminate then wait (with kill fallback).
     for proc in app.bot_data.get("_tailscale_funnels", []):

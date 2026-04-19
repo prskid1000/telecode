@@ -1,99 +1,48 @@
-"""
-Anthropic-compatible streaming proxy with ToolSearch interception.
+"""Dual-protocol proxy in front of llama-server.
 
-Sits between Claude Code and LM Studio (or any OpenAI-compatible backend).
-Intercepts tool lists, defers non-core tools, and handles ToolSearch round-trips.
+Exposes both Anthropic `/v1/messages` and OpenAI `/v1/chat/completions`
+to clients. Internally everything is translated to OpenAI shape (llama.cpp
+native) before hitting the upstream; the response stream is translated
+back to whatever protocol the client used.
+
+The intercept loop (ToolSearch / managed tools / auto-load / hallucination
+guard) runs on the internal OpenAI shape. Per-protocol differences are
+confined to the `ClientAdapter` subclasses at the top of this file.
 """
 from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+import logging
+import time
+import uuid
+from typing import Any, Optional
 
 import aiohttp
 from aiohttp import web
 
-# How often to send `: keepalive` SSE comments to the client while waiting
-# on upstream. Resets the client's HTTP read timeout. SSE comment lines are
-# ignored by parsers — purely a wire-level keep-alive.
-_HEARTBEAT_INTERVAL = 2.0
-
 from proxy import config as proxy_config
-from proxy import managed_tools as _managed_tools  # noqa: F401  registers tools
+from proxy import managed_tools  # noqa: F401  side-effect: registers tools
+from proxy import translate as xlate
+from proxy import tokenizer as toks
 from proxy.tool_registry import (
-    split_tools, rewrite_messages, strip_all_reminders, proxy_system_instruction,
-    lift_tool_result_images as _lift_tool_result_images,
+    proxy_system_instruction,
+    strip_all_reminders,
 )
 from proxy.tool_search import BM25Index
+from llamacpp import config as llama_cfg
+from llamacpp.supervisor import get_supervisor
+
+log = logging.getLogger("telecode.proxy")
+
+_HEARTBEAT_INTERVAL = 2.0
 
 
-def _format_functions_block(matched: list[dict[str, Any]]) -> str:
-    """Format matched tools as a <functions> block matching real Claude Code ToolSearch."""
-    if not matched:
-        return "No matching tools found. Try a different query."
-    lines = ["<functions>"]
-    for t in matched:
-        # Match Claude Code format: {"description": ..., "name": ..., "parameters": ...}
-        entry = {
-            "description": t.get("description", ""),
-            "name": t.get("name", ""),
-            "parameters": t.get("input_schema", {}),
-        }
-        lines.append(f"<function>{json.dumps(entry)}</function>")
-    lines.append("</functions>")
-    return "\n".join(lines)
-
-
-
-def _status_block_lines(text: str, index: int) -> list[str]:
-    """Build SSE lines for one synthetic text content block carrying status.
-
-    Renders in CC as a normal text block with the `●` / `└` formatted text.
-    Always rendered, even when the model goes straight to tool_use with no
-    text of its own — so visibility never gets dropped.
-    """
-    start = {
-        "type": "content_block_start",
-        "index": index,
-        "content_block": {"type": "text", "text": ""},
-    }
-    delta = {
-        "type": "content_block_delta",
-        "index": index,
-        "delta": {"type": "text_delta", "text": text + "\n\n"},
-    }
-    stop = {"type": "content_block_stop", "index": index}
-    return [
-        "event: content_block_start\n",
-        f"data: {json.dumps(start)}\n\n",
-        "event: content_block_delta\n",
-        f"data: {json.dumps(delta)}\n\n",
-        "event: content_block_stop\n",
-        f"data: {json.dumps(stop)}\n\n",
-    ]
-
-
-def _shift_event_index(line: str, offset: int) -> str:
-    """Bump the `index` field of a content_block_* event by `offset`.
-
-    Used when synthetic status blocks have been emitted at indices [0..N-1]:
-    every upstream content block index N must shift to N+offset on the wire
-    so the wire stream stays self-consistent.
-    """
-    if offset == 0 or not line.startswith("data: "):
-        return line
-    try:
-        event = json.loads(line[6:].rstrip("\n"))
-    except json.JSONDecodeError:
-        return line
-    if event.get("type", "").startswith("content_block_") and "index" in event:
-        event["index"] = event["index"] + offset
-        return f"data: {json.dumps(event)}\n\n"
-    return line
-
+# ═══════════════════════════════════════════════════════════════════════
+# SSE utilities
+# ═══════════════════════════════════════════════════════════════════════
 
 async def _ensure_prepared(resp: web.StreamResponse, request: web.Request) -> None:
-    """Idempotent prepare(): set SSE headers + CORS once."""
     if resp.prepared:
         return
     resp.content_type = "text/event-stream"
@@ -107,24 +56,17 @@ async def _start_heartbeat(
     resp: web.StreamResponse,
     request: web.Request,
     write_lock: asyncio.Lock,
+    *,
+    protocol: str,
 ) -> asyncio.Task:
-    """Spawn a heartbeat task that runs for the entire request lifetime.
+    """Send wire-level keep-alives every 2s and protocol pings every N seconds.
 
-    Two cadences:
-      - `: keepalive\\n\\n` SSE comment every `_HEARTBEAT_INTERVAL` seconds
-        (default 2s). Wire-level keep-alive — clients ignore comment lines
-        but their HTTP read timer resets on byte activity.
-      - `event: ping\\n\\ndata: {"type":"ping"}\\n\\n` every
-        `proxy.ping_interval` seconds (default 20s). Anthropic's official
-        live-progress signal — CC / pivot / Office add-ins recognize it
-        and won't time out even on long generations.
-
-    All writes go through `write_lock` to serialize with the main loop's
-    chunk writes during passthrough mode.
+    Anthropic protocol: `event: ping` frames (CC / pivot recognize these).
+    OpenAI protocol: SSE comment lines only (OpenAI SSE has no ping event).
     """
     await _ensure_prepared(resp, request)
     ping_every = max(_HEARTBEAT_INTERVAL, proxy_config.ping_interval())
-    _PING_LINE = b"event: ping\ndata: {\"type\":\"ping\"}\n\n"
+    anthropic_ping = b"event: ping\ndata: {\"type\":\"ping\"}\n\n"
 
     async def _beat() -> None:
         elapsed = 0.0
@@ -135,8 +77,8 @@ async def _start_heartbeat(
                 elapsed += _HEARTBEAT_INTERVAL
                 async with write_lock:
                     try:
-                        if elapsed - last_ping >= ping_every:
-                            await resp.write(_PING_LINE)
+                        if elapsed - last_ping >= ping_every and protocol == "anthropic":
+                            await resp.write(anthropic_ping)
                             last_ping = elapsed
                         else:
                             await resp.write(b": keepalive\n\n")
@@ -158,332 +100,7 @@ async def _stop_heartbeat(task: asyncio.Task | None) -> None:
         pass
 
 
-# ── Location detection ───────────────────────────────────────────────────────
-
-_location_cache: str | None = None
-
-
-async def _get_location() -> str:
-    """Get user's location. Uses settings override if set, otherwise
-    auto-detects once via ip-api.com (free, no key, cached for session)."""
-    global _location_cache
-
-    # Settings override
-    configured = proxy_config.location()
-    if configured:
-        return configured
-
-    # Return cached result
-    if _location_cache is not None:
-        return _location_cache
-
-    # Auto-detect via IP geolocation (one-time)
-    try:
-        timeout = aiohttp.ClientTimeout(total=5)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get("http://ip-api.com/json/?fields=city,country") as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    city = data.get("city", "")
-                    country = data.get("country", "")
-                    if city and country:
-                        _location_cache = f"{city}, {country}"
-                    elif country:
-                        _location_cache = country
-                    else:
-                        _location_cache = ""
-                else:
-                    _location_cache = ""
-    except Exception:
-        _location_cache = ""
-
-    return _location_cache
-
-
-# ── Request handling ─────────────────────────────────────────────────────────
-
-async def _forward_stream(
-    upstream: str,
-    payload: dict[str, Any],
-    headers: dict[str, str],
-    resp: web.StreamResponse,
-    request: web.Request,
-    intercept_names: set[str] | None = None,
-    *,
-    known_names: set[str] | None = None,
-    status_blocks: list[str] | None = None,
-    base_index_offset: int = 0,
-) -> dict[str, Any] | None:
-    """Stream from upstream with early branch on first content_block_start.
-
-    Returns:
-      dict — response began with a tool_use whose name is in `intercept_names`.
-             Nothing was written to the client; rest of upstream is consumed
-             only enough to capture the full tool_use input. Caller handles
-             the tool, optionally accumulates a status string, and re-calls.
-      None — response is final (text, or non-intercepted tool_use). Has been
-             fully streamed to the client. Status blocks (if any) were emitted
-             as synthetic text blocks at indices [0..N-1] and upstream block
-             indices were shifted by N + base_index_offset.
-
-    A heartbeat task emits `: keepalive\\n\\n` every ~2s during the buffer
-    window so the client's HTTP read timeout doesn't fire while we wait.
-    """
-    intercept_names = intercept_names or set()
-    # Hallucination guard: when `known_names` is provided, any tool_use whose
-    # name is neither in `intercept_names` nor in `known_names` is treated as
-    # intercepted (returned to caller with _hallucinated=True) so the proxy
-    # can return BM25 suggestions instead of letting the bogus call leak to CC.
-    known_names = known_names or set()
-    status_blocks = status_blocks or []
-    n_status = len(status_blocks)
-    index_offset = base_index_offset + n_status
-
-    # write_lock may be provided by the caller (preferred — lets heartbeat
-    # stay alive across _forward_stream calls). Fallback for standalone use.
-    write_lock = getattr(resp, "_write_lock", None)
-    own_heartbeat = write_lock is None
-    if write_lock is None:
-        write_lock = asyncio.Lock()
-
-    # Buffered events held during the decision window (up to first
-    # content_block_start). On passthrough we flush these; on intercept we
-    # keep accumulating to capture the full tool_use input then discard.
-    buffered: list[str] = []
-    decided: str | None = None  # None | "intercept" | "passthrough"
-    heartbeat: asyncio.Task | None = None
-
-    # Tool tracking (only the FIRST tool_use in a response can be intercepted)
-    cur_name = ""
-    cur_id = ""
-    cur_json = ""
-    tool_use: dict[str, Any] | None = None
-
-    async def _flush_buffered_with_status() -> None:
-        """Called when we decide PASSTHROUGH: emit status blocks (at indices
-        starting from base_index_offset), then flush buffered events with
-        their indices shifted by index_offset, then continue streaming live.
-        """
-        await _ensure_prepared(resp, request)
-        async with write_lock:
-            for i, text in enumerate(status_blocks):
-                for line in _status_block_lines(text, base_index_offset + i):
-                    await resp.write(line.encode())
-            for line in buffered:
-                await resp.write(_shift_event_index(line, index_offset).encode())
-        buffered.clear()
-
-    try:
-        if own_heartbeat:
-            heartbeat = await _start_heartbeat(resp, request, write_lock)
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{upstream}/v1/messages",
-                json=payload,
-                headers=headers,
-            ) as upstream_resp:
-                if upstream_resp.status != 200:
-                    body = await upstream_resp.text()
-                    await _stop_heartbeat(heartbeat)
-                    heartbeat = None
-                    # We already prepared with 200 — surface the error as an
-                    # SSE error event so CC sees it.
-                    err = {"type": "error", "error": {"type": "upstream_error",
-                                                       "status": upstream_resp.status,
-                                                       "body": body[:500]}}
-                    async with write_lock:
-                        await resp.write(b"event: error\n")
-                        await resp.write(f"data: {json.dumps(err)}\n\n".encode())
-                    return None
-
-                buf = ""
-                async for chunk in upstream_resp.content.iter_any():
-                    text = chunk.decode("utf-8", errors="replace")
-                    buf += text
-
-                    while "\n" in buf:
-                        line, buf = buf.split("\n", 1)
-                        line = line.rstrip("\r")
-
-                        # Reconstruct canonical SSE form
-                        if not line.startswith("data: "):
-                            sse_line = f"{line}\n"
-                        else:
-                            data_str = line[6:]
-                            sse_line = f"data: {data_str}\n\n"
-
-                        # Parse event for state-machine decisions
-                        event: dict[str, Any] | None = None
-                        if line.startswith("data: "):
-                            data_str = line[6:]
-                            if data_str.strip() != "[DONE]":
-                                try:
-                                    event = json.loads(data_str)
-                                except json.JSONDecodeError:
-                                    event = None
-
-                        # Forward the FIRST message_start to the client
-                        # immediately, regardless of intercept/passthrough.
-                        # Clients (CC, pivot) buffer their SSE parser until they
-                        # see message_start — without this they hold back any
-                        # status blocks we emit between rounds and flush them
-                        # together with the next round's text. Subsequent
-                        # rounds' message_start events are dropped (one
-                        # request = one message).
-                        etype = event.get("type") if event else ""
-                        if etype == "message_start":
-                            if not getattr(resp, "_message_start_sent", False):
-                                resp._message_start_sent = True
-                                # Reverse model mapping: client expects the
-                                # alias it sent, not the upstream model name.
-                                client_model = getattr(resp, "_client_model", None)
-                                if client_model and event:
-                                    msg = event.get("message")
-                                    if isinstance(msg, dict) and "model" in msg:
-                                        msg["model"] = client_model
-                                        sse_line = f"data: {json.dumps(event)}\n\n"
-                                # Synthesize the SSE event header too (clients
-                                # may rely on it; original header was appended
-                                # to `buffered` on the preceding line but would
-                                # be discarded with the rest of an intercept
-                                # round's buffer).
-                                async with write_lock:
-                                    await resp.write(b"event: message_start\n")
-                                    await resp.write(sse_line.encode())
-                                    writer = getattr(resp, "_payload_writer", None)
-                                    if writer is not None:
-                                        try:
-                                            await writer.drain()
-                                        except (ConnectionResetError, ConnectionError):
-                                            pass
-                            # Remove any `event: message_start` header we may
-                            # have already appended to buffered on the previous
-                            # line (passthrough rounds mustn't send a duplicate).
-                            if buffered and buffered[-1].strip() == "event: message_start":
-                                buffered.pop()
-                            continue
-
-                        # Drop message_stop on intercept rounds (we're looping;
-                        # client must see exactly one message_stop at the end).
-                        if (decided == "intercept" and etype in ("message_delta", "message_stop")):
-                            continue
-
-                        # First content_block_start = decision point
-                        if (decided is None and event
-                                and event.get("type") == "content_block_start"):
-                            block = event.get("content_block", {})
-                            btype = block.get("type", "")
-                            if btype == "tool_use":
-                                cur_name = block.get("name", "")
-                                cur_id = block.get("id", "")
-                                cur_json = ""
-                                if cur_name in intercept_names:
-                                    decided = "intercept"
-                                elif known_names and cur_name not in known_names:
-                                    # Hallucinated — unknown tool name.
-                                    # Intercept so caller returns BM25 suggestions.
-                                    decided = "intercept"
-                                else:
-                                    decided = "passthrough"
-                            else:
-                                # text or other → passthrough
-                                decided = "passthrough"
-
-                            if decided == "passthrough":
-                                buffered.append(sse_line)
-                                await _flush_buffered_with_status()
-                                continue
-                            # else INTERCEPT: fall through, keep buffering
-                            # Heartbeat keeps running through both modes — pings
-                            # are emitted every `proxy.ping_interval` seconds even
-                            # during long upstream silence mid-passthrough.
-
-                        # Accumulate tool_use input json (intercept path only —
-                        # in passthrough it's already streamed to client below)
-                        if (decided == "intercept" and event
-                                and event.get("type") == "content_block_delta"):
-                            delta = event.get("delta", {})
-                            if delta.get("type") == "input_json_delta":
-                                cur_json += delta.get("partial_json", "")
-
-                        if (decided == "intercept" and event
-                                and event.get("type") == "content_block_stop"
-                                and tool_use is None):
-                            try:
-                                args = json.loads(cur_json) if cur_json else {}
-                            except json.JSONDecodeError:
-                                args = {}
-                            tool_use = {"id": cur_id, "name": cur_name, "input": args}
-                            # Tool input fully captured; we can stop early.
-                            # Continue draining the stream cleanly so the
-                            # connection closes (some servers don't like aborts).
-
-                        if decided == "passthrough":
-                            # Live streaming: shift index and write immediately
-                            # under the lock so heartbeat pings don't interleave
-                            # mid-event.
-                            shifted = _shift_event_index(sse_line, index_offset).encode()
-                            async with write_lock:
-                                await resp.write(shifted)
-                        else:
-                            # INTERCEPT or pre-decision → buffer
-                            buffered.append(sse_line)
-
-        return tool_use
-    finally:
-        await _stop_heartbeat(heartbeat)
-
-
-def _canonicalize_body(body: dict[str, Any]) -> dict[str, Any]:
-    """Rebuild the upstream body with a cache-friendly key order and
-    normalized message content.
-
-    Why: LM Studio's prefix cache keys on the exact serialized token stream.
-    CC puts `messages` near the start of the JSON body, so a new user turn
-    breaks the prefix after ~100 chars. By placing stable fields (system,
-    tools) first, the cache hits cover the entire system prompt and tool
-    definitions — only the growing messages tail needs re-processing.
-
-    Also normalizes message content: CC sometimes emits `content: "text"`
-    (plain string), sometimes `content: [{"type":"text","text":"..."}]`.
-    Each flip between forms costs a cache miss. We always use list form.
-    """
-    # 1) Normalize message content
-    msgs = body.get("messages", [])
-    normalized: list[dict[str, Any]] = []
-    for m in msgs:
-        if not isinstance(m, dict):
-            normalized.append(m)
-            continue
-        content = m.get("content")
-        if isinstance(content, str):
-            new = dict(m)
-            new["content"] = [{"type": "text", "text": content}]
-            normalized.append(new)
-        else:
-            normalized.append(m)
-
-    # 2) Rebuild body with stable-first key order
-    preferred_order = ("model", "system", "tools", "max_tokens", "temperature",
-                       "top_p", "top_k", "stop_sequences", "stream", "metadata",
-                       "tool_choice", "messages")
-    out: dict[str, Any] = {}
-    for key in preferred_order:
-        if key == "messages":
-            out[key] = normalized
-        elif key in body:
-            out[key] = body[key]
-    # Preserve any fields we didn't anticipate, placed AFTER messages (harmless)
-    for key, val in body.items():
-        if key not in out:
-            out[key] = val
-    return out
-
-
 def _apply_cors_to_stream(resp: web.StreamResponse, request: web.Request) -> None:
-    """Set CORS headers on a StreamResponse before prepare() — middleware can't
-    reach headers after prepare() has committed them."""
     origins = proxy_config.cors_origins()
     if not origins:
         return
@@ -494,97 +111,41 @@ def _apply_cors_to_stream(resp: web.StreamResponse, request: web.Request) -> Non
         resp.headers["Access-Control-Allow-Private-Network"] = "true"
 
 
-async def _flush_sse(
-    resp: web.StreamResponse,
-    request: web.Request,
-    lines: list[str],
-) -> None:
-    """Flush buffered SSE lines to the client."""
-    if proxy_config.debug():
-        await _dump_request({"sse_lines": lines, "total_bytes": sum(len(l) for l in lines)}, "RESPONSE")
-    if not resp.prepared:
-        resp.content_type = "text/event-stream"
-        resp.headers["Cache-Control"] = "no-cache"
-        resp.headers["Connection"] = "keep-alive"
-        _apply_cors_to_stream(resp, request)
-        await resp.prepare(request)
-    for line in lines:
-        await resp.write(line.encode())
+# ═══════════════════════════════════════════════════════════════════════
+# Location detection (for date/location injection)
+# ═══════════════════════════════════════════════════════════════════════
+
+_location_cache: str | None = None
 
 
-async def _do_tool_search(
-    deferred: list[dict[str, Any]],
-    args: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """Execute ToolSearch and return matching tool definitions.
-
-    Query forms (matching Claude Code's real ToolSearch):
-      select:Read,Edit,Grep  — exact name match, comma-separated
-      +slack send             — require "slack" in name, rank by remaining terms
-      notebook jupyter        — keyword search (BM25)
-    """
-    query = args.get("query", "")
-    max_results = args.get("max_results", 5)
-
-    # select:Name1,Name2 — exact name lookup
-    if query.startswith("select:"):
-        names = {n.strip() for n in query[7:].split(",") if n.strip()}
-        return [t for t in deferred if t.get("name", "") in names]
-
-    # +required_in_name rest of keywords — filter by name, rank remainder
-    if query.startswith("+"):
-        parts = query.split(None, 1)
-        required = parts[0][1:].lower()  # strip the +
-        filtered = [t for t in deferred if required in t.get("name", "").lower()]
-        if len(parts) > 1 and filtered:
-            index = BM25Index(filtered)
-            return index.search(parts[1], max_results)
-        return filtered[:max_results]
-
-    # Default: BM25 keyword search
-    index = BM25Index(deferred)
-    return index.search(query, max_results)
+async def _get_location() -> str:
+    global _location_cache
+    configured = proxy_config.location()
+    if configured:
+        return configured
+    if _location_cache is not None:
+        return _location_cache
+    try:
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get("http://ip-api.com/json/?fields=city,country") as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    city = data.get("city", "")
+                    country = data.get("country", "")
+                    _location_cache = f"{city}, {country}" if (city and country) else (country or "")
+                else:
+                    _location_cache = ""
+    except Exception:
+        _location_cache = ""
+    return _location_cache
 
 
-# ── Debug dump (disabled — set _DEBUG = True to enable) ──────────────────────
-
-_dump_counter = 0
-_MAX_DUMP_FILES = 50
-
-
-async def _dump_request(body: dict[str, Any], label: str, meta: dict[str, Any] | None = None) -> None:
-    """Dump request to log file. Enable via proxy.debug in settings.json.
-
-    Rotates to keep only the last _MAX_DUMP_FILES files.
-    """
-    if not proxy_config.debug():
-        return
-    import os, glob as globmod, aiofiles
-    global _dump_counter
-    _dump_counter += 1
-    dump_dir = os.path.join(os.path.dirname(__file__), "..", "data", "logs")
-    os.makedirs(dump_dir, exist_ok=True)
-    full_path = os.path.join(dump_dir, f"proxy_full_{_dump_counter}.json")
-    async with aiofiles.open(full_path, "w", encoding="utf-8") as f:
-        payload: dict[str, Any] = {"label": label, "body": body}
-        if meta:
-            payload["meta"] = meta
-        await f.write(json.dumps(payload, indent=2, ensure_ascii=False))
-
-    # Rotate: keep only last _MAX_DUMP_FILES
-    files = sorted(globmod.glob(os.path.join(dump_dir, "proxy_full_*.json")))
-    for old in files[:-_MAX_DUMP_FILES]:
-        try:
-            os.remove(old)
-        except OSError:
-            pass
-
+# ═══════════════════════════════════════════════════════════════════════
+# Profile matching
+# ═══════════════════════════════════════════════════════════════════════
 
 def _match_profile(headers) -> dict | None:
-    """Return the first client profile whose match condition is satisfied.
-
-    Match spec: {"header": "<Name>", "contains": "<substring>"} (case-insensitive).
-    """
     for profile in proxy_config.client_profiles():
         match = profile.get("match", {})
         hdr = match.get("header", "")
@@ -597,49 +158,366 @@ def _match_profile(headers) -> dict | None:
     return None
 
 
-async def _prepare_request(
-    body: dict[str, Any],
-    request: web.Request,
-) -> dict[str, Any]:
-    """Apply all proxy transforms to a request body.
+# ═══════════════════════════════════════════════════════════════════════
+# Client adapters — per-protocol status emission
+# ═══════════════════════════════════════════════════════════════════════
 
-    Shared by handle_messages and handle_count_tokens so the token count
-    reflects exactly what the model would see on a real request.
-
-    Returns a dict with keys:
-      body, deferred, headers, managed_intercept, auto_load, client_model
+class ClientAdapter:
+    """Per-protocol helpers. Each adapter knows how to:
+      - emit message_start/initial-frame ONCE at request start (so status
+        blocks that follow aren't buffered by the client SSE parser)
+      - emit a status line (tool-call visibility) between rounds
+      - translate upstream OpenAI chunks to the client's protocol
     """
-    # Match request against configured client profiles (first match wins).
-    profile = _match_profile(request.headers)
 
-    # Apply model mapping (e.g. claude-opus-4-6 -> qwen3.5-35b-a3b)
-    mapping = proxy_config.model_mapping()
-    requested_model = body.get("model", "")
-    if mapping:
-        if requested_model in mapping:
-            body["model"] = mapping[requested_model]
+    protocol = "anthropic"
 
-    # Profile-driven tool filtering:
-    #  - strip_tool_names: drop tools whose name matches any entry (hosted or custom)
-    #  - strip_cache_control: remove `cache_control` key from each tool (LM Studio rejects it)
-    strip_names = set(profile.get("strip_tool_names", [])) if profile else set()
-    strip_cc = profile.get("strip_cache_control", True) if profile else True
+    def __init__(self, client_model: str) -> None:
+        self.client_model = client_model
+        self.initial_emitted = False
 
-    tools = body.get("tools", [])
-    if tools and (strip_names or strip_cc):
-        filtered = []
-        for t in tools:
-            name = t.get("name", "")
-            if name in strip_names:
-                continue
-            if strip_cc:
-                t = {k: v for k, v in t.items() if k != "cache_control"}
-            filtered.append(t)
-        body["tools"] = filtered
+    def initial_frame(self) -> bytes:
+        """Frame the client must see before any status/content. Override per protocol."""
+        raise NotImplementedError
+
+    def emit_status(self, text: str) -> bytes:
+        raise NotImplementedError
+
+    def reset_state(self, reasoning_cfg: dict[str, Any]) -> None:
+        raise NotImplementedError
+
+    def translate_openai_chunk(self, chunk: dict[str, Any]) -> bytes:
+        raise NotImplementedError
+
+    def end_stream(self) -> bytes:
+        raise NotImplementedError
+
+
+class AnthropicAdapter(ClientAdapter):
+    protocol = "anthropic"
+
+    def __init__(self, client_model: str) -> None:
+        super().__init__(client_model)
+        self.status_emitted = 0
+        self.state: xlate.AnthropicStreamState | None = None
+        # Shared across rounds so start_message/end_stream fire exactly once.
+        self._message_id = f"msg_{uuid.uuid4().hex[:24]}"
+
+    def initial_frame(self) -> bytes:
+        """Emit Anthropic `message_start` once. Clients buffer ALL subsequent
+        events until they see this — critical for status-block visibility."""
+        if self.initial_emitted:
+            return b""
+        self.initial_emitted = True
+        ev = {
+            "type": "message_start",
+            "message": {
+                "id": self._message_id,
+                "type": "message",
+                "role": "assistant",
+                "model": self.client_model or "unknown",
+                "content": [],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 0, "output_tokens": 0},
+            },
+        }
+        return (
+            f"event: message_start\n"
+            f"data: {json.dumps(ev)}\n\n"
+        ).encode()
+
+    def emit_status(self, text: str) -> bytes:
+        """Status = synthetic text content block. Indices start at 0 and
+        increment per status, before any real content blocks (which start
+        at `status_emitted` and go up from there)."""
+        frame = xlate.emit_anthropic_status_block(text, self.status_emitted)
+        self.status_emitted += 1
+        return frame
+
+    def reset_state(self, reasoning_cfg: dict[str, Any]) -> None:
+        """Create a fresh AnthropicStreamState for a new upstream round.
+        Stream state's next_index is offset past already-emitted status
+        blocks. message_start was already emitted by `initial_frame` at
+        request start, so we mark the state as 'started' to suppress its
+        own message_start emission in step()."""
+        state = xlate.AnthropicStreamState(
+            reasoning=xlate.ReasoningState(
+                start_tag=reasoning_cfg.get("start", "<think>"),
+                end_tag=reasoning_cfg.get("end", "</think>"),
+                emit_thinking=reasoning_cfg.get("emit_thinking_blocks", True),
+                enabled=reasoning_cfg.get("enabled", True),
+            ),
+            client_model=self.client_model,
+        )
+        state._next_index = self.status_emitted
+        state._message_started = True  # initial_frame already sent it
+        state._message_id = self._message_id
+        self.state = state
+
+    def translate_openai_chunk(self, chunk: dict[str, Any]) -> bytes:
+        assert self.state is not None
+        return self.state.step(chunk)
+
+    def end_stream(self) -> bytes:
+        return b""  # message_stop emitted by state on finish_reason
+
+
+class OpenAIAdapter(ClientAdapter):
+    protocol = "openai"
+
+    def __init__(self, client_model: str) -> None:
+        super().__init__(client_model)
+        self.completion_id = f"chatcmpl-{uuid.uuid4().hex[:16]}"
+
+    def initial_frame(self) -> bytes:
+        """Emit a `role: "assistant"` opener chunk once. OpenAI clients
+        expect the first chunk's delta to carry the role — putting it
+        before status/content keeps strict parsers happy."""
+        if self.initial_emitted:
+            return b""
+        self.initial_emitted = True
+        chunk = {
+            "id": self.completion_id,
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": self.client_model or "unknown",
+            "choices": [{
+                "index": 0,
+                "delta": {"role": "assistant", "content": ""},
+                "finish_reason": None,
+            }],
+        }
+        return f"data: {json.dumps(chunk)}\n\n".encode()
+
+    def emit_status(self, text: str) -> bytes:
+        return xlate.emit_openai_status_chunk(text, self.client_model, self.completion_id)
+
+    def reset_state(self, reasoning_cfg: dict[str, Any]) -> None:
+        pass  # OpenAI clients get raw upstream chunks (identity translation)
+
+    def translate_openai_chunk(self, chunk: dict[str, Any]) -> bytes:
+        """Rewrite only the `model` field (so the client sees the alias it
+        sent) and forward the rest verbatim. Strip any `role` from deltas
+        after the opener (we already emitted it in initial_frame)."""
+        if self.client_model:
+            chunk = {**chunk, "model": self.client_model}
+        chunk["id"] = self.completion_id  # unify the id across round-trips
+        # Drop redundant role emissions — we emitted role in initial_frame.
+        for ch in chunk.get("choices", []) or []:
+            d = ch.get("delta")
+            if isinstance(d, dict) and "role" in d:
+                d.pop("role", None)
+        return f"data: {json.dumps(chunk)}\n\n".encode()
+
+    def end_stream(self) -> bytes:
+        return b"data: [DONE]\n\n"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Request preparation (shared by Anthropic + OpenAI paths)
+# ═══════════════════════════════════════════════════════════════════════
+
+async def _inject_system_prompt(
+    body: dict[str, Any],
+    profile: dict | None,
+    inject_date_location: bool,
+) -> dict[str, Any]:
+    """Prepend profile system_instruction and/or date+location to body.
+
+    body is in INTERNAL (OpenAI) shape — we modify the first system message
+    or prepend a new one.
+    """
+    parts: list[str] = []
+
+    system_md = profile.get("system_instruction") if profile else None
+    if system_md:
+        instruction = proxy_system_instruction(system_md)
+        if instruction:
+            parts.append(instruction)
+
+    if inject_date_location:
+        from datetime import datetime
+        date_str = datetime.now().strftime("%Y-%m-%d (%A)")
+        location = await _get_location()
+        segs = [f"Current date: {date_str}."]
+        if location:
+            segs.append(f"User location: {location}.")
+        parts.append("<system-reminder>\n" + " ".join(segs) + "\n</system-reminder>")
+
+    if not parts:
+        return body
+
+    injection = "\n\n".join(parts)
+    messages = body.get("messages", [])
+    if messages and messages[0].get("role") == "system":
+        existing = messages[0].get("content", "")
+        if isinstance(existing, str):
+            messages[0] = {**messages[0], "content": f"{injection}\n\n{existing}" if existing else injection}
+        elif isinstance(existing, list):
+            # Re-emit as string (llama.cpp handles both but string is cheaper)
+            flat = "\n".join(p.get("text", "") for p in existing if isinstance(p, dict) and p.get("type") == "text")
+            messages[0] = {**messages[0], "content": f"{injection}\n\n{flat}" if flat else injection}
+    else:
+        body["messages"] = [{"role": "system", "content": injection}] + list(messages)
+
+    return body
+
+
+def _apply_tool_transforms(
+    body: dict[str, Any],
+    profile: dict | None,
+    use_tool_search: bool,
+    managed_inject_names: list[str],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Split tools into core + deferred for the internal body.
+
+    The internal body uses OpenAI-shape `tools: [{type:"function", function:{...}}]`.
+    We work with those directly.
+
+    Returns (body, deferred_anthropic_shape_for_ToolSearch_BM25).
+    """
+    # Strip cache_control (defensive — translate.py already does this, but
+    # clients sometimes mirror it on tool definitions too).
+    tools_raw = body.get("tools", []) or []
+    tools: list[dict[str, Any]] = []
+    for t in tools_raw:
+        if isinstance(t, dict):
+            tools.append({k: v for k, v in t.items() if k != "cache_control"})
+
+    # Resolve managed tools to inject
+    from proxy.managed_tools import _REGISTRY as _MGR
+    inject_schemas: list[dict[str, Any]] = []
+    managed_strip: set[str] = set()
+    for name in managed_inject_names:
+        mt = _MGR.get(name)
+        if not mt:
+            continue
+        managed_strip.add(mt.name)
+        managed_strip.update(mt.strip_from_cc)
+        inject_schemas.append(mt.schema)
+
+    # Strip managed-tool-equivalents the client sent
+    def _fn_name(tool: dict[str, Any]) -> str:
+        fn = tool.get("function") if isinstance(tool.get("function"), dict) else None
+        return fn.get("name", "") if fn else tool.get("name", "")
+
+    tools = [t for t in tools if _fn_name(t) not in managed_strip]
+
+    # Convert Anthropic-shape managed schemas to OpenAI-shape tools for injection
+    def _anth_to_openai_tool(s: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": s.get("name", ""),
+                "description": s.get("description", ""),
+                "parameters": s.get("input_schema", {"type": "object"}),
+            },
+        }
+
+    managed_oa = [_anth_to_openai_tool(s) for s in inject_schemas]
 
     deferred: list[dict[str, Any]] = []
+    if use_tool_search:
+        core_names = set(
+            (profile.get("core_tools") if profile and "core_tools" in profile else proxy_config.core_tools())
+            or []
+        )
 
-    # Profile settings (fall back to global proxy settings) — every feature independently togglable
+        core_tools_out: list[dict[str, Any]] = []
+        for t in tools:
+            name = _fn_name(t)
+            if name in core_names:
+                core_tools_out.append(t)
+            else:
+                # Convert to Anthropic shape for BM25 / ToolSearch results
+                fn = t.get("function") or {}
+                deferred.append({
+                    "name": fn.get("name", name),
+                    "description": fn.get("description", ""),
+                    "input_schema": fn.get("parameters", {"type": "object"}),
+                })
+
+        # Inject ToolSearch meta-tool whenever we have deferred tools
+        if deferred:
+            from proxy.tool_registry import TOOL_SEARCH_TOOL
+            core_tools_out.insert(0, _anth_to_openai_tool(TOOL_SEARCH_TOOL))
+
+        # Managed tools are always core-visible
+        tools = managed_oa + core_tools_out
+    else:
+        tools = managed_oa + tools
+
+    if tools:
+        body["tools"] = tools
+    elif "tools" in body:
+        del body["tools"]
+
+    return body, deferred
+
+
+def _inject_deferred_reminder(
+    body: dict[str, Any],
+    deferred: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Tell the model which tool NAMES are unloaded (schemas retrievable via ToolSearch)."""
+    if not deferred:
+        return body
+    names = ", ".join(t["name"] for t in deferred)
+    reminder = (
+        "<system-reminder>\n"
+        f"Unloaded tools (call ToolSearch to load schema before use): {names}\n"
+        "</system-reminder>"
+    )
+    messages = body.get("messages", [])
+    # Append to the first user message so the model sees it in context
+    for i, msg in enumerate(messages):
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            messages[i] = {**msg, "content": f"{reminder}\n\n{content}" if content else reminder}
+        elif isinstance(content, list):
+            messages[i] = {**msg, "content": [{"type": "text", "text": reminder}] + list(content)}
+        break
+    return body
+
+
+async def _prepare_internal_body(
+    body: dict[str, Any],
+    request: web.Request,
+    inbound_protocol: str,
+) -> dict[str, Any]:
+    """Translate client body → internal body, apply all proxy transforms,
+    return a dict with keys:
+      body: internal-shape body (ready for llama.cpp /v1/chat/completions)
+      deferred: list of deferred tools (Anthropic-shape, for BM25)
+      managed_intercept: set of managed tool names to intercept
+      auto_load: bool
+      client_model: str (original requested model; for reverse mapping)
+      active_model: str (resolved llama.cpp registry key)
+      reasoning_cfg: dict (inference_for(active_model).reasoning)
+      profile: matched profile or None
+    """
+    profile = _match_profile(request.headers)
+    requested_model = body.get("model", "") or ""
+
+    # 1. Resolve model via registry / mapping (so we can apply its inference defaults)
+    active_model = llama_cfg.resolve_model(requested_model)
+    if not active_model:
+        raise web.HTTPBadRequest(reason=f"Unknown model: {requested_model}. Register in llamacpp.models.")
+
+    inference = llama_cfg.inference_for(active_model)
+
+    # 2. Client body → internal (OpenAI) body
+    if inbound_protocol == "anthropic":
+        internal = xlate.anthropic_request_to_internal(body, inference_defaults=inference)
+    else:
+        internal = xlate.openai_request_to_internal(body, inference_defaults=inference)
+
+    internal["model"] = active_model
+
+    # 3. Profile-driven feature flags
     def _pget(key: str, default):
         if profile and key in profile:
             return profile[key]
@@ -648,261 +526,437 @@ async def _prepare_request(
     use_tool_search = _pget("tool_search", proxy_config.tool_search())
     inject_date_loc = _pget("inject_date_location", True)
     use_strip_reminders = _pget("strip_reminders", proxy_config.strip_reminders())
-    use_lift_images = _pget("lift_tool_result_images", proxy_config.lift_tool_result_images())
     use_auto_load = _pget("auto_load_tools", proxy_config.auto_load_tools())
-    system_md = profile.get("system_instruction") if profile else None
 
-    # Inject profile-specific system instruction (prepended to client's system)
-    if system_md:
-        instruction = proxy_system_instruction(system_md)
-        if instruction:
-            system = body.get("system", "")
-            if isinstance(system, str):
-                body["system"] = f"{instruction}\n\n{system}" if system else instruction
-            elif isinstance(system, list):
-                system.insert(0, {"type": "text", "text": instruction})
+    # 4. System-prompt injection
+    internal = await _inject_system_prompt(internal, profile, inject_date_loc)
 
-    # Inject current date + location as a system-reminder (unless disabled)
-    if inject_date_loc:
-        from datetime import datetime
-        date_str = datetime.now().strftime("%Y-%m-%d (%A)")
-        location = await _get_location()
-        parts = [f"Current date: {date_str}."]
-        if location:
-            parts.append(f"User location: {location}.")
-        context = "<system-reminder>\n" + " ".join(parts) + "\n</system-reminder>"
-        system = body.get("system", "")
-        if isinstance(system, str):
-            body["system"] = f"{system}\n\n{context}" if system else context
-        elif isinstance(system, list):
-            system.append({"type": "text", "text": context})
-
-    # Resolve managed tool injection (works with or without tool_search)
-    from proxy.managed_tools import _REGISTRY as _MANAGED_REG
-    inject_managed: list[str] = (
+    # 5. Tool transforms (split into core/deferred, inject managed)
+    from proxy.managed_tools import _REGISTRY as _MGR
+    from tray_api import is_managed_enabled as _is_enabled
+    managed_inject_raw: list[str] = (
         profile.get("inject_managed") if profile and "inject_managed" in profile
-        else list(_MANAGED_REG.keys())
+        else list(_MGR.keys())
     ) or []
-
-    managed_strip_names: set[str] = set()
-    inject_schemas: list[dict[str, Any]] = []
-    for mname in inject_managed:
-        mt = _MANAGED_REG.get(mname)
-        if not mt:
-            continue
-        managed_strip_names.add(mt.name)
-        managed_strip_names.update(mt.strip_from_cc)
-        inject_schemas.append(mt.schema)
-
-    if use_tool_search:
-        _core_list = profile.get("core_tools") if profile and "core_tools" in profile else proxy_config.core_tools()
-        core_names: set[str] = set(_core_list or [])
-        extra_strip = {"ToolSearch"} | managed_strip_names
-
-        tools = body.get("tools", [])
-        core, deferred = split_tools(tools, core_names, extra_strip, inject_schemas)
-        body["tools"] = core
-
-        # Inject deferred tools instruction into system, tool names into messages
-        if deferred:
-            body["messages"] = rewrite_messages(body.get("messages", []), deferred)
-
-    elif inject_schemas or managed_strip_names:
-        # Managed-tool injection without splitting (Office profile path)
-        tools = body.get("tools", [])
-        kept = [t for t in tools if t.get("name", "") not in managed_strip_names]
-        body["tools"] = inject_schemas + kept
-
-    if use_strip_reminders:
-        body["messages"] = strip_all_reminders(body.get("messages", []))
-
-    if use_lift_images:
-        body["messages"] = _lift_tool_result_images(body.get("messages", []))
-
-    # Forward auth headers
-    headers = {}
-    for h in ("x-api-key", "anthropic-version", "authorization", "content-type"):
-        if h in request.headers:
-            headers[h] = request.headers[h]
-    headers.setdefault("content-type", "application/json")
-
-    # Which managed tools to intercept for THIS request = whatever the profile injected.
-    managed_intercept: set[str] = {mt.name for mt in (_MANAGED_REG.get(n) for n in inject_managed) if mt}
-
-    # Prefix-cache optimization for LM Studio
-    body = _canonicalize_body(body)
-
-    await _dump_request(
-        body,
-        "OUTGOING",
-        meta={
-            "profile": (profile.get("name") if profile else None) or "-",
-            "model_before": requested_model,
-            "model_after": body.get("model", "") or "",
-            "user_agent": (request.headers.get("User-Agent", "") or "")[:200],
-            "referer": (request.headers.get("Referer", "") or "")[:200],
-        },
+    # Honor live runtime toggles set via the control panel
+    managed_inject: list[str] = [n for n in managed_inject_raw if _is_enabled(n)]
+    internal, deferred = _apply_tool_transforms(
+        internal, profile, use_tool_search, managed_inject,
     )
 
-    # If we rewrote `model` above, reverse-map in responses so the client
-    # sees the alias it asked for (not the upstream model name).
-    client_model = requested_model if (mapping and requested_model in mapping) else None
+    # 6. Inject deferred-listing reminder into first user message
+    if deferred:
+        internal = _inject_deferred_reminder(internal, deferred)
+
+    # 7. Strip reminders (after our own injection, so keep ours)
+    if use_strip_reminders:
+        internal["messages"] = _strip_reminders_from_internal(internal.get("messages", []))
+
+    managed_intercept = {
+        _MGR[n].name for n in managed_inject if n in _MGR
+    }
+
+    # Translator may have embedded per-request reasoning overrides
+    # (thinking.display=omitted, adaptive, etc.) in `_telecode_hints`.
+    hints = xlate.pop_hints(internal)
+    reasoning_cfg = dict(inference.get("reasoning", {}))
+    if "emit_thinking_blocks" in hints:
+        reasoning_cfg["emit_thinking_blocks"] = bool(hints["emit_thinking_blocks"])
 
     return {
-        "body": body,
+        "body": internal,
         "deferred": deferred,
-        "headers": headers,
         "managed_intercept": managed_intercept,
         "auto_load": use_auto_load,
-        "client_model": client_model,
+        "client_model": requested_model,
+        "active_model": active_model,
+        "reasoning_cfg": reasoning_cfg,
+        "profile": profile,
     }
 
 
-async def handle_messages(request: web.Request) -> web.StreamResponse:
-    """Main proxy endpoint: POST /v1/messages"""
-    try:
-        body = await request.json()
-    except json.JSONDecodeError:
-        return web.json_response({"error": "Invalid JSON"}, status=400)
+def _strip_reminders_from_internal(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Re-use the Anthropic-shape reminder stripper. The content we care
+    about is just the text inside messages — role labels are irrelevant."""
+    # Wrap each message's content into Anthropic-shape, strip, unwrap
+    adapted = []
+    for msg in messages:
+        c = msg.get("content")
+        if isinstance(c, str):
+            adapted.append({"role": msg.get("role", "user"), "content": c})
+        elif isinstance(c, list):
+            adapted.append({"role": msg.get("role", "user"), "content": c})
+        else:
+            adapted.append(msg)
+    stripped = strip_all_reminders(adapted)
+    # Merge back any metadata keys we might have dropped (tool_calls, tool_call_id, name)
+    out = []
+    by_role: dict[int, dict[str, Any]] = {}
+    for i, s in enumerate(stripped):
+        original = messages[i] if i < len(messages) else {}
+        merged = {**original, **s}
+        out.append(merged)
+        by_role[i] = merged
+    return out
 
-    # Dump the raw incoming body plus minimal client metadata for cache debugging.
-    await _dump_request(
-        body,
-        "INCOMING",
-        meta={
-            "user_agent": (request.headers.get("User-Agent", "") or "")[:200],
-            "referer": (request.headers.get("Referer", "") or "")[:200],
+
+# ═══════════════════════════════════════════════════════════════════════
+# ToolSearch / status helpers
+# ═══════════════════════════════════════════════════════════════════════
+
+def _format_functions_block(matched: list[dict[str, Any]]) -> str:
+    if not matched:
+        return "No matching tools found. Try a different query."
+    lines = ["<functions>"]
+    for t in matched:
+        entry = {
+            "description": t.get("description", ""),
+            "name": t.get("name", ""),
+            "parameters": t.get("input_schema", {}),
+        }
+        lines.append(f"<function>{json.dumps(entry)}</function>")
+    lines.append("</functions>")
+    return "\n".join(lines)
+
+
+async def _do_tool_search(
+    deferred: list[dict[str, Any]],
+    args: dict[str, Any],
+) -> list[dict[str, Any]]:
+    query = args.get("query", "")
+    max_results = args.get("max_results", 5)
+
+    if query.startswith("select:"):
+        names = {n.strip() for n in query[7:].split(",") if n.strip()}
+        return [t for t in deferred if t.get("name", "") in names]
+
+    if query.startswith("+"):
+        parts = query.split(None, 1)
+        required = parts[0][1:].lower()
+        filtered = [t for t in deferred if required in t.get("name", "").lower()]
+        if len(parts) > 1 and filtered:
+            return BM25Index(filtered).search(parts[1], max_results)
+        return filtered[:max_results]
+
+    return BM25Index(deferred).search(query, max_results)
+
+
+def _anth_tool_to_openai_tool(s: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": s.get("name", ""),
+            "description": s.get("description", ""),
+            "parameters": s.get("input_schema", {"type": "object"}),
         },
-    )
+    }
 
-    prep = await _prepare_request(body, request)
+
+# ═══════════════════════════════════════════════════════════════════════
+# OpenAI SSE stream reader with first-tool-call decision
+# ═══════════════════════════════════════════════════════════════════════
+
+class InterceptedToolCall:
+    """Signal object: upstream started with a tool_call that matched our
+    intercept set. Caller handles the call and re-invokes upstream."""
+    def __init__(self, id: str, name: str, arguments: str, hallucinated: bool = False) -> None:
+        self.id = id
+        self.name = name
+        self.arguments = arguments
+        self.hallucinated = hallucinated
+
+
+async def _run_upstream_round(
+    internal_body: dict[str, Any],
+    headers: dict[str, str],
+    resp: web.StreamResponse,
+    request: web.Request,
+    adapter: ClientAdapter,
+    reasoning_cfg: dict[str, Any],
+    *,
+    intercept_names: set[str],
+    known_names: set[str],
+    write_lock: asyncio.Lock,
+) -> Optional[InterceptedToolCall]:
+    """One upstream round-trip. Returns InterceptedToolCall if the first
+    content block is an intercepted tool_call (nothing written to client);
+    otherwise streams the response through to the client and returns None.
+    """
+    upstream = llama_cfg.upstream_url()
+    url = f"{upstream}/v1/chat/completions"
+
+    # OpenAI stream SSE parser state
+    buf = ""
+    decided: str | None = None  # None | "intercept" | "passthrough"
+    # Tool-call assembly (per-call-index)
+    tool_parts: dict[int, dict[str, Any]] = {}
+    tool_order: list[int] = []
+
+    adapter.reset_state(reasoning_cfg)
+
+    # Mark this round as in-flight so the supervisor's idle-unload watcher
+    # never tears down llama-server mid-stream. We end-request just before
+    # each return path below (there are 4: 502 from upstream, [DONE],
+    # captured-tool-call, stream-without-DONE).
+    supervisor = await get_supervisor()
+    await supervisor.begin_request()
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=internal_body, headers=headers) as upstream_resp:
+            if upstream_resp.status != 200:
+                errtext = await upstream_resp.text()
+                log.warning("upstream %d: %s", upstream_resp.status, errtext[:500])
+                async with write_lock:
+                    await _ensure_prepared(resp, request)
+                    err = {
+                        "type": "error",
+                        "error": {
+                            "type": "upstream_error",
+                            "status": upstream_resp.status,
+                            "body": errtext[:500],
+                        },
+                    }
+                    if adapter.protocol == "anthropic":
+                        await resp.write(b"event: error\n")
+                        await resp.write(f"data: {json.dumps(err)}\n\n".encode())
+                    else:
+                        await resp.write(f"data: {json.dumps(err)}\n\n".encode())
+                        await resp.write(b"data: [DONE]\n\n")
+                await supervisor.end_request()
+                return None
+
+            async for chunk in upstream_resp.content.iter_any():
+                text = chunk.decode("utf-8", errors="replace")
+                buf += text
+
+                while "\n\n" in buf:
+                    event_block, buf = buf.split("\n\n", 1)
+                    data_line = None
+                    for line in event_block.split("\n"):
+                        if line.startswith("data: "):
+                            data_line = line[6:]
+                            break
+                    if data_line is None:
+                        continue
+                    if data_line.strip() == "[DONE]":
+                        # End of stream
+                        if decided == "passthrough":
+                            async with write_lock:
+                                await resp.write(adapter.end_stream())
+                        await supervisor.end_request()
+                        return None
+
+                    try:
+                        event = json.loads(data_line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    # ── Pre-decision: watch first content signal ────────
+                    just_decided = False
+                    if decided is None:
+                        choices = event.get("choices", [])
+                        if choices:
+                            delta = choices[0].get("delta", {}) or {}
+                            tcs = delta.get("tool_calls", []) or []
+                            content = delta.get("content")
+
+                            if tcs:
+                                # First tool_call — assemble until we know the name,
+                                # then decide intercept/passthrough.
+                                for tc in tcs:
+                                    idx = tc.get("index", 0)
+                                    entry = tool_parts.setdefault(idx, {
+                                        "id": tc.get("id", ""),
+                                        "name": "",
+                                        "arguments": "",
+                                    })
+                                    if tc.get("id"):
+                                        entry["id"] = tc["id"]
+                                    fn = tc.get("function", {}) or {}
+                                    if fn.get("name"):
+                                        entry["name"] += fn["name"]
+                                    if "arguments" in fn:
+                                        entry["arguments"] += fn["arguments"] or ""
+                                    if idx not in tool_order:
+                                        tool_order.append(idx)
+
+                                first_idx = tool_order[0]
+                                first_name = tool_parts[first_idx]["name"]
+                                if first_name:
+                                    if first_name in intercept_names:
+                                        decided = "intercept"
+                                    elif known_names and first_name not in known_names:
+                                        decided = "intercept"  # hallucinated
+                                    else:
+                                        decided = "passthrough"
+                                    just_decided = True
+                                # else still waiting for full name
+                            elif content or choices[0].get("finish_reason"):
+                                decided = "passthrough"
+                                just_decided = True
+
+                    # ── Post-decision handling ──────────────────────────
+                    # If decision flipped THIS event, we already consumed the
+                    # tool-call fragment in the pre-decision branch; don't
+                    # re-append name/arguments below.
+                    if decided == "passthrough":
+                        async with write_lock:
+                            await _ensure_prepared(resp, request)
+                            await resp.write(adapter.translate_openai_chunk(event))
+                    elif decided == "intercept":
+                        # Keep assembling the first tool_call's arguments.
+                        # Skip assembly on the decision tick — already done.
+                        choices = event.get("choices", [])
+                        if choices:
+                            delta = choices[0].get("delta", {}) or {}
+                            if not just_decided:
+                                for tc in delta.get("tool_calls", []) or []:
+                                    idx = tc.get("index", 0)
+                                    if idx not in tool_parts:
+                                        continue
+                                    fn = tc.get("function", {}) or {}
+                                    if fn.get("name"):
+                                        tool_parts[idx]["name"] += fn["name"]
+                                    if "arguments" in fn:
+                                        tool_parts[idx]["arguments"] += fn["arguments"] or ""
+                            if choices[0].get("finish_reason"):
+                                # Stream ended — return the captured call
+                                first_idx = tool_order[0]
+                                entry = tool_parts[first_idx]
+                                await supervisor.end_request()
+                                return InterceptedToolCall(
+                                    id=entry["id"] or f"call_{uuid.uuid4().hex[:12]}",
+                                    name=entry["name"],
+                                    arguments=entry["arguments"],
+                                    hallucinated=(entry["name"] not in intercept_names),
+                                )
+                    # else decided is None: still pre-decision, keep reading
+
+    # Stream ended without [DONE] — treat as passthrough complete
+    try:
+        await supervisor.end_request()
+    except Exception:
+        pass
+    return None
+
+
+async def _emit_status(
+    adapter: ClientAdapter,
+    resp: web.StreamResponse,
+    request: web.Request,
+    write_lock: asyncio.Lock,
+    text: str,
+) -> None:
+    """Write a status line (tool-call visibility) to the wire immediately."""
+    await _ensure_prepared(resp, request)
+    async with write_lock:
+        await resp.write(adapter.emit_status(text))
+        writer = getattr(resp, "_payload_writer", None)
+        if writer is not None:
+            try:
+                await writer.drain()
+            except (ConnectionResetError, ConnectionError):
+                pass
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Streaming intercept loop
+# ═══════════════════════════════════════════════════════════════════════
+
+async def _run_streaming(
+    prep: dict[str, Any],
+    request: web.Request,
+    adapter: ClientAdapter,
+) -> web.StreamResponse:
+    """Execute the streaming intercept loop for one request."""
+    from proxy.managed_tools import is_managed, get_tool, format_visibility, run_pre_llm, run_post_llm
+
     body = prep["body"]
-    headers = prep["headers"]
     deferred = prep["deferred"]
     managed_intercept = prep["managed_intercept"]
-    use_auto_load = prep["auto_load"]
-    client_model = prep["client_model"]
-    upstream = proxy_config.upstream_url()
-
-    if body.get("stream", False):
-        return await _handle_streaming(upstream, body, headers, deferred, request,
-                                       managed_intercept=managed_intercept,
-                                       auto_load=use_auto_load,
-                                       client_model=client_model)
-    else:
-        return await _handle_non_streaming(upstream, body, headers, deferred,
-                                           managed_intercept=managed_intercept,
-                                           auto_load=use_auto_load,
-                                           client_model=client_model)
-
-
-async def _handle_streaming(
-    upstream: str,
-    body: dict[str, Any],
-    headers: dict[str, str],
-    deferred: list[dict[str, Any]],
-    request: web.Request,
-    managed_intercept: set[str] | None = None,
-    auto_load: bool = False,
-    client_model: str | None = None,
-) -> web.StreamResponse:
-    """Handle streaming request. Two independent intercept behaviors:
-
-    - ToolSearch + deferred tools: always intercepted when `deferred` is non-empty
-      (tool_search produced them — ToolSearch is how the model loads them).
-    - Managed tools (WebSearch, code_execution, speak, ...): intercepted when the
-      request's profile injected them (`managed_intercept` names).
-    """
-    from proxy.managed_tools import is_managed, get_handler, get_tool, format_visibility, run_pre_llm, run_post_llm
+    auto_load = prep["auto_load"]
+    reasoning_cfg = prep["reasoning_cfg"]
+    active_model = prep["active_model"]
 
     deferred_names = {t["name"] for t in deferred}
 
     resp = web.StreamResponse()
-    resp._req = request
-    resp._client_model = client_model
-    # Request-scoped write lock + heartbeat so pings keep flowing across
-    # intercept round-trips AND during local tool-handler execution (e.g.
-    # code_execution can take 30s — without this, no bytes would hit the
-    # client for that whole window).
-    write_lock: asyncio.Lock = asyncio.Lock()
+    write_lock = asyncio.Lock()
     resp._write_lock = write_lock
     heartbeat: asyncio.Task | None = None
 
-    # ── Intercept loop ───────────────────────────────────────────
-    # Each iteration calls upstream. _forward_stream branches on the first
-    # content_block_start: if intercepted tool_use → returns the tool_use dict
-    # (nothing written to client yet); otherwise streams the response live
-    # (with upstream indices shifted past any already-emitted status blocks).
-    max_roundtrips = proxy_config.max_roundtrips()
-    # Names currently visible to the model as core tools (for hallucination guard)
-    core_visible_names: set[str] = {t.get("name", "") for t in body.get("tools", [])}
-    # Status blocks already written to the wire. The NEXT _forward_stream call
-    # must shift upstream block indices by this count so the wire stays
-    # self-consistent.
-    status_emitted = 0
+    # Names currently exposed as callable tools
+    def _fn_name(tool: dict[str, Any]) -> str:
+        fn = tool.get("function") if isinstance(tool.get("function"), dict) else None
+        return fn.get("name", "") if fn else tool.get("name", "")
 
-    async def _emit_live_status(text: str) -> None:
-        """Write a status block to the wire immediately, under the request's
-        write lock (heartbeat may be writing concurrently). Drains the
-        underlying HTTP writer so the client sees the block now, not
-        buffered with the next round's bytes."""
-        nonlocal status_emitted
-        await _ensure_prepared(resp, request)
-        async with write_lock:
-            for line in _status_block_lines(text, status_emitted):
-                await resp.write(line.encode())
-            # Force the payload writer to push buffered bytes to the
-            # transport. Without this, small writes can sit in the
-            # aiohttp chunked-encoding buffer until the next write comes.
-            writer = getattr(resp, "_payload_writer", None)
-            if writer is not None:
-                try:
-                    await writer.drain()
-                except (ConnectionResetError, ConnectionError):
-                    pass
-        status_emitted += 1
+    core_visible_names: set[str] = {_fn_name(t) for t in body.get("tools", [])}
+
+    headers = {"Content-Type": "application/json"}
+    api_key = llama_cfg.api_key()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    # Ensure the correct model is loaded
+    try:
+        supervisor = await get_supervisor()
+        await supervisor.ensure_model(active_model)
+    except Exception as exc:
+        log.error("model swap failed: %s", exc, exc_info=True)
+        # Return a minimal error through the adapter's protocol
+        err_msg = f"Failed to load model '{active_model}': {exc}"
+        return web.json_response(
+            {"type": "error", "error": {"type": "model_load_error", "message": err_msg}},
+            status=503,
+        )
 
     try:
-        heartbeat = await _start_heartbeat(resp, request, write_lock)
+        heartbeat = await _start_heartbeat(resp, request, write_lock, protocol=adapter.protocol)
 
+        # Emit the protocol's initial frame IMMEDIATELY so that any status
+        # block we push between rounds isn't buffered by the client's SSE
+        # parser. Anthropic: message_start. OpenAI: role:"assistant" opener.
+        initial = adapter.initial_frame()
+        if initial:
+            await _ensure_prepared(resp, request)
+            async with write_lock:
+                await resp.write(initial)
+                writer = getattr(resp, "_payload_writer", None)
+                if writer is not None:
+                    try:
+                        await writer.drain()
+                    except (ConnectionResetError, ConnectionError):
+                        pass
+
+        max_roundtrips = proxy_config.max_roundtrips()
         for _rt in range(max_roundtrips):
-            # Rebuild intercept set each round so names promoted to core by
-            # auto_load (or ToolSearch) stop being intercepted on retry — the
-            # model's second call must pass through to CC for execution.
-            round_intercept: set[str] = set()
+            # Rebuild intercept set each round (tools joined core_visible_names
+            # via auto_load should stop being intercepted).
+            intercept_names: set[str] = set()
             if deferred:
-                round_intercept.add("ToolSearch")
-                # Only deferred names NOT YET LOADED stay intercepted. Once a
-                # name is in core_visible_names, auto_load and unloaded-guard
-                # are done with it and CC should execute it.
-                round_intercept |= (deferred_names - core_visible_names)
-            if managed_intercept:
-                round_intercept |= managed_intercept
+                intercept_names.add("ToolSearch")
+                intercept_names |= (deferred_names - core_visible_names)
+            intercept_names |= managed_intercept
 
-            # Hallucination guard: everything the model is allowed to call
-            # without interception. Anything outside this set AND outside
-            # `intercept_names` is treated as a made-up name and caught.
-            known_names = (
-                core_visible_names
-                | deferred_names
-                | round_intercept
-            )
+            known_names = core_visible_names | deferred_names | intercept_names
 
-            tool_use = await _forward_stream(
-                upstream, body, headers, resp, request,
-                intercept_names=round_intercept,
+            tool_call = await _run_upstream_round(
+                body, headers, resp, request, adapter, reasoning_cfg,
+                intercept_names=intercept_names,
                 known_names=known_names,
-                status_blocks=[],  # status now emitted live, not batched
-                base_index_offset=status_emitted,
+                write_lock=write_lock,
             )
 
-            if tool_use is None:
-                # Final response fully streamed.
-                break
+            if tool_call is None:
+                break  # passthrough complete
 
-            # Handle the intercepted tool — build status_line + tool_result content
-            tool_name = tool_use["name"]
-            tool_input = tool_use.get("input") or {}
+            # ── Handle intercepted tool call ────────────────────────────
+            try:
+                tool_input = json.loads(tool_call.arguments) if tool_call.arguments else {}
+            except json.JSONDecodeError:
+                tool_input = {}
+
+            tool_name = tool_call.name
             matched: list[dict[str, Any]] = []
             result_content: str | None = None
             status_line: str | None = None
@@ -919,11 +973,10 @@ async def _handle_streaming(
 
             elif is_managed(tool_name):
                 tool_entry = get_tool(tool_name)
-                handler = tool_entry.handler if tool_entry else None
-                if handler and tool_entry:
+                if tool_entry and tool_entry.handler:
                     try:
                         enriched = await run_pre_llm(tool_entry, tool_input)
-                        summary, result_content = await handler(enriched)
+                        summary, result_content = await tool_entry.handler(enriched)
                         result_content = await run_post_llm(tool_entry, result_content)
                     except Exception as exc:
                         summary = f"Failed: {exc}"
@@ -951,33 +1004,31 @@ async def _handle_streaming(
                 )
 
             else:
-                # Hallucination guard: unknown tool name (not core, not deferred,
-                # not managed, not ToolSearch). Run BM25 over everything known
-                # with the bogus name as query and return the top matches as
-                # suggestions — no schemas injected (that would bloat context).
-                # Auto-load / ToolSearch handle the next call for the real name.
-                haystack = list(body.get("tools", [])) + deferred
+                # Hallucination guard
+                haystack_tools = [
+                    {
+                        "name": _fn_name(t),
+                        "description": (t.get("function") or {}).get("description", ""),
+                        "input_schema": (t.get("function") or {}).get("parameters", {}),
+                    }
+                    for t in body.get("tools", [])
+                ]
+                haystack = haystack_tools + deferred
                 search_matches = await _do_tool_search(
                     haystack, {"query": tool_name, "max_results": 5}
                 )
                 if search_matches:
-                    suggestion_names = ", ".join(
-                        m.get("name", "") for m in search_matches[:5]
-                    )
+                    sugg = ", ".join(m.get("name", "") for m in search_matches[:5])
                     result_content = (
                         f"The tool `{tool_name}` does not exist. Did you mean one of these?\n\n"
                         f"{_format_functions_block(search_matches)}\n\n"
                         f"Call the correct tool with its exact name from the schema above."
                     )
-                    status_line = (
-                        f'● Unknown tool: {tool_name}\n'
-                        f'└  Suggested: {suggestion_names}'
-                    )
+                    status_line = f'● Unknown tool: {tool_name}\n└  Suggested: {sugg}'
                 else:
                     result_content = (
                         f"The tool `{tool_name}` does not exist and no close matches were found. "
-                        f"Call `ToolSearch(query=\"<keywords>\")` with keywords from the task "
-                        f"(not a guessed tool name) to discover the right tool."
+                        f"Call `ToolSearch(query=\"<keywords>\")` with keywords from the task."
                     )
                     status_line = (
                         f'● Unknown tool: {tool_name}\n'
@@ -985,29 +1036,36 @@ async def _handle_streaming(
                     )
 
             if result_content is None:
-                # Defensive: should be unreachable now. Stop the loop.
                 break
 
-            # Write the status block to the wire NOW so the user sees the tool
-            # call immediately, not bundled with the final model response.
             if status_line:
-                await _emit_live_status(status_line)
+                await _emit_status(adapter, resp, request, write_lock, status_line)
 
+            # Append matched schemas to body.tools (core-visible going forward)
             if matched:
-                body["tools"] = body["tools"] + matched
-                core_visible_names |= {t.get("name", "") for t in matched}
+                body.setdefault("tools", []).extend(_anth_tool_to_openai_tool(m) for m in matched)
+                core_visible_names |= {m["name"] for m in matched}
 
-            body["messages"] = body.get("messages", []) + [
-                {"role": "assistant", "content": [
-                    {"type": "tool_use", "id": tool_use["id"],
-                     "name": tool_name, "input": tool_input},
-                ]},
-                {"role": "user", "content": [
-                    {"type": "tool_result", "tool_use_id": tool_use["id"],
-                     "content": result_content},
-                ]},
-            ]
-            # Next iteration: base_index_offset=status_emitted shifts upstream
+            # Append [assistant-tool_call, tool-result] to messages (OpenAI shape)
+            body.setdefault("messages", []).extend([
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": tool_call.id,
+                        "type": "function",
+                        "function": {
+                            "name": tool_name,
+                            "arguments": tool_call.arguments or "{}",
+                        },
+                    }],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": result_content,
+                },
+            ])
     finally:
         await _stop_heartbeat(heartbeat)
 
@@ -1018,308 +1076,370 @@ async def _handle_streaming(
     return resp
 
 
-async def _handle_non_streaming(
-    upstream: str,
-    body: dict[str, Any],
-    headers: dict[str, str],
-    deferred: list[dict[str, Any]],
-    managed_intercept: set[str] | None = None,
-    auto_load: bool = False,
-    client_model: str | None = None,
+# ═══════════════════════════════════════════════════════════════════════
+# Non-streaming intercept loop
+# ═══════════════════════════════════════════════════════════════════════
+
+async def _run_non_streaming(
+    prep: dict[str, Any],
+    request: web.Request,
+    inbound_protocol: str,
 ) -> web.Response:
-    """Handle non-streaming request. Same intercept model as streaming:
-    ToolSearch+deferred always intercepted when deferred exist;
-    managed tools intercepted only when `managed_intercept` names are set.
-    """
-    from proxy.managed_tools import get_handler, get_tool, format_visibility, run_pre_llm, run_post_llm
+    from proxy.managed_tools import is_managed, get_tool, format_visibility, run_pre_llm, run_post_llm
+
+    body = prep["body"]
+    deferred = prep["deferred"]
+    managed_intercept = prep["managed_intercept"]
+    auto_load = prep["auto_load"]
+    reasoning_cfg = prep["reasoning_cfg"]
+    active_model = prep["active_model"]
+    client_model = prep["client_model"]
+
+    body["stream"] = False
 
     deferred_names = {t["name"] for t in deferred}
-    managed_names = managed_intercept or set()
-    # Names currently visible to the model as core tools (for hallucination guard)
-    core_visible_names: set[str] = {t.get("name", "") for t in body.get("tools", [])}
-    summaries: list[str] = []
 
-    def _reverse_model(r: dict[str, Any]) -> dict[str, Any]:
-        if client_model and isinstance(r, dict) and "model" in r:
-            r["model"] = client_model
-        return r
+    def _fn_name(tool: dict[str, Any]) -> str:
+        fn = tool.get("function") if isinstance(tool.get("function"), dict) else None
+        return fn.get("name", "") if fn else tool.get("name", "")
+
+    core_visible_names: set[str] = {_fn_name(t) for t in body.get("tools", [])}
+
+    headers = {"Content-Type": "application/json"}
+    api_key = llama_cfg.api_key()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    # Ensure correct model loaded
+    try:
+        supervisor = await get_supervisor()
+        await supervisor.ensure_model(active_model)
+    except Exception as exc:
+        return web.json_response(
+            {"type": "error", "error": {"type": "model_load_error", "message": str(exc)}},
+            status=503,
+        )
+
+    upstream = llama_cfg.upstream_url()
+    url = f"{upstream}/v1/chat/completions"
 
     max_roundtrips = proxy_config.max_roundtrips()
     result: dict[str, Any] = {}
+    summaries: list[str] = []
+
     for _rt in range(max_roundtrips):
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{upstream}/v1/messages",
-                json=body,
-                headers=headers,
-            ) as upstream_resp:
+            async with session.post(url, json=body, headers=headers) as upstream_resp:
+                if upstream_resp.status != 200:
+                    errtext = await upstream_resp.text()
+                    return web.json_response(
+                        {"type": "error", "error": {"type": "upstream_error", "status": upstream_resp.status, "body": errtext[:500]}},
+                        status=502,
+                    )
                 result = await upstream_resp.json()
 
-        if result.get("stop_reason") != "tool_use":
-            # Prepend summaries into the model's first text block (no new blocks)
-            if summaries:
-                prefix = "\n".join(summaries) + "\n\n"
-                for block in result.get("content", []):
-                    if block.get("type") == "text":
-                        block["text"] = prefix + block.get("text", "")
-                        break
-            return web.json_response(_reverse_model(result), status=200)
+        choice = (result.get("choices") or [{}])[0]
+        msg = choice.get("message", {}) or {}
+        tool_calls = msg.get("tool_calls") or []
+        finish = choice.get("finish_reason")
 
+        if finish != "tool_calls" and not tool_calls:
+            break  # done
+
+        # Handle the first intercepted tool call (if any)
         handled = False
-        for block in result.get("content", []):
-            if block.get("type") != "tool_use":
+        for tc in tool_calls:
+            fn = tc.get("function", {}) or {}
+            tool_name = fn.get("name", "")
+            try:
+                tool_input = json.loads(fn.get("arguments", "{}") or "{}")
+            except json.JSONDecodeError:
+                tool_input = {}
+
+            # Decide if we should intercept this call
+            should_intercept = (
+                tool_name == "ToolSearch"
+                or tool_name in managed_intercept
+                or tool_name in deferred_names
+                or (tool_name and tool_name not in core_visible_names)  # hallucinated
+            )
+            if not should_intercept:
                 continue
-            tool_name = block.get("name", "")
+
             matched: list[dict[str, Any]] = []
             result_text: str | None = None
 
             if tool_name == "ToolSearch":
-                matched = await _do_tool_search(deferred, block.get("input", {}))
+                matched = await _do_tool_search(deferred, tool_input)
                 result_text = _format_functions_block(matched)
 
-            elif (not auto_load) and tool_name in deferred_names and tool_name not in core_visible_names:
-                result_text = (
-                    f"`{tool_name}` is currently UNLOADED in this conversation.\n\n"
-                    f"Call `ToolSearch(query=\"select:{tool_name}\", max_results=5)` to load its schema, "
-                    f"then call `{tool_name}` again using the parameter names from that schema."
-                )
-
-            elif tool_name in managed_names:
+            elif is_managed(tool_name):
                 tool_entry = get_tool(tool_name)
-                handler = tool_entry.handler if tool_entry else None
-                if handler and tool_entry:
+                if tool_entry and tool_entry.handler:
                     try:
-                        enriched = await run_pre_llm(tool_entry, block.get("input", {}))
-                        summary, result_text = await handler(enriched)
+                        enriched = await run_pre_llm(tool_entry, tool_input)
+                        summary, result_text = await tool_entry.handler(enriched)
                         result_text = await run_post_llm(tool_entry, result_text)
                     except Exception as exc:
                         summary = f"Failed: {exc}"
                         result_text = f"ERROR: {tool_name} failed: {exc}"
-                    summaries.append(format_visibility(tool_name, block.get("input", {}), summary))
+                    summaries.append(format_visibility(tool_name, tool_input, summary))
 
             elif auto_load and tool_name in deferred_names and tool_name not in core_visible_names:
-                # Only fire on the FIRST call — after injection the tool joins
-                # core_visible_names and subsequent calls pass through to CC.
                 matched = [t for t in deferred if t["name"] == tool_name]
                 result_text = (
-                    f"This tool's schema was not loaded. Here is the schema:\n\n"
+                    f"The schema for `{tool_name}` has now been loaded:\n\n"
                     f"{_format_functions_block(matched)}\n\n"
                     f"Call the tool again with the correct parameter names."
                 )
 
-            elif tool_name not in core_visible_names and (deferred or core_visible_names):
-                # Hallucination guard — show top matches, don't inject schemas.
-                haystack = list(body.get("tools", [])) + deferred
-                search_matches = await _do_tool_search(
-                    haystack, {"query": tool_name, "max_results": 5}
+            elif (not auto_load) and tool_name in deferred_names and tool_name not in core_visible_names:
+                result_text = (
+                    f"`{tool_name}` is currently UNLOADED. Call ToolSearch to load it."
                 )
-                matched = []
+
+            else:
+                # Hallucination guard
+                haystack_tools = [
+                    {
+                        "name": _fn_name(t),
+                        "description": (t.get("function") or {}).get("description", ""),
+                        "input_schema": (t.get("function") or {}).get("parameters", {}),
+                    }
+                    for t in body.get("tools", [])
+                ]
+                haystack = haystack_tools + deferred
+                search_matches = await _do_tool_search(haystack, {"query": tool_name, "max_results": 5})
                 if search_matches:
                     result_text = (
-                        f"The tool `{tool_name}` does not exist. Did you mean one of these?\n\n"
-                        f"{_format_functions_block(search_matches)}\n\n"
-                        f"Call the correct tool with its exact name from the schema above."
+                        f"The tool `{tool_name}` does not exist. Did you mean:\n\n"
+                        f"{_format_functions_block(search_matches)}"
                     )
                 else:
-                    result_text = (
-                        f"The tool `{tool_name}` does not exist and no close matches were found. "
-                        f"Call `ToolSearch(query=\"<keywords>\")` with task-related keywords "
-                        f"to discover the right tool."
-                    )
+                    result_text = f"The tool `{tool_name}` does not exist."
 
             if not result_text:
                 continue
 
             if matched:
-                body["tools"] = body["tools"] + matched
-            body["messages"] = body.get("messages", []) + [
-                {"role": "assistant", "content": result.get("content", [])},
-                {"role": "user", "content": [
-                    {"type": "tool_result", "tool_use_id": block["id"],
-                     "content": result_text},
-                ]},
-            ]
+                body.setdefault("tools", []).extend(_anth_tool_to_openai_tool(m) for m in matched)
+                core_visible_names |= {m["name"] for m in matched}
+
+            body.setdefault("messages", []).extend([
+                {
+                    "role": "assistant",
+                    "content": msg.get("content"),
+                    "tool_calls": [{
+                        "id": tc.get("id", ""),
+                        "type": "function",
+                        "function": {"name": tool_name, "arguments": fn.get("arguments", "{}")},
+                    }],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.get("id", ""),
+                    "content": result_text,
+                },
+            ])
             handled = True
             break
 
         if not handled:
-            return web.json_response(_reverse_model(result), status=200)
+            break
 
-    return web.json_response(_reverse_model(result), status=200)
+    # Prepend summaries to first text block (managed-tool visibility)
+    if summaries:
+        prefix = "\n".join(summaries) + "\n\n"
+        choices = result.get("choices") or []
+        if choices:
+            mmsg = choices[0].get("message", {}) or {}
+            content = mmsg.get("content") or ""
+            if isinstance(content, str):
+                mmsg["content"] = prefix + content
+            choices[0]["message"] = mmsg
+            result["choices"] = choices
 
-
-# ── /v1/models — convert OpenAI format from LM Studio to Anthropic format ──
-
-def _openai_models_to_anthropic(openai_data: dict) -> dict:
-    """Convert OpenAI /v1/models response to Anthropic format.
-
-    Prepends any client-facing aliases from proxy.model_mapping so clients
-    (e.g. Office add-ins) see familiar Claude model names.
-    """
-    from datetime import datetime, timezone
-
-    models = []
-
-    # Prepend mapped aliases (claude-opus-4-6, etc.) so they appear first
-    mapping = proxy_config.model_mapping()
-    for alias, real in mapping.items():
-        display = alias.replace("-", " ").replace("_", " ").title()
-        models.append({
-            "id": alias,
-            "type": "model",
-            "display_name": display,
-            "created_at": "2024-01-01T00:00:00Z",
-        })
-
-    for m in openai_data.get("data", []):
-        created_ts = m.get("created", 0)
-        try:
-            created_at = datetime.fromtimestamp(created_ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        except (OSError, ValueError):
-            created_at = "2024-01-01T00:00:00Z"
-
-        model_id = m.get("id", "unknown")
-        display = model_id.replace("-", " ").replace("_", " ").title()
-        models.append({
-            "id": model_id,
-            "type": "model",
-            "display_name": display,
-            "created_at": created_at,
-        })
-
-    return {
-        "data": models,
-        "has_more": False,
-        "first_id": models[0]["id"] if models else "",
-        "last_id": models[-1]["id"] if models else "",
-    }
+    # Convert to client protocol
+    if inbound_protocol == "anthropic":
+        anth = xlate.openai_response_to_anthropic(
+            result, reasoning_cfg=reasoning_cfg, client_model=client_model,
+        )
+        return web.json_response(anth)
+    else:
+        # OpenAI identity — just rewrite `model`
+        if client_model:
+            result["model"] = client_model
+        return web.json_response(result)
 
 
-async def _fetch_anthropic_models(request: web.Request) -> list[dict]:
-    """Fetch models from LM Studio and return as Anthropic-format model list."""
-    upstream = proxy_config.upstream_url()
-    headers = {k: v for k, v in request.headers.items()
-               if k.lower() not in ("host", "transfer-encoding")}
+# ═══════════════════════════════════════════════════════════════════════
+# Route handlers
+# ═══════════════════════════════════════════════════════════════════════
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(f"{upstream}/v1/models", headers=headers) as resp:
-            data = await resp.json()
-            return _openai_models_to_anthropic(data).get("data", [])
-
-
-async def handle_models(request: web.Request) -> web.Response:
-    """GET /v1/models — fetch from LM Studio (OpenAI format), return Anthropic format."""
-    try:
-        models = await _fetch_anthropic_models(request)
-    except Exception:
-        models = []
-
-    return web.json_response({
-        "data": models,
-        "has_more": False,
-        "first_id": models[0]["id"] if models else "",
-        "last_id": models[-1]["id"] if models else "",
-    })
-
-
-async def handle_model_by_id(request: web.Request) -> web.Response:
-    """GET /v1/models/{model_id} — return a single model in Anthropic format."""
-    model_id = request.match_info["model_id"]
-
-    try:
-        models = await _fetch_anthropic_models(request)
-    except Exception:
-        models = []
-
-    for m in models:
-        if m["id"] == model_id:
-            return web.json_response(m)
-
-    return web.json_response(
-        {"type": "error", "error": {"type": "not_found_error",
-                                     "message": f"model: {model_id}"}},
-        status=404,
-    )
-
-
-# ── Passthrough for non-messages endpoints ───────────────────────────────────
-
-async def handle_passthrough(request: web.Request) -> web.Response:
-    """Forward any non-/v1/messages request unchanged."""
-    upstream = proxy_config.upstream_url()
-    path = request.path
-    headers = {k: v for k, v in request.headers.items()
-               if k.lower() not in ("host", "transfer-encoding")}
-
-    body = await request.read()
-
-    async with aiohttp.ClientSession() as session:
-        async with session.request(
-            request.method,
-            f"{upstream}{path}",
-            headers=headers,
-            data=body if body else None,
-        ) as upstream_resp:
-            resp_body = await upstream_resp.read()
-            return web.Response(
-                body=resp_body,
-                status=upstream_resp.status,
-                content_type=upstream_resp.content_type,
-            )
-
-
-# ── Token counting ──────────────────────────────────────────────────────────
-
-async def handle_count_tokens(request: web.Request) -> web.Response:
-    """POST /v1/messages/count_tokens — count input tokens.
-
-    LM Studio has no native count_tokens endpoint, so we run the full
-    _prepare_request pipeline (model mapping, tool search, system prompt
-    injection, etc.) then forward to /v1/messages with max_tokens=1.
-    The usage.input_tokens in the response reflects exactly what the model
-    would see on a real request.
-    """
+async def handle_anthropic_messages(request: web.Request) -> web.StreamResponse:
     try:
         body = await request.json()
     except json.JSONDecodeError:
         return web.json_response({"error": "Invalid JSON"}, status=400)
 
-    prep = await _prepare_request(body, request)
-    body = prep["body"]
-    headers = prep["headers"]
-
-    # Force minimal generation — we only care about usage.input_tokens
-    body["max_tokens"] = 1
-    body["stream"] = False
-
-    upstream = proxy_config.upstream_url()
+    rid = request_log.new_request("POST", "/v1/messages",
+                                  client_model=body.get("model", ""),
+                                  inbound_protocol="anthropic")
+    request_log.set_request_preview(rid, body)
+    request["_rid"] = rid
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{upstream}/v1/messages",
-                json=body,
-                headers=headers,
-            ) as upstream_resp:
-                result = await upstream_resp.json()
-                input_tokens = result.get("usage", {}).get("input_tokens", 0)
-                return web.json_response({"input_tokens": input_tokens})
+        prep = await _prepare_internal_body(body, request, "anthropic")
+        if prep["body"].get("stream", False):
+            adapter = AnthropicAdapter(client_model=prep["client_model"])
+            resp = await _run_streaming(prep, request, adapter)
+        else:
+            resp = await _run_non_streaming(prep, request, "anthropic")
+        request_log.finish(rid, resp.status)
+        return resp
+    except Exception as exc:
+        request_log.finish(rid, 500, error=str(exc))
+        raise
+
+
+async def handle_openai_chat_completions(request: web.Request) -> web.StreamResponse:
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+
+    rid = request_log.new_request("POST", "/v1/chat/completions",
+                                  client_model=body.get("model", ""),
+                                  inbound_protocol="openai")
+    request_log.set_request_preview(rid, body)
+    request["_rid"] = rid
+    try:
+        prep = await _prepare_internal_body(body, request, "openai")
+        if prep["body"].get("stream", False):
+            adapter = OpenAIAdapter(client_model=prep["client_model"])
+            resp = await _run_streaming(prep, request, adapter)
+        else:
+            resp = await _run_non_streaming(prep, request, "openai")
+        request_log.finish(rid, resp.status)
+        return resp
+    except Exception as exc:
+        request_log.finish(rid, 500, error=str(exc))
+        raise
+
+
+async def handle_count_tokens(request: web.Request) -> web.Response:
+    """POST /v1/messages/count_tokens — accurate via llama.cpp /tokenize."""
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+
+    prep = await _prepare_internal_body(body, request, "anthropic")
+    internal = prep["body"]
+    active_model = prep["active_model"]
+
+    # Ensure model is loaded so /apply-template + /tokenize use the right tokenizer
+    try:
+        supervisor = await get_supervisor()
+        await supervisor.ensure_model(active_model)
     except Exception as exc:
         return web.json_response(
-            {"error": {"type": "proxy_error", "message": str(exc)}},
-            status=502,
+            {"error": {"type": "model_load_error", "message": str(exc)}},
+            status=503,
         )
 
+    messages = internal.get("messages", [])
+    count = await toks.count_tokens(messages)
+    return web.json_response({"input_tokens": count})
 
-# ── App factory ──────────────────────────────────────────────────────────────
+
+def _is_anthropic_request(request: web.Request) -> bool:
+    """Detect whether a request wants Anthropic-shape output by header sniff."""
+    headers = request.headers
+    if "anthropic-version" in headers:
+        return True
+    if "x-api-key" in headers:
+        return True
+    return False
+
+
+async def handle_models(request: web.Request) -> web.Response:
+    """Dual-protocol /v1/models — shape chosen by header sniff."""
+    # Fetch upstream models
+    registered = list(llama_cfg.models().keys())
+    aliases = proxy_config.model_mapping()
+
+    if _is_anthropic_request(request):
+        # Anthropic shape — registered models + aliases
+        openai_data = xlate.build_openai_models(registered, aliases)
+        return web.json_response(xlate.openai_models_to_anthropic(openai_data, aliases))
+
+    # OpenAI shape
+    return web.json_response(xlate.build_openai_models(registered, aliases))
+
+
+async def handle_model_by_id(request: web.Request) -> web.Response:
+    model_id = request.match_info["model_id"]
+    registered = list(llama_cfg.models().keys())
+    aliases = proxy_config.model_mapping()
+
+    if _is_anthropic_request(request):
+        openai_data = xlate.build_openai_models(registered, aliases)
+        anth = xlate.openai_models_to_anthropic(openai_data, aliases)
+        for m in anth.get("data", []):
+            if m["id"] == model_id:
+                return web.json_response(m)
+        return web.json_response(
+            {"type": "error", "error": {"type": "not_found_error", "message": f"model: {model_id}"}},
+            status=404,
+        )
+
+    # OpenAI shape
+    data = xlate.build_openai_models(registered, aliases).get("data", [])
+    for m in data:
+        if m["id"] == model_id:
+            return web.json_response(m)
+    return web.json_response({"error": {"message": f"Model {model_id} not found", "type": "not_found"}}, status=404)
+
+
+async def handle_embeddings(request: web.Request) -> web.Response:
+    """POST /v1/embeddings — forward to llama.cpp unchanged."""
+    body = await request.read()
+    upstream = llama_cfg.upstream_url()
+
+    headers = {}
+    for h in ("content-type", "authorization"):
+        if h in request.headers:
+            headers[h] = request.headers[h]
+    headers.setdefault("content-type", "application/json")
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(f"{upstream}/v1/embeddings", data=body, headers=headers) as up:
+            out = await up.read()
+            return web.Response(body=out, status=up.status, content_type=up.content_type)
+
+
+async def handle_health(request: web.Request) -> web.Response:
+    """Forward /health to llama.cpp for clients that probe it."""
+    upstream = llama_cfg.upstream_url()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{upstream}/health", timeout=aiohttp.ClientTimeout(total=5)) as up:
+                out = await up.read()
+                return web.Response(body=out, status=up.status, content_type=up.content_type)
+    except Exception as exc:
+        return web.json_response({"status": "error", "message": str(exc)}, status=503)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# App factory
+# ═══════════════════════════════════════════════════════════════════════
 
 @web.middleware
 async def cors_middleware(request: web.Request, handler):
-    """Add CORS headers to all responses when proxy.cors_origins is set."""
     origins = proxy_config.cors_origins()
     origin = request.headers.get("Origin", "")
     allowed = origins and ("*" in origins or origin in origins)
 
-    # All OPTIONS requests get a direct response (never forward to handler)
     if request.method == "OPTIONS":
         resp = web.Response(status=204)
         if allowed:
@@ -1341,17 +1461,29 @@ async def cors_middleware(request: web.Request, handler):
 
 def create_app() -> web.Application:
     app = web.Application(middlewares=[cors_middleware])
-    app.router.add_post("/v1/messages/count_tokens", handle_count_tokens)
-    app.router.add_post("/v1/messages", handle_messages)
+
+    protocols = set(proxy_config.protocols())
+
+    if "anthropic" in protocols:
+        app.router.add_post("/v1/messages/count_tokens", handle_count_tokens)
+        app.router.add_post("/v1/messages", handle_anthropic_messages)
+
+    if "openai" in protocols:
+        app.router.add_post("/v1/chat/completions", handle_openai_chat_completions)
+
+    # /v1/models routes are shared — shape chosen by header sniff
     app.router.add_get("/v1/models", handle_models)
     app.router.add_get("/v1/models/{model_id}", handle_model_by_id)
-    # Passthrough everything else (health, etc.)
-    app.router.add_route("*", "/{path:.*}", handle_passthrough)
+
+    # Embeddings + health forwarded to llama.cpp
+    app.router.add_post("/v1/embeddings", handle_embeddings)
+    app.router.add_get("/health", handle_health)
+
     return app
 
 
-async def start_proxy_background() -> aiohttp.web.AppRunner | None:
-    """Start proxy as a background task (non-blocking). Returns runner for cleanup."""
+async def start_proxy_background() -> web.AppRunner | None:
+    """Start proxy as a background task (non-blocking)."""
     if not proxy_config.enabled():
         return None
 
@@ -1362,4 +1494,5 @@ async def start_proxy_background() -> aiohttp.web.AppRunner | None:
     host = proxy_config.proxy_host()
     site = web.TCPSite(runner, host, port)
     await site.start()
+    log.info("proxy listening on %s:%d — protocols=%s", host, port, proxy_config.protocols())
     return runner

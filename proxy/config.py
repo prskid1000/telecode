@@ -1,9 +1,16 @@
-"""Proxy configuration — reads from main settings.json."""
+"""Proxy configuration — reads from main settings.json.
+
+Upstream is always llama-server (spawned by the supervisor in `llamacpp/`).
+The proxy presents both Anthropic (`/v1/messages`) and OpenAI
+(`/v1/chat/completions`) surfaces to clients and translates to llama.cpp's
+OpenAI-compatible endpoints internally.
+"""
 from __future__ import annotations
 
 import config as app_config
+from llamacpp import config as llama_cfg
 
-# BM25 tuning
+# BM25 tuning (kept — proxy-internal ToolSearch engine)
 BM25_K1 = 0.9
 BM25_B = 0.4
 MAX_SEARCH_RESULTS = 5
@@ -24,15 +31,31 @@ def proxy_port() -> int:
 
 
 def upstream_url() -> str:
-    """LM Studio (or other backend) base URL."""
-    return app_config.get_nested("proxy.upstream_url", "http://localhost:1234")
+    """llama-server base URL.
+
+    Sourced from `llamacpp.host`/`llamacpp.port` (the supervisor owns the
+    process). Falls back to `proxy.upstream_url` only if `llamacpp.enabled`
+    is false — i.e. someone is running a stand-alone llama-server and
+    pointed the proxy at it manually.
+    """
+    if llama_cfg.enabled():
+        return llama_cfg.upstream_url()
+    override = app_config.get_nested("proxy.upstream_url", "") or ""
+    return override or llama_cfg.upstream_url()
 
 
-def upstream_model() -> str:
-    """Model name for lightweight proxy-internal LLM calls (query classifier etc.)."""
-    return app_config.get_nested("proxy.upstream_model", app_config.get_nested(
-        "tools.claude-local.env.ANTHROPIC_MODEL", "qwen3.5-35b-a3b"
-    ))
+def protocols() -> list[str]:
+    """Which client-facing protocols to expose.
+
+    Values: "anthropic", "openai". Default both. Disabling one just
+    unregisters the corresponding routes; there is no per-request toggle.
+    """
+    configured = app_config.get_nested("proxy.protocols", ["anthropic", "openai"])
+    if not configured:
+        return ["anthropic", "openai"]
+    # Normalize + filter
+    known = {"anthropic", "openai"}
+    return [p for p in configured if p in known] or ["anthropic", "openai"]
 
 
 def enabled() -> bool:
@@ -44,50 +67,32 @@ def debug() -> bool:
 
 
 def max_roundtrips() -> int:
-    """Maximum number of intercept round-trips for a single request before
-    giving up. One round-trip = one upstream call. ToolSearch, managed tools,
-    auto-load schema injection, and unloaded-tool guards each consume one.
-    """
+    """Max intercept round-trips per request (ToolSearch, managed tools,
+    auto-load, unloaded-guard each consume one)."""
     return int(app_config.get_nested("proxy.max_roundtrips", 15))
 
 
 def ping_interval() -> float:
-    """Seconds between `event: ping` heartbeats sent to the client during
-    long-running streams. Anthropic-aware clients (CC, pivot.claude.ai,
-    Office add-ins) treat these as live-progress signals and won't time out.
-    The faster `: keepalive` SSE comments still go out every 2s.
-    """
+    """Seconds between `event: ping` heartbeats."""
     return float(app_config.get_nested("proxy.ping_interval", 10))
 
 
 def tool_search() -> bool:
-    """Enable tool splitting, ToolSearch injection, and deferred tool handling."""
     return bool(app_config.get_nested("proxy.tool_search", False))
 
 
 def strip_reminders() -> bool:
-    """Strip all system-reminder blocks from messages. Works independently or with tool_search."""
     return bool(app_config.get_nested("proxy.strip_reminders", False))
 
 
 def auto_load_tools() -> bool:
-    """Auto-load deferred tool schemas when model calls them without loading first.
-    Only takes effect for requests where tool_search produced deferred tools."""
     return bool(app_config.get_nested("proxy.auto_load_tools", False))
 
 
-def lift_tool_result_images() -> bool:
-    """Rewrite array-form tool_result.content so LM Studio accepts it, lifting
-    image blocks out as siblings in the same user message."""
-    return bool(app_config.get_nested("proxy.lift_tool_result_images", False))
-
-
 def location() -> str:
-    """User's location for context injection (e.g. 'Kolkata, India'). Empty = omit."""
+    """User's location for context injection. Empty = omit."""
     return str(app_config.get_nested("proxy.location", "") or "")
 
-
-# ── Web search (Brave Search scraper) ──────────────────────────────────────
 
 def cors_origins() -> list[str]:
     """CORS allowed origins. Empty list = CORS disabled."""
@@ -97,33 +102,20 @@ def cors_origins() -> list[str]:
 def client_profiles() -> list[dict]:
     """Header-based client profiles for per-client request handling.
 
-    Example (settings.json):
-        "proxy": {
-          "client_profiles": [
-            {
-              "name": "office",
-              "match": {"header": "Referer", "contains": "pivot.claude.ai"},
-              "system_instruction": "proxy_office.md",
-              "tool_search": false,
-              "intercept": false,
-              "inject_date_location": false
-            }
-          ]
-        }
-
-    First profile whose `match` matches wins. If no match, default behavior applies.
+    First profile whose `match` matches wins. See README for full shape.
+    Each profile can override any proxy feature flag.
     """
     return app_config.get_nested("proxy.client_profiles", []) or []
 
 
 def model_mapping() -> dict[str, str]:
-    """Map client-facing model names to upstream model names.
+    """Map client-facing model names to llama.cpp registry keys.
 
-    e.g. {"claude-opus-4-6": "qwen3.5-35b-a3b"}
+    e.g. {"claude-opus-4-6": "qwen3.5-35b"}
 
-    - /v1/models response lists the keys (client-facing names) alongside real models
-    - /v1/messages rewrites request's `model` field from key → value before forwarding
+    - /v1/models response lists the keys (client-facing names) alongside
+      registered models
+    - /v1/messages rewrites request's `model` field from key → value before
+      the supervisor picks which model to run
     """
     return app_config.get_nested("proxy.model_mapping", {}) or {}
-
-
