@@ -82,50 +82,52 @@ To run in the background without a console window (Windows):
 pythonw main.py
 ```
 
-### System tray UI
+### System tray UI + settings window
 
-`python main.py` starts the Telegram bot AND a native system-tray icon
-together — one process, one entry point. Right-click the tray icon for
-the full control surface:
+`python main.py` (or `pythonw main.py` for no console) starts the
+Telegram bot AND a fully-styled system tray / settings window together
+in one process.
 
-```
-Status info rows (live)
-─
-llama.cpp ▸ Enabled, Active Model swap, Load/Unload/Restart,
-            sampling presets, reasoning toggles, idle-unload preset,
-            Open llama.log
-Proxy     ▸ Enabled, Protocols, tool_search/auto_load_tools/strip_reminders/
-            debug, max_roundtrips/ping_interval presets,
-            Profiles ▸ per-profile editor
-MCP       ▸ Enabled
-Managed   ▸ Per-tool live toggles (web_search, code_execution, …)
-Telegram  ▸ Streaming + Capture presets
-Voice     ▸ STT enabled
-Computer  ▸ API format + capture presets
-Sessions  ▸ Click any session to kill, or Kill All
-─
-Reload Config / Open settings.json / Open Logs Folder / Quit
-```
+- **Tray icon** (right-click for quick menu):
+    ```
+    Live status info rows (llama / proxy / mcp / sessions)
+    ─
+    Open Settings Window   (default left-click)
+    Reload Config
+    ─
+    Load Llama Now / Unload Llama / Restart Llama
+    ─
+    Open settings.json / Open Logs Folder
+    ─
+    Quit Telecode
+    ```
+- **Left-click** the tray icon → toggle a frameless dark-themed
+  **settings window** with:
+  - Sidebar: Status / llama.cpp / Proxy / MCP / Managed / Telegram /
+    Voice / Computer / Sessions / Logs
+  - **Numeric values are text inputs paired with sliders** — type `0.73`
+    or drag, both work, always linked. No "pick from this list" presets.
+  - Animated toggle switches for booleans
+  - Dropdowns for enums (API format, protocols)
+  - Live sessions table with kill-selected / kill-all
+  - Live status tiles refreshed every 1s
 
-- **Mint lightning-bolt icon** on transparent background — reads on dark or
-  light Windows 11 taskbars.
-- **Every checkbox/preset writes settings.json + calls `config.reload()`**
-  → effective on the next request that reads the value (no restart needed
-  for sampling/reasoning/profile flags). Items marked ⟳ in the menu need
-  a service restart (proxy port, MCP port — sockets are bound at start).
-- **Runtime tool toggles** (Managed Tools / MCP) persist to
-  `data/runtime-overrides.json` and take effect immediately.
-- Last-active llama model persists to `data/llama-state.json` (used as
-  the implicit default; **NOT** auto-loaded on startup unless
-  `llamacpp.auto_start: true`).
+- **Every change writes settings.json + calls `config.reload()`** →
+  takes effect on the next request that reads the value. Port changes
+  (proxy / MCP) still need a telecode restart.
+- **Managed-tool toggles** persist to `data/runtime-overrides.json` and
+  take effect immediately per request.
+- **Last-active llama model** persists to `data/llama-state.json` and is
+  used as the implicit default when a request omits `model` — it is
+  **NOT** auto-loaded on startup unless `llamacpp.auto_start: true`.
 
-To install the dependency:
-
+Dependency (already in `requirements.txt`):
 ```bash
-pip install pystray
+pip install PySide6
 ```
 
-To run with no console window on Windows: `pythonw main.py`.
+**Theme**: the window uses a custom dark QSS regardless of your Windows
+theme — consistent across setups.
 
 ### llama.cpp inference (local models)
 

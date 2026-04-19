@@ -117,7 +117,7 @@ class SettingsWindow(QMainWindow):
 
         self.setWindowTitle("telecode")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
-        self.setAttribute(Qt.WindowAttribute.WA_TranslucentBackground, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self.resize(1100, 720)
 
         # Root
