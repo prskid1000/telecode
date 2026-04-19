@@ -120,8 +120,18 @@ async def _show_summary(update: Update) -> None:
 
     # Voice
     lines.append("\n<b>Voice</b>")
-    stt_status = "🟢 enabled" if config.stt_enabled() else "⚫ disabled"
-    lines.append(f"  STT: {stt_status}  ·  <code>{_esc(config.stt_base_url())}</code>")
+    if not config.stt_enabled():
+        stt_line = "⚫ disabled"
+    else:
+        from voice.health import get_status as _vs
+        v = _vs()
+        if not v.stt_last_checked:
+            stt_line = "⚪ enabled · untested (tries on first voice message)"
+        elif v.stt_reachable:
+            stt_line = "🟢 enabled · last request OK"
+        else:
+            stt_line = "🔴 enabled · last request failed"
+    lines.append(f"  STT: {stt_line}  ·  <code>{_esc(config.stt_base_url())}</code>")
 
     # Streaming
     lines.append("\n<b>Streaming</b>")

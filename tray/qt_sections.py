@@ -559,10 +559,45 @@ def _telegram(window) -> QWidget:
 
 
 def _voice(window) -> QWidget:
+    from voice.health import get_status as _voice_status
+
     scroll, _, layout = _page()
     card, body = _card("Voice")
     body.addWidget(_toggle_row("voice.stt.enabled", "STT Enabled",
                                 "Auto-transcribe voice messages via a local Whisper endpoint."))
+
+    # Live health pill — state is updated by real voice.stt.transcribe()
+    # calls (no probe). Refreshed by the window's 1s tick.
+    pill = QLabel("⚪ untested")
+    pill.setProperty("class", "stat_pill")
+    url_lbl = QLabel("")
+    url_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
+    body.addWidget(_row(row_label("Health",
+                                    "Reflects the outcome of the most recent transcribe request. "
+                                    "No background probing — status only changes when a voice message is processed."),
+                         _wrap_align(pill, Qt.AlignmentFlag.AlignLeft)))
+    body.addWidget(_row(row_label("Endpoint", ""), url_lbl))
+
+    import config as _cfg
+    def refresh() -> None:
+        vs = _voice_status()
+        url_lbl.setText(_cfg.stt_base_url())
+        if not vs.stt_configured:
+            pill.setText("⚫ disabled")
+            pill.setProperty("class", "stat_pill")
+        elif not vs.stt_last_checked:
+            pill.setText("⚪ untested")
+            pill.setProperty("class", "stat_pill")
+        elif vs.stt_reachable:
+            pill.setText("🟢 reachable")
+            pill.setProperty("class", "stat_pill stat_pill_ok")
+        else:
+            pill.setText("🔴 last call failed")
+            pill.setProperty("class", "stat_pill stat_pill_err")
+        pill.style().unpolish(pill); pill.style().polish(pill)
+    scroll.refresh = refresh  # type: ignore[attr-defined]
+    refresh()
+
     layout.addWidget(card)
     layout.addStretch(1)
     return scroll
