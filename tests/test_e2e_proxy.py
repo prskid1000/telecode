@@ -622,6 +622,231 @@ async def t_anth_model_alias(session: aiohttp.ClientSession) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════
+# Tray-UI action tests (settings patch, add/remove, lifecycle)
+# ══════════════════════════════════════════════════════════════════════
+
+def _enumerate_leaves(d, prefix=""):
+    if isinstance(d, dict) and d:
+        for k, v in d.items():
+            p = f"{prefix}.{k}" if prefix else k
+            if isinstance(v, dict) and v:
+                yield from _enumerate_leaves(v, p)
+            else:
+                yield p, v
+    else:
+        yield prefix, d
+
+
+def _mutate(value):
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, int):
+        return value + 1 if value < 999999 else value - 1
+    if isinstance(value, float):
+        return round(value + 0.013, 4)
+    if isinstance(value, str):
+        return value + "_zz"
+    if isinstance(value, list):
+        return list(value) + ["__test__"]
+    if isinstance(value, dict):
+        out = dict(value); out["__test_key__"] = "__test__"; return out
+    return value
+
+
+async def t_all_settings_round_trip() -> None:
+    """Every leaf in settings.json patches + reads back + restores cleanly."""
+    name = "settings: 118-leaf round-trip (tray patch path)"
+    from tray.qt_helpers import read_settings, get_path, patch_settings, settings_path
+    import config as app_config
+
+    original = json.loads(settings_path().read_text(encoding="utf-8"))
+    leaves = list(_enumerate_leaves(original))
+    failed: list[tuple[str, str]] = []
+    tested = 0
+    skipped = 0
+
+    try:
+        for path, orig in leaves:
+            new = _mutate(orig)
+            if new == orig:
+                skipped += 1
+                continue
+            try:
+                patch_settings(path, new)
+                got = get_path(read_settings(), path)
+                if got != new:
+                    failed.append((path, f"read back {got!r} != {new!r}"))
+                    continue
+                got_live = app_config.get_nested(path)
+                if got_live != new:
+                    failed.append((path, f"config.reload() stale: {got_live!r}"))
+                    continue
+                tested += 1
+            except Exception as e:
+                failed.append((path, f"{type(e).__name__}: {e}"))
+            finally:
+                try:
+                    patch_settings(path, orig)
+                except Exception:
+                    pass
+    finally:
+        # Belt-and-braces structural restore
+        settings_path().write_text(
+            json.dumps(original, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        app_config.reload()
+
+    if failed:
+        RES.fail(name, f"{len(failed)} failures: " + ", ".join(p for p, _ in failed[:3]))
+    else:
+        RES.ok(f"{name}  ({tested} tested, {skipped} null-skipped)")
+
+
+async def t_add_remove_model_flow() -> None:
+    name = "add/remove:  llamacpp.models.<key>"
+    from tray.qt_helpers import read_settings, get_path, patch_settings, remove_path
+    import copy
+
+    key = "__e2e_test_model__"
+    seed = {"path": "/tmp/x.gguf", "ctx_size": 2048, "n_gpu_layers": 0}
+    try:
+        remove_path(f"llamacpp.models.{key}")
+        patch_settings(f"llamacpp.models.{key}", copy.deepcopy(seed))
+        if get_path(read_settings(), f"llamacpp.models.{key}.ctx_size") != 2048:
+            RES.fail(name, "after add, key not present"); return
+        remove_path(f"llamacpp.models.{key}")
+        if get_path(read_settings(), f"llamacpp.models.{key}") is not None:
+            RES.fail(name, "after remove, key still present"); return
+        RES.ok(name)
+    finally:
+        remove_path(f"llamacpp.models.{key}")
+
+
+async def t_add_remove_tool_flow() -> None:
+    name = "add/remove:  tools.<key>"
+    from tray.qt_helpers import read_settings, get_path, patch_settings, remove_path
+    import copy
+
+    key = "__e2e_test_tool__"
+    seed = {"name": "Test", "startup_cmd": ["echo"], "flags": [], "env": {}, "session": {}}
+    try:
+        remove_path(f"tools.{key}")
+        patch_settings(f"tools.{key}", copy.deepcopy(seed))
+        if get_path(read_settings(), f"tools.{key}.startup_cmd") != ["echo"]:
+            RES.fail(name, "after add, key not present"); return
+        remove_path(f"tools.{key}")
+        if get_path(read_settings(), f"tools.{key}") is not None:
+            RES.fail(name, "after remove, key still present"); return
+        RES.ok(name)
+    finally:
+        remove_path(f"tools.{key}")
+
+
+async def t_valid_key_regex() -> None:
+    name = "add/remove:  _valid_key regex"
+    from tray.qt_sections import _valid_key
+    for bad in ("", " ", "a b", "a:b", "a.b", "1abc", "x/y", "Ω"):
+        ok, _ = _valid_key(bad)
+        if ok:
+            RES.fail(name, f"should reject {bad!r}"); return
+    for good in ("a", "ab_cd", "ABC-123", "x9", "Qwen-30b"):
+        ok, _ = _valid_key(good)
+        if not ok:
+            RES.fail(name, f"should accept {good!r}"); return
+    RES.ok(name)
+
+
+async def t_managed_tool_runtime_toggle() -> None:
+    name = "managed:    runtime toggle persists & reads"
+    from proxy.runtime_state import is_managed_enabled, set_tool
+    tool = "web_search"
+    prev = is_managed_enabled(tool)
+    try:
+        set_tool("managed_tools", tool, not prev)
+        if is_managed_enabled(tool) != (not prev):
+            RES.fail(name, "toggle did not take effect"); return
+        set_tool("managed_tools", tool, prev)
+        if is_managed_enabled(tool) != prev:
+            RES.fail(name, "restore did not take effect"); return
+        RES.ok(name)
+    finally:
+        set_tool("managed_tools", tool, prev)
+
+
+async def t_request_log_populated() -> None:
+    """After the routing/text tests have run, the in-process request_log ring
+    buffer should have entries. Uses snapshot() — same call tray's Requests
+    section makes."""
+    name = "requests:   in-process ring buffer populated"
+    from proxy import request_log
+    snap = request_log.snapshot()
+    if len(snap) == 0:
+        RES.fail(name, "buffer empty — route handlers aren't calling request_log.finish()"); return
+    # Every entry should have required fields
+    e = snap[0]
+    for field in ("rid", "method", "path", "started_at", "status"):
+        if field not in e:
+            RES.fail(name, f"entry missing field {field!r}"); return
+    RES.ok(f"{name}  ({len(snap)} entries)")
+
+
+async def t_supervisor_unload_load(supervisor) -> None:
+    """Actually call Unload → verify alive=False → call Load → verify alive=True.
+    This is the live Load Now / Unload button code path."""
+    name = "llama:      Unload + Load round-trip"
+    if not supervisor.alive():
+        RES.fail(name, "supervisor not alive before test — can't verify unload"); return
+    try:
+        await supervisor.stop()
+        if supervisor.alive():
+            RES.fail(name, "after stop(), alive=True"); return
+        t0 = time.time()
+        active = await supervisor.start_default()
+        dt = time.time() - t0
+        if not supervisor.alive():
+            RES.fail(name, "after start_default(), alive=False"); return
+        if not active:
+            RES.fail(name, "start_default() returned empty model name"); return
+        RES.ok(f"{name}  (reloaded '{active}' in {dt:.1f}s)")
+    except Exception as e:
+        RES.fail(name, f"{type(e).__name__}: {e}")
+
+
+async def t_supervisor_restart(supervisor) -> None:
+    """Actually call Restart → stop + start_default. Verify active_model still set."""
+    name = "llama:      Restart"
+    if not supervisor.alive():
+        RES.fail(name, "supervisor not alive before test"); return
+    try:
+        await supervisor.stop()
+        active = await supervisor.start_default()
+        if not supervisor.alive() or not active:
+            RES.fail(name, f"restart failed: alive={supervisor.alive()}, active={active!r}"); return
+        RES.ok(f"{name}  (active={active})")
+    except Exception as e:
+        RES.fail(name, f"{type(e).__name__}: {e}")
+
+
+async def t_supervisor_ensure_same_model_fast(supervisor) -> None:
+    """ensure_model(same) must be a no-op — no respawn."""
+    name = "llama:      ensure_model(same) is a no-op"
+    if not supervisor.alive():
+        RES.fail(name, "supervisor not alive"); return
+    active = supervisor.active_model()
+    t0 = time.time()
+    await supervisor.ensure_model(active)
+    dt = time.time() - t0
+    if not supervisor.alive() or supervisor.active_model() != active:
+        RES.fail(name, "state changed unexpectedly"); return
+    if dt > 2.0:
+        RES.fail(name, f"took {dt:.1f}s — suggests respawn"); return
+    RES.ok(f"{name}  ({dt*1000:.0f}ms)")
+
+
+# ══════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════
 
@@ -687,6 +912,22 @@ async def main() -> int:
             await t_anth_vision_text(session)
             await t_openai_vision(session)
             await t_anth_tool_result_with_image(session)
+
+        print("\n── Tray: settings patch path ──")
+        await t_all_settings_round_trip()
+        await t_add_remove_model_flow()
+        await t_add_remove_tool_flow()
+        await t_valid_key_regex()
+        await t_managed_tool_runtime_toggle()
+
+        print("\n── Tray: request log ──")
+        await t_request_log_populated()
+
+        # Lifecycle tests go LAST — they stop/restart llama-server.
+        print("\n── Tray: llama.cpp lifecycle actions ──")
+        await t_supervisor_ensure_same_model_fast(supervisor)
+        await t_supervisor_unload_load(supervisor)
+        await t_supervisor_restart(supervisor)
 
     code = RES.summary()
 
