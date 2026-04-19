@@ -117,7 +117,7 @@ llama.cpp + dual-protocol proxy (for local models):
 |------|------|
 | `settings.json` | Only config source |
 | `config.py` | Read/write accessors (must be **functions** for hot-reload). `store_path` / `logs_dir` resolve relative paths against the `settings.json` directory (not cwd). |
-| `main.py` | App startup, handlers, `set_my_commands`, voice probe loop (no background stale checker) |
+| `main.py` | App startup, handlers, `set_my_commands`. No background STT poll: voice.health state is updated by real `voice.stt.transcribe` calls. |
 | `store.py` | Topics JSON |
 | `sessions/process.py` | PTY + pyte + snapshot diff + timers |
 | `sessions/screen.py` | Image capture, video recording, window enumeration |
@@ -131,7 +131,7 @@ llama.cpp + dual-protocol proxy (for local models):
 | `backends/implementations.py` | `GenericCLIBackend` (data-driven) + Screen, Video (non-PTY) |
 | `backends/registry.py` | Auto-built from `settings.json` tools; `get_backend`, `all_backends`, `refresh` |
 | `backends/params.py` | Load tool params from settings |
-| `voice/*` | STT health probe, transcribe |
+| `voice/*` | STT transcribe + lazy health state. `voice.stt.transcribe()` calls `voice.health.record_success()` / `record_failure(reason)` after every request. No startup probe, no `probe_loop`. Default `stt_reachable=True` so the first voice message reaches the endpoint; a failure flips it to False and short-circuits future attempts until the next success. |
 | `llamacpp/supervisor.py` | Spawns and babysits llama-server subprocess; model-swap on demand |
 | `llamacpp/argv.py` | Builds llama-server CLI argv from `llamacpp.models.<m>` + `extra_args` |
 | `llamacpp/config.py` | `llamacpp.*` settings accessors + model registry resolution |
@@ -486,7 +486,7 @@ Streamable HTTP MCP server (FastMCP, port 1236). Drop-in tools/resources/prompts
 | Video encoding fails | Ensure ffmpeg is on PATH; check logs for ffmpeg stderr |
 | Computer control clicks wrong spot | DPI scaling issue; check `_get_window_rect` returns logical coords |
 | Computer control LLM error | Check llama-server is up and the proxy is running; `base_url` should point at the proxy (`http://localhost:1235/v1`), not llama-server directly |
-| Voice not working | Start STT service; health probe detects within 60s and transcription kicks in automatically |
+| Voice not working | Start STT service and send a voice message. First request hits the endpoint directly; no background probe means no "wait 60s" delay, but also no passive liveness. |
 | Proxy not starting | Check `proxy.enabled` is `true` in settings.json; check port not in use |
 | llama-server won't start | Check `data/logs/llama.log` for the actual binary output. Verify `llamacpp.binary` path and `llamacpp.models.<default>.path` point at real files |
 | Model swap hangs | `llamacpp.ready_timeout_sec` (default 120) too short for a large GGUF to load; increase it |

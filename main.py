@@ -13,7 +13,7 @@ from telegram.ext import (
 
 import config
 from sessions.manager import SessionManager
-from voice.health import probe, probe_loop
+from voice.health import get_status as voice_status
 from bot.handlers import (
     cmd_start, cmd_help, cmd_new, cmd_stop,
     cmd_settings, cmd_key,
@@ -210,12 +210,16 @@ async def _post_init(app) -> None:
     except Exception as exc:
         log.error("set_my_commands failed: %s", exc, exc_info=True)
 
-    try:
-        vs = await probe()
-        log.info("Voice: STT=%s", "OK" if vs.stt_available else "unavailable")
-        app.bot_data["_probe_task"] = asyncio.ensure_future(probe_loop(60))
-    except Exception as exc:
-        log.error("Voice probe init failed: %s", exc, exc_info=True)
+    # Voice: no startup probe + no background poll. The first incoming voice
+    # message hits the STT endpoint directly; voice.health state is driven by
+    # those real requests (record_success / record_failure inside
+    # voice.stt.transcribe). If the endpoint is down at boot we don't know
+    # and don't care until a user actually sends audio.
+    vs = voice_status()
+    log.info(
+        "Voice: STT=%s (lazy — health tracked from real transcribe calls)",
+        "configured" if vs.stt_configured else "disabled",
+    )
 
     # llama-server is LAZY by default — the proxy's first request triggers
     # `supervisor.ensure_model()` which spawns llama-server then. This means:

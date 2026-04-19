@@ -1,9 +1,19 @@
-"""Voice service health checker."""
+"""Voice service health tracking.
+
+No startup probe, no background poll loop. `stt_reachable` flips based
+on the outcome of real `transcribe()` calls — optimistic on first use
+(we haven't seen it fail), pessimistic after a failure until the next
+successful call flips it back.
+
+This is the flow the user asked for: the only request we send to the
+STT endpoint is the actual audio — zero "wake up STT every 60s" traffic.
+"""
 from __future__ import annotations
-import asyncio, logging
+
+import logging
 from dataclasses import dataclass
-from html import escape as _esc
-import aiohttp
+from html import escape as _esc  # noqa: F401 — re-exported for callers
+
 import config
 
 log = logging.getLogger("telecode.voice.health")
@@ -13,69 +23,64 @@ log = logging.getLogger("telecode.voice.health")
 class VoiceStatus:
     stt_configured: bool
     stt_reachable:  bool
+    stt_last_checked: bool = False  # True once a real request has been made
 
     @property
     def stt_available(self) -> bool:
         return self.stt_configured and self.stt_reachable
 
     def summary(self) -> str:
-        """HTML-formatted voice status for Telegram."""
         def dot(ok: bool) -> str:
             return "🟢" if ok else "🔴"
         lines = ["<b>🎙️ Voice</b>\n"]
         if self.stt_configured:
-            status = "connected" if self.stt_reachable else "not reachable"
-            lines.append(f"Speech-to-text: {dot(self.stt_reachable)} {status}")
+            if not self.stt_last_checked:
+                lines.append("Speech-to-text: ⚪ untested — tries on first voice message")
+            else:
+                status = "connected" if self.stt_reachable else "not reachable"
+                lines.append(f"Speech-to-text: {dot(self.stt_reachable)} {status}")
         else:
             lines.append("Speech-to-text: ⚫ off")
-        if not self.stt_available:
-            lines.append("\n<i>Voice messages won't work right now.</i>")
+        if self.stt_configured and self.stt_last_checked and not self.stt_reachable:
+            lines.append("\n<i>Last transcribe request failed.</i>")
         return "\n".join(lines)
 
 
-_status = VoiceStatus(stt_configured=False, stt_reachable=False)
-_http_session: aiohttp.ClientSession | None = None
+# Optimistic default: reachable=True so the first voice message actually
+# hits the endpoint. record_failure() flips it on the first real failure;
+# record_success() flips it back.
+_status = VoiceStatus(
+    stt_configured=False,
+    stt_reachable=True,
+    stt_last_checked=False,
+)
 
 
-def _get_http_session() -> aiohttp.ClientSession:
-    global _http_session
-    if _http_session is None or _http_session.closed:
-        _http_session = aiohttp.ClientSession()
-    return _http_session
+def _refresh_configured() -> None:
+    """Pick up live settings changes (e.g. toggling voice.stt.enabled)."""
+    _status.stt_configured = config.stt_enabled()
 
 
 def get_status() -> VoiceStatus:
+    _refresh_configured()
     return _status
 
 
-async def _check(base_url: str, timeout: float = 3.0) -> bool:
-    try:
-        session = _get_http_session()
-        async with session.get(
-            f"{base_url.rstrip('/')}/models",
-            timeout=aiohttp.ClientTimeout(total=timeout),
-        ) as r:
-            return r.status < 500
-    except Exception:
-        return False
+def record_success() -> None:
+    """Called by voice.stt.transcribe() after a 200 OK response."""
+    _refresh_configured()
+    was_down = _status.stt_last_checked and not _status.stt_reachable
+    _status.stt_reachable = True
+    _status.stt_last_checked = True
+    if was_down:
+        log.info("STT recovered at %s", config.stt_base_url())
 
 
-async def probe() -> VoiceStatus:
-    global _status
-    stt_ok = await _check(config.stt_base_url()) if config.stt_enabled() else False
-    if config.stt_enabled():
-        log.info("STT %s at %s", "OK" if stt_ok else "UNREACHABLE", config.stt_base_url())
-    _status = VoiceStatus(
-        stt_configured=config.stt_enabled(),
-        stt_reachable=stt_ok,
-    )
-    return _status
-
-
-async def probe_loop(interval: int = 60) -> None:
-    try:
-        while True:
-            await probe()
-            await asyncio.sleep(interval)
-    except asyncio.CancelledError:
-        return
+def record_failure(reason: str = "") -> None:
+    """Called by voice.stt.transcribe() after any non-200 / exception."""
+    _refresh_configured()
+    was_up = not _status.stt_last_checked or _status.stt_reachable
+    _status.stt_reachable = False
+    _status.stt_last_checked = True
+    if was_up:
+        log.info("STT UNREACHABLE at %s (%s)", config.stt_base_url(), reason or "—")

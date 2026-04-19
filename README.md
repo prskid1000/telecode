@@ -371,7 +371,7 @@ Pick a window from the list. The bot records at 3fps, encodes each chunk with ff
 
 ### Voice
 
-Send a voice message in a session topic -- transcribed via STT and sent as text. Active whenever the STT endpoint health probe succeeds; silently skipped when the endpoint is down. Requires an OpenAI-compatible STT endpoint (default `http://localhost:6600/v1`).
+Send a voice message in a session topic -- transcribed via STT and sent as text. No startup probe or background polling: the first voice message is sent straight to the STT endpoint; if that call fails, subsequent voice messages are short-circuited with an "unavailable" reply until the next success. Requires an OpenAI-compatible STT endpoint (default `http://localhost:6600/v1`).
 
 ---
 
@@ -414,7 +414,7 @@ Short-output shells like `shell` or `powershell` can use tighter values (e.g. `0
 | `base_url` | OpenAI-compatible STT endpoint (e.g. `http://localhost:6600/v1`) |
 | `model` | STT model name (e.g. `whisper-1`) |
 
-Activation is automatic: when the endpoint health probe succeeds voice messages are transcribed; otherwise they're silently skipped.
+Activation is lazy: the first voice message hits the endpoint directly; health state is driven by the outcome of that real request (and subsequent ones). No startup probe, no 60s poll loop.
 
 ### `capture` — screen capture cadence
 
@@ -785,7 +785,7 @@ mcp_server/            Streamable-HTTP MCP server (port 1236)
   prompts/             Drop-in prompt modules (auto-discovered)
 
 voice/                 STT availability + transcription
-  health.py            STT availability probe
+  health.py            STT availability state — updated by real transcribe calls
   stt.py               Speech-to-text transcription client
 ```
 
@@ -803,6 +803,6 @@ voice/                 STT availability + transcription
 
 **Screen capture blank/black** -- Window may be on another virtual desktop. Minimized windows are auto-restored.
 
-**Voice not working** -- Start your STT service; the health probe detects it within 60s and voice messages are transcribed automatically.
+**Voice not working** -- Start your STT service and send a voice message; the first one hits the endpoint directly and updates health state. No background probe, so there's no "wait 60s after starting STT" anymore.
 
 **Video encoding fails** -- Ensure ffmpeg is installed and on PATH.
