@@ -951,11 +951,17 @@ class AnthropicStreamState:
 
             self._stop_reason = _finish_reason_to_anthropic(finish)
 
-            # message_delta with stop info + usage
+            # message_delta with stop info + usage. Both input_tokens and
+            # output_tokens MUST be present — claude-cli reads input_tokens
+            # to compute the /context "current usage", and a missing field
+            # surfaces as 0/200k (looks like the entire context is empty).
             out += _sse_event("message_delta", {
                 "type": "message_delta",
                 "delta": {"stop_reason": self._stop_reason, "stop_sequence": None},
-                "usage": {"output_tokens": self._usage["output_tokens"]},
+                "usage": {
+                    "input_tokens":  self._usage["input_tokens"],
+                    "output_tokens": self._usage["output_tokens"],
+                },
             })
             out += _sse_event("message_stop", {"type": "message_stop"})
 
