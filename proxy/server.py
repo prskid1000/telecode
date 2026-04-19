@@ -23,6 +23,7 @@ from aiohttp import web
 
 from proxy import config as proxy_config
 from proxy import managed_tools  # noqa: F401  side-effect: registers tools
+from proxy import request_log
 from proxy import translate as xlate
 from proxy import tokenizer as toks
 from proxy.tool_registry import (

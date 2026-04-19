@@ -47,7 +47,7 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
     from tray.qt_theme import QSS
     from tray.qt_window import SettingsWindow
     from tray import icon as icon_factory
-    from tray.qt_helpers import schedule, patch_settings, read_settings, get_path, build_status
+    from tray.qt_helpers import schedule, patch_settings, read_settings, get_path, build_status, humanize, format_protocol
 
     # Qt wants high-DPI attributes set before QApplication is instantiated
     QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
@@ -76,42 +76,32 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
     menu = QMenu()
     menu.setStyleSheet(QSS)
 
-    # ── Live status info rows ────────────────────────────────────────
-    info_llama = QAction("⬡ Llama: Disabled", menu); info_llama.setEnabled(False)
-    info_proxy = QAction("⬡ Proxy: Disabled", menu); info_proxy.setEnabled(False)
-    info_mcp   = QAction("⬡ MCP: Disabled",   menu); info_mcp.setEnabled(False)
-    info_ses   = QAction("⬢ Sessions: 0 / 0", menu); info_ses.setEnabled(False)
-    for a in (info_llama, info_proxy, info_mcp, info_ses):
-        menu.addAction(a)
-    menu.addSeparator()
-
-    # Open settings (default left-click action)
-    open_settings_action = QAction("Open Settings Window", menu)
-    open_settings_action.triggered.connect(window.toggle_visibility)
-    menu.addAction(open_settings_action)
-    menu.setDefaultAction(open_settings_action)
-
-    reload_action = QAction("Reload Config", menu)
-    def _reload():
-        import config as app_config
-        try:
-            app_config.reload()
-        except Exception as exc:
-            log.error("reload failed: %s", exc)
-    reload_action.triggered.connect(_reload)
-    menu.addAction(reload_action)
-
-    menu.addSeparator()
-
-    # llama quick actions
-    load_action    = QAction("Load Llama Now", menu)
-    unload_action  = QAction("Unload Llama",   menu)
-    restart_action = QAction("Restart Llama",  menu)
     def _sched(coro_factory):
         try:
             schedule(bot_loop, coro_factory())
         except Exception as exc:
             log.warning("schedule: %s", exc)
+
+    def _toggle_and_reload(path: str, value):
+        try:
+            patch_settings(path, value)
+        except Exception as exc:
+            log.error("patch %s failed: %s", path, exc)
+
+    # ── Llama submenu ────────────────────────────────────────────────
+    llama_menu = menu.addMenu("⬡ Llama")
+    llama_header = QAction("Disabled", llama_menu); llama_header.setEnabled(False)
+    llama_model  = QAction("Model: —", llama_menu); llama_model.setEnabled(False)
+    llama_menu.addAction(llama_header)
+    llama_menu.addAction(llama_model)
+    llama_menu.addSeparator()
+    llama_autostart = QAction("Auto Start", llama_menu); llama_autostart.setCheckable(True)
+    llama_autostart.triggered.connect(lambda checked: _toggle_and_reload("llamacpp.auto_start", bool(checked)))
+    llama_menu.addAction(llama_autostart)
+    llama_menu.addSeparator()
+    load_action    = QAction("Load Now",   llama_menu)
+    unload_action  = QAction("Unload",     llama_menu)
+    restart_action = QAction("Restart",    llama_menu)
     def _load():
         async def _do():
             from llamacpp.supervisor import get_supervisor
@@ -135,30 +125,51 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
     load_action.triggered.connect(_load)
     unload_action.triggered.connect(_unload)
     restart_action.triggered.connect(_restart)
-    menu.addAction(load_action)
-    menu.addAction(unload_action)
-    menu.addAction(restart_action)
+    llama_menu.addAction(load_action)
+    llama_menu.addAction(unload_action)
+    llama_menu.addAction(restart_action)
+
+    # ── Proxy submenu ────────────────────────────────────────────────
+    proxy_menu = menu.addMenu("⬡ Proxy")
+    proxy_header = QAction("Disabled", proxy_menu); proxy_header.setEnabled(False)
+    proxy_protos = QAction("Protocols: —", proxy_menu); proxy_protos.setEnabled(False)
+    proxy_menu.addAction(proxy_header)
+    proxy_menu.addAction(proxy_protos)
+    proxy_menu.addSeparator()
+    proxy_enabled = QAction("Enabled (restart required)", proxy_menu); proxy_enabled.setCheckable(True)
+    proxy_enabled.triggered.connect(lambda checked: _toggle_and_reload("proxy.enabled", bool(checked)))
+    proxy_menu.addAction(proxy_enabled)
+    proxy_debug = QAction("Debug Dumps", proxy_menu); proxy_debug.setCheckable(True)
+    proxy_debug.triggered.connect(lambda checked: _toggle_and_reload("proxy.debug", bool(checked)))
+    proxy_menu.addAction(proxy_debug)
+
+    # ── MCP submenu ──────────────────────────────────────────────────
+    mcp_menu = menu.addMenu("⬡ MCP")
+    mcp_header = QAction("Disabled", mcp_menu); mcp_header.setEnabled(False)
+    mcp_tools  = QAction("Tools: 0", mcp_menu); mcp_tools.setEnabled(False)
+    mcp_menu.addAction(mcp_header)
+    mcp_menu.addAction(mcp_tools)
+    mcp_menu.addSeparator()
+    mcp_enabled = QAction("Enabled (restart required)", mcp_menu); mcp_enabled.setCheckable(True)
+    mcp_enabled.triggered.connect(lambda checked: _toggle_and_reload("mcp_server.enabled", bool(checked)))
+    mcp_menu.addAction(mcp_enabled)
+
+    # ── Bot submenu ──────────────────────────────────────────────────
+    bot_menu = menu.addMenu("⬢ Bot")
+    bot_sessions = QAction("Sessions: 0 / 0", bot_menu); bot_sessions.setEnabled(False)
+    bot_group    = QAction("Group: —",        bot_menu); bot_group.setEnabled(False)
+    bot_users    = QAction("Allowed Users: 0", bot_menu); bot_users.setEnabled(False)
+    bot_menu.addAction(bot_sessions)
+    bot_menu.addAction(bot_group)
+    bot_menu.addAction(bot_users)
+
     menu.addSeparator()
 
-    # Open file helpers
-    def _open_path(p: Path) -> None:
-        try:
-            if sys.platform == "win32":
-                os.startfile(str(p))  # noqa: S606
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", str(p)])
-            else:
-                subprocess.Popen(["xdg-open", str(p)])
-        except Exception as exc:
-            log.warning("open %s: %s", p, exc)
-
-    from tray.qt_helpers import settings_path as _sp
-    open_sj = QAction("Open settings.json", menu)
-    open_sj.triggered.connect(lambda: _open_path(_sp()))
-    menu.addAction(open_sj)
-    open_logs = QAction("Open Logs Folder", menu)
-    open_logs.triggered.connect(lambda: _open_path(_sp().parent / "data" / "logs"))
-    menu.addAction(open_logs)
+    # Open settings (default left-click action)
+    open_settings_action = QAction("Open Settings Window", menu)
+    open_settings_action.triggered.connect(window.toggle_visibility)
+    menu.addAction(open_settings_action)
+    menu.setDefaultAction(open_settings_action)
 
     menu.addSeparator()
 
@@ -195,32 +206,65 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
         proxy = st.get("proxy") or {}
         mcp   = st.get("mcp")   or {}
         sessions = st.get("sessions") or []
+        settings = read_settings()
 
-        if llama.get("enabled"):
-            info_llama.setText(
-                f"⬢ Llama: {llama.get('active_model', '—')}"
-                if llama.get("alive") else "⬡ Llama: Idle"
-            )
-        else:
-            info_llama.setText("⬡ Llama: Disabled")
-        if proxy.get("enabled"):
-            from tray.qt_helpers import format_protocol
-            protos = ", ".join(format_protocol(p) for p in proxy.get("protocols", []))
-            info_proxy.setText(f"⬢ Proxy: :{proxy.get('port', '?')} · {protos}")
-        else:
-            info_proxy.setText("⬡ Proxy: Disabled")
-        if mcp.get("enabled"):
-            info_mcp.setText(f"⬢ MCP: :{mcp.get('port', '?')} · {len(mcp.get('registered_tools', []))} Tools")
-        else:
-            info_mcp.setText("⬡ MCP: Disabled")
-        alive = sum(1 for s in sessions if s.get("alive"))
-        info_ses.setText(f"⬢ Sessions: {alive} / {len(sessions)}")
-
+        # ── Llama ────────────────────────────────────────────────────
         alive_bool = bool(llama.get("alive"))
         llama_enabled = bool(llama.get("enabled"))
+        if llama_enabled:
+            llama_menu.setTitle(f"⬢ Llama: {llama.get('active_model') or 'Idle'}" if alive_bool else "⬡ Llama: Idle")
+            llama_header.setText("Running" if alive_bool else "Idle")
+        else:
+            llama_menu.setTitle("⬡ Llama: Disabled")
+            llama_header.setText("Disabled")
+        llama_model.setText(f"Model: {llama.get('active_model') or llama.get('default_model') or '—'}")
+        llama_autostart.blockSignals(True)
+        llama_autostart.setChecked(bool(get_path(settings, "llamacpp.auto_start", False)))
+        llama_autostart.blockSignals(False)
         load_action.setEnabled(llama_enabled and not alive_bool)
         unload_action.setEnabled(llama_enabled and alive_bool)
         restart_action.setEnabled(llama_enabled and alive_bool)
+
+        # ── Proxy ────────────────────────────────────────────────────
+        if proxy.get("enabled"):
+            protos = ", ".join(format_protocol(p) for p in proxy.get("protocols", []))
+            proxy_menu.setTitle(f"⬢ Proxy: :{proxy.get('port', '?')}")
+            proxy_header.setText(f"Port :{proxy.get('port', '?')}")
+            proxy_protos.setText(f"Protocols: {protos or '—'}")
+        else:
+            proxy_menu.setTitle("⬡ Proxy: Disabled")
+            proxy_header.setText("Disabled")
+            proxy_protos.setText("Protocols: —")
+        proxy_enabled.blockSignals(True)
+        proxy_enabled.setChecked(bool(get_path(settings, "proxy.enabled", False)))
+        proxy_enabled.blockSignals(False)
+        proxy_debug.blockSignals(True)
+        proxy_debug.setChecked(bool(get_path(settings, "proxy.debug", False)))
+        proxy_debug.blockSignals(False)
+
+        # ── MCP ──────────────────────────────────────────────────────
+        if mcp.get("enabled"):
+            n_tools = len(mcp.get("registered_tools", []))
+            mcp_menu.setTitle(f"⬢ MCP: :{mcp.get('port', '?')}")
+            mcp_header.setText(f"Port :{mcp.get('port', '?')}")
+            mcp_tools.setText(f"Tools: {n_tools}")
+        else:
+            mcp_menu.setTitle("⬡ MCP: Disabled")
+            mcp_header.setText("Disabled")
+            mcp_tools.setText("Tools: 0")
+        mcp_enabled.blockSignals(True)
+        mcp_enabled.setChecked(bool(get_path(settings, "mcp_server.enabled", False)))
+        mcp_enabled.blockSignals(False)
+
+        # ── Bot ──────────────────────────────────────────────────────
+        alive = sum(1 for s in sessions if s.get("alive"))
+        bot_menu.setTitle(f"⬢ Bot: {alive} / {len(sessions)}")
+        bot_sessions.setText(f"Sessions: {alive} / {len(sessions)}")
+        group_id = get_path(settings, "telegram.group_id", "—")
+        bot_group.setText(f"Group: {group_id}")
+        allowed = get_path(settings, "telegram.allowed_user_ids", []) or []
+        bot_users.setText(f"Allowed Users: {len(allowed)}")
+
         # tooltip
         bits = ["telecode"]
         if alive_bool and llama.get("active_model"):

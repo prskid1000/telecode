@@ -1,83 +1,79 @@
-"""Dark theme QSS for the telecode settings window + tray menu.
+"""Dark theme QSS — sleek, rich, compact.
 
-Single source of truth. Applied at QApplication level so it cascades
-to QMenu (system tray), QMainWindow, and every child widget.
+Design targets:
+  - Information density: every panel packs 15-25% more rows than the
+    previous layout by tightening padding and using two-column grids
+    where the eye naturally groups fields (temp+top_p on one row etc.).
+  - Subtle depth: cards have a 1px border + faint inner highlight;
+    buttons have hover-only accents.
+  - One dark palette — never follows Windows theme.
 """
 from __future__ import annotations
 
-# Base palette — pulled from the same tones we used in the old web UI so
-# the vibe is consistent with screenshots in the README.
-BG          = "#0d1016"
-BG_ELEV     = "#141924"
-BG_CARD     = "#1a202e"
-BG_ROW      = "#1e2536"
+# ── Palette ──────────────────────────────────────────────────────────
+BG          = "#0c0f14"
+BG_ELEV     = "#10141c"
+BG_CARD     = "#151a24"
+BG_ROW      = "#1a2030"
+BG_HOVER    = "#1d2334"
 FG          = "#e6ebf2"
-FG_DIM      = "#94a2b8"
-FG_MUTE     = "#5b6a82"
+FG_DIM      = "#8a96aa"
+FG_MUTE     = "#4f5a70"
 ACCENT      = "#6ba4ff"
 ACCENT_2    = "#56e0c2"
 WARN        = "#f5a524"
 ERR         = "#ff6e6e"
 OK          = "#56e0c2"
-BORDER      = "#232c3e"
+BORDER      = "#1e2636"
+BORDER_SOFT = "#171d28"
 
 
 QSS = f"""
 * {{
     color: {FG};
-    font-family: "Segoe UI", Inter, Arial, sans-serif;
-    font-size: 13px;
+    font-family: "Segoe UI", Inter, -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 12px;
 }}
 
 QWidget#window_root {{
     background: {BG};
 }}
 
+/* Menus (tray + context) */
 QMenu {{
     background: {BG_CARD};
     border: 1px solid {BORDER};
-    border-radius: 8px;
-    padding: 6px;
+    border-radius: 6px;
+    padding: 4px;
     color: {FG};
+    font-size: 12px;
 }}
 QMenu::item {{
-    padding: 6px 22px 6px 12px;
-    border-radius: 4px;
-    margin: 1px 2px;
+    padding: 5px 18px 5px 10px;
+    border-radius: 3px;
+    margin: 0 2px;
 }}
-QMenu::item:selected {{
-    background: {BG_ROW};
-}}
-QMenu::item:disabled {{
-    color: {FG_MUTE};
-}}
-QMenu::separator {{
-    height: 1px;
-    background: {BORDER};
-    margin: 4px 6px;
-}}
-QMenu::indicator {{
-    width: 14px;
-    height: 14px;
-    margin-left: 4px;
-}}
+QMenu::item:selected {{ background: {BG_ROW}; }}
+QMenu::item:disabled {{ color: {FG_MUTE}; }}
+QMenu::separator {{ height: 1px; background: {BORDER}; margin: 3px 4px; }}
 
 /* Sidebar */
 QListWidget#sidebar {{
     background: {BG_ELEV};
     border: none;
+    border-right: 1px solid {BORDER_SOFT};
     outline: 0;
-    padding: 10px 6px;
-    font-size: 13.5px;
+    padding: 6px 4px;
+    font-size: 12px;
 }}
 QListWidget#sidebar::item {{
-    padding: 7px 10px;
-    border-radius: 6px;
+    padding: 6px 10px;
+    border-radius: 4px;
     color: {FG_DIM};
-    margin-bottom: 2px;
+    margin-bottom: 1px;
 }}
 QListWidget#sidebar::item:hover {{
-    background: {BG_CARD};
+    background: {BG_HOVER};
     color: {FG};
 }}
 QListWidget#sidebar::item:selected {{
@@ -89,124 +85,118 @@ QListWidget#sidebar::item:selected {{
 /* Titlebar */
 QWidget#titlebar {{
     background: {BG};
-    border-bottom: 1px solid {BORDER};
+    border-bottom: 1px solid {BORDER_SOFT};
 }}
 QLabel#titlebar_title {{
     font-weight: 500;
-    font-size: 13px;
+    font-size: 12px;
     color: {FG};
+    letter-spacing: 0.01em;
 }}
-QLabel#titlebar_icon {{
-    font-size: 16px;
-}}
+QLabel#titlebar_icon {{ font-size: 13px; }}
 QPushButton.tb_btn {{
     background: transparent;
     border: none;
     color: {FG_DIM};
-    padding: 0 16px;
-    font-size: 14px;
-    min-height: 32px;
+    padding: 0 14px;
+    font-size: 13px;
+    min-height: 30px;
+    max-height: 30px;
 }}
-QPushButton.tb_btn:hover {{
-    background: {BG_ROW};
-    color: {FG};
-}}
-QPushButton.tb_close:hover {{
-    background: #e81123;
-    color: white;
-}}
+QPushButton.tb_btn:hover {{ background: {BG_HOVER}; color: {FG}; }}
+QPushButton.tb_close:hover {{ background: #e81123; color: white; }}
 
-/* Content area */
-QScrollArea {{
-    background: {BG};
-    border: none;
-}}
-QWidget#content {{
-    background: {BG};
-}}
+/* Scroll area + content */
+QScrollArea {{ background: {BG}; border: none; }}
+QWidget#content {{ background: {BG}; }}
 
-/* Section cards */
+/* Cards */
 QFrame.card {{
     background: {BG_CARD};
     border: 1px solid {BORDER};
-    border-radius: 10px;
+    border-radius: 8px;
 }}
 QLabel.card_title {{
-    font-size: 15px;
+    font-size: 13px;
     font-weight: 600;
     color: {FG};
+    letter-spacing: -0.01em;
 }}
 QLabel.card_sub {{
-    font-size: 12px;
+    font-size: 11px;
     color: {FG_DIM};
 }}
 QLabel.section_header {{
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 600;
     color: {FG_MUTE};
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-top: 4px;
+    letter-spacing: 0.08em;
+    padding-top: 2px;
 }}
 
 /* Row label / help text */
 QLabel.row_label {{
     color: {FG};
-    font-size: 13px;
+    font-size: 12px;
 }}
 QLabel.row_help {{
     color: {FG_MUTE};
-    font-size: 11.5px;
+    font-size: 10.5px;
 }}
 QLabel.key_path {{
     color: {FG_MUTE};
-    font-family: "JetBrains Mono", Consolas, monospace;
-    font-size: 11px;
+    font-family: "JetBrains Mono", Consolas, "Courier New", monospace;
+    font-size: 10px;
 }}
+QLabel.row_hint {{
+    color: {FG_MUTE};
+    font-size: 10.5px;
+}}
+
+/* Hover highlight on rows */
+QWidget.row:hover {{ background: {BG_HOVER}; border-radius: 4px; }}
 
 /* Inputs */
 QLineEdit, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QTextEdit {{
-    background: #11151f;
+    background: #0d1118;
     border: 1px solid {BORDER};
-    border-radius: 6px;
-    padding: 6px 10px;
+    border-radius: 4px;
+    padding: 4px 8px;
     color: {FG};
     selection-background-color: {ACCENT};
     selection-color: {BG};
+    min-height: 20px;
 }}
 QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus,
 QPlainTextEdit:focus, QTextEdit:focus {{
     border: 1px solid {ACCENT};
+    background: #0f141d;
 }}
 
 QComboBox {{
-    background: #11151f;
+    background: #0d1118;
     border: 1px solid {BORDER};
-    border-radius: 6px;
-    padding: 5px 30px 5px 10px;
+    border-radius: 4px;
+    padding: 4px 22px 4px 8px;
     color: {FG};
-    min-height: 24px;
+    min-height: 20px;
 }}
-QComboBox:hover, QComboBox:focus {{
-    border: 1px solid {ACCENT};
-}}
-QComboBox::drop-down {{
-    border: none;
-    width: 24px;
-}}
+QComboBox:hover, QComboBox:focus {{ border: 1px solid {ACCENT}; }}
+QComboBox::drop-down {{ border: none; width: 20px; }}
 QComboBox QAbstractItemView {{
     background: {BG_CARD};
     border: 1px solid {BORDER};
-    border-radius: 6px;
+    border-radius: 4px;
     color: {FG};
     selection-background-color: {BG_ROW};
     outline: 0;
-    padding: 4px;
+    padding: 2px;
 }}
 
 /* Slider */
 QSlider::groove:horizontal {{
-    height: 4px;
+    height: 3px;
     background: {BORDER};
     border-radius: 2px;
 }}
@@ -216,48 +206,36 @@ QSlider::sub-page:horizontal {{
 }}
 QSlider::handle:horizontal {{
     background: {FG};
-    width: 14px;
-    margin-top: -5px;
-    margin-bottom: -5px;
-    border-radius: 7px;
+    width: 10px;
+    margin-top: -4px;
+    margin-bottom: -4px;
+    border-radius: 5px;
 }}
-QSlider::handle:horizontal:hover {{
-    background: {ACCENT};
-}}
+QSlider::handle:horizontal:hover {{ background: {ACCENT}; }}
 
 /* Buttons */
 QPushButton {{
     background: {BG_ROW};
     border: 1px solid {BORDER};
-    border-radius: 6px;
-    padding: 6px 14px;
+    border-radius: 4px;
+    padding: 4px 10px;
     color: {FG};
-    font-size: 12.5px;
+    font-size: 11.5px;
+    min-height: 22px;
 }}
-QPushButton:hover {{
-    border: 1px solid {ACCENT};
-}}
-QPushButton:disabled {{
-    color: {FG_MUTE};
-    background: {BG_CARD};
-}}
+QPushButton:hover {{ border: 1px solid {ACCENT}; background: {BG_HOVER}; }}
+QPushButton:disabled {{ color: {FG_MUTE}; background: {BG_CARD}; }}
 QPushButton.primary {{
     background: {ACCENT};
     color: {BG};
     border: 1px solid {ACCENT};
     font-weight: 600;
 }}
-QPushButton.primary:hover {{
-    background: #7db0ff;
-}}
+QPushButton.primary:hover {{ background: #7db0ff; }}
 QPushButton.primary:disabled {{
-    background: {BG_ROW};
-    color: {FG_MUTE};
-    border: 1px solid {BORDER};
+    background: {BG_ROW}; color: {FG_MUTE}; border: 1px solid {BORDER};
 }}
-QPushButton.danger {{
-    color: {ERR};
-}}
+QPushButton.danger {{ color: {ERR}; }}
 QPushButton.danger:hover {{
     background: rgba(255, 110, 110, 25);
     border: 1px solid {ERR};
@@ -267,79 +245,58 @@ QPushButton.ghost {{
     border: 1px solid transparent;
     color: {FG_DIM};
 }}
-QPushButton.ghost:hover {{
-    color: {FG};
-    border: 1px solid {BORDER};
-}}
+QPushButton.ghost:hover {{ color: {FG}; border: 1px solid {BORDER}; }}
 
-/* Status pills */
+/* Status pill strip */
 QLabel.stat_pill {{
     background: {BG_CARD};
     border: 1px solid {BORDER};
-    border-radius: 20px;
-    padding: 4px 12px;
-    font-size: 11.5px;
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-size: 11px;
     color: {FG_DIM};
 }}
-QLabel.stat_pill_ok {{
-    color: {OK};
-    border-color: {OK};
-}}
-QLabel.stat_pill_err {{
-    color: {ERR};
-    border-color: {ERR};
-}}
+QLabel.stat_pill_ok  {{ color: {OK};  border-color: rgba(86, 224, 194, 80); }}
+QLabel.stat_pill_err {{ color: {ERR}; border-color: rgba(255, 110, 110, 80); }}
 
-/* Toggle labels */
-QLabel.toggle_label {{
-    color: {FG};
-}}
+QLabel.toggle_label {{ color: {FG}; font-size: 12px; }}
 
 /* Scrollbars */
-QScrollBar:vertical {{
-    background: transparent;
-    width: 10px;
-}}
+QScrollBar:vertical {{ background: transparent; width: 8px; margin: 2px 0; }}
 QScrollBar::handle:vertical {{
-    background: #232c3e;
-    border-radius: 5px;
-    min-height: 20px;
+    background: #1e2636; border-radius: 4px; min-height: 18px;
 }}
-QScrollBar::handle:vertical:hover {{
-    background: #2a3147;
-}}
-QScrollBar::add-line, QScrollBar::sub-line {{
-    height: 0;
-}}
+QScrollBar::handle:vertical:hover {{ background: #2a3147; }}
+QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
 
-/* Save bar */
-QFrame#save_bar {{
-    background: {BG};
-    border-top: 1px solid {BORDER};
-}}
-QLabel#save_bar_count {{
-    color: {FG_DIM};
-    font-size: 12px;
-}}
-
-/* Table (sessions) */
+/* Tables */
 QTableWidget {{
     background: {BG_CARD};
     border: 1px solid {BORDER};
-    border-radius: 8px;
-    gridline-color: {BORDER};
+    border-radius: 6px;
+    gridline-color: {BORDER_SOFT};
     selection-background-color: {BG_ROW};
-    alternate-background-color: {BG_ROW};
+    alternate-background-color: #161c28;
+    font-size: 11.5px;
 }}
 QHeaderView::section {{
     background: {BG_ELEV};
     color: {FG_MUTE};
     border: none;
     border-bottom: 1px solid {BORDER};
-    padding: 6px 10px;
-    font-size: 11px;
-    font-weight: 500;
+    padding: 4px 8px;
+    font-size: 10px;
+    font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.06em;
+}}
+
+/* Tool tips */
+QToolTip {{
+    background: {BG_CARD};
+    border: 1px solid {BORDER};
+    color: {FG};
+    padding: 4px 8px;
+    font-size: 11px;
 }}
 """
