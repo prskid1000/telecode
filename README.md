@@ -82,6 +82,91 @@ To run in the background without a console window (Windows):
 pythonw main.py
 ```
 
+### System tray UI
+
+`python main.py` starts the Telegram bot AND a native system-tray icon
+together — one process, one entry point. Right-click the tray icon for
+the full control surface:
+
+```
+Status info rows (live)
+─
+llama.cpp ▸ Enabled, Active Model swap, Load/Unload/Restart,
+            sampling presets, reasoning toggles, idle-unload preset,
+            Open llama.log
+Proxy     ▸ Enabled, Protocols, tool_search/auto_load_tools/strip_reminders/
+            debug, max_roundtrips/ping_interval presets,
+            Profiles ▸ per-profile editor
+MCP       ▸ Enabled
+Managed   ▸ Per-tool live toggles (web_search, code_execution, …)
+Telegram  ▸ Streaming + Capture presets
+Voice     ▸ STT enabled
+Computer  ▸ API format + capture presets
+Sessions  ▸ Click any session to kill, or Kill All
+─
+Reload Config / Open settings.json / Open Logs Folder / Quit
+```
+
+- **Mint lightning-bolt icon** on transparent background — reads on dark or
+  light Windows 11 taskbars.
+- **Every checkbox/preset writes settings.json + calls `config.reload()`**
+  → effective on the next request that reads the value (no restart needed
+  for sampling/reasoning/profile flags). Items marked ⟳ in the menu need
+  a service restart (proxy port, MCP port — sockets are bound at start).
+- **Runtime tool toggles** (Managed Tools / MCP) persist to
+  `data/runtime-overrides.json` and take effect immediately.
+- Last-active llama model persists to `data/llama-state.json` (used as
+  the implicit default; **NOT** auto-loaded on startup unless
+  `llamacpp.auto_start: true`).
+
+To install the dependency:
+
+```bash
+pip install pystray
+```
+
+To run with no console window on Windows: `pythonw main.py`.
+
+### llama.cpp inference (local models)
+
+Telecode can own a local `llama-server` process end-to-end: the supervisor
+spawns, babysits, and model-swaps `llama-server` automatically. Enable it in
+`settings.json`:
+
+```json
+{
+  "llamacpp": {
+    "enabled": true,
+    "binary": "C:/path/to/llama-server.exe",
+    "default_model": "qwen3.5-35b",
+    "models": {
+      "qwen3.5-35b": {
+        "path": "C:/path/to/model.gguf",
+        "mmproj": "C:/path/to/mmproj-F16.gguf",
+        "ctx_size": 262144,
+        "n_gpu_layers": 40,
+        "flash_attn": true,
+        "cache_type_k": "q4_0",
+        "cache_type_v": "q4_0",
+        "n_cpu_moe": 31,
+        "jinja": true
+      }
+    }
+  }
+}
+```
+
+Every LM-Studio load-tab knob (40+ flags: `ubatch_size`, `parallel`,
+`flash_attn`, `cache_type_k/v`, `n_cpu_moe`, `mmproj`, `draft_model`,
+`grammar`, `reasoning_budget`, …) maps to a llama-server CLI flag. Anything
+not special-cased can be passed verbatim via `extra_args: [["--flag","val"]]`.
+See `settings.example.json` for the full list.
+
+With `llamacpp.enabled: true`, the proxy at `:1235` becomes the
+single endpoint for both Anthropic (`/v1/messages`) and OpenAI
+(`/v1/chat/completions`) clients — point `ANTHROPIC_BASE_URL` or
+`OPENAI_BASE_URL` at it.
+
 #### Auto-start on login (Windows)
 
 Create a scheduled task (requires admin):

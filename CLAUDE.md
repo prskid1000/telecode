@@ -39,26 +39,51 @@ Computer control (vision LLM):
     -> capture post-action screenshot -> edit same photo message
     -> repeat (one action per LLM call) until done=true or user sends new message
 
-Tool-search proxy (for local models):
-    Claude Code request (with ~100+ tools)
-    -> proxy intercepts on http://127.0.0.1:1235/v1/messages
-    -> split_tools(): core tools forwarded, rest stored as deferred
-    -> inject ToolSearch meta-tool + managed-tool schemas into core tools
-    -> _handle_streaming owns the response:
-        · resp.prepare() + _start_heartbeat(: keepalive 2s, event: ping 10s)
-        · write_lock shared across all round-trips (heartbeat + main loop)
-    -> forward to LM Studio (http://localhost:1234)
-    -> _forward_stream branches on first content_block_start:
-        * intercepted tool_use → buffer just the input, return tool_use dict
-        * anything else → flush + stream rest LIVE to client
-          (upstream indices shifted past status blocks already emitted)
-    -> intercept handler runs (ToolSearch BM25 / web_search / code_exec /
-       auto_load / unloaded-guard)
-    -> _emit_live_status writes `● Tool(arg)` + `└ summary` synthetic text
-       block to the wire IMMEDIATELY (user sees it now, not at end)
-    -> append [tool_use, tool_result] to messages; loop up to
-       proxy.max_roundtrips rounds
-    -> final clean response streams live to client
+llama.cpp + dual-protocol proxy (for local models):
+    bot startup
+    -> LlamaSupervisor.start_default(): spawn llama-server with argv built
+       from llamacpp.models.<default>.* (-m, --ctx-size, -ngl, --mmproj,
+       draft model, cache types, chat_template, extra_args escape hatch)
+    -> wait /health until "ok"
+    -> proxy starts on http://127.0.0.1:1235
+
+    client request
+    -> /v1/messages (Anthropic) or /v1/chat/completions (OpenAI) — both
+       routes active; protocol chosen by path
+       /v1/models — shape chosen by header sniff (anthropic-version /
+       x-api-key → Anthropic shape; else OpenAI shape)
+    -> proxy translates to INTERNAL (OpenAI) shape via proxy/translate.py
+       · cache_control stripped recursively
+       · Anthropic content arrays → OpenAI content parts (text / image_url)
+       · tool_use / tool_result → OpenAI tool_calls / role:"tool"
+       · inference defaults merged from llamacpp.inference + per-model
+    -> LlamaSupervisor.ensure_model(): swap process if body.model resolves
+       to a different registered model (restart with new argv, wait /health)
+    -> split_tools(): core + deferred (ToolSearch BM25); managed tools
+       always injected; ToolSearch meta-tool present when deferred exists
+    -> intercept loop on internal shape (proxy/server._run_streaming):
+        · resp.prepare() + heartbeat (SSE comments 2s; Anthropic `event: ping`
+          every `proxy.ping_interval` seconds for Anthropic clients)
+        · write_lock shared across all round-trips
+        · POST to llama.cpp /v1/chat/completions with stream=true
+        · first content signal (tool_call.name or content delta) decides:
+            intercepted name → assemble arguments, break round, run handler,
+                              emit status line + append assistant+tool
+                              messages, re-loop
+            passthrough      → translate OpenAI SSE live to client
+                              (AnthropicStreamState for Anthropic clients
+                               reconstructs message_start / content_block_* /
+                               message_delta / message_stop, mapping
+                               <think>...</think> to `thinking` blocks via
+                               ReasoningState; OpenAI clients get verbatim
+                               chunks with model field rewritten to the
+                               client's alias)
+    -> status blocks:
+        Anthropic client: synthetic text content blocks at indices 0..N-1
+        OpenAI client:    synthetic chat.completion.chunk content deltas
+    -> /v1/messages/count_tokens uses llama.cpp /apply-template + /tokenize
+       — accurate, no max_tokens=1 round-trip hack
+    -> /v1/embeddings forwarded verbatim to llama-server
 ```
 
 - **Session key:** `{backend}:{name}` -- colon is the separator; do not use colons in names.
@@ -107,14 +132,24 @@ Tool-search proxy (for local models):
 | `backends/registry.py` | Auto-built from `settings.json` tools; `get_backend`, `all_backends`, `refresh` |
 | `backends/params.py` | Load tool params from settings |
 | `voice/*` | STT health probe, transcribe |
+| `llamacpp/supervisor.py` | Spawns and babysits llama-server subprocess; model-swap on demand |
+| `llamacpp/argv.py` | Builds llama-server CLI argv from `llamacpp.models.<m>` + `extra_args` |
+| `llamacpp/config.py` | `llamacpp.*` settings accessors + model registry resolution |
+| `proc_group.py` | Windows Job Object (`KILL_ON_JOB_CLOSE`) — binds every child PID we spawn (llama-server, Tailscale funnels, PTY CLIs) to this Python process's lifetime so the OS reaps everything if we die for any reason. Also `kill_process_tree(pid)` for graceful tree shutdown via `taskkill /T`. |
+| `tray/app.py` | In-process tray UI (pystray). Runs on a daemon thread spawned by `main.py:_post_init`. Menu actions call directly into `LlamaSupervisor` / `SessionManager` / `runtime_state`; async ones via `asyncio.run_coroutine_threadsafe(coro, bot_loop)`. Boolean settings.json toggles hit `_patch_settings()` → atomic write + `config.reload()`. Conditional disabling via pystray `enabled=callable`. |
+| `tray/icon.py` | Mint lightning-bolt icon (4× LANCZOS supersample, transparent background). One static image — never reassigned at runtime (avoids the pystray Win32 ghost-icon bug). |
+| `proxy/runtime_state.py` | Persists managed-tool / MCP-tool toggles to `data/runtime-overrides.json`. `is_managed_enabled(name)` consulted by `proxy/server.py` before injecting; survives restarts. |
+| `llamacpp/state.py` | Persists last-active llama model to `data/llama-state.json`. Used as the implicit default when a request omits `model`. NOT auto-loaded on startup unless `llamacpp.auto_start: true`. |
 | `proxy/__main__.py` | Standalone entry: `python -m proxy` |
-| `proxy/server.py` | aiohttp streaming proxy with intercept loop (ToolSearch + managed tools) |
+| `proxy/server.py` | Dual-protocol (Anthropic + OpenAI) aiohttp proxy with intercept loop |
+| `proxy/translate.py` | Anthropic ↔ OpenAI shape conversions; ReasoningState `<think>` state machine; AnthropicStreamState that reconstructs message_start / content_block_* / thinking / tool_use / message_stop from OpenAI SSE |
+| `proxy/tokenizer.py` | Wrapper around llama.cpp `/tokenize` + `/apply-template` for accurate count_tokens |
 | `proxy/tool_search.py` | BM25 + regex search engine (zero deps) |
-| `proxy/tool_registry.py` | Core/deferred tool splitting, ToolSearch + managed tool schema injection |
-| `proxy/llm.py` | Generic `structured_call(prompt, schema)` — upstream LLM via `/v1/chat/completions` for proxy-internal use |
+| `proxy/tool_registry.py` | Core/deferred tool splitting, ToolSearch meta-tool schema, system instruction loading |
+| `proxy/llm.py` | `structured_call(prompt, schema)` — llama.cpp via `/v1/chat/completions` for proxy-internal use |
 | `proxy/managed_tools.py` | Registry of proxy-handled tools (WebSearch, speak, transcribe); schemas + handlers + LLM hooks |
 | `proxy/web_search.py` | Brave Search scraper + result formatter |
-| `proxy/config.py` | Proxy settings (port, upstream, upstream_model, core tools, BM25 params, web_search, client_profiles, model_mapping) |
+| `proxy/config.py` | Proxy settings (port, protocols, CORS, core tools, client_profiles, model_mapping) |
 | `proxy/instructions/system.md` | Default Claude Code system instruction (tool_search path) |
 | `proxy/instructions/office.md` | Office add-in profile system instruction |
 | `mcp_server/app.py` | FastMCP instance (stateless streamable HTTP) |
@@ -133,9 +168,11 @@ Tool-search proxy (for local models):
 1. **Config** -- only `settings.json`; no scattered env vars except `TELECODE_SETTINGS`.
 2. **`config.py`** -- always `config.foo()`, never cached module-level constants for values that can change.
 3. **Sessions** -- key format `backend:name`; routing by `thread_id` only.
-4. **Processes** -- real PTY (Unix `openpty`, Windows ConPTY via pywinpty), not plain pipes. Screen capture uses PrintWindow (Win) / screencapture (Mac) / import (Linux), not PTY. Computer control uses `pyautogui` for mouse/keyboard.
+4. **Processes** -- real PTY (Unix `openpty`, Windows ConPTY via pywinpty), not plain pipes. Screen capture uses PrintWindow (Win) / screencapture (Mac) / import (Linux), not PTY. Computer control uses `pyautogui` for mouse/keyboard. llama-server is spawned and babysat by `LlamaSupervisor`; do not start it manually in the same lifecycle.
 5. **Telegram** -- `ParseMode.HTML`; escape user/process text with `html.escape()` where needed.
 6. **No** in-bot AI and **no** separate "memory" layer -- CLIs own context.
+7. **`cache_control`** -- always stripped in the translator; never a per-profile toggle. llama.cpp does its own slot-based KV caching; Anthropic's cache_control metadata has no meaning downstream.
+8. **Internal canonical shape is OpenAI.** All intercept-loop logic works on OpenAI tools / tool_calls / role:"tool" messages. Protocol-specific concerns live only in the two `ClientAdapter` subclasses and in `proxy/translate.py`.
 
 ---
 
@@ -203,73 +240,167 @@ Other tunables near top of `process.py`: screen rows/history size.
 
 ---
 
+## Child-process lifetime (`proc_group.py`)
+
+Every subprocess we spawn — llama-server, Tailscale funnel processes, PTY-driven CLIs (Claude Code, Codex, bash, powershell) — gets bound to a single process-wide Windows Job Object created lazily on first call to `bind_to_lifetime_job(pid, proc=…)`. The job has the `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` flag, so when this Python interpreter exits **for any reason** (Ctrl+C, Task Manager kill, pythonw crash, OS shutdown), the OS releases the job handle, the job closes, and every member process is terminated by the kernel.
+
+Belt-and-braces:
+- `atexit.register(_atexit_kill_all)` — covers clean exits where pywin32 isn't available; calls `proc.kill()` on every tracked Popen / asyncio.subprocess.Process.
+- `kill_process_tree(pid, force=False)` — graceful path. Uses `taskkill /PID <pid> /T` (`/F` if force) on Windows or `os.killpg` on Unix. Walks the whole process tree, so workers spawned by the immediate child also die.
+
+The supervisor's `_stop_locked` calls `kill_process_tree` first (graceful), waits 4s, then `kill_process_tree(force=True)`. Sessions/process.py wires PTY children via `bind_to_lifetime_job`. Tailscale funnels in main.py do the same.
+
+If a tracked subprocess refuses to die: check `tasklist /FI "IMAGENAME eq llama-server.exe"` after telecode exits — should be empty within ~2s. If not, the Job Object didn't take (look for `proc_group: could not create Job Object` in `data/logs/telecode.log`) — usually a missing `pywin32` install.
+
+---
+
+## System tray UI (`tray/`)
+
+Native pystray menu running in a daemon thread inside the bot process.
+There is **no separate tray process, no webview, no HTTP RPC, no PyInstaller
+bundle** — `python main.py` (or `pythonw main.py` for no console) starts
+both the Telegram bot and the tray together.
+
+Architecture:
+- `main.py:_post_init` calls `tray.app.start_tray_in_thread(app, loop)` after
+  the bot is initialized.
+- pystray runs on a daemon thread; menu callbacks fire on that thread.
+- Sync actions (settings patch, log open) run directly.
+- Async actions (model swap, session kill) use
+  `asyncio.run_coroutine_threadsafe(coro, bot_loop)` to schedule onto the
+  Telegram bot's asyncio loop.
+- Quit → `app.stop_running()` scheduled on the loop → `run_polling` returns
+  → process exits cleanly.
+
+Menu structure (every label is Title Cased; tool IDs like `web_search`
+get `_humanize()`d to `Web Search` for display only):
+
+```
+Status info rows (llama / proxy / mcp / sessions)
+─
+llama.cpp ▸ Enabled, Active Model radio, Load Now / Unload / Restart,
+            Auto-Start On Launch, Idle Unload + Ready Timeout presets,
+            Sampling presets (temp/top_p/top_k/min_p/repeat/presence),
+            Reasoning subsection (Use Reasoning + Parse <think> + Show),
+            Open llama.log
+Proxy     ▸ Enabled, Protocols multi-checkbox, 4 boolean flags,
+            Max Round-Trips + Ping Interval presets,
+            Profiles ▸ per-profile { System Instruction radio,
+                                     Inject Managed Tools checkboxes,
+                                     4 booleans },
+            Open telecode.log
+MCP       ▸ Enabled (per-tool toggles intentionally read-only — MCP
+            server's tool exposure is fixed at registration time;
+            Managed Tools is the live-toggle surface)
+Managed   ▸ Per-tool checkboxes (runtime-overrides.json, hot)
+Telegram  ▸ Streaming presets (5) + Capture presets (2)
+Voice     ▸ STT enabled
+Computer  ▸ API Format radio + Capture Interval + Max History presets
+Sessions  ▸ Click-to-kill list + Kill All
+─
+Reload Config / Open settings.json (default left-click) / Open Logs Folder
+─
+Quit Telecode
+```
+
+Conditional disabling via `enabled=callable`:
+- Subsystem submenu items grey out when `<subsystem>.enabled = false`.
+- Load disabled when alive; Unload/Restart disabled when not alive.
+- Show Reasoning disabled when Parse OFF; both disabled when Use Reasoning OFF.
+
+Persistence:
+- All boolean/preset toggles → `_patch_settings()` writes settings.json
+  atomically + calls `config.reload()` → effective on next reader's call.
+- Managed/MCP-tool toggles → `proxy/runtime_state.py` →
+  `data/runtime-overrides.json`.
+- Last-active llama model → `data/llama-state.json` (used as implicit
+  default; not auto-loaded on startup unless `llamacpp.auto_start: true`).
+
+pystray gotcha: `_assert_action` rejects callables with
+`co_argcount > 2`. The pattern `lambda _i, _it, key=val: ...` has
+argcount=3 (defaults count). Use `TrayApp._act(fn, *bound)` which
+returns a clean 2-arg lambda.
+
+---
+
+## llama.cpp supervisor (`llamacpp/`)
+
+1. **Spawning:** `LlamaSupervisor.start_default()` runs from `main.py:_post_init` BEFORE the proxy. `llamacpp.binary` → `shutil.which` → `subprocess.Popen`. stdout+stderr merged into `data/logs/llama.log` (append mode, one `===== spawning =====` banner per restart).
+
+2. **argv builder** (`llamacpp/argv.py`): walks `llamacpp.models.<model>` and emits flags via a table-driven mapper — `ctx_size → --ctx-size`, `n_gpu_layers → --n-gpu-layers`, `flash_attn → --flash-attn`, `mmproj → --mmproj`, `draft_model → --model-draft`, `chat_template`, `jinja`, `cache_type_k/v`, `slot_save_path`, LoRA, grammar, etc. Anything not special-cased goes through `extra_args: [["--flag","value"]]` verbatim. Both per-model and top-level `llamacpp.extra_args` are honored.
+
+3. **Model swap:** `ensure_model(name)` resolves the request's model through `llamacpp.models` → `proxy.model_mapping` → `default_model`. If the resolved key differs from the running model, the supervisor stops and respawns with the new argv; `/health` is polled until `"ok"`. Swap latency surfaces as normal generation time — heartbeat pings already cover it.
+
+4. **Ready probe:** `/health` status `"ok"` = loaded + ready; `503` / `"loading model"` = still warming up; connection errors = not up yet. Deadline = `llamacpp.ready_timeout_sec` (default 120).
+
+5. **Shutdown:** `shutdown_supervisor()` in `main.py:_post_shutdown` sends SIGTERM (Win: `terminate()`), waits 4s, then `kill()`. Fired AFTER the proxy runner so no request is mid-flight.
+
+---
+
 ## Proxy pipeline (`proxy/`)
 
-Anthropic-API-compatible middleware for local models (LM Studio, Ollama, etc.). Every transform is an independent flag; profiles override per-client.
+Dual-protocol middleware in front of llama.cpp. Both **Anthropic** `/v1/messages` and **OpenAI** `/v1/chat/completions` are exposed to clients; internally everything is canonicalised to OpenAI shape (llama.cpp's native format) before hitting upstream. Every transform is an independent flag; profiles override per-client.
 
-1. **Startup:** `start_proxy_background()` from `main.py:_post_init`. Port 1235 by default. Also runs standalone via `python -m proxy`.
+1. **Startup:** `start_proxy_background()` from `main.py:_post_init`, AFTER the supervisor. Port 1235 by default. Also runs standalone via `python -m proxy` (supervisor spawn must already be running in that mode).
 
-2. **Profile matching:** `_match_profile(headers)` — first `client_profile` whose `match.header` contains `match.contains` wins. Each profile independently overrides any feature flag; unset fields fall back to global `proxy.*`.
+2. **Protocols** (`proxy.protocols`): `["anthropic", "openai"]` by default — both route sets registered. Disabling one unregisters its routes. `/v1/models` stays dual and picks shape by header sniff (`anthropic-version` / `x-api-key` → Anthropic, else OpenAI).
 
-3. **Model mapping** (`proxy.model_mapping`): rewrites `body.model` (e.g. `claude-opus-4-6` → `qwen3.5-35b-a3b`). Applied to both `/v1/messages` and `/v1/models`. The response `model` field is **reverse-mapped** back to the client-facing alias (in `message_start` for streaming, in the JSON body for non-streaming), so clients tracking request/response model IDs see what they sent.
+3. **Profile matching:** `_match_profile(headers)` — first `client_profile` whose `match.header` contains `match.contains` wins. Each profile independently overrides any feature flag; unset fields fall back to global `proxy.*`.
 
-4. **Tool filtering** (profile-driven): `strip_tool_names` drops tools by exact name (Anthropic's hosted tool names are stable across versions, so `["web_search", "code_execution"]` catches every version). `strip_cache_control` (default `true`) removes the `cache_control` key LM Studio rejects. Runs before any splitting.
+4. **Model mapping** (`proxy.model_mapping`): rewrites `body.model` (e.g. `claude-opus-4-6` → `qwen3.5-35b`). `body.model` is resolved via `llama_cfg.resolve_model()` (registry → mapping → default). Response `model` is reverse-mapped back to the client's alias.
 
-5. **Managed-tool injection** (`inject_managed`): list of names from the managed-tool registry. For each, the matching name + its `strip_from_cc` list are added to the strip set; its schema is injected into `body.tools`. Works whether or not `tool_search` is on. Managed tools are always intercepted in the loop (no separate flag — interception is the proxy's job).
+5. **Client-body translation** (`proxy/translate.py`):
+   - **anthropic_request_to_internal**: Anthropic blocks → OpenAI content parts (text/image_url). Tool_use → assistant `tool_calls`. Tool_result arrays → `role:"tool"` string content + lifted user message with image parts (OpenAI `tool` role requires string content; images ride alongside). `cache_control` dropped recursively. `system` (string or list) flattened into leading `{"role":"system"}`.
+   - **openai_request_to_internal**: near-identity; applies inference defaults, sets `stream_options.include_usage=true`, `cache_prompt=true`.
+   - Inference defaults merged from `llamacpp.inference` + per-model `llamacpp.models.<m>.inference_defaults`, overridable by request body.
 
-6. **Tool search** (`tool_search: true`): self-contained feature. `split_tools()` in `tool_registry.py` takes `(tools, core_names, strip_names, inject_schemas)`. Tools in `core_names` stay core; `strip_names` are dropped; everything else becomes deferred. ToolSearch meta-tool is injected when deferred is non-empty, and is always intercepted by the loop. Deferred names are listed in a `<system-reminder>` injected into the first user message.
+6. **Managed-tool injection** (`inject_managed`): registry names + their `strip_from_cc` list become a strip set; Anthropic-shape schemas are converted to OpenAI-shape tools and injected. Always intercepted.
 
-6a. **Auto-load** (`auto_load_tools: true`): when the model calls a deferred tool by name (no ToolSearch first), the proxy intercepts on the FIRST call only, injects the matched schema into `body["tools"]`, adds the name to a local `core_visible_names` set, and returns the schema to the model as a `tool_result` asking it to re-issue the call. On the SECOND call the name is in `core_visible_names` so auto-load is skipped; the tool_use flushes through to CC, which has the tool in its registry and executes it. The "fires once" guard prevents the infinite loop of the earlier implementation. Saves a model turn compared to manual ToolSearch.
+7. **Tool search** (`tool_search: true`): `_apply_tool_transforms` splits OpenAI-shape tools into core + deferred (BM25 haystack in Anthropic shape). `ToolSearch` meta-tool injected when deferred is non-empty. Deferred names listed in a `<system-reminder>` appended to the first user message.
 
-6b. **Hallucination guard**: if the model calls a tool name that's neither core nor deferred nor managed (typo, made-up name), the proxy runs BM25 over `core + deferred` with the hallucinated name as query and returns the top-5 matches in the tool_result text — **does NOT inject their schemas** into `body.tools` (that would bloat context with 5 schemas when only 1 is needed). Model picks the right name from the suggestions and retries; on that retry, auto_load (if on) injects only the single matched schema. Fires regardless of tool_search setting — Office profiles benefit too.
+   - **Auto-load** (`auto_load_tools: true`): first blind call to a deferred name triggers the proxy to return its schema as a tool_result (schema also added to `body.tools` / `core_visible_names`); model retries, next call flushes through to the client.
+   - **Unloaded-tool guard** (`auto_load_tools: false`): blocks direct calls to deferred names and instructs `ToolSearch(select:Name)`.
+   - **Hallucination guard**: tool names not in `core_visible ∪ deferred ∪ managed ∪ ToolSearch` are intercepted; BM25 over `core + deferred` with the bogus name as query returns the top-5 suggestions in a `<functions>` block. No schemas auto-injected (would bloat context).
 
-6c. **Unloaded-tool guard (policy)**: when `auto_load_tools: false`, direct calls to deferred (unloaded) tools are blocked and the proxy returns a tool_result telling the model to load the schema via `ToolSearch(select:...)` first. This prevents “it worked anyway” cases where the client can execute tools the upstream model never received schemas for.
+8. **System prompts** — two independent injections:
+   - `system_instruction` (profile): prepends a markdown file from `proxy/instructions/` to the leading system message. `<if dotted.key="value">...</if>` conditionals supported.
+   - `inject_date_location`: appends current date + location as a `<system-reminder>` (location from `proxy.location` or `ip-api.com`).
 
-7. **System prompts** — two independent injections:
-   - `system_instruction` (profile): prepends a markdown file from `proxy/instructions/` to `body.system`. Supports `<if dotted.key="value">...</if>` conditional blocks.
-   - `inject_date_location`: appends current date + auto-detected location as a `<system-reminder>` to `body.system` (location from `proxy.location` override or `ip-api.com`).
+9. **Message transforms**:
+   - `strip_reminders`: strip `<system-reminder>` blocks (keeps skills + our deferred-tools listing).
+   - `cache_control` stripping: always on; not a knob anymore.
+   - Tool-result image handling: always on; images lifted into a follow-on user message so llama.cpp's vision path sees them.
 
-8. **Message transforms** (independent flags):
-   - `strip_reminders`: strip `<system-reminder>` blocks from message history.
-   - `lift_tool_result_images`: lift image blocks out of array-form tool_results (LM Studio array-form workaround).
+10. **Intercept loop** (`_run_streaming` / `_run_non_streaming`): operates on internal (OpenAI) shape. Each round-trip calls `_run_upstream_round`, which reads OpenAI SSE from llama.cpp and **branches on the first content signal**:
+    - First `tool_call` with an intercepted (or hallucinated) name → keep assembling arguments until `finish_reason=tool_calls`, return `InterceptedToolCall`. Nothing written to client.
+    - Anything else (text delta / non-intercepted tool_call / finish) → stream live through the adapter.
 
-9. **Intercept loop** (`_handle_streaming`): each round-trip calls `_forward_stream`, which **branches on the first `content_block_start`**:
-   - **Tool name in intercept set** → keep buffering only enough to capture the full tool_use input, then return it. Loop runs the handler, appends `[tool_use, tool_result]` to messages, and re-calls upstream.
-   - **Tool name not in intercept set, or text block** → emit any pending status blocks as synthetic text content blocks at indices `0..N-1`, flush buffered events with their indices shifted by `N`, then **stream the rest live** to the client. No buffering of the final response — large tool_use payloads (e.g. `execute_office_js` story drafts) flow through with zero added latency.
+    `_start_heartbeat` runs for the full request lifetime; per-protocol:
+    - Anthropic clients: `: keepalive\n\n` every 2s + `event: ping\ndata: {"type":"ping"}\n\n` every `proxy.ping_interval` (10s) — CC / pivot / Office add-ins recognize the ping and don't time out.
+    - OpenAI clients: `: keepalive\n\n` only (no ping in the OpenAI SSE spec).
 
-   `_start_heartbeat` runs for the full request lifetime (both buffering and passthrough). Two cadences, both serialized with main-loop writes via an `asyncio.Lock`:
-   - `: keepalive\n\n` SSE comment every 2s — wire-level keep-alive, ignored by SSE parsers, resets HTTP read timer.
-   - `event: ping\ndata: {"type":"ping"}\n\n` every `proxy.ping_interval` seconds (default 10s) — Anthropic's official live-progress signal that CC / pivot / Office add-ins recognize, so even minute-long generations don't trigger client timeouts.
+    Loops up to `proxy.max_roundtrips` (default 15). Always intercepted: `ToolSearch` (when deferred exists), all injected managed tools, all deferred names (auto-load or unloaded-guard).
 
-   `prepare()` is called immediately on upstream connect so the socket goes live before any decision. Heartbeat + `write_lock` are request-scoped (owned by `_handle_streaming`), so pings keep flowing **across round-trip boundaries and during local tool-handler execution** (e.g. a 30s `code_execution` call — no gap where the client gets no bytes).
+11. **Client adapters** (`ClientAdapter` subclasses):
+    - `AnthropicAdapter`: owns an `AnthropicStreamState` per round, which wraps a `ReasoningState` (the `<think>...</think>` state machine). Status lines = synthetic text content blocks at indices `0..status_emitted-1`; real blocks start at `status_emitted`. Stream state rebuilds `message_start` / `content_block_start` / `content_block_delta` / `message_delta` / `message_stop` events from OpenAI chunks. `<think>` openers across delta boundaries are handled via a max-tag-length lookahead buffer. `thinking_delta` blocks emitted when `emit_thinking_blocks=true` (default), stripped when false.
+    - `OpenAIAdapter`: near-identity for chat.completion.chunk events. Rewrites `model` → client alias, unifies `id` across round-trips. Status lines = synthetic assistant content-delta chunks (renders as prepended text in OpenAI-speaking UIs).
 
-   Loops up to `proxy.max_roundtrips` rounds (default 15, settings-configurable). Always intercepted: `ToolSearch` (when deferred tools exist), all injected managed tools, and all deferred names (auto-load or unloaded-tool guard depending on `auto_load_tools`).
+12. **Intercept handlers** — five branches in `_run_streaming`:
+    - **`ToolSearch`** → BM25 over deferred. Status: `● ToolSearch("q") / └  N schemas loaded: A, B, C` or `└  No matches`.
+    - **Managed tools** (`is_managed`) → `pre_llm` → `handler` → `post_llm`. Status: `format_visibility(name, input, summary)`. Errors: `● Tool() / └  Failed: <exc>`.
+    - **Auto-load first blind call** — deferred name not yet loaded. Schema added, model told to retry. Status: `● Loaded ToolName / └  Schema delivered · awaiting retry`.
+    - **Unloaded-tool guard** — blocks the call; instructs `ToolSearch(select:...)`. Status: `● Blocked: ToolName (unloaded) / └  Model instructed to ToolSearch first`.
+    - **Hallucination guard** — top-5 BM25 suggestions returned (no schemas). Status: `● Unknown tool: X / └  Suggested: A, B, C` or `└  No close matches · model told to ToolSearch with keywords`.
 
-10. **Intercept handlers** — five branches in `_handle_streaming`, each produces a `status_line` + `result_content` pair:
-    - **`ToolSearch`** → BM25 over deferred tools; returns `<functions>` block. Status: `● ToolSearch("q") / └ N schemas loaded: A, B, C` (or `No matches`).
-    - **Managed tools** (`is_managed(name)`) → `web_search`, `code_execution`, `speak`, `transcribe`, plus any `mcp_server/tools/*.py` drop-in auto-bridged via `managed_tools.py`. Runs `pre_llm → handler → post_llm`. Status: `format_visibility(name, input, handler_summary)`. Errors surface as `● Tool(...) / └ Failed: <exc>`.
-    - **`auto_load` first blind call** — deferred name not yet in `core_visible_names`. Injects schema into `body.tools`, tells model to retry. Status: `● Loaded ToolName / └ Schema delivered · awaiting retry`.
-    - **Unloaded-tool guard** (`auto_load: false`, deferred name) — blocks; instructs `ToolSearch(select:...)`. Status: `● Blocked: ToolName (unloaded) / └ Model instructed to ToolSearch first`.
-    - **Hallucination guard** — any tool_use name not in `intercept_names` and not in `known_names` (core_visible ∪ deferred ∪ managed ∪ ToolSearch) is treated as intercepted by `_forward_stream`. `_handle_streaming`'s fallback branch runs BM25 over `core + deferred` with the bogus name as query and returns the top 5 matches as a `<functions>` block in the tool_result — **no schemas injected** (that would bloat context with 5 schemas when only 1 is needed). The model picks the right name and retries; auto_load (if on) injects the single correct schema on that retry. Status: `● Unknown tool: X / └ Suggested: A, B, C` (or `No close matches · model told to ToolSearch with keywords`).
+13. **Token counting** (`/v1/messages/count_tokens`): runs the full prepare pipeline, then calls llama.cpp `/apply-template` → `/tokenize`. Exact, no generation. Replaces the old `max_tokens=1` round-trip hack.
 
-11. **Visibility status blocks**: every branch above produces a CC-native two-line string. `_handle_streaming` calls `_emit_live_status(text)` **immediately after the handler returns** — the synthetic text content block is written to the wire right then, under the shared `write_lock`, with the underlying HTTP payload writer drained. User sees the tool line first, then waits while upstream re-processes, then the model's reply streams. A `status_emitted` counter flows into each `_forward_stream` call as `base_index_offset` so upstream's block indices shift past already-emitted status blocks. The proxy also **forwards the first `message_start` event to the client immediately** (even on an intercept round) so clients' SSE parsers don't buffer — without this, clients hold back the status block until they see `message_start`, defeating the live-emit. Subsequent rounds' `message_start` / `message_delta` / `message_stop` on intercept rounds are dropped so there's still exactly one message envelope per request.
+14. **Embeddings** (`/v1/embeddings`): forwarded to llama-server verbatim. Use for RAG etc.
 
-   Status formats (all driven by `format_visibility()` + per-handler strings):
-   - `● ToolSearch("query")` / `└  N schemas loaded: A, B, C` (or `└  No matches`)
-   - `● WebSearch("query")` / `└  5 results from brave.com`
-   - `● code_execution()` / `└  Exited 0 in 1.2s · 4 lines stdout`
-   - `● Loaded ToolName` / `└  Schema delivered · awaiting retry` (auto-load)
-   - `● Blocked: ToolName (unloaded)` / `└  Model instructed to ToolSearch first` (unloaded guard)
+15. **Managed tools registry** (`proxy/managed_tools.py`): unchanged — `ManagedTool` with Anthropic-format schema, async handler `(input) -> (summary, result)`, optional `strip_from_cc`, optional `pre_llm`/`post_llm` `LLMHook`. MCP tools auto-bridged.
 
-12. **Managed tools registry** (`proxy/managed_tools.py`): each `ManagedTool` has an Anthropic-format schema, async handler returning `(summary, result)`, optional `strip_from_cc` list, and optional `pre_llm`/`post_llm` `LLMHook`s that call `structured_call()` (`proxy/llm.py`) for arg enrichment / result post-processing. Currently registered: `WebSearch` (Brave scraper), `speak` (Kokoro TTS), `transcribe` (Whisper STT), `code_execution` (Python 3 subprocess sandbox — 30s timeout, `-I` isolated mode, no network, used by Office add-ins for PTC-style data work). Add a tool = `register(name, schema, handler, strip=[...], pre_llm=..., post_llm=...)` — zero changes to `server.py`.
+16. **CORS**: `cors_origins` list. Streaming responses get headers via `_apply_cors_to_stream()` before `prepare()`.
 
-13. **Web search** (`proxy/web_search.py`): scrapes `search.brave.com/search?q=...&source=web` directly. Parser targets stable CSS selectors (`div.snippet[data-type="web"]`, `div.title`, `div.content`). Only `data-type="web"` snippets — video/image clusters excluded. No cache, browser-realistic headers.
-
-14. **CORS**: `cors_origins` list gates middleware. Streaming responses set headers via `_apply_cors_to_stream()` before `resp.prepare()` (aiohttp middleware can't mutate headers after prepare commits them — this was needed for Office add-ins in browser sandboxes).
-
-15. **Passthrough:** non-`/v1/messages`, non-`/v1/models` requests forwarded unchanged. `/v1/models` fetches upstream (OpenAI format), converts to Anthropic format, prepends any `model_mapping` aliases.
-
-To use: set `proxy.enabled: true` and point `ANTHROPIC_BASE_URL` at `http://localhost:1235`.
+To use: set `llamacpp.enabled: true` + `proxy.enabled: true`, fill in `llamacpp.binary` and `llamacpp.models.<name>.path`, point client tools at `http://localhost:1235` (Anthropic clients: `ANTHROPIC_BASE_URL`; OpenAI clients: `OPENAI_BASE_URL` or `base_url`).
 
 ---
 
@@ -352,9 +483,12 @@ Streamable HTTP MCP server (FastMCP, port 1236). Drop-in tools/resources/prompts
 | Screen capture blank | Window may be on another virtual desktop; minimized windows are auto-restored |
 | Video encoding fails | Ensure ffmpeg is on PATH; check logs for ffmpeg stderr |
 | Computer control clicks wrong spot | DPI scaling issue; check `_get_window_rect` returns logical coords |
-| Computer control LLM error | Check LM Studio is running, model is loaded, base_url/model in settings |
+| Computer control LLM error | Check llama-server is up and the proxy is running; `base_url` should point at the proxy (`http://localhost:1235/v1`), not llama-server directly |
 | Voice not working | Start STT service; health probe detects within 60s and transcription kicks in automatically |
 | Proxy not starting | Check `proxy.enabled` is `true` in settings.json; check port not in use |
+| llama-server won't start | Check `data/logs/llama.log` for the actual binary output. Verify `llamacpp.binary` path and `llamacpp.models.<default>.path` point at real files |
+| Model swap hangs | `llamacpp.ready_timeout_sec` (default 120) too short for a large GGUF to load; increase it |
+| `<think>` blocks leak into text | Per-model `llamacpp.models.<m>.inference_defaults.reasoning.start/end` tags must match what the model actually emits |
 | ToolSearch not triggered | Model may not call it; check upstream is reachable; with `proxy.debug` on, inspect `data/logs/proxy_full_*.json` dumps |
 | Tools missing after search | Tool may not match query; try regex with `re:` prefix; check `MAX_SEARCH_RESULTS` |
 | MCP server not starting | Check `mcp_server.enabled` is `true`; check port 1236 not in use |

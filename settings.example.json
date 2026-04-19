@@ -4,15 +4,20 @@
     "group_id": -100YOUR_GROUP_ID,
     "allowed_user_ids": []
   },
+
   "paths": {
     "store_path": "./data/telecode.json",
     "logs_dir": "./data/logs"
   },
+
   "streaming": {
     "interval_sec": 0.8,
     "max_message_length": 3800,
-    "idle_timeout_sec": 1800
+    "idle_timeout_sec": 1800,
+    "idle_sec": 2.0,
+    "max_wait_sec": 5.0
   },
+
   "voice": {
     "stt": {
       "enabled": false,
@@ -20,10 +25,12 @@
       "model": "whisper-1"
     }
   },
+
   "capture": {
     "image_interval": 15,
     "video_interval": 60
   },
+
   "mcp_server": {
     "enabled": false,
     "host": "127.0.0.1",
@@ -32,24 +39,161 @@
     "tts_url": "http://127.0.0.1:6500",
     "stt_url": "http://127.0.0.1:6600"
   },
+
+  "llamacpp": {
+    "enabled": false,
+    "binary": "llama-server",
+    "host": "127.0.0.1",
+    "port": 1234,
+    "auto_start": false,
+    "idle_unload_sec": 300,
+    "ready_timeout_sec": 120,
+    "api_key": "",
+
+    "default_model": "your-model",
+
+    "models": {
+      "your-model": {
+        "path": "/absolute/path/to/model.gguf",
+        "mmproj": "",
+        "preload": false,
+
+        "ctx_size": 32768,
+        "n_gpu_layers": 99,
+        "threads": 12,
+        "batch_size": 2048,
+        "ubatch_size": 512,
+        "parallel": 1,
+        "cont_batching": true,
+
+        "flash_attn": true,
+        "mlock": false,
+        "no_mmap": false,
+        "no_kv_offload": false,
+        "kv_unified": false,
+
+        "cache_type_k": "f16",
+        "cache_type_v": "f16",
+        "cache_reuse": 256,
+
+        "n_cpu_moe": 0,
+        "cpu_moe": false,
+
+        "rope_scaling": "",
+        "rope_freq_base": 0,
+        "rope_freq_scale": 0,
+        "yarn_orig_ctx": 0,
+
+        "keep": 0,
+        "seed": -1,
+        "numa": "",
+        "main_gpu": 0,
+        "tensor_split": "",
+        "split_mode": "layer",
+
+        "slot_save_path": "",
+
+        "chat_template": "",
+        "jinja": true,
+
+        "draft_model": "",
+        "draft_n": 5,
+        "draft_n_min": 0,
+        "draft_p_min": 0.75,
+
+        "lora": "",
+        "lora_scale": 1.0,
+
+        "grammar": "",
+        "grammar_file": "",
+
+        "extra_args": [
+          ["--example-extra-flag", "value"]
+        ],
+
+        "inference_defaults": {
+          "temperature": 0.6,
+          "top_p": 0.95,
+          "top_k": 20,
+          "presence_penalty": 1.0,
+          "reasoning": {
+            "enabled": true,
+            "start": "<think>",
+            "end": "</think>",
+            "emit_thinking_blocks": true
+          }
+        }
+      }
+    },
+
+    "inference": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0,
+      "repeat_penalty": 1.0,
+      "presence_penalty": 0.0,
+      "frequency_penalty": 0.0,
+      "max_tokens": null,
+      "stop": [],
+      "context_overflow": "truncate_middle",
+      "disable_thinking": false,
+
+      "reasoning": {
+        "enabled": true,
+        "start": "<think>",
+        "end": "</think>",
+        "emit_thinking_blocks": true
+      },
+
+      "reasoning_effort_map": {
+        "none":    {"enable_thinking": false, "thinking_budget_tokens": 0},
+        "minimal": {"enable_thinking": false, "thinking_budget_tokens": 0},
+        "low":     {"thinking_budget_tokens": 1024,  "reasoning_effort": "low"},
+        "medium":  {"thinking_budget_tokens": 4096,  "reasoning_effort": "medium"},
+        "high":    {"thinking_budget_tokens": 16384, "reasoning_effort": "high"},
+        "xhigh":   {"thinking_budget_tokens": 65536, "reasoning_effort": "high"},
+        "max":     {"thinking_budget_tokens": 0,     "reasoning_effort": "high"}
+      },
+
+      "structured_output": { "enabled": false, "schema": null, "grammar": null }
+    },
+
+    "extra_args": []
+  },
+
   "proxy": {
     "enabled": false,
     "host": "127.0.0.1",
     "port": 1235,
-    "upstream_url": "http://localhost:1234",
+    "protocols": ["anthropic", "openai"],
     "debug": false,
+
     "tool_search": false,
     "strip_reminders": false,
     "auto_load_tools": false,
-    "lift_tool_result_images": false,
     "location": "",
+    "max_roundtrips": 15,
+    "ping_interval": 10,
+
     "core_tools": ["Bash", "Edit", "Read", "Write", "Glob", "Grep", "Agent", "Skill"],
     "cors_origins": [],
+
     "model_mapping": {
-      "claude-opus-4-6": "your-local-model-id",
-      "claude-sonnet-4-6": "your-local-model-id"
+      "claude-opus-4-6": "your-model",
+      "claude-sonnet-4-6": "your-model"
     },
+
     "client_profiles": [
+      {
+        "name": "e2e-test",
+        "match": {"header": "User-Agent", "contains": "telecode-e2e"},
+        "tool_search": false,
+        "inject_date_location": false,
+        "strip_reminders": false,
+        "auto_load_tools": false,
+        "inject_managed": []
+      },
       {
         "name": "office",
         "match": {"header": "Referer", "contains": "pivot.claude.ai"},
@@ -57,12 +201,10 @@
         "tool_search": false,
         "inject_date_location": false,
         "strip_reminders": false,
-        "lift_tool_result_images": false,
         "auto_load_tools": false,
         "core_tools": [],
         "inject_managed": ["code_execution", "web_search"],
-        "strip_tool_names": [],
-        "strip_cache_control": true
+        "strip_tool_names": []
       },
       {
         "name": "claude-code",
@@ -70,28 +212,23 @@
         "system_instruction": "system.md",
         "tool_search": true,
         "inject_date_location": true,
-        "strip_reminders": false,
-        "lift_tool_result_images": false,
-        "auto_load_tools": false,
+        "strip_reminders": true,
+        "auto_load_tools": true,
         "core_tools": ["Bash", "Edit", "Read", "Write", "Glob", "Grep", "Agent", "Skill"],
-        "inject_managed": ["web_search", "speak", "transcribe"],
-        "strip_tool_names": [],
-        "strip_cache_control": false
+        "inject_managed": ["web_search"],
+        "strip_tool_names": []
       }
     ]
   },
+
   "tools": {
     "claude": {
       "name": "Claude Code",
       "icon": "\ud83d\udfe3",
       "startup_cmd": ["claude"],
       "flags": ["--dangerously-skip-permissions"],
-      "env": {
-        "ANTHROPIC_API_KEY": ""
-      },
-      "session": {
-        "resume_id": ""
-      }
+      "env": { "ANTHROPIC_API_KEY": "" },
+      "session": { "resume_id": "" }
     },
     "claude-local": {
       "name": "Claude Code (Local)",
@@ -100,13 +237,11 @@
       "flags": ["--dangerously-skip-permissions", "--max-turns", "100"],
       "env": {
         "ANTHROPIC_BASE_URL": "http://localhost:1235",
-        "ANTHROPIC_AUTH_TOKEN": "lmstudio",
-        "ANTHROPIC_MODEL": "your-model-name",
+        "ANTHROPIC_AUTH_TOKEN": "local",
+        "ANTHROPIC_MODEL": "your-model",
         "DISABLE_PROMPT_CACHING": "1"
       },
-      "session": {
-        "resume_id": ""
-      }
+      "session": { "resume_id": "" }
     },
     "codex": {
       "name": "Codex CLI",
@@ -130,7 +265,8 @@
       "startup_cmd": ["bash", "--norc", "--noprofile"],
       "flags": [],
       "env": {},
-      "session": {}
+      "session": {},
+      "streaming": { "idle_sec": 0.5, "max_wait_sec": 2.5 }
     },
     "powershell": {
       "name": "PowerShell",
@@ -138,15 +274,16 @@
       "startup_cmd": ["powershell.exe", "-NoProfile", "-NoLogo"],
       "flags": [],
       "env": {},
-      "session": {}
+      "session": {},
+      "streaming": { "idle_sec": 0.5, "max_wait_sec": 2.5 }
     },
     "computer": {
       "name": "Computer Control",
       "icon": "\ud83d\udda5\ufe0f",
       "api": {
-        "base_url": "http://localhost:1234/v1",
-        "api_key": "lm-studio",
-        "model": "your-vision-model",
+        "base_url": "http://localhost:1235/v1",
+        "api_key": "local",
+        "model": "your-model",
         "format": "openai"
       },
       "capture_interval": 3,

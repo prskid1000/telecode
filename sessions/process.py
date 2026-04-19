@@ -556,11 +556,19 @@ class PTYProcess:
 
     async def _start_win(self, env: dict) -> None:
         from winpty import PtyProcess as WinPty
+        from proc_group import bind_to_lifetime_job
         env["TERM"] = "xterm-256color"
         self._pty = await self._loop.run_in_executor(
             None,
             lambda: WinPty.spawn(self.cmd, cwd=self.cwd, env=env, dimensions=(_ROWS, _COLS)),
         )
+        # pywinpty exposes the child PID via .pid; bind it to the kill-on-close
+        # Job Object so the OS reaps the CLI (claude / codex / bash / powershell)
+        # if this Python process dies unexpectedly. Graceful shutdowns still go
+        # through _stop_win → pty.close(force=True).
+        child_pid = getattr(self._pty, "pid", 0) or 0
+        if child_pid:
+            bind_to_lifetime_job(child_pid)
         self._reader_task = asyncio.ensure_future(self._win_reader())
 
     async def _win_reader(self) -> None:
