@@ -120,11 +120,35 @@ if (-not (Test-Path $venvPython)) {
 
 Write-Host "    pip install (idempotent — skips on re-run)..." -ForegroundColor DarkGray
 & $venvPython -m pip install --upgrade pip --quiet 2>&1 | Out-Null
-& "$venv\Scripts\pip.exe" install -r $reqFile --quiet 2>&1 | Out-Null
 
-# Quick sanity: import the critical deps
-$importCheck = & $venvPython -c "import telegram, aiohttp, pyte, PySide6, aiofiles; print('ok')" 2>&1
-if ($importCheck -notmatch 'ok') {
+# Don't swallow pip's stderr — missing wheels / resolver failures need to
+# be visible, otherwise the smoke test catches them later without context.
+$pipOut = & "$venv\Scripts\pip.exe" install -r $reqFile 2>&1
+if ($LASTEXITCODE -ne 0) {
+    $pipOut | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+    Fail "pip install exited with code $LASTEXITCODE — see errors above"
+}
+
+# Smoke test: every module main.py + its transitive imports reach for.
+# Note: `pywinpty` package → `winpty` import; `mcp` is the FastMCP SDK.
+$smoke = @'
+import sys
+mods = ["telegram", "aiohttp", "aiofiles", "pyte", "winpty",
+        "mss", "PIL", "pyautogui", "yaml", "PySide6", "mcp",
+        "win32api"]
+missing = []
+for m in mods:
+    try:
+        __import__(m)
+    except ImportError as e:
+        missing.append(f"{m} ({e})")
+if missing:
+    print("MISSING:", ", ".join(missing))
+    sys.exit(1)
+print("ok")
+'@
+$importCheck = & $venvPython -c $smoke 2>&1
+if ($LASTEXITCODE -ne 0 -or $importCheck -notmatch 'ok') {
     Fail "venv smoke test failed: $importCheck"
 }
 Ok "venv ready: $venv"
