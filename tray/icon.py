@@ -41,10 +41,10 @@ def make_icon(size: int = 64) -> Image.Image:
     img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
 
-    # Mint bolt — pops on dark taskbars (Windows 11 dark theme) and stays
-    # visible on light ones; matches voxtype's accent palette.
+    # Solid white bolt — strict monochrome. Reads on dark Windows 11
+    # taskbar (the default). For light taskbars, swap the fill to black.
     pts = _scale_points(_BOLT, SCALE)
-    d.polygon(pts, fill=(86, 224, 194, 255))
+    d.polygon(pts, fill=(255, 255, 255, 255))
 
     if size != big:
         img = img.resize((size, size), Image.LANCZOS)
