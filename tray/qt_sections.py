@@ -8,6 +8,7 @@ Sections call helpers for settings patch + async dispatch.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 
 from PySide6.QtCore import Qt, QTimer
@@ -972,6 +973,8 @@ def _models(window) -> QWidget:
     layout.addStretch(1)
 
     def _clear_form():
+        # Flush pending debounced edits so typing isn't lost on picker change
+        _flush_pending(form_host)
         while form_layout.count():
             item = form_layout.takeAt(0)
             w = item.widget()
@@ -1045,20 +1048,21 @@ def _models(window) -> QWidget:
             _build_form(key)
 
     def _on_add():
+        import copy
         name, ok = QInputDialog.getText(content, "Add Model", "Model key (e.g. qwen3-30b):")
-        if not ok or not name.strip():
+        if not ok:
             return
         name = name.strip()
+        valid, err = _valid_key(name)
+        if not valid:
+            QMessageBox.warning(content, "Invalid Name", err)
+            return
         existing = get_path(read_settings(), "llamacpp.models", {}) or {}
         if name in existing:
             QMessageBox.warning(content, "Exists", f"Model '{name}' already exists.")
             return
-        patch_settings(f"llamacpp.models.{name}", dict(_MODEL_DEFAULTS))
-        # Ensure inference_defaults is its own dict (dict() above is shallow)
-        patch_settings(f"llamacpp.models.{name}.inference_defaults",
-                       dict(_MODEL_DEFAULTS["inference_defaults"]))
-        patch_settings(f"llamacpp.models.{name}.inference_defaults.reasoning",
-                       dict(_MODEL_DEFAULTS["inference_defaults"]["reasoning"]))
+        # deepcopy so nested dicts are never shared with _MODEL_DEFAULTS
+        patch_settings(f"llamacpp.models.{name}", copy.deepcopy(_MODEL_DEFAULTS))
         _refresh_picker(preserve_key=name)
 
     def _on_remove():
@@ -1103,12 +1107,47 @@ _TOOL_DEFAULTS_CLI: dict[str, Any] = {
 
 
 def _debounced_commit(te, commit_fn, delay_ms: int = 500):
-    """Attach a QTimer so we patch settings only when typing pauses."""
+    """Attach a QTimer so we patch settings only when typing pauses.
+
+    Also exposes `te._commit_now()` so `_flush_pending(container)` can force
+    any in-flight debounced edits to persist before the form is rebuilt /
+    the widget destroyed (e.g. on picker change)."""
     timer = QTimer(te)
     timer.setSingleShot(True)
     timer.setInterval(delay_ms)
     timer.timeout.connect(commit_fn)
     te.textChanged.connect(lambda: timer.start())
+    def _commit_now():
+        if timer.isActive():
+            timer.stop()
+            try:
+                commit_fn()
+            except Exception:
+                pass
+    te._commit_now = _commit_now  # type: ignore[attr-defined]
+
+
+def _flush_pending(container) -> None:
+    """Fire any pending debounced commits attached to QPlainTextEdit descendants."""
+    from PySide6.QtWidgets import QPlainTextEdit
+    for te in container.findChildren(QPlainTextEdit):
+        fn = getattr(te, "_commit_now", None)
+        if callable(fn):
+            fn()
+
+
+_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+
+
+def _valid_key(name: str) -> tuple[bool, str]:
+    """Reject keys containing ':', '.', whitespace, or JSON-hostile chars.
+    Session keys follow `backend:name`; colons / dots would corrupt routing."""
+    if not name:
+        return False, "Name cannot be empty."
+    if not _KEY_RE.match(name):
+        return False, ("Use letters, digits, '_' or '-' only (must start with a letter, "
+                       "max 64 chars). Colons, dots, and spaces are not allowed.")
+    return True, ""
 
 
 def _list_row(path: str, label: str, help_text: str = "",
@@ -1171,6 +1210,8 @@ def _tools(window) -> QWidget:
     layout.addStretch(1)
 
     def _clear_form():
+        # Flush pending debounced edits so typing isn't lost on picker change
+        _flush_pending(form_host)
         while form_layout.count():
             item = form_layout.takeAt(0)
             w = item.widget()
@@ -1181,7 +1222,15 @@ def _tools(window) -> QWidget:
         _clear_form()
         p = f"tools.{key}"
         data = get_path(read_settings(), p, {}) or {}
-        is_computer = "api" in data
+        # Robust shape check: computer-control tool has a dict-typed `api` key
+        # with the specific `format` sub-key and NO `startup_cmd` (a future
+        # CLI tool with its own `api` block would still have startup_cmd).
+        api = data.get("api") if isinstance(data, dict) else None
+        is_computer = (
+            isinstance(api, dict)
+            and "format" in api
+            and not data.get("startup_cmd")
+        )
 
         form_layout.addWidget(_section_header("Identity"))
         form_layout.addWidget(_line_row(f"{p}.name", "Display Name", "My Tool"))
@@ -1243,19 +1292,23 @@ def _tools(window) -> QWidget:
             _build_form(key)
 
     def _on_add():
+        import copy
         name, ok = QInputDialog.getText(content, "Add CLI Tool",
                                          "Tool key (letters/digits/hyphens, e.g. powershell):")
-        if not ok or not name.strip():
+        if not ok:
             return
         name = name.strip()
+        valid, err = _valid_key(name)
+        if not valid:
+            QMessageBox.warning(content, "Invalid Name", err)
+            return
         existing = get_path(read_settings(), "tools", {}) or {}
         if name in existing:
             QMessageBox.warning(content, "Exists", f"Tool '{name}' already exists.")
             return
-        default = dict(_TOOL_DEFAULTS_CLI)
+        default = copy.deepcopy(_TOOL_DEFAULTS_CLI)
         default["name"] = humanize(name)
         patch_settings(f"tools.{name}", default)
-        patch_settings(f"tools.{name}.session", {"resume_id": ""})
         _refresh_picker(preserve_key=name)
 
     def _on_remove():
