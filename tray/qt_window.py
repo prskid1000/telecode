@@ -37,9 +37,11 @@ SECTIONS: list[tuple[str, str, str]] = [
     # (id, label, icon-char)
     ("status",   "Status",     "⚡"),
     ("llama",    "llama.cpp",  "🤖"),
+    ("models",   "Models",     "📦"),
     ("proxy",    "Proxy",      "🔀"),
     ("mcp",      "MCP",        "🧩"),
     ("managed",  "Managed",    "🛠"),
+    ("tools",    "Tools",      "🧰"),
     ("telegram", "Telegram",   "💬"),
     ("voice",    "Voice",      "🎙"),
     ("computer", "Computer",   "🖥"),
