@@ -534,7 +534,7 @@ async def _prepare_internal_body(
 
     # 5. Tool transforms (split into core/deferred, inject managed)
     from proxy.managed_tools import _REGISTRY as _MGR
-    from tray_api import is_managed_enabled as _is_enabled
+    from proxy.runtime_state import is_managed_enabled as _is_enabled
     managed_inject_raw: list[str] = (
         profile.get("inject_managed") if profile and "inject_managed" in profile
         else list(_MGR.keys())
