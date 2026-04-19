@@ -88,23 +88,26 @@ pythonw main.py
 Telegram bot AND a fully-styled system tray / settings window together
 in one process.
 
-- **Tray icon** (right-click for quick menu):
+- **Tray icon** (right-click for subsystem submenus):
     ```
-    Live status info rows (llama / proxy / mcp / sessions)
+    ⬡/⬢ Llama ▸ status + Auto Start + Load / Unload / Restart
+    ⬡/⬢ Proxy ▸ status + Enabled + Debug Dumps
+    ⬡/⬢ MCP   ▸ status + Enabled
+    ⬢   Bot   ▸ sessions / group / allowed users
     ─
     Open Settings Window   (default left-click)
-    Reload Config
-    ─
-    Load Llama Now / Unload Llama / Restart Llama
-    ─
-    Open settings.json / Open Logs Folder
     ─
     Quit Telecode
     ```
 - **Left-click** the tray icon → toggle a frameless dark-themed
   **settings window** with:
   - Sidebar: Status / llama.cpp / Proxy / MCP / Managed / Telegram /
-    Voice / Computer / Sessions / Logs
+    Voice / Computer / Sessions / **Requests** / **Logs**
+  - **Requests** — live list of recent proxy round-trips (status-colored)
+    with a foldable JSON tree inspector on the right.
+  - **Logs** — built-in tailing viewer with syntax highlighting for
+    timestamps, levels, `[logger.name]`, tracebacks and URLs. Follow /
+    Reveal Folder / Open Externally controls.
   - **Numeric values are text inputs paired with sliders** — type `0.73`
     or drag, both work, always linked. No "pick from this list" presets.
   - Animated toggle switches for booleans

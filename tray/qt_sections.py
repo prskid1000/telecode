@@ -651,30 +651,463 @@ def _sessions(window) -> QWidget:
 
 
 def _logs(window) -> QWidget:
+    """Live-tailing log viewer with level coloring."""
+    import os, re, subprocess, sys as _s
+    from PySide6.QtCore import QRegularExpression
+    from PySide6.QtGui import (
+        QTextCharFormat, QColor, QSyntaxHighlighter, QFont, QTextCursor,
+    )
+    from PySide6.QtWidgets import QPlainTextEdit, QCheckBox
+    from tray.qt_helpers import settings_path as _sp
+    from tray.qt_theme import ACCENT, WARN, ERR, OK, FG_DIM, FG_MUTE, BG_ELEV
+
+    LOG_FILES = [
+        "telecode.log", "telecode.log.prev",
+        "llama.log", "llama.log.prev",
+        "tray-bot.stderr.log",
+    ]
+    MAX_TAIL_BYTES = 512 * 1024  # last ~512 KB is plenty for UI
+
+    class LogHighlighter(QSyntaxHighlighter):
+        """Color timestamps, levels, logger names, tracebacks, numbers."""
+        def __init__(self, doc):
+            super().__init__(doc)
+            def fmt(color: str, bold: bool = False) -> QTextCharFormat:
+                f = QTextCharFormat()
+                f.setForeground(QColor(color))
+                if bold:
+                    f.setFontWeight(QFont.Weight.DemiBold)
+                return f
+            self._rules = [
+                # timestamp: 2026-04-19 13:00:32,913
+                (QRegularExpression(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}[,\.]?\d*"), fmt(FG_MUTE)),
+                # level tokens
+                (QRegularExpression(r"\b(CRITICAL|FATAL)\b"), fmt("#ff9aa2", True)),
+                (QRegularExpression(r"\b(ERROR|ERR)\b"),      fmt(ERR, True)),
+                (QRegularExpression(r"\b(WARN(ING)?)\b"),     fmt(WARN, True)),
+                (QRegularExpression(r"\b(INFO)\b"),           fmt(ACCENT, True)),
+                (QRegularExpression(r"\b(DEBUG|TRACE)\b"),    fmt(FG_DIM, True)),
+                # logger name in brackets: [telecode.tray]
+                (QRegularExpression(r"\[[\w\.\-]+\]"), fmt(OK)),
+                # python traceback
+                (QRegularExpression(r'^\s*File\s+".+?",\s+line\s+\d+.*$'), fmt("#b892ff")),
+                (QRegularExpression(r"^\s*Traceback \(most recent call last\):.*$"), fmt(ERR, True)),
+                (QRegularExpression(r"^\s*\w*(Error|Exception):.*$"), fmt(ERR)),
+                # URLs
+                (QRegularExpression(r"https?://\S+"), fmt(ACCENT)),
+                # numbers (soft)
+                (QRegularExpression(r"\b\d+(\.\d+)?\b"), fmt("#a8b3c7")),
+            ]
+
+        def highlightBlock(self, text: str) -> None:
+            for rx, f in self._rules:
+                it = rx.globalMatch(text)
+                while it.hasNext():
+                    m = it.next()
+                    self.setFormat(m.capturedStart(), m.capturedLength(), f)
+
     scroll, _, layout = _page()
-    card, body = _card("Logs", "Open a log file in your default editor")
-    for name in ("telecode.log", "telecode.log.prev", "llama.log", "llama.log.prev", "tray-bot.stderr.log"):
-        btn = QPushButton(f"Open {name}")
-        btn.setProperty("class", "ghost")
-        def _open(_=False, n=name):
-            import os, subprocess, sys as _s
-            from pathlib import Path as _P
-            from tray.qt_helpers import settings_path as _sp
-            p = _sp().parent / "data" / "logs" / n
-            try:
-                if _s.platform == "win32":
-                    os.startfile(str(p))
-                elif _s.platform == "darwin":
-                    subprocess.Popen(["open", str(p)])
-                else:
-                    subprocess.Popen(["xdg-open", str(p)])
-            except Exception:
-                pass
-        btn.clicked.connect(_open)
-        row = _row(row_label(name, "", ""), _wrap_align(btn, Qt.AlignmentFlag.AlignLeft))
-        body.addWidget(row)
+    card, body = _card("Logs", "Live-tailing viewer · auto-refreshes")
+
+    # ── Top bar: file picker + actions ───────────────────────────────
+    top = QHBoxLayout()
+    top.setSpacing(8)
+
+    picker = QComboBox()
+    for n in LOG_FILES:
+        picker.addItem(n)
+    picker.setMinimumWidth(200)
+
+    size_label = QLabel("—")
+    size_label.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
+
+    follow_cb = Toggle()
+    follow_cb.setChecked(True)
+    follow_lbl = QLabel("Follow")
+    follow_lbl.setProperty("class", "toggle_label")
+
+    clear_btn = QPushButton("Clear View")
+    clear_btn.setProperty("class", "ghost")
+    open_btn = QPushButton("Open Externally")
+    open_btn.setProperty("class", "ghost")
+    reveal_btn = QPushButton("Reveal Folder")
+    reveal_btn.setProperty("class", "ghost")
+
+    top.addWidget(picker)
+    top.addWidget(size_label)
+    top.addStretch(1)
+    top.addWidget(follow_lbl)
+    top.addWidget(follow_cb)
+    top.addSpacing(8)
+    top.addWidget(clear_btn)
+    top.addWidget(open_btn)
+    top.addWidget(reveal_btn)
+    body.addLayout(top)
+
+    # ── Viewer ───────────────────────────────────────────────────────
+    viewer = QPlainTextEdit()
+    viewer.setReadOnly(True)
+    viewer.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+    viewer.setStyleSheet(
+        f"QPlainTextEdit {{ background: {BG_ELEV}; border: 1px solid {BORDER};"
+        f" border-radius: 6px; font-family: 'JetBrains Mono', Consolas, monospace;"
+        f" font-size: 11.5px; padding: 6px 8px; selection-background-color: {ACCENT};"
+        f" selection-color: #000; }}"
+    )
+    viewer.setMinimumHeight(480)
+    highlighter = LogHighlighter(viewer.document())
+    body.addWidget(viewer, 1)
+
+    # ── State + helpers ──────────────────────────────────────────────
+    state: dict[str, Any] = {"path": None, "pos": 0, "size": 0}
+
+    def _log_path(name: str):
+        return _sp().parent / "data" / "logs" / name
+
+    def _human_bytes(n: int) -> str:
+        for unit in ("B", "KB", "MB", "GB"):
+            if n < 1024:
+                return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+            n /= 1024
+        return f"{n:.1f} TB"
+
+    def _load_initial(path):
+        viewer.clear()
+        if not path.exists():
+            viewer.setPlainText(f"[file not found: {path}]")
+            state["pos"] = 0
+            state["size"] = 0
+            size_label.setText("—")
+            return
+        size = path.stat().st_size
+        state["size"] = size
+        start = max(0, size - MAX_TAIL_BYTES)
+        try:
+            with open(path, "rb") as f:
+                f.seek(start)
+                if start > 0:
+                    f.readline()  # drop partial line
+                data = f.read()
+                state["pos"] = f.tell()
+            text = data.decode("utf-8", errors="replace")
+            if start > 0:
+                text = f"… (showing last {_human_bytes(len(data))} of {_human_bytes(size)}) …\n" + text
+            viewer.setPlainText(text)
+            if follow_cb.isChecked():
+                viewer.moveCursor(QTextCursor.MoveOperation.End)
+            size_label.setText(_human_bytes(size))
+        except Exception as e:
+            viewer.setPlainText(f"[error reading {path}: {e}]")
+
+    def _tail():
+        path = state.get("path")
+        if path is None or not path.exists():
+            return
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return
+        # rotation/truncation: reload from scratch
+        if size < state["pos"]:
+            _load_initial(path)
+            return
+        if size == state["pos"]:
+            return
+        try:
+            with open(path, "rb") as f:
+                f.seek(state["pos"])
+                data = f.read()
+                state["pos"] = f.tell()
+                state["size"] = size
+        except Exception:
+            return
+        if not data:
+            return
+        text = data.decode("utf-8", errors="replace")
+        # preserve scroll unless follow is on
+        at_bottom = follow_cb.isChecked() or (
+            viewer.verticalScrollBar().value() >= viewer.verticalScrollBar().maximum() - 2
+        )
+        cursor = viewer.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertText(text)
+        size_label.setText(_human_bytes(size))
+        if at_bottom:
+            viewer.moveCursor(QTextCursor.MoveOperation.End)
+
+    def _on_pick(idx: int):
+        name = picker.itemText(idx)
+        state["path"] = _log_path(name)
+        state["pos"] = 0
+        _load_initial(state["path"])
+
+    def _open_external():
+        p = state.get("path")
+        if not p:
+            return
+        try:
+            if _s.platform == "win32":
+                os.startfile(str(p))
+            elif _s.platform == "darwin":
+                subprocess.Popen(["open", str(p)])
+            else:
+                subprocess.Popen(["xdg-open", str(p)])
+        except Exception:
+            pass
+
+    def _reveal():
+        p = state.get("path")
+        if not p:
+            return
+        folder = p.parent
+        try:
+            if _s.platform == "win32":
+                subprocess.Popen(["explorer", "/select,", str(p)]) if p.exists() else os.startfile(str(folder))
+            elif _s.platform == "darwin":
+                subprocess.Popen(["open", "-R", str(p)]) if p.exists() else subprocess.Popen(["open", str(folder)])
+            else:
+                subprocess.Popen(["xdg-open", str(folder)])
+        except Exception:
+            pass
+
+    picker.currentIndexChanged.connect(_on_pick)
+    clear_btn.clicked.connect(viewer.clear)
+    open_btn.clicked.connect(_open_external)
+    reveal_btn.clicked.connect(_reveal)
+
+    # Initial load
+    _on_pick(0)
+
+    # Tail timer — owned by the page widget so it stops when the page is destroyed
+    tail_timer = QTimer(scroll)
+    tail_timer.setInterval(1000)
+    tail_timer.timeout.connect(_tail)
+    tail_timer.start()
+
     layout.addWidget(card)
-    layout.addStretch(1)
+    return scroll
+
+
+def _requests(window) -> QWidget:
+    """Live request log viewer with a foldable structured JSON tree."""
+    import time as _time
+    from PySide6.QtWidgets import (
+        QSplitter, QListWidget, QListWidgetItem, QTreeWidget, QTreeWidgetItem,
+    )
+    from PySide6.QtGui import QColor, QBrush, QFont
+    from tray.qt_theme import ACCENT, WARN, ERR, OK, FG_DIM, FG_MUTE, BG_ELEV, BG_CARD
+
+    try:
+        from proxy import request_log
+    except Exception:
+        request_log = None  # type: ignore[assignment]
+
+    scroll, content, layout = _page()
+    layout.setContentsMargins(16, 14, 16, 14)
+    card, body = _card("Requests", "Live proxy request log · click to inspect")
+
+    # ── Top controls ─────────────────────────────────────────────────
+    top = QHBoxLayout(); top.setSpacing(8)
+    count_lbl = QLabel("0 requests"); count_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
+    pause_lbl = QLabel("Pause"); pause_lbl.setProperty("class", "toggle_label")
+    pause_cb = Toggle()
+    clear_btn = QPushButton("Clear"); clear_btn.setProperty("class", "ghost")
+    expand_btn = QPushButton("Expand All"); expand_btn.setProperty("class", "ghost")
+    collapse_btn = QPushButton("Collapse"); collapse_btn.setProperty("class", "ghost")
+    top.addWidget(count_lbl)
+    top.addStretch(1)
+    top.addWidget(pause_lbl); top.addWidget(pause_cb)
+    top.addSpacing(8)
+    top.addWidget(expand_btn); top.addWidget(collapse_btn); top.addWidget(clear_btn)
+    body.addLayout(top)
+
+    # ── Split: list | tree ───────────────────────────────────────────
+    split = QSplitter(Qt.Orientation.Horizontal)
+    split.setChildrenCollapsible(False)
+
+    req_list = QListWidget()
+    req_list.setStyleSheet(
+        f"QListWidget {{ background: {BG_ELEV}; border: 1px solid {BORDER};"
+        f" border-radius: 6px; outline: 0; font-family: 'JetBrains Mono', Consolas, monospace;"
+        f" font-size: 11px; padding: 4px; }}"
+        f"QListWidget::item {{ padding: 5px 8px; border-radius: 3px; margin-bottom: 1px; }}"
+        f"QListWidget::item:hover {{ background: {BG_CARD}; }}"
+        f"QListWidget::item:selected {{ background: {BG_CARD}; color: {FG}; border-left: 2px solid {ACCENT}; }}"
+    )
+    req_list.setMinimumWidth(320)
+
+    tree = QTreeWidget()
+    tree.setHeaderLabels(["Key", "Value"])
+    tree.setAlternatingRowColors(False)
+    tree.setStyleSheet(
+        f"QTreeWidget {{ background: {BG_ELEV}; border: 1px solid {BORDER};"
+        f" border-radius: 6px; font-family: 'JetBrains Mono', Consolas, monospace;"
+        f" font-size: 11px; padding: 4px; outline: 0; }}"
+        f"QTreeWidget::item {{ padding: 2px 4px; }}"
+        f"QTreeWidget::item:hover {{ background: {BG_CARD}; }}"
+        f"QTreeWidget::item:selected {{ background: {BG_CARD}; color: {FG}; }}"
+        f"QHeaderView::section {{ background: {BG_CARD}; color: {FG_MUTE};"
+        f" padding: 4px 6px; border: none; border-bottom: 1px solid {BORDER};"
+        f" font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }}"
+        f"QTreeWidget::branch {{ background: transparent; }}"
+    )
+    tree.header().resizeSection(0, 260)
+
+    split.addWidget(req_list)
+    split.addWidget(tree)
+    split.setStretchFactor(0, 0)
+    split.setStretchFactor(1, 1)
+    split.setSizes([340, 700])
+    body.addWidget(split, 1)
+
+    card.setMinimumHeight(560)
+    layout.addWidget(card, 1)
+
+    # ── JSON → QTreeWidgetItem ───────────────────────────────────────
+    TYPE_COLORS = {
+        "str":   "#c8e2a8",
+        "int":   "#a8b3c7",
+        "float": "#a8b3c7",
+        "bool":  ACCENT,
+        "null":  FG_MUTE,
+    }
+
+    def _leaf_item(key: str, value: Any) -> QTreeWidgetItem:
+        if value is None:
+            tname, shown = "null", "null"
+        elif isinstance(value, bool):
+            tname, shown = "bool", "true" if value else "false"
+        elif isinstance(value, int):
+            tname, shown = "int", str(value)
+        elif isinstance(value, float):
+            tname, shown = "float", f"{value:g}"
+        elif isinstance(value, str):
+            tname = "str"
+            shown = value if len(value) < 300 else value[:300] + f"… (+{len(value)-300} chars)"
+            shown = f"\"{shown}\""
+        else:
+            tname, shown = type(value).__name__, repr(value)
+        it = QTreeWidgetItem([key, shown])
+        it.setForeground(1, QBrush(QColor(TYPE_COLORS.get(tname, FG))))
+        it.setForeground(0, QBrush(QColor(ACCENT)))
+        return it
+
+    def _populate(parent: QTreeWidgetItem, value: Any) -> None:
+        if isinstance(value, dict):
+            for k, v in value.items():
+                if isinstance(v, (dict, list)):
+                    summary = f"{{{len(v)}}}" if isinstance(v, dict) else f"[{len(v)}]"
+                    child = QTreeWidgetItem([str(k), summary])
+                    child.setForeground(0, QBrush(QColor(ACCENT)))
+                    child.setForeground(1, QBrush(QColor(FG_MUTE)))
+                    parent.addChild(child)
+                    _populate(child, v)
+                else:
+                    parent.addChild(_leaf_item(str(k), v))
+        elif isinstance(value, list):
+            for i, v in enumerate(value):
+                if isinstance(v, (dict, list)):
+                    summary = f"{{{len(v)}}}" if isinstance(v, dict) else f"[{len(v)}]"
+                    child = QTreeWidgetItem([f"[{i}]", summary])
+                    child.setForeground(0, QBrush(QColor(WARN)))
+                    child.setForeground(1, QBrush(QColor(FG_MUTE)))
+                    parent.addChild(child)
+                    _populate(child, v)
+                else:
+                    parent.addChild(_leaf_item(f"[{i}]", v))
+
+    def _render(entry: dict[str, Any]) -> None:
+        tree.clear()
+        root = tree.invisibleRootItem()
+        _populate(root, entry)
+        # Pre-expand top-level only
+        for i in range(root.childCount()):
+            root.child(i).setExpanded(i < 3)
+
+    # ── Status color helper ──────────────────────────────────────────
+    def _status_color(status: int | None, error: str) -> str:
+        if error:
+            return ERR
+        if status is None:
+            return WARN  # in-flight
+        if status >= 500:
+            return ERR
+        if status >= 400:
+            return WARN
+        if status >= 200:
+            return OK
+        return FG_MUTE
+
+    # ── Refresh driver ───────────────────────────────────────────────
+    state: dict[str, Any] = {"selected_rid": None, "snapshot": []}
+
+    def _fmt_row(e: dict[str, Any]) -> str:
+        ts = _time.strftime("%H:%M:%S", _time.localtime(e["started_at"]))
+        status = e.get("status")
+        status_txt = f"{status}" if status is not None else "…"
+        dur = e.get("duration_ms")
+        dur_txt = f"{dur}ms" if dur is not None else "—"
+        proto = (e.get("inbound_protocol") or "")[:4]
+        model = (e.get("client_model") or "")[:28]
+        return f"{ts}  {status_txt:>3}  {dur_txt:>6}  {proto:<4}  {model}"
+
+    def refresh():
+        if pause_cb.isChecked() or request_log is None:
+            return
+        snap = request_log.snapshot()
+        state["snapshot"] = snap
+        count_lbl.setText(f"{len(snap)} requests")
+
+        # Rebuild list only if rids changed (cheap header compare)
+        prev_rids = [req_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(req_list.count())]
+        new_rids = [e["rid"] for e in snap]
+        if prev_rids != new_rids:
+            sel_rid = state.get("selected_rid")
+            req_list.blockSignals(True)
+            req_list.clear()
+            for e in snap:
+                item = QListWidgetItem(_fmt_row(e))
+                item.setData(Qt.ItemDataRole.UserRole, e["rid"])
+                item.setForeground(QBrush(QColor(_status_color(e.get("status"), e.get("error", "")))))
+                req_list.addItem(item)
+            # restore selection
+            if sel_rid and sel_rid in new_rids:
+                req_list.setCurrentRow(new_rids.index(sel_rid))
+            req_list.blockSignals(False)
+        else:
+            # Update status colors / durations in place (in-flight → finished)
+            for i, e in enumerate(snap):
+                item = req_list.item(i)
+                if item is None:
+                    continue
+                item.setText(_fmt_row(e))
+                item.setForeground(QBrush(QColor(_status_color(e.get("status"), e.get("error", "")))))
+
+        # Refresh tree if selected entry changed
+        rid = state.get("selected_rid")
+        if rid:
+            entry = next((e for e in snap if e["rid"] == rid), None)
+            if entry is not None and entry.get("finished_at") != state.get("_last_finished"):
+                state["_last_finished"] = entry.get("finished_at")
+                _render(entry)
+
+    def _on_select(row: int):
+        if row < 0 or row >= req_list.count():
+            return
+        rid = req_list.item(row).data(Qt.ItemDataRole.UserRole)
+        state["selected_rid"] = rid
+        entry = next((e for e in state["snapshot"] if e["rid"] == rid), None)
+        if entry is not None:
+            state["_last_finished"] = entry.get("finished_at")
+            _render(entry)
+
+    req_list.currentRowChanged.connect(_on_select)
+    clear_btn.clicked.connect(lambda: (request_log.clear() if request_log else None, req_list.clear(), tree.clear(), state.update({"selected_rid": None})))
+    expand_btn.clicked.connect(tree.expandAll)
+    collapse_btn.clicked.connect(tree.collapseAll)
+
+    scroll.refresh = refresh  # type: ignore[attr-defined]
+    refresh()
     return scroll
 
 
@@ -688,5 +1121,6 @@ _BUILDERS: dict[str, Callable[[Any], QWidget]] = {
     "voice":    _voice,
     "computer": _computer,
     "sessions": _sessions,
+    "requests": _requests,
     "logs":     _logs,
 }

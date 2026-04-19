@@ -44,6 +44,7 @@ SECTIONS: list[tuple[str, str, str]] = [
     ("voice",    "Voice",      "🎙"),
     ("computer", "Computer",   "🖥"),
     ("sessions", "Sessions",   "📡"),
+    ("requests", "Requests",   "📨"),
     ("logs",     "Logs",       "📜"),
 ]
 

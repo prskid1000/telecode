@@ -142,7 +142,8 @@ llama.cpp + dual-protocol proxy (for local models):
 | `tray/qt_widgets.py` | Custom `Toggle` (animated pill switch, `QCheckBox` subclass) and `NumberEditor` (text input + slider, linked, emits `valueChanged(float)`). |
 | `tray/qt_helpers.py` | Shared: `read_settings` / `patch_settings` (atomic write + `config.reload()`), `schedule(loop, coro)` for async dispatch, `humanize(tool_id)` for labels, `build_status()` for the live snapshot dict. |
 | `tray/qt_window.py` | `SettingsWindow` — frameless `QMainWindow` with custom `TitleBar` (drag/minimize/maximize/hide), sidebar `QListWidget`, `QStackedWidget` for sections. Per-section refresh via a 1s `QTimer` that calls each cached page's optional `refresh()` method. |
-| `tray/qt_sections.py` | `build(section_id, window)` dispatch. One builder per sidebar entry: Status tiles / llama (sampling sliders + reasoning + Load/Unload/Restart + idle_unload) / Proxy (Enabled + protocols + flag toggles + max_roundtrips/ping_interval) / MCP / Managed / Telegram (streaming + capture) / Voice / Computer / Sessions (live QTableWidget) / Logs. |
+| `tray/qt_sections.py` | `build(section_id, window)` dispatch. One builder per sidebar entry: Status tiles / llama (sampling sliders + reasoning + Load/Unload/Restart + idle_unload) / Proxy (Enabled + protocols + flag toggles + max_roundtrips/ping_interval) / MCP / Managed / Telegram (streaming + capture) / Voice / Computer / Sessions (live QTableWidget) / **Requests** (live `QListWidget` of recent proxy requests + foldable `QTreeWidget` JSON inspector on the right — colored by status, rebuilds only when rids change, in-place cell refresh for in-flight→finished transitions) / **Logs** (live-tailing `QPlainTextEdit` with `QSyntaxHighlighter` coloring timestamps, levels, `[logger.name]`, URLs, tracebacks; 1s `QTimer` appends only new bytes, handles rotation via size-shrink detection, initial load capped at last 512 KB). |
+| `proxy/request_log.py` | Thread-safe ring buffer (`MAX_ENTRIES=200`) of recent proxy request dicts — `new_request` / `set_request_preview` / `finish` called from `proxy/server.py` route handlers. `snapshot()` feeds the Requests tray section. When `proxy.debug=true`, `finish` also writes `data/logs/requests/req_<ts>_<rid>.json`. |
 | `proxy/runtime_state.py` | Persists managed-tool / MCP-tool toggles to `data/runtime-overrides.json`. `is_managed_enabled(name)` consulted by `proxy/server.py` before injecting; survives restarts. |
 | `llamacpp/state.py` | Persists last-active llama model to `data/llama-state.json`. Used as the implicit default when a request omits `model`. NOT auto-loaded on startup unless `llamacpp.auto_start: true`. |
 | `proxy/__main__.py` | Standalone entry: `python -m proxy` |
@@ -280,33 +281,29 @@ Architecture:
 Menu structure (every label is Title Cased; tool IDs like `web_search`
 get `_humanize()`d to `Web Search` for display only):
 
+Right-click tray menu — each subsystem gets its own submenu, populated by
+the 2s `_refresh_info` timer in `tray/app.py`:
+
 ```
-Status info rows (llama / proxy / mcp / sessions)
+⬡/⬢ Llama ▸ Status line + Active model + Auto Start toggle
+            + Load / Unload / Restart (enabled per supervisor state)
+⬡/⬢ Proxy ▸ Status line (port) + Protocols + Enabled toggle
+            (⟳ restart required) + Debug Dumps toggle
+⬡/⬢ MCP   ▸ Status line (port) + Tool count + Enabled toggle
+            (⟳ restart required)
+⬢   Bot   ▸ Sessions alive/total + group_id + allowed_user count
+            (status-only — bot is the host process)
 ─
-llama.cpp ▸ Enabled, Active Model radio, Load Now / Unload / Restart,
-            Auto-Start On Launch, Idle Unload + Ready Timeout presets,
-            Sampling presets (temp/top_p/top_k/min_p/repeat/presence),
-            Reasoning subsection (Use Reasoning + Parse <think> + Show),
-            Open llama.log
-Proxy     ▸ Enabled, Protocols multi-checkbox, 4 boolean flags,
-            Max Round-Trips + Ping Interval presets,
-            Profiles ▸ per-profile { System Instruction radio,
-                                     Inject Managed Tools checkboxes,
-                                     4 booleans },
-            Open telecode.log
-MCP       ▸ Enabled (per-tool toggles intentionally read-only — MCP
-            server's tool exposure is fixed at registration time;
-            Managed Tools is the live-toggle surface)
-Managed   ▸ Per-tool checkboxes (runtime-overrides.json, hot)
-Telegram  ▸ Streaming presets (5) + Capture presets (2)
-Voice     ▸ STT enabled
-Computer  ▸ API Format radio + Capture Interval + Max History presets
-Sessions  ▸ Click-to-kill list + Kill All
-─
-Reload Config / Open settings.json (default left-click) / Open Logs Folder
+Open Settings Window (default left-click)
 ─
 Quit Telecode
 ```
+
+Reload / Open settings.json / Open Logs Folder were removed from the tray
+menu — all three surfaces are inside the Settings window (Logs section =
+built-in live tailing viewer, Requests section = JSON tree inspector, and
+any settings patch already triggers `config.reload()` atomically).
+
 
 Conditional disabling via `enabled=callable`:
 - Subsystem submenu items grey out when `<subsystem>.enabled = false`.
