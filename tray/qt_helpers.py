@@ -69,6 +69,29 @@ def patch_settings(path: str, value: Any) -> None:
         log.error("reload failed: %s", exc, exc_info=True)
 
 
+def remove_path(path: str) -> None:
+    """Delete a dotted key from settings.json (atomic write + reload)."""
+    import config as app_config
+    sp = settings_path()
+    raw = app_config.raw()
+    keys = path.split(".")
+    node: Any = raw
+    for k in keys[:-1]:
+        if not isinstance(node, dict) or k not in node:
+            return
+        node = node[k]
+    if isinstance(node, dict):
+        node.pop(keys[-1], None)
+    tmp = sp.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(raw, indent=2, ensure_ascii=False) + "\n",
+                   encoding="utf-8")
+    os.replace(tmp, sp)
+    try:
+        app_config.reload()
+    except Exception as exc:
+        log.error("reload failed: %s", exc, exc_info=True)
+
+
 # ── Async dispatch onto the bot loop ─────────────────────────────────
 
 def schedule(loop: asyncio.AbstractEventLoop, coro) -> None:

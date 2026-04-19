@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 
 from tray.qt_widgets import Toggle, NumberEditor, row_label
 from tray.qt_helpers import (
-    read_settings, get_path, patch_settings, schedule,
+    read_settings, get_path, patch_settings, remove_path, schedule,
     humanize, format_protocol, build_status,
 )
 from tray.qt_theme import FG, FG_DIM, FG_MUTE, BG, BG_CARD, BORDER, OK, ERR
@@ -888,6 +888,393 @@ def _logs(window) -> QWidget:
     return scroll
 
 
+# ══════════════════════════════════════════════════════════════════════
+# Models (llamacpp.models.*) — add/remove + full field editor
+# ══════════════════════════════════════════════════════════════════════
+
+_MODEL_DEFAULTS: dict[str, Any] = {
+    "path": "",
+    "mmproj": "",
+    "ctx_size": 4096,
+    "n_gpu_layers": 0,
+    "threads": 8,
+    "ubatch_size": 512,
+    "parallel": 1,
+    "flash_attn": True,
+    "cache_type_k": "f16",
+    "cache_type_v": "f16",
+    "mlock": False,
+    "no_mmap": False,
+    "n_cpu_moe": 0,
+    "jinja": True,
+    "inference_defaults": {
+        "temperature": 0.7,
+        "top_p": 0.95,
+        "top_k": 40,
+        "presence_penalty": 0.0,
+        "reasoning": {
+            "enabled": False,
+            "start": "<think>",
+            "end": "</think>",
+            "emit_thinking_blocks": False,
+        },
+    },
+}
+
+_CACHE_TYPES = [
+    ("f32", "f32"), ("f16", "f16"), ("bf16", "bf16"),
+    ("q8_0", "q8_0"), ("q5_1", "q5_1"), ("q5_0", "q5_0"),
+    ("q4_1", "q4_1"), ("q4_0", "q4_0"),
+]
+
+
+def _line_row(path: str, label: str, placeholder: str = "", help_text: str = "") -> QWidget:
+    """Free-text string row."""
+    le = QLineEdit()
+    le.setPlaceholderText(placeholder)
+    le.setText(str(get_path(read_settings(), path, "") or ""))
+    le.editingFinished.connect(lambda: patch_settings(path, le.text()))
+    return _row(row_label(label, help_text, path), le)
+
+
+def _enum_row_strs(path: str, label: str, options: list[tuple[str, str]],
+                   help_text: str = "") -> QWidget:
+    return _enum_row(path, label, [(d, v) for d, v in options], help_text)
+
+
+def _models(window) -> QWidget:
+    from PySide6.QtWidgets import QStackedWidget, QInputDialog, QMessageBox
+
+    scroll, content, layout = _page()
+    card, body = _card("Models", "llamacpp.models.* — registered model registry")
+
+    # ── Picker row ───────────────────────────────────────────────────
+    top = QHBoxLayout(); top.setSpacing(8)
+    picker = QComboBox(); picker.setMinimumWidth(240)
+    add_btn = QPushButton("+ Add")
+    add_btn.setProperty("class", "primary")
+    remove_btn = QPushButton("Remove")
+    remove_btn.setProperty("class", "danger")
+    set_default_btn = QPushButton("Set As Default")
+    set_default_btn.setProperty("class", "ghost")
+    default_lbl = QLabel(""); default_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
+    top.addWidget(picker); top.addWidget(default_lbl); top.addStretch(1)
+    top.addWidget(set_default_btn); top.addWidget(add_btn); top.addWidget(remove_btn)
+    body.addLayout(top)
+
+    # ── Form container ──────────────────────────────────────────────
+    form_host = QWidget()
+    form_layout = QVBoxLayout(form_host)
+    form_layout.setContentsMargins(0, 4, 0, 0)
+    form_layout.setSpacing(10)
+    body.addWidget(form_host)
+    layout.addWidget(card)
+    layout.addStretch(1)
+
+    def _clear_form():
+        while form_layout.count():
+            item = form_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+    def _build_form(key: str):
+        _clear_form()
+        p = f"llamacpp.models.{key}"
+        form_layout.addWidget(_section_header("Paths"))
+        form_layout.addWidget(_line_row(f"{p}.path",   "GGUF Path",
+                                         "D:/models/foo.gguf",
+                                         "Absolute path to the model .gguf file."))
+        form_layout.addWidget(_line_row(f"{p}.mmproj", "mmproj Path (vision)",
+                                         "D:/models/mmproj.gguf",
+                                         "Optional — only needed for vision-capable GGUFs (Qwen-VL etc)."))
+
+        form_layout.addWidget(_section_header("Capacity / Compute"))
+        form_layout.addWidget(_number_row(f"{p}.ctx_size",     "Context Size",       512, 1048576, 256, 0, "tok"))
+        form_layout.addWidget(_number_row(f"{p}.n_gpu_layers", "GPU Layers",         0,   200,     1,   0, "",
+                                           "Layers offloaded to GPU. Higher = faster, more VRAM."))
+        form_layout.addWidget(_number_row(f"{p}.n_cpu_moe",    "CPU MoE Layers",     0,   200,     1,   0, "",
+                                           "MoE experts kept on CPU. 0 = all on GPU."))
+        form_layout.addWidget(_number_row(f"{p}.threads",      "Threads",            1,   128,     1,   0))
+        form_layout.addWidget(_number_row(f"{p}.ubatch_size",  "Micro-Batch Size",   32,  8192,    32,  0, "tok"))
+        form_layout.addWidget(_number_row(f"{p}.parallel",     "Parallel Slots",     1,   32,      1,   0))
+
+        form_layout.addWidget(_section_header("Cache"))
+        form_layout.addWidget(_enum_row_strs(f"{p}.cache_type_k", "Cache Type (K)", _CACHE_TYPES))
+        form_layout.addWidget(_enum_row_strs(f"{p}.cache_type_v", "Cache Type (V)", _CACHE_TYPES))
+
+        form_layout.addWidget(_section_header("Flags"))
+        form_layout.addWidget(_toggle_row(f"{p}.flash_attn", "Flash Attention"))
+        form_layout.addWidget(_toggle_row(f"{p}.mlock",      "Mlock"))
+        form_layout.addWidget(_toggle_row(f"{p}.no_mmap",    "No mmap"))
+        form_layout.addWidget(_toggle_row(f"{p}.jinja",      "Jinja Chat Template",
+                                           "Use the built-in tokenizer chat template (required for tools)."))
+
+        form_layout.addWidget(_section_header("Inference Defaults"))
+        ip = f"{p}.inference_defaults"
+        form_layout.addWidget(_number_row(f"{ip}.temperature",      "Temperature",      0.0, 1.5, 0.05, 2))
+        form_layout.addWidget(_number_row(f"{ip}.top_p",            "Top-P",            0.0, 1.0, 0.01, 2))
+        form_layout.addWidget(_number_row(f"{ip}.top_k",            "Top-K",            0,   200, 1,    0))
+        form_layout.addWidget(_number_row(f"{ip}.presence_penalty", "Presence Penalty", 0.0, 2.0, 0.05, 2))
+
+        form_layout.addWidget(_section_header("Reasoning"))
+        rp = f"{ip}.reasoning"
+        form_layout.addWidget(_toggle_row(f"{rp}.enabled",              "Parse <think> Blocks"))
+        form_layout.addWidget(_line_row(f"{rp}.start",                  "Start Tag", "<think>"))
+        form_layout.addWidget(_line_row(f"{rp}.end",                    "End Tag",   "</think>"))
+        form_layout.addWidget(_toggle_row(f"{rp}.emit_thinking_blocks", "Emit Thinking Blocks"))
+
+    def _refresh_picker(preserve_key: str | None = None):
+        picker.blockSignals(True)
+        picker.clear()
+        models = list(get_path(read_settings(), "llamacpp.models", {}) or {})
+        for m in models:
+            picker.addItem(m, m)
+        if preserve_key and preserve_key in models:
+            picker.setCurrentIndex(models.index(preserve_key))
+        picker.blockSignals(False)
+        default_lbl.setText(f"default: {get_path(read_settings(), 'llamacpp.default_model', '—') or '—'}")
+        if picker.count():
+            _build_form(picker.currentData() or picker.itemData(0))
+        else:
+            _clear_form()
+
+    def _on_pick(_i: int):
+        key = picker.currentData()
+        if key:
+            _build_form(key)
+
+    def _on_add():
+        name, ok = QInputDialog.getText(content, "Add Model", "Model key (e.g. qwen3-30b):")
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        existing = get_path(read_settings(), "llamacpp.models", {}) or {}
+        if name in existing:
+            QMessageBox.warning(content, "Exists", f"Model '{name}' already exists.")
+            return
+        patch_settings(f"llamacpp.models.{name}", dict(_MODEL_DEFAULTS))
+        # Ensure inference_defaults is its own dict (dict() above is shallow)
+        patch_settings(f"llamacpp.models.{name}.inference_defaults",
+                       dict(_MODEL_DEFAULTS["inference_defaults"]))
+        patch_settings(f"llamacpp.models.{name}.inference_defaults.reasoning",
+                       dict(_MODEL_DEFAULTS["inference_defaults"]["reasoning"]))
+        _refresh_picker(preserve_key=name)
+
+    def _on_remove():
+        key = picker.currentData()
+        if not key:
+            return
+        if QMessageBox.question(content, "Remove", f"Delete model '{key}'?") != QMessageBox.StandardButton.Yes:
+            return
+        remove_path(f"llamacpp.models.{key}")
+        # If default pointed at it, clear default
+        if get_path(read_settings(), "llamacpp.default_model") == key:
+            patch_settings("llamacpp.default_model", "")
+        _refresh_picker()
+
+    def _on_set_default():
+        key = picker.currentData()
+        if key:
+            patch_settings("llamacpp.default_model", key)
+            default_lbl.setText(f"default: {key}")
+
+    picker.currentIndexChanged.connect(_on_pick)
+    add_btn.clicked.connect(_on_add)
+    remove_btn.clicked.connect(_on_remove)
+    set_default_btn.clicked.connect(_on_set_default)
+
+    _refresh_picker()
+    return scroll
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Tools (tools.*) — CLI & computer tool entries with add/remove
+# ══════════════════════════════════════════════════════════════════════
+
+_TOOL_DEFAULTS_CLI: dict[str, Any] = {
+    "name": "",
+    "icon": "🔧",
+    "startup_cmd": [],
+    "flags": [],
+    "env": {},
+    "session": {"resume_id": ""},
+}
+
+
+def _debounced_commit(te, commit_fn, delay_ms: int = 500):
+    """Attach a QTimer so we patch settings only when typing pauses."""
+    timer = QTimer(te)
+    timer.setSingleShot(True)
+    timer.setInterval(delay_ms)
+    timer.timeout.connect(commit_fn)
+    te.textChanged.connect(lambda: timer.start())
+
+
+def _list_row(path: str, label: str, help_text: str = "",
+              placeholder: str = "one per line") -> QWidget:
+    """List-of-strings editor (newline-separated, debounced)."""
+    from PySide6.QtWidgets import QPlainTextEdit
+    te = QPlainTextEdit()
+    te.setPlaceholderText(placeholder)
+    te.setFixedHeight(72)
+    cur = get_path(read_settings(), path, []) or []
+    te.setPlainText("\n".join(str(x) for x in cur))
+    def _commit():
+        vals = [l for l in te.toPlainText().splitlines() if l.strip() != ""]
+        patch_settings(path, vals)
+    _debounced_commit(te, _commit)
+    return _row(row_label(label, help_text, path), te)
+
+
+def _kv_row(path: str, label: str, help_text: str = "") -> QWidget:
+    """Key=value dict editor (one `K=V` per line, debounced)."""
+    from PySide6.QtWidgets import QPlainTextEdit
+    te = QPlainTextEdit()
+    te.setPlaceholderText("KEY=value")
+    te.setFixedHeight(120)
+    cur = get_path(read_settings(), path, {}) or {}
+    te.setPlainText("\n".join(f"{k}={v}" for k, v in cur.items()))
+    def _commit():
+        out: dict[str, Any] = {}
+        for line in te.toPlainText().splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                k = k.strip()
+                if k:
+                    out[k] = v
+        patch_settings(path, out)
+    _debounced_commit(te, _commit)
+    return _row(row_label(label, help_text, path), te)
+
+
+def _tools(window) -> QWidget:
+    from PySide6.QtWidgets import QInputDialog, QMessageBox
+
+    scroll, content, layout = _page()
+    card, body = _card("Tools", "tools.* — CLI tools + computer control entries")
+
+    # ── Picker row ───────────────────────────────────────────────────
+    top = QHBoxLayout(); top.setSpacing(8)
+    picker = QComboBox(); picker.setMinimumWidth(240)
+    add_btn = QPushButton("+ Add CLI Tool"); add_btn.setProperty("class", "primary")
+    remove_btn = QPushButton("Remove"); remove_btn.setProperty("class", "danger")
+    top.addWidget(picker); top.addStretch(1); top.addWidget(add_btn); top.addWidget(remove_btn)
+    body.addLayout(top)
+
+    form_host = QWidget()
+    form_layout = QVBoxLayout(form_host)
+    form_layout.setContentsMargins(0, 4, 0, 0)
+    form_layout.setSpacing(10)
+    body.addWidget(form_host)
+    layout.addWidget(card)
+    layout.addStretch(1)
+
+    def _clear_form():
+        while form_layout.count():
+            item = form_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+    def _build_form(key: str):
+        _clear_form()
+        p = f"tools.{key}"
+        data = get_path(read_settings(), p, {}) or {}
+        is_computer = "api" in data
+
+        form_layout.addWidget(_section_header("Identity"))
+        form_layout.addWidget(_line_row(f"{p}.name", "Display Name", "My Tool"))
+        form_layout.addWidget(_line_row(f"{p}.icon", "Icon (emoji)", "🔧"))
+
+        if is_computer:
+            # Computer-control shape
+            form_layout.addWidget(_section_header("API"))
+            form_layout.addWidget(_line_row(f"{p}.api.base_url", "Base URL",
+                                             "http://localhost:1235/v1"))
+            form_layout.addWidget(_line_row(f"{p}.api.api_key",  "API Key", "local"))
+            form_layout.addWidget(_line_row(f"{p}.api.model",    "Model", "qwen3.5-35b"))
+            form_layout.addWidget(_enum_row_strs(f"{p}.api.format", "Format",
+                                                   [("OpenAI", "openai"),
+                                                    ("Anthropic", "anthropic"),
+                                                    ("Claude Code CLI", "claude-code")]))
+            form_layout.addWidget(_section_header("Loop"))
+            form_layout.addWidget(_number_row(f"{p}.capture_interval", "Capture Interval", 1, 30, 1, 0, "s"))
+            form_layout.addWidget(_number_row(f"{p}.max_history",      "Max History",       5, 100, 5, 0))
+            form_layout.addWidget(_line_row(f"{p}.system_prompt",      "System Prompt",    ""))
+        else:
+            # CLI shape
+            form_layout.addWidget(_section_header("Command"))
+            form_layout.addWidget(_list_row(f"{p}.startup_cmd", "Startup Cmd",
+                                             "One binary / arg per line. First line = binary.",
+                                             "claude"))
+            form_layout.addWidget(_list_row(f"{p}.flags",        "Flags",
+                                             "Extra CLI flags, one per line.",
+                                             "--dangerously-skip-permissions"))
+            form_layout.addWidget(_section_header("Environment"))
+            form_layout.addWidget(_kv_row(f"{p}.env", "env",
+                                           "One KEY=value per line. Applied when spawning this tool."))
+            form_layout.addWidget(_section_header("Session"))
+            form_layout.addWidget(_line_row(f"{p}.session.resume_id",
+                                             "Resume ID",
+                                             "Set by the bot — used to reattach to prior runs."))
+
+    def _refresh_picker(preserve_key: str | None = None):
+        picker.blockSignals(True)
+        picker.clear()
+        for k in list(get_path(read_settings(), "tools", {}) or {}):
+            display = k
+            nm = get_path(read_settings(), f"tools.{k}.name", "") or humanize(k)
+            display = f"{k}  —  {nm}"
+            picker.addItem(display, k)
+        if preserve_key:
+            for i in range(picker.count()):
+                if picker.itemData(i) == preserve_key:
+                    picker.setCurrentIndex(i); break
+        picker.blockSignals(False)
+        if picker.count():
+            _build_form(picker.currentData() or picker.itemData(0))
+        else:
+            _clear_form()
+
+    def _on_pick(_i: int):
+        key = picker.currentData()
+        if key:
+            _build_form(key)
+
+    def _on_add():
+        name, ok = QInputDialog.getText(content, "Add CLI Tool",
+                                         "Tool key (letters/digits/hyphens, e.g. powershell):")
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        existing = get_path(read_settings(), "tools", {}) or {}
+        if name in existing:
+            QMessageBox.warning(content, "Exists", f"Tool '{name}' already exists.")
+            return
+        default = dict(_TOOL_DEFAULTS_CLI)
+        default["name"] = humanize(name)
+        patch_settings(f"tools.{name}", default)
+        patch_settings(f"tools.{name}.session", {"resume_id": ""})
+        _refresh_picker(preserve_key=name)
+
+    def _on_remove():
+        key = picker.currentData()
+        if not key:
+            return
+        if QMessageBox.question(content, "Remove", f"Delete tool '{key}'?") != QMessageBox.StandardButton.Yes:
+            return
+        remove_path(f"tools.{key}")
+        _refresh_picker()
+
+    picker.currentIndexChanged.connect(_on_pick)
+    add_btn.clicked.connect(_on_add)
+    remove_btn.clicked.connect(_on_remove)
+
+    _refresh_picker()
+    return scroll
+
+
 def _requests(window) -> QWidget:
     """Live request log viewer with a foldable structured JSON tree."""
     import time as _time
@@ -1114,9 +1501,11 @@ def _requests(window) -> QWidget:
 _BUILDERS: dict[str, Callable[[Any], QWidget]] = {
     "status":   _status,
     "llama":    _llama,
+    "models":   _models,
     "proxy":    _proxy,
     "mcp":      _mcp,
     "managed":  _managed,
+    "tools":    _tools,
     "telegram": _telegram,
     "voice":    _voice,
     "computer": _computer,
