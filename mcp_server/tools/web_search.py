@@ -13,7 +13,7 @@ log = logging.getLogger("telecode.mcp_server.web_search")
 
 
 @mcp_app.tool()
-async def web_search(query: str) -> str:
+async def web_search(query: str, fetch_pages: int = 0) -> str:
     """Search the public web via Brave Search. Returns titles, URLs, snippets.
 
     USE when the user needs information that lives on external websites:
@@ -32,10 +32,17 @@ async def web_search(query: str) -> str:
 
     Args:
         query: The search query (2+ characters).
+        fetch_pages: When > 0, fetch + inline the readable text of the top-N
+                     result pages (capped at 5). Default 0 = snippet-only,
+                     fast. Set to 1–3 when snippets aren't enough to answer
+                     the question — e.g. "explain how X works", "what did
+                     the article say about Y". Each page adds ~1–3 s + up
+                     to 3 KB of text. Do NOT use for shallow factual lookups.
     """
     query = (query or "").strip()
     if len(query) < 2:
         return _ws._format_error(query, "query must be at least 2 characters")
 
-    result_str, count = await _ws.search(query, categories=["general"])
+    fetch_pages = max(0, min(int(fetch_pages or 0), 5))
+    result_str, _count = await _ws.search(query, fetch_pages=fetch_pages)
     return result_str
