@@ -448,7 +448,7 @@ async def cmd_key(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Finalize old live message so post-key output goes to a fresh message
     thread_id = update.message.message_thread_id
-    old_lm = _live_messages.pop(thread_id, None)
+    old_lm = _live_messages.pop(thread_id, None)  # type: ignore[call-overload]
     if old_lm:
         await old_lm.finalize()
 
@@ -644,7 +644,7 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     # Computer control sessions: route text to LLM via .send()
     if isinstance(session.process, ComputerControl):
         # Finalize previous live message, start a fresh one for this turn
-        old_lm = _live_messages.pop(thread_id, None)
+        old_lm = _live_messages.pop(thread_id, None)  # type: ignore[call-overload]
         if old_lm:
             await old_lm.finalize()
         lm = _LiveMessage(bot, chat_id, thread_id)
@@ -660,7 +660,7 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     # Finalize previous live message, start a fresh one for this turn
-    old_lm = _live_messages.pop(thread_id, None)
+    old_lm = _live_messages.pop(thread_id, None)  # type: ignore[call-overload]
     if old_lm:
         await old_lm.finalize()
 
@@ -703,7 +703,7 @@ async def handle_voice_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
 
     thread_id = update.message.message_thread_id
     chat_id = config.telegram_group_id()
-    old_lm = _live_messages.pop(thread_id, None)
+    old_lm = _live_messages.pop(thread_id, None)  # type: ignore[call-overload]
     if old_lm:
         await old_lm.finalize()
     _live_messages[thread_id] = _LiveMessage(ctx.bot, chat_id, thread_id)
@@ -735,7 +735,7 @@ async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
 
     import os, aiofiles
     doc  = update.message.document
-    dest = os.path.join(session.workdir, doc.file_name)
+    dest = os.path.join(session.workdir, doc.file_name or "upload.bin")
     async with aiofiles.open(dest, "wb") as f:
         await f.write(await (await doc.get_file()).download_as_bytearray())
 
