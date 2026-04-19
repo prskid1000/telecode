@@ -766,11 +766,12 @@ def _logs(window) -> QWidget:
         return _sp().parent / "data" / "logs" / name
 
     def _human_bytes(n: int) -> str:
+        size: float = float(n)
         for unit in ("B", "KB", "MB", "GB"):
-            if n < 1024:
-                return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
-            n /= 1024
-        return f"{n:.1f} TB"
+            if size < 1024:
+                return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+            size /= 1024
+        return f"{size:.1f} TB"
 
     def _load_initial(path):
         viewer.clear()

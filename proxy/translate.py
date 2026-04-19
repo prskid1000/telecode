@@ -304,6 +304,15 @@ def _apply_effort_entry(
     return str(entry.get("system_nudge", "") or "")
 
 
+def _apply_thinking_off(body: dict[str, Any]) -> None:
+    """Hard-disable reasoning on this request: set chat_template_kwargs
+    .enable_thinking=false and zero the native thinking_budget_tokens.
+    Used by the master `llamacpp.inference.disable_thinking` switch when
+    the client didn't send an explicit `thinking` parameter of its own."""
+    _merge_chat_template_kwargs(body, {"enable_thinking": False})
+    body["thinking_budget_tokens"] = 0
+
+
 def _resolve_reasoning_effort(
     effort: str | None,
     defaults: dict[str, Any],

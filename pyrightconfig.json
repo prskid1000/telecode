@@ -1,0 +1,26 @@
+{
+  "pythonVersion": "3.12",
+  "pythonPlatform": "Windows",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "none",
+  "reportMissingModuleSource": "none",
+  "reportMissingTypeStubs": "none",
+  "reportOptionalMemberAccess": "none",
+  "reportOptionalOperand": "none",
+  "reportAttributeAccessIssue": "none",
+  "reportArgumentType": "none",
+  "reportCallIssue": "warning",
+  "reportReturnType": "warning",
+  "reportAssignmentType": "warning",
+  "reportUndefinedVariable": "error",
+  "reportGeneralTypeIssues": "warning",
+  "exclude": [
+    "**/__pycache__",
+    "**/node_modules",
+    ".git",
+    "data",
+    "Kokoro-FastAPI",
+    "stt-venv",
+    "tts-venv"
+  ]
+}

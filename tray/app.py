@@ -67,7 +67,7 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
         buf = BytesIO()
         pil.save(buf, format="PNG")
         pm = QPixmap()
-        pm.loadFromData(buf.getvalue(), "PNG")
+        pm.loadFromData(buf.getvalue(), b"PNG")
         return QIcon(pm)
 
     tray = QSystemTrayIcon(_make_qicon(), app)

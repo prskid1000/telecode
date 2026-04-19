@@ -139,7 +139,7 @@ async def _get_location() -> str:
                     _location_cache = ""
     except Exception:
         _location_cache = ""
-    return _location_cache
+    return _location_cache or ""
 
 
 # ═══════════════════════════════════════════════════════════════════════
