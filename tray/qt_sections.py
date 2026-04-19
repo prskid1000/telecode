@@ -153,6 +153,43 @@ def _enum_row(path: str, label: str, options: list[tuple[str, Any]],
     return _row(row_label(label, help_text, path), _wrap_align(cb, Qt.AlignmentFlag.AlignLeft))
 
 
+def _idle_unload_row(path: str, default_sec: int = 300) -> QWidget:
+    """Auto-unload composite: [Enabled] + [N s spinbox]. Stores one int:
+        0          → disabled
+        > 0        → unload after N seconds
+    The last nonzero value is remembered across checkbox toggles so
+    turning Auto-Unload off → on restores the previous duration."""
+    from PySide6.QtWidgets import QCheckBox, QSpinBox, QWidget as _W
+    cur = int(get_path(read_settings(), path, 0) or 0)
+    w = _W()
+    l = QHBoxLayout(w); l.setContentsMargins(0, 0, 0, 0); l.setSpacing(10)
+
+    cb = QCheckBox("Auto-Unload")
+    cb.setChecked(cur > 0)
+    sp = QSpinBox()
+    sp.setRange(1, 86400)
+    sp.setSingleStep(30)
+    sp.setSuffix(" s")
+    sp.setEnabled(cur > 0)
+    sp.setValue(cur if cur > 0 else default_sec)
+
+    state = {"remembered": cur if cur > 0 else default_sec}
+
+    def _on_spin(v: int) -> None:
+        state["remembered"] = int(v)
+        if cb.isChecked():
+            patch_settings(path, int(v))
+    sp.valueChanged.connect(_on_spin)
+
+    def _on_cb(checked: bool) -> None:
+        sp.setEnabled(checked)
+        patch_settings(path, int(state["remembered"]) if checked else 0)
+    cb.toggled.connect(_on_cb)
+
+    l.addWidget(cb); l.addWidget(sp); l.addStretch(1)
+    return w
+
+
 # ══════════════════════════════════════════════════════════════════════
 # Dispatch
 # ══════════════════════════════════════════════════════════════════════
@@ -343,9 +380,12 @@ def _llama(window) -> QWidget:
     body.addWidget(_section_header("Lifecycle"))
     body.addWidget(_toggle_row("llamacpp.auto_start", "Auto-Start On Launch",
                                "Load the default / remembered model at telecode startup."))
-    body.addWidget(_number_row("llamacpp.idle_unload_sec", "Idle Unload",
-                               0, 3600, 60, 0, "s",
-                               "Stop llama-server after this many seconds of no requests. 0 = never."))
+    body.addWidget(_row(row_label("Idle Unload",
+        "Stop llama-server after N seconds of no requests. Next request "
+        "(proxy or tray Load) respawns it. Checkbox = master on/off; the "
+        "spinbox is remembered across toggles.",
+        "llamacpp.idle_unload_sec"),
+        _idle_unload_row("llamacpp.idle_unload_sec", 300)))
     body.addWidget(_number_row("llamacpp.ready_timeout_sec", "Ready Timeout",
                                30, 900, 30, 0, "s",
                                "Max time to wait for /health to return ok after spawn."))
