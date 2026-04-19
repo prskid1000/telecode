@@ -67,7 +67,10 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
         buf = BytesIO()
         pil.save(buf, format="PNG")
         pm = QPixmap()
-        pm.loadFromData(buf.getvalue(), b"PNG")
+        # Auto-detect from PNG magic bytes — passing a format arg here triggers
+        # a PySide6 overload-resolution bug on some versions ("called with
+        # wrong argument values") even though the stubs allow bytes.
+        pm.loadFromData(buf.getvalue())
         return QIcon(pm)
 
     tray = QSystemTrayIcon(_make_qicon(), app)
