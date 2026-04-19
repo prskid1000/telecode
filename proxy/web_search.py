@@ -1,22 +1,22 @@
-"""Web search via Brave Search, with DuckDuckGo HTML fallback.
+"""Web search via Brave Search scraping.
 
-Primary:   https://search.brave.com/search?q=QUERY
-Fallback:  https://html.duckduckgo.com/html/?q=QUERY   (when Brave 429s)
+Scrapes https://search.brave.com/search?q=QUERY — no API key, no
+self-hosted engine. Results are in the raw HTML (Svelte SSR, no JS
+execution needed). URLs are direct (no redirect wrapper).
 
-No API key, no self-hosted engine. Both endpoints return SSR HTML with
-stable semantic classes; parsing uses only those (not build-hash classes).
+Stable CSS selectors used (not svelte-XXXXX build hashes):
+  - div.snippet[data-type="web"]  → result container
+  - div.title[title="..."]        → full title in `title` attr
+  - a[href="https://..."]         → direct destination URL
+  - div.content                   → snippet text
 """
 from __future__ import annotations
 
 import html as _html
-import logging
 import re
-import urllib.parse
 from typing import Any
 
 import aiohttp
-
-log = logging.getLogger("telecode.web_search")
 
 _BRAVE_URL = "https://search.brave.com/search"
 _HEADERS = {
@@ -109,113 +109,40 @@ def _format_error(query: str, message: str) -> str:
 
 # ── Search ─────────────────────────────────────────────────────────────────
 
-# ── DuckDuckGo HTML fallback ───────────────────────────────────────────────
-# Used when Brave returns 429 or parses to zero results. DDG's /html/ endpoint
-# is a no-JS fallback intended for crawlers; it wraps destination URLs behind
-# /l/?uddg=ENCODED which we unwrap.
-
-_DDG_URL = "https://html.duckduckgo.com/html/"
-_DDG_RESULT_SPLIT = re.compile(r'<div\s+class="[^"]*\bresult(?:\s|")')
-_DDG_TITLE_RE = re.compile(
-    r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.DOTALL,
-)
-_DDG_SNIPPET_RE = re.compile(
-    r'class="result__snippet"[^>]*>(.*?)</a>', re.DOTALL,
-)
-
-
-def _unwrap_ddg(href: str) -> str:
-    """DDG wraps URLs as //duckduckgo.com/l/?uddg=ENCODED (or similar).
-    Pull out the real destination."""
-    if "uddg=" in href:
-        try:
-            q = urllib.parse.urlparse(href).query
-            for k, v in urllib.parse.parse_qsl(q):
-                if k == "uddg" and v:
-                    return urllib.parse.unquote(v)
-        except Exception:
-            pass
-    if href.startswith("//"):
-        return "https:" + href
-    return href
-
-
-def _parse_ddg_html(html: str, max_results: int) -> list[dict[str, str]]:
-    parts = _DDG_RESULT_SPLIT.split(html)
-    results: list[dict[str, str]] = []
-    for part in parts[1 : max_results * 3]:  # DDG mixes sponsored in; overshoot then trim
-        m_title = _DDG_TITLE_RE.search(part)
-        if not m_title:
-            continue
-        href = _unwrap_ddg(_html.unescape(m_title.group(1).strip()))
-        title = _html.unescape(_TAG_RE.sub("", m_title.group(2))).strip()
-        if not href.startswith(("http://", "https://")):
-            continue
-        snippet = ""
-        m_snip = _DDG_SNIPPET_RE.search(part)
-        if m_snip:
-            snippet = _html.unescape(_TAG_RE.sub("", m_snip.group(1))).strip()
-        results.append({"title": title, "url": href, "description": snippet})
-        if len(results) >= max_results:
-            break
-    return results
-
-
-async def _fetch(session: aiohttp.ClientSession, url: str,
-                 params: dict[str, str]) -> tuple[int, str]:
-    async with session.get(url, params=params) as resp:
-        return resp.status, await resp.text()
-
-
 async def search(
     query: str,
     max_results: int | None = None,
     **_kwargs: Any,
 ) -> tuple[str, int]:
-    """Search with Brave first, fall back to DuckDuckGo on 429 or empty parse.
-    Returns (formatted_result_string, count)."""
+    """Scrape Brave Search. Returns (formatted_result_string, count)."""
     query = (query or "").strip()
     if not query:
         return _format_error("", "empty query"), 0
     n = max_results or 5
 
-    brave_note = ""
     try:
         timeout = aiohttp.ClientTimeout(total=15)
+        params = {"q": query, "source": "web"}
         async with aiohttp.ClientSession(timeout=timeout, headers=_HEADERS) as session:
-            # ── Primary: Brave ────────────────────────────────────────
-            try:
-                status, body = await _fetch(session, _BRAVE_URL, {"q": query, "source": "web"})
-                if status == 200:
-                    results = _parse_brave_html(body, n)
-                    if results:
-                        return _format_results(query, results), len(results)
-                    brave_note = "brave: empty parse"
-                elif status == 429:
-                    brave_note = "brave: 429 rate-limited"
-                else:
-                    brave_note = f"brave: HTTP {status}"
-                log.info("web_search: brave fallback — %s", brave_note)
-            except Exception as e:
-                brave_note = f"brave: {type(e).__name__}: {e}"
-                log.info("web_search: brave exception — %s", brave_note)
-
-            # ── Fallback: DuckDuckGo HTML ─────────────────────────────
-            try:
-                status, body = await _fetch(session, _DDG_URL, {"q": query})
-                if status != 200:
+            async with session.get(_BRAVE_URL, params=params) as resp:
+                if resp.status == 429:
+                    unlock_url = f"https://search.brave.com/search?q={query.replace(' ', '+')}"
                     return _format_error(
-                        query, f"{brave_note}; ddg: HTTP {status}"
+                        query,
+                        f"Brave Search rate limited (HTTP 429). "
+                        f"Ask the user to open this link in their browser to unlock: {unlock_url} "
+                        f"— opening it in a browser often resets the rate limit for this IP. "
+                        f"Then try searching again."
                     ), 0
-                results = _parse_ddg_html(body, n)
-                if not results:
-                    return _format_error(
-                        query, f"{brave_note}; ddg: empty parse"
-                    ), 0
-                return _format_results(query, results), len(results)
-            except Exception as e:
-                return _format_error(
-                    query, f"{brave_note}; ddg: {type(e).__name__}: {e}"
-                ), 0
+                if resp.status != 200:
+                    body = await resp.text()
+                    return _format_error(query, f"Brave HTTP {resp.status}: {body[:200]}"), 0
+                html = await resp.text()
     except Exception as exc:
         return _format_error(query, str(exc)), 0
+
+    results = _parse_brave_html(html, n)
+    if not results:
+        return _format_error(query, "no results (HTML parse returned empty)"), 0
+
+    return _format_results(query, results), len(results)
