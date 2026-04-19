@@ -8,5 +8,13 @@ Pillow>=10.0.0
 pyautogui>=0.9.54
 PyYAML>=6.0
 
+# FastMCP SDK — used by mcp_server/ and bridged into the proxy's
+# managed-tool registry. Pip package "mcp"; import name "mcp".
+mcp>=1.0.0
+
+# Windows Job Object integration (proc_group.py) + elevated process
+# introspection. Import name "win32api" etc.
+pywin32>=306; sys_platform == "win32"
+
 # System tray + settings window (Qt)
 PySide6>=6.6
