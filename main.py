@@ -21,7 +21,7 @@ from bot.handlers import (
     handle_forum_topic_closed, normalize_mention,
     BOT_COMMANDS,
 )
-from bot.rate import set_session_manager
+from bot.rate import set_session_manager, topic_check_loop
 from proxy.server import start_proxy_background
 from mcp_server.server import start_mcp_background
 from llamacpp import config as llama_cfg
@@ -210,6 +210,17 @@ async def _post_init(app) -> None:
     except Exception as exc:
         log.error("set_my_commands failed: %s", exc, exc_info=True)
 
+    # Background topic-liveness sweep: Telegram emits no service message
+    # on forum-topic DELETION (only on close), so without an active probe
+    # our sessions linger until the user runs /start. topic_check_loop
+    # runs `full_cleanup_all` every 60 s, one sendMessage+delete per live
+    # session per tick. Cheap enough for a personal bot.
+    mgr = app.bot_data.get("session_manager")
+    if mgr is not None:
+        app.bot_data["_topic_check_task"] = asyncio.ensure_future(
+            topic_check_loop(app.bot, mgr, interval_sec=60)
+        )
+
     # Voice: no startup probe + no background poll. The first incoming voice
     # message hits the STT endpoint directly; voice.health state is driven by
     # those real requests (record_success / record_failure inside
@@ -314,7 +325,7 @@ async def _post_shutdown(app) -> None:
         except Exception:
             pass
 
-    for key in ("_probe_task", "_stale_check_task"):
+    for key in ("_probe_task", "_stale_check_task", "_topic_check_task"):
         task = app.bot_data.get(key)
         if task and not task.done():
             task.cancel()
