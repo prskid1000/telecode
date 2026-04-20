@@ -304,6 +304,18 @@ def _apply_effort_entry(
     return str(entry.get("system_nudge", "") or "")
 
 
+def _apply_model_chat_template_kwargs(body: dict[str, Any],
+                                       defaults: dict[str, Any]) -> None:
+    """Merge the model's configured `chat_template_kwargs` dict into the
+    outgoing body. Arbitrary keys — whatever the model's jinja template
+    reads (Qwen: `enable_thinking`; GPT-OSS: `reasoning_effort`; custom
+    templates: whatever you declared). Per-request entries added later
+    via effort resolution take precedence."""
+    cfg = defaults.get("chat_template_kwargs")
+    if isinstance(cfg, dict) and cfg:
+        _merge_chat_template_kwargs(body, cfg)
+
+
 def _apply_thinking_off(body: dict[str, Any],
                          defaults: dict[str, Any] | None = None) -> None:
     """Hard-disable reasoning on this request.
@@ -490,6 +502,9 @@ def anthropic_request_to_internal(
         "stream": bool(body.get("stream", False)),
     }
 
+    # Merge the model's configured chat_template_kwargs FIRST so per-request
+    # effort resolution can still override individual keys.
+    _apply_model_chat_template_kwargs(out, defaults)
     nudge = _apply_effort_entry(entry, out)
     # Master "Use reasoning" switch (settings.json llamacpp.inference.disable_thinking)
     # — only applies if the client didn't explicitly send `thinking` already.
@@ -621,6 +636,7 @@ def openai_request_to_internal(
         effort = nested["effort"]
 
     entry = _resolve_reasoning_effort(effort, defaults)
+    _apply_model_chat_template_kwargs(body, defaults)
     sys_nudge = _apply_effort_entry(entry, body)
     # Master "Use reasoning" switch from settings.json — only fires when the
     # client didn't explicitly send a reasoning_effort.
