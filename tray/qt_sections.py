@@ -1506,6 +1506,17 @@ def _requests(window) -> QWidget:
         f"QTreeWidget::branch {{ background: transparent; }}"
     )
     tree.header().resizeSection(0, 260)
+    # Long values (full content blocks, web-search result bodies) need
+    # horizontal scrolling — header().setStretchLastSection(False) stops
+    # Qt from capping the last column at the widget width, and
+    # setSectionResizeMode(Interactive) lets values extend beyond the
+    # viewport so the tree's own h-scrollbar kicks in.
+    from PySide6.QtWidgets import QHeaderView as _QHV
+    tree.header().setStretchLastSection(False)
+    tree.header().setSectionResizeMode(0, _QHV.ResizeMode.Interactive)
+    tree.header().setSectionResizeMode(1, _QHV.ResizeMode.ResizeToContents)
+    tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    tree.setTextElideMode(Qt.TextElideMode.ElideNone)
 
     split.addWidget(req_list)
     split.addWidget(tree)
@@ -1670,13 +1681,21 @@ def _raw(window) -> QWidget:
     exposed by the curated sections. Syntax-highlighted, validates on
     save, best-effort atomic write + config.reload()."""
     import json as _json
-    from PySide6.QtCore import QRegularExpression
+    from PySide6.QtCore import QRegularExpression, Qt
     from PySide6.QtGui import QTextCharFormat, QColor, QSyntaxHighlighter, QFont
-    from PySide6.QtWidgets import QPlainTextEdit, QLabel, QPushButton
+    from PySide6.QtWidgets import QPlainTextEdit, QLabel, QPushButton, QWidget, QVBoxLayout
     from tray.qt_theme import ACCENT, WARN, ERR, OK, FG_DIM, FG_MUTE
     from tray.qt_helpers import settings_path as _sp
 
-    scroll, _, layout = _page()
+    # Build a non-scrolling page: the outer `_page()`'s QScrollArea
+    # fights with the editor's own vertical scrollbar (editor has
+    # Expanding size policy → grows to content → QScrollArea never
+    # scrolls → editor's scrollbar never appears either). Using a plain
+    # QWidget host lets QPlainTextEdit own its scrollbars cleanly.
+    host = QWidget()
+    layout = QVBoxLayout(host)
+    layout.setContentsMargins(26, 22, 26, 22)
+    layout.setSpacing(18)
     card, body = _card("Raw settings.json",
                         "Everything the curated sections don't cover. "
                         "Editable JSON — Save validates + atomic-writes + config.reload().")
@@ -1713,6 +1732,12 @@ def _raw(window) -> QWidget:
     editor.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
     editor.setMinimumHeight(320)
     editor.setTabChangesFocus(False)
+    # Force both scrollbars visible so long JSON doesn't vanish off the
+    # bottom/right edge. Word-wrap off so indentation-based scanning of
+    # big objects reads naturally.
+    editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
     JsonHighlighter(editor.document())
 
     status = QLabel("")
@@ -1782,7 +1807,7 @@ def _raw(window) -> QWidget:
     # No trailing stretch — the card already owns the vertical space.
 
     _load_into_editor()
-    return scroll
+    return host
 
 
 _BUILDERS: dict[str, Callable[[Any], QWidget]] = {
