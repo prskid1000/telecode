@@ -1705,11 +1705,13 @@ def _raw(window) -> QWidget:
 
     editor = QPlainTextEdit()
     editor.setStyleSheet(
-        f"background-color: #0d1118; color: #cdd3de; "
-        f"font-family: 'Cascadia Code', Consolas, monospace; "
-        f"font-size: 12px; border: 1px solid #1e2636; border-radius: 4px; padding: 6px;"
+        "background-color: transparent; color: #cdd3de; "
+        "font-family: 'Cascadia Code', Consolas, monospace; "
+        "font-size: 12px; border: none; padding: 6px;"
     )
-    editor.setFixedHeight(520)
+    from PySide6.QtWidgets import QSizePolicy
+    editor.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+    editor.setMinimumHeight(320)
     editor.setTabChangesFocus(False)
     JsonHighlighter(editor.document())
 
@@ -1774,10 +1776,10 @@ def _raw(window) -> QWidget:
     reload_btn.clicked.connect(_load_into_editor)
     save_btn.clicked.connect(_on_save)
 
-    body.addWidget(editor)
+    body.addWidget(editor, 1)       # stretch factor 1 so editor fills card
     body.addLayout(row)
-    layout.addWidget(card)
-    layout.addStretch(1)
+    layout.addWidget(card, 1)       # card itself fills the page vertically
+    # No trailing stretch — the card already owns the vertical space.
 
     _load_into_editor()
     return scroll
