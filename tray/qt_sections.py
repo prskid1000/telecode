@@ -1665,6 +1665,124 @@ def _requests(window) -> QWidget:
     return scroll
 
 
+def _raw(window) -> QWidget:
+    """JSON editor for settings.json — the catch-all for anything not
+    exposed by the curated sections. Syntax-highlighted, validates on
+    save, best-effort atomic write + config.reload()."""
+    import json as _json
+    from PySide6.QtCore import QRegularExpression
+    from PySide6.QtGui import QTextCharFormat, QColor, QSyntaxHighlighter, QFont
+    from PySide6.QtWidgets import QPlainTextEdit, QLabel, QPushButton
+    from tray.qt_theme import ACCENT, WARN, ERR, OK, FG_DIM, FG_MUTE
+    from tray.qt_helpers import settings_path as _sp
+
+    scroll, _, layout = _page()
+    card, body = _card("Raw settings.json",
+                        "Everything the curated sections don't cover. "
+                        "Editable JSON — Save validates + atomic-writes + config.reload().")
+
+    class JsonHighlighter(QSyntaxHighlighter):
+        def __init__(self, doc):
+            super().__init__(doc)
+            def fmt(color: str, bold: bool = False) -> QTextCharFormat:
+                f = QTextCharFormat()
+                f.setForeground(QColor(color))
+                if bold:
+                    f.setFontWeight(QFont.Weight.DemiBold)
+                return f
+            self._rules = [
+                (QRegularExpression(r'"[^"\\]*(?:\\.[^"\\]*)*"\s*:'), fmt(ACCENT, True)),   # keys
+                (QRegularExpression(r':\s*"[^"\\]*(?:\\.[^"\\]*)*"'), fmt(OK)),              # string vals
+                (QRegularExpression(r'\b(true|false|null)\b'),        fmt(WARN, True)),      # keywords
+                (QRegularExpression(r'\b-?\d+\.?\d*(?:[eE][+-]?\d+)?\b'), fmt("#b892ff")),   # numbers
+            ]
+        def highlightBlock(self, text):  # type: ignore[override]
+            for regex, f in self._rules:
+                it = regex.globalMatch(text)
+                while it.hasNext():
+                    m = it.next()
+                    self.setFormat(m.capturedStart(), m.capturedLength(), f)
+
+    editor = QPlainTextEdit()
+    editor.setStyleSheet(
+        f"background-color: #0d1118; color: #cdd3de; "
+        f"font-family: 'Cascadia Code', Consolas, monospace; "
+        f"font-size: 12px; border: 1px solid #1e2636; border-radius: 4px; padding: 6px;"
+    )
+    editor.setFixedHeight(520)
+    editor.setTabChangesFocus(False)
+    JsonHighlighter(editor.document())
+
+    status = QLabel("")
+    status.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
+
+    row = QHBoxLayout()
+    row.setContentsMargins(0, 4, 0, 0)
+    row.setSpacing(8)
+    reload_btn = QPushButton("Reload From Disk")
+    reload_btn.setProperty("class", "ghost")
+    save_btn = QPushButton("Save")
+    save_btn.setProperty("class", "primary")
+    row.addWidget(status, 1)
+    row.addWidget(reload_btn)
+    row.addWidget(save_btn)
+
+    def _load_into_editor() -> None:
+        try:
+            p = _sp()
+            text = p.read_text(encoding="utf-8")
+            editor.setPlainText(text)
+            status.setText(f"loaded from {p} ({len(text)} bytes)")
+            status.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+        except Exception as exc:
+            status.setText(f"read failed: {exc}")
+            status.setStyleSheet(f"color: {ERR}; font-size: 11px;")
+
+    def _on_save() -> None:
+        text = editor.toPlainText()
+        try:
+            data = _json.loads(text)
+        except Exception as exc:
+            status.setText(f"invalid JSON — not saved: {exc}")
+            status.setStyleSheet(f"color: {ERR}; font-size: 11px;")
+            return
+        if not isinstance(data, dict):
+            status.setText("top-level must be a JSON object")
+            status.setStyleSheet(f"color: {ERR}; font-size: 11px;")
+            return
+        # Atomic write + reload via the same path as patch_settings
+        import os as _os
+        p = _sp()
+        try:
+            tmp = p.with_suffix(".json.tmp")
+            tmp.write_text(_json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                           encoding="utf-8")
+            _os.replace(tmp, p)
+            try:
+                import config as app_config
+                app_config.reload()
+            except Exception as exc:
+                status.setText(f"saved but reload failed: {exc}")
+                status.setStyleSheet(f"color: {WARN}; font-size: 11px;")
+                return
+            status.setText(f"saved + reloaded ({len(text)} bytes)")
+            status.setStyleSheet(f"color: {OK}; font-size: 11px;")
+        except Exception as exc:
+            status.setText(f"write failed: {exc}")
+            status.setStyleSheet(f"color: {ERR}; font-size: 11px;")
+
+    reload_btn.clicked.connect(_load_into_editor)
+    save_btn.clicked.connect(_on_save)
+
+    body.addWidget(editor)
+    body.addLayout(row)
+    layout.addWidget(card)
+    layout.addStretch(1)
+
+    _load_into_editor()
+    return scroll
+
+
 _BUILDERS: dict[str, Callable[[Any], QWidget]] = {
     "status":   _status,
     "llama":    _llama,
@@ -1679,4 +1797,5 @@ _BUILDERS: dict[str, Callable[[Any], QWidget]] = {
     "sessions": _sessions,
     "requests": _requests,
     "logs":     _logs,
+    "raw":      _raw,
 }
