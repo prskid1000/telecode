@@ -1107,6 +1107,14 @@ def _models(window) -> QWidget:
         form_layout.addWidget(_line_row(f"{rp}.end",                    "End Tag",   "</think>"))
         form_layout.addWidget(_toggle_row(f"{rp}.emit_thinking_blocks", "Emit Thinking Blocks"))
 
+        form_layout.addWidget(_section_header("Chat Template Kwargs"))
+        form_layout.addWidget(_kv_row(f"{ip}.chat_template_kwargs",
+            "Kwargs",
+            "Merged into every request's chat_template_kwargs. Values are "
+            "JSON-parsed — use `enable_thinking=false`, `reasoning_effort=low`, "
+            "`budget=4096`. Anything the model's jinja template reads.",
+            typed=True))
+
     def _refresh_picker(preserve_key: str | None = None):
         picker.blockSignals(True)
         picker.clear()
@@ -1246,14 +1254,40 @@ def _list_row(path: str, label: str, help_text: str = "",
     return _row(row_label(label, help_text, path), te)
 
 
-def _kv_row(path: str, label: str, help_text: str = "") -> QWidget:
-    """Key=value dict editor (one `K=V` per line, debounced)."""
+def _kv_row(path: str, label: str, help_text: str = "",
+            typed: bool = False) -> QWidget:
+    """Key=value dict editor (one `K=V` per line, debounced).
+
+    typed=True: values go through JSON parsing — so `enable_thinking=false`
+    becomes {"enable_thinking": false} (bool), `budget=4096` becomes int,
+    `voice=alloy` stays string. Needed for places like chat_template_kwargs
+    where downstream jinja templates distinguish `false` from `"false"`."""
+    import json as _json
     from PySide6.QtWidgets import QPlainTextEdit
     te = QPlainTextEdit()
     te.setPlaceholderText("KEY=value")
     te.setFixedHeight(120)
     cur = get_path(read_settings(), path, {}) or {}
-    te.setPlainText("\n".join(f"{k}={v}" for k, v in cur.items()))
+
+    def _stringify(v: Any) -> str:
+        if typed and not isinstance(v, str):
+            try:
+                return _json.dumps(v)
+            except Exception:
+                return str(v)
+        return str(v)
+
+    te.setPlainText("\n".join(f"{k}={_stringify(v)}" for k, v in cur.items()))
+
+    def _parse(v: str) -> Any:
+        if not typed:
+            return v
+        v = v.strip()
+        try:
+            return _json.loads(v)
+        except Exception:
+            return v  # fall back to raw string
+
     def _commit():
         out: dict[str, Any] = {}
         for line in te.toPlainText().splitlines():
@@ -1261,7 +1295,7 @@ def _kv_row(path: str, label: str, help_text: str = "") -> QWidget:
                 k, v = line.split("=", 1)
                 k = k.strip()
                 if k:
-                    out[k] = v
+                    out[k] = _parse(v)
         patch_settings(path, out)
     _debounced_commit(te, _commit)
     return _row(row_label(label, help_text, path), te)
