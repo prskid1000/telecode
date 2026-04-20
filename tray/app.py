@@ -278,11 +278,23 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
         allowed = get_path(settings, "telegram.allowed_user_ids", []) or []
         bot_users.setText(f"Allowed Users: {len(allowed)}")
 
-        # tooltip
-        bits = ["telecode"]
-        if alive_bool and llama.get("active_model"):
-            bits.append(llama["active_model"])
-        tray.setToolTip(" · ".join(bits))
+        # Tray hover tooltip — newline-separated so every piece of info
+        # is visible at once on hover instead of one collapsed line.
+        tooltip_lines: list[str] = ["telecode"]
+        if llama.get("enabled"):
+            if alive_bool and llama.get("active_model"):
+                tooltip_lines.append(f"Llama: {llama['active_model']} (alive)")
+            else:
+                tooltip_lines.append("Llama: stopped")
+        if proxy.get("enabled"):
+            tooltip_lines.append(
+                f"Proxy :{proxy.get('port', '?')} · {', '.join(proxy.get('protocols') or [])}"
+            )
+        if mcp.get("enabled"):
+            n_tools = len(mcp.get("registered_tools", []))
+            tooltip_lines.append(f"MCP :{mcp.get('port', '?')} · {n_tools} tools")
+        tooltip_lines.append(f"Sessions: {alive} / {len(sessions)}")
+        tray.setToolTip("\n".join(tooltip_lines))
 
     menu_timer.timeout.connect(_refresh_info)
     menu_timer.start()
