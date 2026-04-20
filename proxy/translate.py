@@ -304,11 +304,20 @@ def _apply_effort_entry(
     return str(entry.get("system_nudge", "") or "")
 
 
-def _apply_thinking_off(body: dict[str, Any]) -> None:
-    """Hard-disable reasoning on this request: set chat_template_kwargs
-    .enable_thinking=false and zero the native thinking_budget_tokens.
-    Used by the master `llamacpp.inference.disable_thinking` switch when
-    the client didn't send an explicit `thinking` parameter of its own."""
+def _apply_thinking_off(body: dict[str, Any],
+                         defaults: dict[str, Any] | None = None) -> None:
+    """Hard-disable reasoning on this request.
+
+    Defers to the model's `reasoning_effort_map["none"]` entry if one
+    exists — that's where family-specific off-switches live (Qwen:
+    `enable_thinking=false`, other families: whatever their template
+    reads). Only falls back to the legacy Qwen hardcode
+    (`enable_thinking=false`, `thinking_budget_tokens=0`) when no map
+    or no "none" entry is configured."""
+    entry = _resolve_reasoning_effort("none", defaults or {})
+    if entry:
+        _apply_effort_entry(entry, body)
+        return
     _merge_chat_template_kwargs(body, {"enable_thinking": False})
     body["thinking_budget_tokens"] = 0
 
@@ -402,7 +411,7 @@ def anthropic_request_to_internal(
     # Two parameters, can combine:
     #
     #   thinking:
-    #     {"type": "disabled"}               → Qwen /no_think injected
+    #     {"type": "disabled"}               → effort="none" (map-resolved)
     #     {"type": "enabled",                  → older models (pre-4.6)
     #      "budget_tokens": N,                  bucketed via effort_map
     #      "display": "summarized"|"omitted"}   omitted → strip <think> output
@@ -485,7 +494,7 @@ def anthropic_request_to_internal(
     # Master "Use reasoning" switch (settings.json llamacpp.inference.disable_thinking)
     # — only applies if the client didn't explicitly send `thinking` already.
     if not thinking_param and bool(defaults.get("disable_thinking", False)):
-        _apply_thinking_off(out)
+        _apply_thinking_off(out, defaults)
     # direct budget from client overrides whatever the map said
     if direct_budget is not None:
         out["thinking_budget_tokens"] = direct_budget
@@ -616,7 +625,7 @@ def openai_request_to_internal(
     # Master "Use reasoning" switch from settings.json — only fires when the
     # client didn't explicitly send a reasoning_effort.
     if effort is None and bool(defaults.get("disable_thinking", False)):
-        _apply_thinking_off(body)
+        _apply_thinking_off(body, defaults)
 
     messages = body.get("messages") or []
     if sys_nudge:
