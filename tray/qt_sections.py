@@ -41,11 +41,8 @@ def _page() -> tuple[QScrollArea, QWidget, QVBoxLayout]:
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
     scroll.setFrameShape(QFrame.Shape.NoFrame)
-    # AlwaysOn — AsNeeded was unreliable because widget-resizable mode
-    # stretches content to viewport width so h-scroll never activated.
-    # Explicit always-visible bars guarantee discoverability.
-    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
     content = QWidget()
     content.setObjectName("content")
     layout = QVBoxLayout(content)
@@ -1735,10 +1732,33 @@ def _raw(window) -> QWidget:
                     self.setFormat(m.capturedStart(), m.capturedLength(), f)
 
     editor = QPlainTextEdit()
+    # Inlining scrollbar QSS because setStyleSheet on the editor can
+    # block the global QScrollBar rules from reaching its own child
+    # scrollbars (Qt cascade quirk), which left the scrollbars
+    # invisibly-styled (0 width / transparent handle) even though the
+    # policy was AlwaysOn.
     editor.setStyleSheet(
-        "background-color: transparent; color: #cdd3de; "
-        "font-family: 'Cascadia Code', Consolas, monospace; "
-        "font-size: 12px; border: none; padding: 6px;"
+        "QPlainTextEdit {"
+        "  background-color: transparent; color: #cdd3de;"
+        "  font-family: 'Cascadia Code', Consolas, monospace;"
+        "  font-size: 12px; border: none; padding: 6px;"
+        "}"
+        "QScrollBar:vertical {"
+        "  background: #151b28; width: 14px; margin: 2px 0; border: none;"
+        "}"
+        "QScrollBar::handle:vertical {"
+        "  background: #4a5a82; border-radius: 5px; min-height: 28px;"
+        "}"
+        "QScrollBar::handle:vertical:hover { background: #6b82b8; }"
+        "QScrollBar:horizontal {"
+        "  background: #151b28; height: 14px; margin: 0 2px; border: none;"
+        "}"
+        "QScrollBar::handle:horizontal {"
+        "  background: #4a5a82; border-radius: 5px; min-width: 28px;"
+        "}"
+        "QScrollBar::handle:horizontal:hover { background: #6b82b8; }"
+        "QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }"
+        "QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }"
     )
     from PySide6.QtWidgets import QSizePolicy
     editor.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
