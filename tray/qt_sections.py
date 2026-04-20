@@ -41,8 +41,11 @@ def _page() -> tuple[QScrollArea, QWidget, QVBoxLayout]:
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
     scroll.setFrameShape(QFrame.Shape.NoFrame)
-    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    # AlwaysOn — AsNeeded was unreliable because widget-resizable mode
+    # stretches content to viewport width so h-scroll never activated.
+    # Explicit always-visible bars guarantee discoverability.
+    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
     content = QWidget()
     content.setObjectName("content")
     layout = QVBoxLayout(content)
@@ -1523,7 +1526,8 @@ def _requests(window) -> QWidget:
     tree.header().setStretchLastSection(False)
     tree.header().setSectionResizeMode(0, _QHV.ResizeMode.Interactive)
     tree.header().setSectionResizeMode(1, _QHV.ResizeMode.ResizeToContents)
-    tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+    tree.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
     tree.setTextElideMode(Qt.TextElideMode.ElideNone)
 
     split.addWidget(req_list)
@@ -1743,8 +1747,8 @@ def _raw(window) -> QWidget:
     # Force both scrollbars visible so long JSON doesn't vanish off the
     # bottom/right edge. Word-wrap off so indentation-based scanning of
     # big objects reads naturally.
-    editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-    editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+    editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
     editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
     JsonHighlighter(editor.document())
 
