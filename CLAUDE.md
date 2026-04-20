@@ -40,50 +40,12 @@ Computer control (vision LLM):
     -> repeat (one action per LLM call) until done=true or user sends new message
 
 llama.cpp + dual-protocol proxy (for local models):
-    bot startup
-    -> LlamaSupervisor.start_default(): spawn llama-server with argv built
-       from llamacpp.models.<default>.* (-m, --ctx-size, -ngl, --mmproj,
-       draft model, cache types, chat_template, extra_args escape hatch)
-    -> wait /health until "ok"
-    -> proxy starts on http://127.0.0.1:1235
-
-    client request
-    -> /v1/messages (Anthropic) or /v1/chat/completions (OpenAI) — both
-       routes active; protocol chosen by path
-       /v1/models — shape chosen by header sniff (anthropic-version /
-       x-api-key → Anthropic shape; else OpenAI shape)
-    -> proxy translates to INTERNAL (OpenAI) shape via proxy/translate.py
-       · cache_control stripped recursively
-       · Anthropic content arrays → OpenAI content parts (text / image_url)
-       · tool_use / tool_result → OpenAI tool_calls / role:"tool"
-       · inference defaults merged from llamacpp.inference + per-model
-    -> LlamaSupervisor.ensure_model(): swap process if body.model resolves
-       to a different registered model (restart with new argv, wait /health)
-    -> split_tools(): core + deferred (ToolSearch BM25); managed tools
-       always injected; ToolSearch meta-tool present when deferred exists
-    -> intercept loop on internal shape (proxy/server._run_streaming):
-        · resp.prepare() + heartbeat (SSE comments 2s; Anthropic `event: ping`
-          every `proxy.ping_interval` seconds for Anthropic clients)
-        · write_lock shared across all round-trips
-        · POST to llama.cpp /v1/chat/completions with stream=true
-        · first content signal (tool_call.name or content delta) decides:
-            intercepted name → assemble arguments, break round, run handler,
-                              emit status line + append assistant+tool
-                              messages, re-loop
-            passthrough      → translate OpenAI SSE live to client
-                              (AnthropicStreamState for Anthropic clients
-                               reconstructs message_start / content_block_* /
-                               message_delta / message_stop, mapping
-                               <think>...</think> to `thinking` blocks via
-                               ReasoningState; OpenAI clients get verbatim
-                               chunks with model field rewritten to the
-                               client's alias)
-    -> status blocks:
-        Anthropic client: synthetic text content blocks at indices 0..N-1
-        OpenAI client:    synthetic chat.completion.chunk content deltas
-    -> /v1/messages/count_tokens uses llama.cpp /apply-template + /tokenize
-       — accurate, no max_tokens=1 round-trip hack
-    -> /v1/embeddings forwarded verbatim to llama-server
+    bot startup -> LlamaSupervisor.start_default() -> wait /health ok
+                -> proxy starts on http://127.0.0.1:1235
+    client request -> translate to OpenAI internal shape
+                   -> model swap if needed -> intercept loop -> upstream SSE
+                   -> stream back as Anthropic or OpenAI (per client)
+    See `## Proxy pipeline` for the full per-step breakdown.
 ```
 
 - **Session key:** `{backend}:{name}` -- colon is the separator; do not use colons in names.
@@ -131,21 +93,21 @@ llama.cpp + dual-protocol proxy (for local models):
 | `backends/implementations.py` | `GenericCLIBackend` (data-driven) + Screen, Video (non-PTY) |
 | `backends/registry.py` | Auto-built from `settings.json` tools; `get_backend`, `all_backends`, `refresh` |
 | `backends/params.py` | Load tool params from settings |
-| `voice/*` | STT transcribe + lazy health state. `voice.stt.transcribe()` calls `voice.health.record_success()` / `record_failure(reason)` after every request. No startup probe, no `probe_loop`. Default `stt_reachable=True` so the first voice message reaches the endpoint; a failure flips it to False and short-circuits future attempts until the next success. |
+| `voice/*` | STT transcribe + lazy health. `transcribe()` records success/failure per call — no startup probe, no background loop. Default reachable=True so the first message hits the endpoint; a failure flips it off until the next success. |
 | `llamacpp/supervisor.py` | Spawns and babysits llama-server subprocess; model-swap on demand |
 | `llamacpp/argv.py` | Builds llama-server CLI argv from `llamacpp.models.<m>` + `extra_args` |
 | `llamacpp/config.py` | `llamacpp.*` settings accessors + model registry resolution |
-| `proc_group.py` | Windows Job Object (`KILL_ON_JOB_CLOSE`) — binds every child PID we spawn (llama-server, Tailscale funnels, PTY CLIs) to this Python process's lifetime so the OS reaps everything if we die for any reason. Also `kill_process_tree(pid)` for graceful tree shutdown via `taskkill /T`. |
-| `tray/app.py` | Qt tray launcher. `start_tray_in_thread(bot_app, bot_loop)` spawns a daemon thread that runs `QApplication.exec()` with a `QSystemTrayIcon` + `SettingsWindow`. Tray click → `window.toggle_visibility()`. Menu action async calls dispatch via `asyncio.run_coroutine_threadsafe(coro, bot_loop)`. Quit calls `bot_app.stop_running()` then `app.quit()`. |
-| `tray/icon.py` | Solid white lightning-bolt, transparent background (4× LANCZOS supersample). Rendered to `QPixmap` at tray init. |
-| `tray/qt_theme.py` | Single QSS dark theme. `QSS` string cascades to the menu AND the window. Palette constants exported for widget code. |
-| `tray/qt_widgets.py` | Custom `Toggle` (animated pill switch, `QCheckBox` subclass) and `NumberEditor` (text input + slider, linked, emits `valueChanged(float)`). |
-| `tray/qt_helpers.py` | Shared: `read_settings` / `patch_settings` (atomic write + `config.reload()`), `schedule(loop, coro)` for async dispatch, `humanize(tool_id)` for labels, `build_status()` for the live snapshot dict. |
-| `tray/qt_window.py` | `SettingsWindow` — frameless `QMainWindow` with custom `TitleBar` (drag/minimize/maximize/hide), sidebar `QListWidget`, `QStackedWidget` for sections. Per-section refresh via a 1s `QTimer` that calls each cached page's optional `refresh()` method. |
-| `tray/qt_sections.py` | `build(section_id, window)` dispatch. One builder per sidebar entry: Status tiles / llama (sampling sliders + reasoning + Load/Unload/Restart + **idle_unload via `_idle_unload_row()` — checkbox + spinbox composite; checkbox off → stores 0 → disabled; last nonzero value remembered across toggles**) / Proxy (Enabled + protocols + flag toggles + max_roundtrips/ping_interval) / MCP / Managed / Telegram (streaming + capture) / Voice / Computer / Sessions (live QTableWidget) / **Requests** (live `QListWidget` of recent proxy requests + foldable `QTreeWidget` JSON inspector on the right — colored by status, rebuilds only when rids change, in-place cell refresh for in-flight→finished transitions) / **Logs** (live-tailing `QPlainTextEdit` with `QSyntaxHighlighter` coloring timestamps, levels, `[logger.name]`, URLs, tracebacks; 1s `QTimer` appends only new bytes, handles rotation via size-shrink detection, initial load capped at last 512 KB). |
-| `proxy/request_log.py` | Thread-safe ring buffer (`MAX_ENTRIES=200`) of recent proxy request dicts — `new_request` / `set_request_preview` / `finish` called from `proxy/server.py` route handlers. `snapshot()` feeds the Requests tray section. When `proxy.debug=true`, `finish` also writes `data/logs/requests/req_<ts>_<rid>.json`. |
-| `proxy/runtime_state.py` | Persists managed-tool / MCP-tool toggles to `data/runtime-overrides.json`. `is_managed_enabled(name)` consulted by `proxy/server.py` before injecting; survives restarts. |
-| `llamacpp/state.py` | Persists last-active llama model to `data/llama-state.json`. Used as the implicit default when a request omits `model`. NOT auto-loaded on startup unless `llamacpp.auto_start: true`. |
+| `proc_group.py` | Windows Job Object (`KILL_ON_JOB_CLOSE`) — binds every spawned child (llama-server, Tailscale, PTY CLIs) to this Python's lifetime. Also `kill_process_tree(pid)`. |
+| `tray/app.py` | Qt tray — daemon thread runs `QApplication.exec()` with tray icon + `SettingsWindow`. Menu async actions via `run_coroutine_threadsafe(coro, bot_loop)`. |
+| `tray/icon.py` | White lightning-bolt icon (4× LANCZOS supersample → QPixmap). |
+| `tray/qt_theme.py` | Single QSS dark theme; palette constants exported. |
+| `tray/qt_widgets.py` | Custom `Toggle` (animated pill checkbox) and `NumberEditor` (linked text + slider). |
+| `tray/qt_helpers.py` | `read_settings` / `patch_settings` (atomic + reload), `schedule(loop, coro)`, `humanize(id)`, `build_status()`. |
+| `tray/qt_window.py` | `SettingsWindow` — frameless `QMainWindow` with sidebar + `QStackedWidget`. Per-section `refresh()` on a 1s `QTimer`. Persists last-viewed section. |
+| `tray/qt_sections.py` | One builder per sidebar entry (Status, llama, Models, Proxy, MCP, Managed, Tools, Telegram, Voice, Computer, Sessions, Requests, Logs, Raw). Raw is a JSON editor over the whole settings.json. |
+| `proxy/request_log.py` | Thread-safe ring buffer (`MAX_ENTRIES=200`) of recent requests — `new_request`/`set_request_preview`/`set_response_preview`/`append_intercept`/`finish`. `proxy.debug=true` dumps finished entries to `data/logs/requests/`. |
+| `proxy/runtime_state.py` | Persists managed/MCP-tool toggles to `data/runtime-overrides.json`. |
+| `llamacpp/state.py` | Persists last-active model to `data/llama-state.json`. Not auto-loaded unless `llamacpp.auto_start: true`. |
 | `proxy/__main__.py` | Standalone entry: `python -m proxy` |
 | `proxy/server.py` | Dual-protocol (Anthropic + OpenAI) aiohttp proxy with intercept loop |
 | `proxy/translate.py` | Anthropic ↔ OpenAI shape conversions; ReasoningState `<think>` state machine; AnthropicStreamState that reconstructs message_start / content_block_* / thinking / tool_use / message_stop from OpenAI SSE |
@@ -262,66 +224,14 @@ If a tracked subprocess refuses to die: check `tasklist /FI "IMAGENAME eq llama-
 
 ## System tray UI (`tray/`)
 
-Native pystray menu running in a daemon thread inside the bot process.
-There is **no separate tray process, no webview, no HTTP RPC, no PyInstaller
-bundle** — `python main.py` (or `pythonw main.py` for no console) starts
-both the Telegram bot and the tray together.
+Qt tray menu + settings window running in a daemon thread inside the bot process. No separate tray process, no webview, no PyInstaller bundle — `python main.py` (or `pythonw main.py`) starts bot + tray together.
 
-Architecture:
-- `main.py:_post_init` calls `tray.app.start_tray_in_thread(app, loop)` after
-  the bot is initialized.
-- pystray runs on a daemon thread; menu callbacks fire on that thread.
-- Sync actions (settings patch, log open) run directly.
-- Async actions (model swap, session kill) use
-  `asyncio.run_coroutine_threadsafe(coro, bot_loop)` to schedule onto the
-  Telegram bot's asyncio loop.
-- Quit → `app.stop_running()` scheduled on the loop → `run_polling` returns
-  → process exits cleanly.
+- `main.py:_post_init` → `tray.app.start_tray_in_thread(app, loop)`.
+- Sync actions (settings patch, log open) run on the tray thread directly.
+- Async actions (model swap, session kill) use `asyncio.run_coroutine_threadsafe(coro, bot_loop)`.
+- Quit → `app.stop_running()` on the loop → `run_polling` returns → clean exit.
 
-Menu structure (every label is Title Cased; tool IDs like `web_search`
-get `_humanize()`d to `Web Search` for display only):
-
-Right-click tray menu — each subsystem gets its own submenu, populated by
-the 2s `_refresh_info` timer in `tray/app.py`:
-
-```
-⬡/⬢ Llama ▸ Status line + Active model + Auto Start toggle
-            + Load / Unload / Restart (enabled per supervisor state)
-⬡/⬢ Proxy ▸ Status line (port) + Protocols + Enabled toggle
-            (⟳ restart required) + Debug Dumps toggle
-⬡/⬢ MCP   ▸ Status line (port) + Tool count + Enabled toggle
-            (⟳ restart required)
-⬢   Bot   ▸ Sessions alive/total + group_id + allowed_user count
-            (status-only — bot is the host process)
-─
-Open Settings Window (default left-click)
-─
-Quit Telecode
-```
-
-Reload / Open settings.json / Open Logs Folder were removed from the tray
-menu — all three surfaces are inside the Settings window (Logs section =
-built-in live tailing viewer, Requests section = JSON tree inspector, and
-any settings patch already triggers `config.reload()` atomically).
-
-
-Conditional disabling via `enabled=callable`:
-- Subsystem submenu items grey out when `<subsystem>.enabled = false`.
-- Load disabled when alive; Unload/Restart disabled when not alive.
-- Show Reasoning disabled when Parse OFF; both disabled when Use Reasoning OFF.
-
-Persistence:
-- All boolean/preset toggles → `_patch_settings()` writes settings.json
-  atomically + calls `config.reload()` → effective on next reader's call.
-- Managed/MCP-tool toggles → `proxy/runtime_state.py` →
-  `data/runtime-overrides.json`.
-- Last-active llama model → `data/llama-state.json` (used as implicit
-  default; not auto-loaded on startup unless `llamacpp.auto_start: true`).
-
-pystray gotcha: `_assert_action` rejects callables with
-`co_argcount > 2`. The pattern `lambda _i, _it, key=val: ...` has
-argcount=3 (defaults count). Use `TrayApp._act(fn, *bound)` which
-returns a clean 2-arg lambda.
+Right-click submenus (Llama / Proxy / MCP / Bot) refreshed every 2s; all toggles persist via `patch_settings` (atomic write + `config.reload()`). Managed/MCP-tool toggles persist to `data/runtime-overrides.json`; last-active llama model to `data/llama-state.json`.
 
 ---
 
