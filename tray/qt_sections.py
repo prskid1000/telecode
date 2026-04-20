@@ -31,10 +31,18 @@ from tray.qt_theme import FG, FG_DIM, FG_MUTE, BG, BG_CARD, BORDER, OK, ERR
 # ══════════════════════════════════════════════════════════════════════
 
 def _page() -> tuple[QScrollArea, QWidget, QVBoxLayout]:
-    """Scrollable page container."""
+    """Scrollable page container with both v+h scrollbars AsNeeded.
+
+    `setWidgetResizable(True)` on its own only gives vertical scroll;
+    the content widget gets shrunk to fit horizontally so wide values
+    (model paths, request previews, tool cmdlines) were getting elided.
+    Combined with an explicit H-scrollbar policy the page now scrolls
+    either direction when content exceeds the viewport."""
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
     scroll.setFrameShape(QFrame.Shape.NoFrame)
+    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
     content = QWidget()
     content.setObjectName("content")
     layout = QVBoxLayout(content)
