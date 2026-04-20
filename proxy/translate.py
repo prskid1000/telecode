@@ -318,20 +318,27 @@ def _apply_model_chat_template_kwargs(body: dict[str, Any],
 
 def _apply_thinking_off(body: dict[str, Any],
                          defaults: dict[str, Any] | None = None) -> None:
-    """Hard-disable reasoning on this request.
+    """Hard-disable reasoning on this request by resolving the model's
+    `reasoning_effort_map["none"]` entry — that's where family-specific
+    off-switches live (Qwen: `enable_thinking=false`; other templates:
+    whatever kwarg they read).
 
-    Defers to the model's `reasoning_effort_map["none"]` entry if one
-    exists — that's where family-specific off-switches live (Qwen:
-    `enable_thinking=false`, other families: whatever their template
-    reads). Only falls back to the legacy Qwen hardcode
-    (`enable_thinking=false`, `thinking_budget_tokens=0`) when no map
-    or no "none" entry is configured."""
+    If no such map entry exists the proxy logs a warning and does
+    nothing — there's no universal "turn reasoning off" knob, and
+    guessing would either be a no-op for the wrong family or silently
+    break a different one. Configure `reasoning_effort_map.none` in
+    settings.json to declare your model's off-switch."""
     entry = _resolve_reasoning_effort("none", defaults or {})
     if entry:
         _apply_effort_entry(entry, body)
         return
-    _merge_chat_template_kwargs(body, {"enable_thinking": False})
-    body["thinking_budget_tokens"] = 0
+    import logging as _logging
+    _logging.getLogger("telecode.proxy").warning(
+        "_apply_thinking_off: no reasoning_effort_map['none'] entry for "
+        "this model — master disable_thinking switch is a no-op. Add an "
+        "entry like {'enable_thinking': false} for Qwen, or whatever kwarg "
+        "your template reads."
+    )
 
 
 def _resolve_reasoning_effort(
