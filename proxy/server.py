@@ -32,7 +32,7 @@ from proxy.tool_registry import (
 )
 from proxy.tool_search import BM25Index
 from llamacpp import config as llama_cfg
-from llamacpp.supervisor import get_supervisor
+from process import get_supervisor
 
 log = logging.getLogger("telecode.proxy")
 

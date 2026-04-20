@@ -25,7 +25,7 @@ from bot.rate import set_session_manager, topic_check_loop
 from proxy.server import start_proxy_background
 from mcp_server.server import start_mcp_background
 from llamacpp import config as llama_cfg
-from llamacpp.supervisor import get_supervisor, shutdown_supervisor
+from process import get_supervisor, shutdown_supervisor
 from tray.app import start_tray_in_thread
 
 
@@ -202,7 +202,7 @@ def _start_tailscale_funnels(log: logging.Logger) -> list[subprocess.Popen]:
         port = int(config.get_nested("mcp_server.port", 1236))
         routes.append((8443, port, "mcp"))
 
-    from proc_group import bind_to_lifetime_job
+    from process import bind_to_lifetime_job
     for https_port, local_port, label in routes:
         try:
             cmd = ["tailscale", "funnel", "--bg", "--https", str(https_port), str(local_port)]

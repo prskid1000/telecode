@@ -18,7 +18,7 @@ import config
 
 log = logging.getLogger("telecode.manager")
 from backends.base import CLIBackend, BackendParams
-from sessions.process import PTYProcess
+from sessions.terminal import PTYProcess
 from sessions.screen import ScreenCapture, VideoCapture
 from sessions.computer import ComputerControl
 

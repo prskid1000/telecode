@@ -648,7 +648,7 @@ bot/handlers.py:handle_text / handle_voice / handle_document
 sessions/manager.py:SessionManager.get_session_by_thread
     │
     ▼              (by backend type)
-    ├──► sessions/process.py    → PTY + pyte screen-diff → bot/live.py:LiveMessage.append → editMessageText
+    ├──► sessions/terminal.py   → PTY + pyte screen-diff → bot/live.py:LiveMessage.append → editMessageText
     ├──► sessions/screen.py     → PrintWindow / mss    → bot/live.py:FrameSender → send_photo / send_video
     └──► sessions/computer.py   → capture + vision LLM → pyautogui → edit_message_media
 

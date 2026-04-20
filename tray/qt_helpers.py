@@ -160,7 +160,7 @@ def build_status() -> dict[str, Any]:
 
     try:
         from llamacpp import config as llama_cfg
-        from llamacpp.supervisor import _SUPERVISOR as sup
+        from process import _SUPERVISOR as sup
         llama_enabled = llama_cfg.enabled()
         llama = {
             "enabled": llama_enabled,

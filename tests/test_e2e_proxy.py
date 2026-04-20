@@ -60,7 +60,7 @@ from PIL import Image, ImageDraw
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from aiohttp import web
-from llamacpp.supervisor import get_supervisor, shutdown_supervisor
+from process import get_supervisor, shutdown_supervisor
 from llamacpp import config as llama_cfg
 from proxy.server import create_app
 from proxy import config as proxy_config

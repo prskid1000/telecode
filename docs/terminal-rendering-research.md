@@ -131,7 +131,7 @@ Curated list of **50+** resources (papers, specs, implementations, blogs) releva
 
 ---
 
-## What Telecode implements (`sessions/process.py`)
+## What Telecode implements (`sessions/terminal.py`)
 
 | Idea | Source family | In code |
 |------|----------------|---------|
