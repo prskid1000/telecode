@@ -27,7 +27,7 @@ import aiohttp
 from llamacpp import config as cfg
 from llamacpp import state as llama_state
 from llamacpp.argv import build_argv, describe
-from proc_group import bind_to_lifetime_job, kill_process_tree
+from proc_group import bind_to_lifetime_job, kill_process_tree, sweep_port
 
 
 log = logging.getLogger("telecode.llamacpp")
@@ -177,6 +177,14 @@ class LlamaSupervisor:
         self._log_fp.flush()
 
         log.info("llama.cpp: spawning '%s' on %s:%d", model_name, cfg.host(), cfg.port())
+
+        # If a previous telecode crashed before its Job Object could tear
+        # down llama-server (or the Job binding failed), an orphan may still
+        # hold our port — llama-server would then die on bind. Sweep it.
+        try:
+            sweep_port(cfg.port(), ("llama-server", "llama_server", "llama.cpp"))
+        except Exception as exc:
+            log.debug("port sweep skipped: %s", exc)
 
         creation = 0
         if sys.platform == "win32":

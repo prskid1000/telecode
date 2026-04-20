@@ -23,7 +23,10 @@ from __future__ import annotations
 
 import atexit
 import logging
+import socket
+import subprocess
 import sys
+import time
 
 log = logging.getLogger("telecode.proc_group")
 
@@ -144,6 +147,85 @@ def kill_process_tree(pid: int, force: bool = False, timeout: float = 5.0) -> bo
     except (ProcessLookupError, PermissionError, OSError) as exc:
         log.debug("killpg failed for pid %d: %s", pid, exc)
         return False
+
+
+def _port_in_use(host: str, port: int) -> bool:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            return s.connect_ex((host, port)) == 0
+    except OSError:
+        return False
+
+
+def _pids_listening_on(port: int) -> list[int]:
+    """Windows-only. Returns PIDs listening on 127.0.0.1:<port>."""
+    if sys.platform != "win32":
+        return []
+    ps = (
+        "$c = Get-NetTCPConnection -LocalAddress 127.0.0.1 "
+        f"-LocalPort {int(port)} -State Listen -ErrorAction SilentlyContinue; "
+        "if ($c) { $c.OwningProcess | Sort-Object -Unique }"
+    )
+    try:
+        out = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps],
+            capture_output=True, text=True, timeout=5.0, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ).stdout
+    except (subprocess.TimeoutExpired, OSError):
+        return []
+    pids: list[int] = []
+    for line in out.splitlines():
+        line = line.strip()
+        if line.isdigit():
+            pids.append(int(line))
+    return pids
+
+
+def _process_image(pid: int) -> str:
+    if sys.platform != "win32":
+        return ""
+    ps = f"(Get-Process -Id {int(pid)} -ErrorAction SilentlyContinue).Path"
+    try:
+        out = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps],
+            capture_output=True, text=True, timeout=5.0, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ).stdout
+    except (subprocess.TimeoutExpired, OSError):
+        return ""
+    return out.strip()
+
+
+def sweep_port(port: int, expected_image_substrings: tuple[str, ...],
+               host: str = "127.0.0.1") -> None:
+    """Kill processes holding `host:port` whose executable path contains any
+    of `expected_image_substrings` (case-insensitive). Safe: foreign
+    listeners on the same port are logged, not killed.
+
+    Use before spawning a sidecar whose previous instance may have been
+    orphaned (Job Object binding failed, parent SIGKILLed, etc.) so the new
+    child doesn't hit a bind-in-use error and die silently.
+    """
+    if not _port_in_use(host, port):
+        return
+    wanted = tuple(s.lower() for s in expected_image_substrings if s)
+    for pid in _pids_listening_on(port):
+        image = _process_image(pid).lower()
+        if image and any(w in image for w in wanted):
+            log.warning("proc_group: port %d held by orphan PID %d (%s) — killing",
+                        port, pid, image)
+            kill_process_tree(pid, force=True)
+        else:
+            log.error("proc_group: port %d in use by foreign PID %d (%s) — "
+                      "not killing; sidecar spawn will fail",
+                      port, pid, image or "unknown")
+    # Give the OS a moment to release the socket.
+    for _ in range(20):
+        if not _port_in_use(host, port):
+            return
+        time.sleep(0.1)
 
 
 def _atexit_kill_all() -> None:
