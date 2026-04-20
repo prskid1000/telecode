@@ -739,7 +739,11 @@ def _logs(window) -> QWidget:
 
     LOG_FILES = [
         "telecode.log", "telecode.log.prev",
-        "llama.log", "llama.log.prev",
+        "llama.log",    "llama.log.prev",
+        "proxy.log",    "proxy.log.prev",
+        "mcp.log",      "mcp.log.prev",
+        "bot.log",      "bot.log.prev",
+        "voice.log",    "voice.log.prev",
         "tray-bot.stderr.log",
     ]
     MAX_TAIL_BYTES = 512 * 1024  # last ~512 KB is plenty for UI

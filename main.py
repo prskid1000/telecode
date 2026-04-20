@@ -29,15 +29,39 @@ from llamacpp.supervisor import get_supervisor, shutdown_supervisor
 from tray.app import start_tray_in_thread
 
 
+# Per-subsystem log files. Each value is the prefix that logger names must
+# start with to land in the file. A single Filter dispatches by name so we
+# don't have to attach handlers to every individual logger.
+_SUB_LOGS = {
+    "proxy.log": ("telecode.proxy", "telecode.runtime_state", "telecode.web_search"),
+    "mcp.log":   ("telecode.mcp_server",),
+    "bot.log":   ("telecode.handlers", "telecode.live", "telecode.rate",
+                  "telecode.topic_manager"),
+    "voice.log": ("telecode.voice",),
+}
+
+
+class _PrefixFilter(logging.Filter):
+    """Pass records whose logger name starts with any of `prefixes`."""
+    def __init__(self, prefixes: tuple[str, ...]) -> None:
+        super().__init__()
+        self._prefixes = prefixes
+
+    def filter(self, record: logging.LogRecord) -> bool:  # noqa: D401
+        return any(record.name == p or record.name.startswith(p + ".")
+                   for p in self._prefixes)
+
+
 def _rotate_previous_logs() -> None:
-    """Rotate telecode.log AND llama.log to .prev so traces from the previous
-    run survive a restart. Also prunes old proxy_full_*.json dumps.
-    Best-effort — skips files held by other processes."""
+    """Rotate every per-subsystem log (telecode/llama/proxy/mcp/bot/voice) to
+    .prev so traces from the previous run survive a restart. Also prunes old
+    proxy_full_*.json dumps. Best-effort — skips files held by other processes."""
     import glob
     logs_dir = config.logs_dir()
     if not os.path.isdir(logs_dir):
         return
-    for basename in ("telecode.log", "llama.log"):
+    basenames = ["telecode.log", "llama.log"] + list(_SUB_LOGS.keys())
+    for basename in basenames:
         current = os.path.join(logs_dir, basename)
         prev = os.path.join(logs_dir, f"{basename}.prev")
         if os.path.exists(current):
@@ -78,6 +102,19 @@ def _setup_logging() -> None:
         handlers=handlers,
         force=True,
     )
+
+    # Per-subsystem files. Records still propagate to root (telecode.log) so
+    # the unified log keeps everything; these dedicated files just give a
+    # focused view (proxy noise vs. bot noise vs. voice noise).
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    root = logging.getLogger()
+    for basename, prefixes in _SUB_LOGS.items():
+        h = logging.FileHandler(
+            os.path.join(config.logs_dir(), basename), encoding="utf-8"
+        )
+        h.setFormatter(fmt)
+        h.addFilter(_PrefixFilter(prefixes))
+        root.addHandler(h)
 
 
 def _install_crash_handlers(log: logging.Logger) -> None:
