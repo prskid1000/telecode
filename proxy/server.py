@@ -930,7 +930,9 @@ async def _run_streaming(
                         pass
 
         max_roundtrips = proxy_config.max_roundtrips()
+        rounds_completed = 0
         for _rt in range(max_roundtrips):
+            rounds_completed = _rt + 1
             # Rebuild intercept set each round (tools joined core_visible_names
             # via auto_load should stop being intercepted).
             intercept_names: set[str] = set()
@@ -962,6 +964,8 @@ async def _run_streaming(
             result_content: str | None = None
             status_line: str | None = None
 
+            _rid = request.get("_rid")
+
             if tool_name == "ToolSearch":
                 matched = await _do_tool_search(deferred, tool_input)
                 result_content = _format_functions_block(matched)
@@ -971,6 +975,12 @@ async def _run_streaming(
                     status_line = f'● ToolSearch("{q[:80]}")\n└  {len(matched)} schemas loaded: {names}'
                 else:
                     status_line = f'● ToolSearch("{q[:80]}")\n└  No matches'
+                if _rid:
+                    request_log.append_intercept(_rid, {
+                        "type": "tool_search",
+                        "query": q,
+                        "matched": [m.get("name", "") for m in matched],
+                    })
 
             elif is_managed(tool_name):
                 tool_entry = get_tool(tool_name)
@@ -983,6 +993,20 @@ async def _run_streaming(
                         summary = f"Failed: {exc}"
                         result_content = f"ERROR: {tool_name} failed: {exc}"
                     status_line = format_visibility(tool_name, tool_input, summary)
+                    if _rid:
+                        # Truncate bulky result bodies (e.g. web-search output)
+                        # so the log entry stays compact; full body still goes
+                        # back to the model.
+                        preview = (result_content or "")
+                        if len(preview) > 2000:
+                            preview = preview[:2000] + f"…(+{len(result_content or '') - 2000} chars)"
+                        request_log.append_intercept(_rid, {
+                            "type": "managed_tool",
+                            "name": tool_name,
+                            "input": tool_input,
+                            "summary": summary,
+                            "result_preview": preview,
+                        })
 
             elif auto_load and tool_name in deferred_names and tool_name not in core_visible_names:
                 matched = [t for t in deferred if t["name"] == tool_name]
@@ -992,6 +1016,10 @@ async def _run_streaming(
                     f"Call the tool again using the parameter names from this schema."
                 )
                 status_line = f'● Loaded {tool_name}\n└  Schema delivered · awaiting retry'
+                if _rid:
+                    request_log.append_intercept(_rid, {
+                        "type": "auto_load", "name": tool_name,
+                    })
 
             elif (not auto_load) and tool_name in deferred_names and tool_name not in core_visible_names:
                 result_content = (
@@ -1003,6 +1031,11 @@ async def _run_streaming(
                     f'● Blocked: {tool_name} (unloaded)\n'
                     f'└  Model instructed to ToolSearch first'
                 )
+                if _rid:
+                    request_log.append_intercept(_rid, {
+                        "type": "blocked", "name": tool_name,
+                        "reason": "unloaded",
+                    })
 
             else:
                 # Hallucination guard
@@ -1035,6 +1068,11 @@ async def _run_streaming(
                         f'● Unknown tool: {tool_name}\n'
                         f'└  No close matches · model told to ToolSearch with keywords'
                     )
+                if _rid:
+                    request_log.append_intercept(_rid, {
+                        "type": "hallucination", "name": tool_name,
+                        "suggestions": [m.get("name", "") for m in search_matches],
+                    })
 
             if result_content is None:
                 break
@@ -1069,6 +1107,19 @@ async def _run_streaming(
             ])
     finally:
         await _stop_heartbeat(heartbeat)
+
+    # Streaming summary — we don't re-assemble the full text here (the
+    # chunks went straight through to the client), but the intercept
+    # list + round count already tells the "why was this slow / what did
+    # the model do" story. The tray viewer's JSON tree is happy with a
+    # tiny summary dict.
+    _rid = request.get("_rid")
+    if _rid:
+        request_log.set_response_preview(_rid, {
+            "mode": "stream",
+            "rounds_completed": rounds_completed,
+            "note": "streamed to client — content not re-captured here",
+        })
 
     if not resp.prepared:
         _apply_cors_to_stream(resp, request)
@@ -1169,10 +1220,17 @@ async def _run_non_streaming(
 
             matched: list[dict[str, Any]] = []
             result_text: str | None = None
+            _rid = request.get("_rid")
 
             if tool_name == "ToolSearch":
                 matched = await _do_tool_search(deferred, tool_input)
                 result_text = _format_functions_block(matched)
+                if _rid:
+                    request_log.append_intercept(_rid, {
+                        "type": "tool_search",
+                        "query": str(tool_input.get("query", "")),
+                        "matched": [m.get("name", "") for m in matched],
+                    })
 
             elif is_managed(tool_name):
                 tool_entry = get_tool(tool_name)
@@ -1185,6 +1243,17 @@ async def _run_non_streaming(
                         summary = f"Failed: {exc}"
                         result_text = f"ERROR: {tool_name} failed: {exc}"
                     summaries.append(format_visibility(tool_name, tool_input, summary))
+                    if _rid:
+                        preview = (result_text or "")
+                        if len(preview) > 2000:
+                            preview = preview[:2000] + f"…(+{len(result_text or '') - 2000} chars)"
+                        request_log.append_intercept(_rid, {
+                            "type": "managed_tool",
+                            "name": tool_name,
+                            "input": tool_input,
+                            "summary": summary,
+                            "result_preview": preview,
+                        })
 
             elif auto_load and tool_name in deferred_names and tool_name not in core_visible_names:
                 matched = [t for t in deferred if t["name"] == tool_name]
@@ -1193,11 +1262,20 @@ async def _run_non_streaming(
                     f"{_format_functions_block(matched)}\n\n"
                     f"Call the tool again with the correct parameter names."
                 )
+                if _rid:
+                    request_log.append_intercept(_rid, {
+                        "type": "auto_load", "name": tool_name,
+                    })
 
             elif (not auto_load) and tool_name in deferred_names and tool_name not in core_visible_names:
                 result_text = (
                     f"`{tool_name}` is currently UNLOADED. Call ToolSearch to load it."
                 )
+                if _rid:
+                    request_log.append_intercept(_rid, {
+                        "type": "blocked", "name": tool_name,
+                        "reason": "unloaded",
+                    })
 
             else:
                 # Hallucination guard
@@ -1218,6 +1296,11 @@ async def _run_non_streaming(
                     )
                 else:
                     result_text = f"The tool `{tool_name}` does not exist."
+                if _rid:
+                    request_log.append_intercept(_rid, {
+                        "type": "hallucination", "name": tool_name,
+                        "suggestions": [m.get("name", "") for m in search_matches],
+                    })
 
             if not result_text:
                 continue
@@ -1261,15 +1344,20 @@ async def _run_non_streaming(
             result["choices"] = choices
 
     # Convert to client protocol
+    _rid = request.get("_rid")
     if inbound_protocol == "anthropic":
         anth = xlate.openai_response_to_anthropic(
             result, reasoning_cfg=reasoning_cfg, client_model=client_model,
         )
+        if _rid:
+            request_log.set_response_preview(_rid, anth)
         return web.json_response(anth)
     else:
         # OpenAI identity — just rewrite `model`
         if client_model:
             result["model"] = client_model
+        if _rid:
+            request_log.set_response_preview(_rid, result)
         return web.json_response(result)
 
 
