@@ -183,10 +183,20 @@ def _pids_listening_on(port: int) -> list[int]:
     return pids
 
 
-def _process_image(pid: int) -> str:
+def _process_image(pid: int) -> tuple[str, str]:
+    """Return (exe_path, command_line) for a PID. Both "" if unknown.
+
+    Command line matters: a .exe under our sidecar tree is typically
+    launched by pyenv's python.exe, so the owning process `Path` points
+    at pyenv while the real identity is in argv.
+    """
     if sys.platform != "win32":
-        return ""
-    ps = f"(Get-Process -Id {int(pid)} -ErrorAction SilentlyContinue).Path"
+        return "", ""
+    ps = (
+        f"$p = Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}' "
+        "-ErrorAction SilentlyContinue; "
+        "if ($p) { $p.ExecutablePath; '---'; $p.CommandLine }"
+    )
     try:
         out = subprocess.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps],
@@ -194,15 +204,18 @@ def _process_image(pid: int) -> str:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         ).stdout
     except (subprocess.TimeoutExpired, OSError):
-        return ""
-    return out.strip()
+        return "", ""
+    parts = out.split("---", 1)
+    exe = parts[0].strip() if parts else ""
+    cmd = parts[1].strip() if len(parts) > 1 else ""
+    return exe, cmd
 
 
 def sweep_port(port: int, expected_image_substrings: tuple[str, ...],
                host: str = "127.0.0.1") -> None:
-    """Kill processes holding `host:port` whose executable path contains any
-    of `expected_image_substrings` (case-insensitive). Safe: foreign
-    listeners on the same port are logged, not killed.
+    """Kill processes holding `host:port` whose executable path OR command
+    line contains any of `expected_image_substrings` (case-insensitive).
+    Safe: foreign listeners on the same port are logged, not killed.
 
     Use before spawning a sidecar whose previous instance may have been
     orphaned (Job Object binding failed, parent SIGKILLed, etc.) so the new
@@ -212,15 +225,17 @@ def sweep_port(port: int, expected_image_substrings: tuple[str, ...],
         return
     wanted = tuple(s.lower() for s in expected_image_substrings if s)
     for pid in _pids_listening_on(port):
-        image = _process_image(pid).lower()
-        if image and any(w in image for w in wanted):
+        exe, cmd = _process_image(pid)
+        exe_lc, cmd_lc = exe.lower(), cmd.lower()
+        hit = any((w in exe_lc) or (w in cmd_lc) for w in wanted)
+        if hit:
             log.warning("proc_group: port %d held by orphan PID %d (%s) — killing",
-                        port, pid, image)
+                        port, pid, exe or cmd or "unknown")
             kill_process_tree(pid, force=True)
         else:
-            log.error("proc_group: port %d in use by foreign PID %d (%s) — "
-                      "not killing; sidecar spawn will fail",
-                      port, pid, image or "unknown")
+            log.error("proc_group: port %d in use by foreign PID %d "
+                      "(exe=%s cmd=%s) — not killing; sidecar spawn will fail",
+                      port, pid, exe or "?", cmd or "?")
     # Give the OS a moment to release the socket.
     for _ in range(20):
         if not _port_in_use(host, port):
