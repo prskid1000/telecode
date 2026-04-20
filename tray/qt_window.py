@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from tray.qt_theme import QSS, BG
 from tray import qt_sections as sections
+from tray.qt_helpers import read_settings, patch_settings
 
 log = logging.getLogger("telecode.tray.window")
 
@@ -162,8 +163,16 @@ class SettingsWindow(QMainWindow):
         root_layout.addWidget(body, 1)
         self.setCentralWidget(root)
 
-        # Initial page
-        self._sidebar.setCurrentRow(0)
+        # Restore last-viewed section (persisted under `tray.last_section`).
+        # Falls back to row 0 if the saved id is no longer present.
+        last = str(read_settings().get("tray", {}).get("last_section", "") or "")
+        initial_row = 0
+        if last:
+            for i, (sid, *_rest) in enumerate(SECTIONS):
+                if sid == last:
+                    initial_row = i
+                    break
+        self._sidebar.setCurrentRow(initial_row)
 
         # Live status refresh (1s) — drives sections that care (Status / Sessions)
         self._status_timer = QTimer(self)
@@ -205,6 +214,12 @@ class SettingsWindow(QMainWindow):
             self._page_cache[sid] = sections.build(sid, self)
             self._stack.addWidget(self._page_cache[sid])
         self._stack.setCurrentWidget(self._page_cache[sid])
+        # Persist last-viewed section so the next launch lands on the same
+        # page. Best-effort — settings write failures shouldn't break nav.
+        try:
+            patch_settings("tray.last_section", sid)
+        except Exception:
+            pass
 
     def _tick(self) -> None:
         """Let each loaded section refresh itself if it wants to."""
