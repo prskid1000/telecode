@@ -246,6 +246,18 @@ class LlamaSupervisor:
                             status = (data or {}).get("status", "")
                             # "ok" = loaded + ready; "loading model" = still spinning up
                             if status == "ok":
+                                # Guard against an orphan answering on our
+                                # port: if our child dies within a short
+                                # window after "ok", the ping was hitting
+                                # someone else, not us.
+                                await asyncio.sleep(1.0)
+                                if self._proc is None or self._proc.poll() is not None:
+                                    raise RuntimeError(
+                                        f"llama-server died right after /health=ok "
+                                        f"(code {self._proc.returncode if self._proc else '?'}); "
+                                        f"another process on port {cfg.port()}? "
+                                        f"see {cfg.log_file()}"
+                                    )
                                 return
                         elif resp.status == 503:
                             # llama-server returns 503 while still loading
