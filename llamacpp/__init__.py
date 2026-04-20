@@ -1,17 +1,12 @@
-"""llama.cpp subprocess supervisor + argv builder.
+"""llama.cpp config + argv builder.
 
-Owns the llama-server process lifecycle for the proxy:
-  - spawn + babysit a single llama-server instance
-  - probe /health until ready
-  - swap models on demand (restart with new argv)
-  - tear down on shutdown
+The subprocess supervisor used to live here too but was consolidated
+into the top-level `process.py` alongside port-sweep, Job Object, and
+tree-kill primitives. Import the supervisor from there:
 
-All configuration comes from settings.json under `llamacpp.*`. See
-`config.py` accessors in this package (`llamacpp/config.py`) for the
-full shape.
+    from process import get_supervisor, shutdown_supervisor, LlamaSupervisor
+
+This package now owns only the static description of what to spawn:
+config accessors (`config.py`), argv builder (`argv.py`), and the
+last-active-model state file (`state.py`).
 """
-from __future__ import annotations
-
-from llamacpp.supervisor import LlamaSupervisor, get_supervisor, shutdown_supervisor
-
-__all__ = ["LlamaSupervisor", "get_supervisor", "shutdown_supervisor"]

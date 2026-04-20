@@ -81,7 +81,7 @@ llama.cpp + dual-protocol proxy (for local models):
 | `config.py` | Read/write accessors (must be **functions** for hot-reload). `store_path` / `logs_dir` resolve relative paths against the `settings.json` directory (not cwd). |
 | `main.py` | App startup, handlers, `set_my_commands`. No background STT poll: voice.health state is updated by real `voice.stt.transcribe` calls. |
 | `store.py` | Topics JSON |
-| `sessions/process.py` | PTY + pyte + snapshot diff + timers |
+| `sessions/terminal.py` | PTY + pyte + snapshot diff + timers (was `sessions/process.py`) |
 | `sessions/screen.py` | Image capture, video recording, window enumeration |
 | `sessions/computer.py` | Vision LLM computer control (capture + actions + LLM loop) |
 | `sessions/manager.py` | Start/kill sessions, send, send_raw, interrupt, pause/resume |
@@ -94,10 +94,10 @@ llama.cpp + dual-protocol proxy (for local models):
 | `backends/registry.py` | Auto-built from `settings.json` tools; `get_backend`, `all_backends`, `refresh` |
 | `backends/params.py` | Load tool params from settings |
 | `voice/*` | STT transcribe + lazy health. `transcribe()` records success/failure per call — no startup probe, no background loop. Default reachable=True so the first message hits the endpoint; a failure flips it off until the next success. |
-| `llamacpp/supervisor.py` | Spawns and babysits llama-server subprocess; model-swap on demand |
+| `process.py` | All subprocess-lifecycle code in one file: Windows Job Object (`KILL_ON_JOB_CLOSE`) that binds every spawned child (llama-server, Tailscale, PTY CLIs) to this Python's lifetime; `kill_process_tree(pid)`; `sweep_port()` — command-line-aware orphan killer; `LlamaSupervisor` — babysits llama-server with readiness probe (poll-death + post-`/health` stability guard), inflight-gated idle unload, model-swap on demand. |
 | `llamacpp/argv.py` | Builds llama-server CLI argv from `llamacpp.models.<m>` + `extra_args` |
 | `llamacpp/config.py` | `llamacpp.*` settings accessors + model registry resolution |
-| `proc_group.py` | Windows Job Object (`KILL_ON_JOB_CLOSE`) — binds every spawned child (llama-server, Tailscale, PTY CLIs) to this Python's lifetime. Also `kill_process_tree(pid)`. |
+| `llamacpp/state.py` | Persist last-active model name (`data/llama-state.json`) |
 | `tray/app.py` | Qt tray — daemon thread runs `QApplication.exec()` with tray icon + `SettingsWindow`. Menu async actions via `run_coroutine_threadsafe(coro, bot_loop)`. |
 | `tray/icon.py` | White lightning-bolt icon (4× LANCZOS supersample → QPixmap). |
 | `tray/qt_theme.py` | Single QSS dark theme; palette constants exported. |
@@ -144,7 +144,7 @@ llama.cpp + dual-protocol proxy (for local models):
 
 ---
 
-## PTY output pipeline (`sessions/process.py`)
+## PTY output pipeline (`sessions/terminal.py`)
 
 1. Raw bytes -> **pyte** `HistoryScreen` + `Stream`.
 2. Each snapshot = **history lines** + **display lines** (one top-to-bottom list).
@@ -154,7 +154,7 @@ llama.cpp + dual-protocol proxy (for local models):
 
 Both thresholds are tunable per-backend via `tools.<key>.streaming.{idle_sec,max_wait_sec}`, falling back to the global `streaming.{idle_sec,max_wait_sec}` in `settings.json`. Loaded by `backends/params.py` → `BackendParams.idle_sec` / `max_wait_sec` → `PTYProcess(..., idle_sec=..., max_wait_sec=...)`. Short-output shells (`shell`, `powershell`) flush faster than TUIs like Claude Code; tune per-tool to taste.
 
-Other tunables near top of `process.py`: screen rows/history size.
+Other tunables near top of `sessions/terminal.py`: screen rows/history size.
 
 ---
 
@@ -208,17 +208,23 @@ Other tunables near top of `process.py`: screen rows/history size.
 
 ---
 
-## Child-process lifetime (`proc_group.py`)
+## Subprocess lifecycle (`process.py`)
 
-Every subprocess we spawn — llama-server, Tailscale funnel processes, PTY-driven CLIs (Claude Code, Codex, bash, powershell) — gets bound to a single process-wide Windows Job Object created lazily on first call to `bind_to_lifetime_job(pid, proc=…)`. The job has the `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` flag, so when this Python interpreter exits **for any reason** (Ctrl+C, Task Manager kill, pythonw crash, OS shutdown), the OS releases the job handle, the job closes, and every member process is terminated by the kernel.
+All subprocess-lifecycle code was consolidated into one top-level `process.py`. Two layers:
 
-Belt-and-braces:
-- `atexit.register(_atexit_kill_all)` — covers clean exits where pywin32 isn't available; calls `proc.kill()` on every tracked Popen / asyncio.subprocess.Process.
-- `kill_process_tree(pid, force=False)` — graceful path. Uses `taskkill /PID <pid> /T` (`/F` if force) on Windows or `os.killpg` on Unix. Walks the whole process tree, so workers spawned by the immediate child also die.
+**Generic primitives (crash safety + graceful kill):**
+- **Windows Job Object** — every subprocess we spawn (llama-server, Tailscale funnels, PTY-driven CLIs like Claude Code / Codex / bash / powershell) gets bound to a single process-wide Job Object flagged `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` via `bind_to_lifetime_job(pid, proc=…)`. When this Python interpreter exits **for any reason** (Ctrl+C, Task Manager kill, pythonw crash, OS shutdown), the OS releases the job handle, the job closes, and every member process dies.
+- **atexit fallback** — `_atexit_kill_tracked` covers clean-exit paths where pywin32 isn't available.
+- **`kill_process_tree(pid, force=False)`** — graceful shutdown path. `taskkill /PID <pid> /T` on Windows, `killpg` on Unix. Walks the full tree, so workers spawned by the immediate child die too.
+- **`sweep_port(port, whitelist)`** — kills orphans holding a port whose exe **or** command line matches the whitelist. Foreign listeners are logged, not killed. Called before each llama-server spawn so a previous telecode that couldn't bind the Job (or died before atexit fired) can't keep the port across restarts.
 
-The supervisor's `_stop_locked` calls `kill_process_tree` first (graceful), waits 4s, then `kill_process_tree(force=True)`. Sessions/process.py wires PTY children via `bind_to_lifetime_job`. Tailscale funnels in main.py do the same.
+**`LlamaSupervisor` (the only subprocess-babysitter in telecode):**
+- One active llama-server at a time; model-swap via `ensure_model(name)` under an asyncio lock.
+- `_wait_ready` — polls `/health`, checks `proc.poll()` each iteration, and after a `status:"ok"` response waits 1s and re-polls the child to catch an orphan on the same port that would otherwise fake readiness.
+- `_stop_locked` — graceful `kill_process_tree`, 4s wait, then force.
+- Inflight-gated idle unload (`begin_request` / `end_request` + watcher task).
 
-If a tracked subprocess refuses to die: check `tasklist /FI "IMAGENAME eq llama-server.exe"` after telecode exits — should be empty within ~2s. If not, the Job Object didn't take (look for `proc_group: could not create Job Object` in `data/logs/telecode.log`) — usually a missing `pywin32` install.
+If a tracked subprocess refuses to die: check `tasklist /FI "IMAGENAME eq llama-server.exe"` after telecode exits — should be empty within ~2s. If not, the Job Object didn't take (look for `could not create Job Object` in `data/logs/telecode.log`) — usually a missing `pywin32` install.
 
 ---
 

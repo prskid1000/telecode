@@ -46,7 +46,7 @@ _HISTORY = 5000       # lines of scrollback history to keep
 _IDLE_SEC = 2.0       # seconds of silence after last data → streaming is done, send
 _MAX_WAIT_SEC = 5.0   # max seconds to buffer before forcing an intermediate send
 
-log = logging.getLogger("telecode.process")
+log = logging.getLogger("telecode.terminal")
 
 _BOX_DRAW_RANGES = (
     range(0x2500, 0x2580),  # box drawing
@@ -556,7 +556,7 @@ class PTYProcess:
 
     async def _start_win(self, env: dict) -> None:
         from winpty import PtyProcess as WinPty
-        from proc_group import bind_to_lifetime_job
+        from process import bind_to_lifetime_job
         env["TERM"] = "xterm-256color"
         self._pty = await self._loop.run_in_executor(
             None,

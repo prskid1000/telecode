@@ -315,7 +315,7 @@ def _llama(window) -> QWidget:
         model_box.blockSignals(True)
         model_box.clear()
         models = list(get_path(read_settings(), "llamacpp.models", {}) or {})
-        from llamacpp.supervisor import _SUPERVISOR as sup
+        from process import _SUPERVISOR as sup
         active = sup.active_model() if sup else ""
         for m in models:
             model_box.addItem(m, m)
@@ -329,7 +329,7 @@ def _llama(window) -> QWidget:
         if not m:
             return
         async def _do():
-            from llamacpp.supervisor import get_supervisor
+            from process import get_supervisor
             sup = await get_supervisor()
             await sup.ensure_model(m)
         schedule(window.bot_loop, _do())
@@ -349,20 +349,20 @@ def _llama(window) -> QWidget:
 
     def _load():
         async def _do():
-            from llamacpp.supervisor import get_supervisor
+            from process import get_supervisor
             from llamacpp import config as cfg
             sup = await get_supervisor()
             await sup.ensure_model(cfg.default_model())
         schedule(window.bot_loop, _do())
     def _unload():
         async def _do():
-            from llamacpp.supervisor import get_supervisor
+            from process import get_supervisor
             sup = await get_supervisor()
             await sup.stop()
         schedule(window.bot_loop, _do())
     def _restart():
         async def _do():
-            from llamacpp.supervisor import get_supervisor
+            from process import get_supervisor
             sup = await get_supervisor()
             await sup.stop()
             await sup.start_default()
@@ -426,7 +426,7 @@ def _llama(window) -> QWidget:
     # Refresh on timer (models list may change from settings.json edit)
     def refresh() -> None:
         _refresh_models()
-        from llamacpp.supervisor import _SUPERVISOR as sup
+        from process import _SUPERVISOR as sup
         alive = bool(sup and sup.alive())
         load_btn.setEnabled(not alive)
         unload_btn.setEnabled(alive)

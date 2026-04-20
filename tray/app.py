@@ -107,20 +107,20 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
     restart_action = QAction("Restart",    llama_menu)
     def _load():
         async def _do():
-            from llamacpp.supervisor import get_supervisor
+            from process import get_supervisor
             from llamacpp import config as cfg
             sup = await get_supervisor()
             await sup.ensure_model(cfg.default_model())
         _sched(_do)
     def _unload():
         async def _do():
-            from llamacpp.supervisor import get_supervisor
+            from process import get_supervisor
             sup = await get_supervisor()
             await sup.stop()
         _sched(_do)
     def _restart():
         async def _do():
-            from llamacpp.supervisor import get_supervisor
+            from process import get_supervisor
             sup = await get_supervisor()
             await sup.stop()
             await sup.start_default()
