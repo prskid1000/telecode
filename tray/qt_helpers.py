@@ -35,13 +35,28 @@ def get_path(d: dict, dotted: str, default=None):
 
 
 def _set_nested(root: dict, path: str, value: Any) -> None:
+    """Write `value` at dotted `path` inside `root`. Intermediate dicts are
+    created on demand. Unlike the previous version, every branch that can
+    lose the write logs a warning — silent no-ops are how the voxtype
+    hotkey-rebind bug hid for so long."""
     keys = path.split(".")
     node = root
-    for k in keys[:-1]:
-        if isinstance(node, list) and k.isdigit():
-            node = node[int(k)]
+    for i, k in enumerate(keys[:-1]):
+        if isinstance(node, list):
+            if not k.isdigit():
+                log.warning("_set_nested(%r): list index expected at %r, got %r — skipping",
+                            path, ".".join(keys[:i+1]), k)
+                return
+            idx = int(k)
+            if idx < 0 or idx >= len(node):
+                log.warning("_set_nested(%r): list index %d out of range at %r — skipping",
+                            path, idx, ".".join(keys[:i+1]))
+                return
+            node = node[idx]
             continue
         if not isinstance(node, dict):
+            log.warning("_set_nested(%r): expected dict at %r, got %s — skipping",
+                        path, ".".join(keys[:i+1]), type(node).__name__)
             return
         nxt = node.get(k)
         if nxt is None or not isinstance(nxt, (dict, list)):
@@ -51,6 +66,16 @@ def _set_nested(root: dict, path: str, value: Any) -> None:
     last = keys[-1]
     if isinstance(node, dict):
         node[last] = value
+    elif isinstance(node, list) and last.isdigit():
+        idx = int(last)
+        if 0 <= idx < len(node):
+            node[idx] = value
+        else:
+            log.warning("_set_nested(%r): final list index %d out of range — skipping",
+                        path, idx)
+    else:
+        log.warning("_set_nested(%r): final parent is %s (expected dict/list) — skipping",
+                    path, type(node).__name__)
 
 
 def patch_settings(path: str, value: Any) -> None:
