@@ -70,6 +70,16 @@ def new_request(method: str, path: str, client_model: str = "",
         "status":            None,
         "error":             "",
         "request_preview":   None,
+        # response_preview — final upstream body (non-streaming) or an
+        # assembled summary {rounds, status_lines, final_text} (streaming).
+        # Set by the route handler right before finish().
+        "response_preview":  None,
+        # intercepts — ordered list of events from the proxy's intercept
+        # loop. Each event is a dict with {type, ts, …}. Populated by
+        # server.py as it handles ToolSearch / managed tools / auto-load /
+        # unloaded-guard / hallucination-guard branches. Lets the tray
+        # viewer explain WHY a request took N round-trips.
+        "intercepts":        [],
     }
     with _lock:
         _entries.appendleft(entry)
@@ -88,6 +98,27 @@ def set_request_preview(rid: str, body: Any) -> None:
         e = _by_rid.get(rid)
         if e is not None:
             e["request_preview"] = body
+
+
+def set_response_preview(rid: str, body: Any) -> None:
+    """Record the response we're about to send to the client (or a
+    summary of it for streams). Stored verbatim — the tray viewer's
+    JSON tree handles deeply nested bodies."""
+    with _lock:
+        e = _by_rid.get(rid)
+        if e is not None:
+            e["response_preview"] = body
+
+
+def append_intercept(rid: str, event: dict[str, Any]) -> None:
+    """Append one entry to the intercepts list. `event` should carry at
+    least `type` (tool_search | managed_tool | auto_load | blocked |
+    hallucination) plus whatever tool-specific detail is useful."""
+    event = {**event, "ts": time.time()}
+    with _lock:
+        e = _by_rid.get(rid)
+        if e is not None:
+            e["intercepts"].append(event)
 
 
 def finish(rid: str, status: int, error: str = "") -> None:
