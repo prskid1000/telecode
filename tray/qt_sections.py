@@ -427,6 +427,9 @@ def _llama(window) -> QWidget:
     rbody.addWidget(_toggle_row("llamacpp.inference.reasoning.emit_thinking_blocks",
                                  "Show Reasoning In Output",
                                  "Forward parsed thinking as Anthropic thinking content blocks."))
+    rbody.addWidget(_toggle_row("llamacpp.inference.drop_prior_thinking",
+                                 "Drop Prior-Turn Thinking",
+                                 "On (default): strip thinking blocks from prior assistant turns before sending upstream — llama.cpp regenerates. Off: reinject as <think>...</think> for trained-adaptive models that need prior reasoning for multi-turn coherence."))
     layout.addWidget(rcard)
 
     layout.addStretch(1)
@@ -1100,6 +1103,23 @@ def _models(window) -> QWidget:
         form_layout.addWidget(_toggle_row(f"{p}.no_mmap",    "No mmap"))
         form_layout.addWidget(_toggle_row(f"{p}.jinja",      "Jinja Chat Template",
                                            "Use the built-in tokenizer chat template (required for tools)."))
+
+        form_layout.addWidget(_section_header("Speculative Decoding"))
+        form_layout.addWidget(_line_row(f"{p}.draft_model", "Draft Model (GGUF)",
+                                         "D:/models/draft-0.6b.gguf",
+                                         "Separate small LM for draft tokens. Leave empty to use prompt-lookup self-speculation."))
+        form_layout.addWidget(_line_row(f"{p}.lookup_cache_static", "Lookup Cache (static)",
+                                         "./data/lookup-static.bin",
+                                         "Precomputed n-gram cache from llama-lookup-create. Read-only at runtime."))
+        form_layout.addWidget(_line_row(f"{p}.lookup_cache_dynamic", "Lookup Cache (dynamic)",
+                                         "./data/lookup-dyn.bin",
+                                         "Self-speculation n-gram cache. Created on first run, grows over time. No draft model needed."))
+        form_layout.addWidget(_number_row(f"{p}.draft_n",     "Draft Max Tokens",  0, 32,   1,    0, "",
+                                           "Max draft tokens per step. 0 = disabled. Typical: 8."))
+        form_layout.addWidget(_number_row(f"{p}.draft_n_min", "Draft Min Tokens",  0, 32,   1,    0, "",
+                                           "Minimum draft length before accepting. Typical: 2."))
+        form_layout.addWidget(_number_row(f"{p}.draft_p_min", "Draft Min Probability", 0.0, 1.0, 0.05, 2, "",
+                                           "Reject draft tokens below this probability. Typical: 0.5."))
 
         form_layout.addWidget(_section_header("Inference Defaults"))
         ip = f"{p}.inference_defaults"

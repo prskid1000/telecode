@@ -57,6 +57,8 @@ _MODEL_FLAG_SPECS: list[tuple[str, str, str]] = [
     ("draft_n",       "--draft-max",       "value"),
     ("draft_n_min",   "--draft-min",       "value"),
     ("draft_p_min",   "--draft-p-min",     "value"),
+    ("lookup_cache_static",  "--lookup-cache-static",  "path"),
+    ("lookup_cache_dynamic", "--lookup-cache-dynamic", "path"),
     ("lora",          "--lora",            "path"),
     ("lora_scale",    "--lora-scaled",     "value"),
     ("grammar",       "--grammar",         "value"),
