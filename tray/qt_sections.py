@@ -1593,6 +1593,7 @@ def _requests(window) -> QWidget:
         f"QTreeWidget::item {{ padding: 2px 4px; }}"
         f"QTreeWidget::item:hover {{ background: {BG_CARD}; }}"
         f"QTreeWidget::item:selected {{ background: {BG_CARD}; color: {FG}; }}"
+        f"QHeaderView {{ background: {BG_CARD}; border: none; }}"
         f"QHeaderView::section {{ background: {BG_CARD}; color: {FG_MUTE};"
         f" padding: 4px 6px; border: none; border-bottom: 1px solid {BORDER};"
         f" font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }}"
