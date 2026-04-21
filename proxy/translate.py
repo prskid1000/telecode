@@ -103,12 +103,21 @@ def _anthropic_content_to_openai(content: Any) -> Any:
     return parts
 
 
-def _decompose_anthropic_message(msg: dict[str, Any]) -> list[dict[str, Any]]:
+def _decompose_anthropic_message(
+    msg: dict[str, Any],
+    drop_prior_thinking: bool = True,
+    think_start: str = "<think>",
+    think_end: str = "</think>",
+) -> list[dict[str, Any]]:
     """Split one Anthropic message into one or more OpenAI messages.
 
     Anthropic packs tool_use + text into a single assistant message, and
     tool_result + text into a single user message. OpenAI requires separate
     messages: assistant(content + tool_calls) vs tool(one per tool_use_id).
+
+    If `drop_prior_thinking=False`, prior-turn thinking blocks are reinjected
+    as `<think>...</think>` text at the head of the assistant message so
+    trained-adaptive models retain their reasoning context across turns.
     """
     role = msg.get("role", "user")
     content = msg.get("content", "")
@@ -124,6 +133,7 @@ def _decompose_anthropic_message(msg: dict[str, Any]) -> list[dict[str, Any]]:
     if role == "assistant":
         text_parts: list[dict[str, Any]] = []
         tool_calls: list[dict[str, Any]] = []
+        thinking_text: list[str] = []
         for block in content:
             if not isinstance(block, dict):
                 continue
@@ -131,9 +141,11 @@ def _decompose_anthropic_message(msg: dict[str, Any]) -> list[dict[str, Any]]:
             if btype == "text":
                 text_parts.append({"type": "text", "text": block.get("text", "")})
             elif btype == "thinking":
-                # We don't round-trip thinking blocks back to the model —
-                # llama.cpp regenerates them via <think> tags each turn.
-                continue
+                if drop_prior_thinking:
+                    continue
+                raw = block.get("thinking", "") or ""
+                if raw:
+                    thinking_text.append(f"{think_start}{raw}{think_end}")
             elif btype == "tool_use":
                 args = block.get("input", {})
                 tool_calls.append({
@@ -144,6 +156,12 @@ def _decompose_anthropic_message(msg: dict[str, Any]) -> list[dict[str, Any]]:
                         "arguments": json.dumps(args),
                     },
                 })
+        if thinking_text:
+            prefix = "".join(thinking_text)
+            if text_parts:
+                text_parts[0]["text"] = prefix + text_parts[0].get("text", "")
+            else:
+                text_parts.append({"type": "text", "text": prefix})
         out_msg: dict[str, Any] = {"role": "assistant"}
         # Flatten single-text content to string (llama.cpp prefers it)
         if len(text_parts) == 1:
@@ -500,8 +518,17 @@ def anthropic_request_to_internal(
     if system_text:
         messages.append({"role": "system", "content": system_text})
 
+    reasoning_cfg = defaults.get("reasoning") or {}
+    drop_prior = bool(defaults.get("drop_prior_thinking", True))
+    think_start = str(reasoning_cfg.get("start", "<think>") or "<think>")
+    think_end = str(reasoning_cfg.get("end", "</think>") or "</think>")
     for msg in body.get("messages", []):
-        messages.extend(_decompose_anthropic_message(msg))
+        messages.extend(_decompose_anthropic_message(
+            msg,
+            drop_prior_thinking=drop_prior,
+            think_start=think_start,
+            think_end=think_end,
+        ))
 
     out: dict[str, Any] = {
         "model": body.get("model", ""),
