@@ -185,6 +185,7 @@ def claude_code_task(
         "kind": "done",
         "tool_count": len(tool_calls),
         "cost_usd": fin.get("total_cost_usd"),
+        "num_turns": fin.get("num_turns"),
         "input_tokens": total_input,
         "output_tokens": usage.get("output_tokens"),
         "cache_read_tokens": cache_reads,
