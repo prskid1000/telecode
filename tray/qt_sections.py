@@ -564,16 +564,24 @@ def _managed(window) -> QWidget:
     layout.addWidget(card)
     layout.addStretch(1)
 
-    def refresh() -> None:
+    # name -> Toggle widget, so refresh can sync state without rebuilding.
+    toggles: dict[str, Toggle] = {}
+    # Tracks last tool ordering so we only tear down on actual changes.
+    last_names: list[str] = []
+    empty_label: QLabel | None = None
+
+    def _rebuild(tools: list[dict]) -> None:
+        nonlocal empty_label
         for i in reversed(range(rows_wrap.count())):
             w = rows_wrap.itemAt(i).widget()
             if w:
                 w.deleteLater()
-        tools = build_status().get("managed", [])
+        toggles.clear()
+        empty_label = None
         if not tools:
-            l = QLabel("No managed tools registered.")
-            l.setStyleSheet(f"color: {FG_MUTE};")
-            rows_wrap.addWidget(l)
+            empty_label = QLabel("No managed tools registered.")
+            empty_label.setStyleSheet(f"color: {FG_MUTE};")
+            rows_wrap.addWidget(empty_label)
             return
         from proxy.runtime_state import set_tool
         for t in tools:
@@ -584,8 +592,29 @@ def _managed(window) -> QWidget:
             def _toggle(_s: int, n=name, tw=t_widget) -> None:
                 set_tool("managed_tools", n, tw.isChecked())
             t_widget.stateChanged.connect(_toggle)
+            toggles[name] = t_widget
             rows_wrap.addWidget(_row(row_label(humanize(name), "", name),
                                       _wrap_align(t_widget, Qt.AlignmentFlag.AlignLeft)))
+
+    def refresh() -> None:
+        nonlocal last_names
+        tools = build_status().get("managed", [])
+        names = [t.get("name", "?") for t in tools]
+        if names != last_names:
+            _rebuild(tools)
+            last_names = names
+            return
+        # Same set of tools — just sync check state without animating or
+        # re-triggering the stateChanged -> set_tool write.
+        for t in tools:
+            name = t.get("name", "?")
+            enabled = bool(t.get("enabled", True))
+            tw = toggles.get(name)
+            if tw is None or tw.isChecked() == enabled:
+                continue
+            tw.blockSignals(True)
+            tw.setChecked(enabled)
+            tw.blockSignals(False)
     scroll.refresh = refresh  # type: ignore[attr-defined]
     refresh()
     return scroll
