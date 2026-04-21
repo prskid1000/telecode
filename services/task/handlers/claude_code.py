@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -56,6 +57,7 @@ def _handle_event(evt: Dict[str, Any], tool_calls: List[str]) -> None:
 
 def claude_code_task(
     prompt: str,
+    is_local: bool = False,
 ) -> Dict[str, Any]:
     """Run Claude Code in the session folder assigned by the queue."""
     task_id = get_task_id() or "no-task"
@@ -84,6 +86,29 @@ def claude_code_task(
     if resume_id:
         cmd += ["--resume", resume_id]
 
+    env = None
+    if is_local:
+        import llamacpp.state as llama_state
+        model = llama_state.last_active_model() or "local"
+        proxy_url = f"http://localhost:{app_config.proxy_port()}"
+        
+        env = {
+            **os.environ,
+            "ANTHROPIC_BASE_URL": proxy_url,
+            "ANTHROPIC_AUTH_TOKEN": "local", # or 'lmstudio' as per user snippet
+            "ANTHROPIC_MODEL": model,
+            "BASH_DEFAULT_TIMEOUT_MS": "1800000",
+            "BASH_MAX_TIMEOUT_MS": "3600000",
+            "DISABLE_PROMPT_CACHING": "1",
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
+            "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+            "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1",
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "8192",
+            "ENABLE_TOOL_SEARCH": "false",
+        }
+        logger.info(f"Local mode: using model {model} at {proxy_url}")
+
     logger.info(f"Claude Code starting: cwd={work_dir} session={sid} resume={resume_id or 'none'}")
     update_progress(0.05, "launching claude")
     append_event({
@@ -93,6 +118,7 @@ def claude_code_task(
         "prompt": prompt,
         "resumed": bool(resume_id),
         "resumed_claude_session_id": resume_id,
+        "is_local": is_local,
     })
 
     proc = subprocess.Popen(
@@ -100,6 +126,7 @@ def claude_code_task(
         cwd=str(work_dir),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=env,
         text=True,
         bufsize=1,
     )

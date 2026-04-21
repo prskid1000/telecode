@@ -660,6 +660,32 @@ def _voice(window) -> QWidget:
                          _wrap_align(pill, Qt.AlignmentFlag.AlignLeft)))
     body.addWidget(_row(row_label("Endpoint", ""), url_lbl))
 
+    # Test button
+    from voice.stt import transcribe, HELLO_WORLD_AUDIO
+    test_btn = QPushButton("Run Test")
+    test_btn.setFixedWidth(80)
+    test_btn.setProperty("class", "ghost")
+
+    def run_test() -> None:
+        test_btn.setEnabled(False)
+        test_btn.setText("Testing...")
+
+        async def _run() -> None:
+            try:
+                # Use a .wav filename since we provided a WAV header
+                await transcribe(HELLO_WORLD_AUDIO, filename="test.wav")
+            finally:
+                test_btn.setEnabled(True)
+                test_btn.setText("Run Test")
+                refresh()
+
+        schedule(window.bot_loop(), _run())
+
+    test_btn.clicked.connect(run_test)
+
+    body.addWidget(_row(row_label("Test", "Send a sample 'Hello World' audio to verify the endpoint."),
+                        _wrap_align(test_btn, Qt.AlignmentFlag.AlignLeft)))
+
     import config as _cfg
     def refresh() -> None:
         vs = _voice_status()

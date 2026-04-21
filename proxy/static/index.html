@@ -94,7 +94,13 @@
     </div>
     <div class="row">
       <label>task type</label>
-      <input type="text" id="taskType" value="CLAUDE_CODE" placeholder="e.g. CLAUDE_CODE, GEMINI, ECHO" style="width:200px"/>
+      <select id="taskType" style="width:200px; background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font: 13px var(--mono);">
+        <option value="CLAUDE_CODE">CLAUDE_CODE</option>
+        <option value="GEMINI">GEMINI</option>
+      </select>
+      <label style="min-width:auto;margin-left:10px">
+        <input type="checkbox" id="isLocal"/> local mode
+      </label>
     </div>
     <div class="row">
       <label>session idle</label>
@@ -261,9 +267,16 @@ $("upload").onclick = async () => {
 $("submit").onclick = async () => {
   const sid = $("sid").value.trim() || undefined;
   const taskType = $("taskType").value.trim();
+  const isLocal = $("isLocal").checked;
+  
+  const params = taskType === "ECHO" ? { text: $("prompt").value } : { prompt: $("prompt").value };
+  if (taskType === "CLAUDE_CODE" || taskType === "GEMINI") {
+    params.is_local = isLocal;
+  }
+
   const body = {
     task_type: taskType,
-    params: taskType === "ECHO" ? { text: $("prompt").value } : { prompt: $("prompt").value },
+    params: params,
     session_idle_timeout_seconds: +$("sessTimeout").value,
   };
   if (sid) body.session_id = sid;
