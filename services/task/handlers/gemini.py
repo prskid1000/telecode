@@ -33,10 +33,19 @@ def _describe_tool(name: str, tool_input: Dict[str, Any]) -> str:
 def _handle_event(evt: Dict[str, Any], tool_calls: List[str]) -> None:
     etype = evt.get("type")
     
-    # 1. Gemini CLI native format
-    if etype == "text":
-        text = evt.get("text", "").strip()
-        if text: append_event({"kind": "narrative", "text": text})
+    # 1. Narrative events (already handled in loop for accumulated_text, but we still want individual events)
+    # Actually we'll handle narrative append_event in the loop too to keep them in sync.
+    
+    if etype == "tool_use":
+        name = evt.get("tool_name", "?")
+        tool_calls.append(name)
+        append_event({
+            "kind": "tool",
+            "tool": name,
+            "summary": _describe_tool(name, evt.get("parameters", {})),
+        })
+        update_progress(min(0.9, 0.1 + 0.05 * len(tool_calls)), f"step {len(tool_calls)}: {name}")
+
     elif etype == "thought":
         thought = evt.get("text", "").strip()
         if thought: append_event({"kind": "thought", "text": thought})
@@ -50,13 +59,11 @@ def _handle_event(evt: Dict[str, Any], tool_calls: List[str]) -> None:
         })
         update_progress(min(0.9, 0.1 + 0.05 * len(tool_calls)), f"step {len(tool_calls)}: {name}")
     
-    # 2. Compatibility / Anthropic-style format
     elif etype == "assistant":
+        # Anthropic-style blocks
         for block in evt.get("message", {}).get("content", []):
             btype = block.get("type")
-            if btype == "text" and block.get("text", "").strip():
-                append_event({"kind": "narrative", "text": block["text"].strip()})
-            elif btype == "tool_use":
+            if btype == "tool_use":
                 name = block.get("name", "?")
                 tool_calls.append(name)
                 append_event({
@@ -66,7 +73,7 @@ def _handle_event(evt: Dict[str, Any], tool_calls: List[str]) -> None:
                 })
                 update_progress(min(0.9, 0.1 + 0.05 * len(tool_calls)), f"step {len(tool_calls)}: {name}")
     
-    # 3. System events
+    # 4. System events
     elif etype == "system" and evt.get("subtype") == "api_retry":
         append_event({
             "kind": "retry",
@@ -146,6 +153,9 @@ def gemini_task(
     )
 
     tool_calls: List[str] = []
+    accumulated_text: List[str] = []
+    num_assistant_messages = 0
+    last_event_was_tool = False
     final: Optional[Dict[str, Any]] = None
     captured_gemini_sid: Optional[str] = None
 
@@ -166,7 +176,29 @@ def gemini_task(
                 except json.JSONDecodeError:
                     continue
 
-                _handle_event(evt, tool_calls)
+                etype = evt.get("type")
+                # Manage accumulated_text here for better turn control
+                if etype == "message" and evt.get("role") == "assistant":
+                    content = evt.get("content", "")
+                    if content:
+                        # If this follows a tool result OR if it's not a delta, it's a new turn/block
+                        is_delta = evt.get("delta", False)
+                        if last_event_was_tool or not is_delta or not accumulated_text:
+                            accumulated_text.append(content)
+                            num_assistant_messages += 1
+                        else:
+                            accumulated_text[-1] += content
+                        
+                        append_event({"kind": "narrative", "text": content})
+                        last_event_was_tool = False
+                elif etype in ("tool_use", "tool_call"):
+                    last_event_was_tool = True
+                elif etype == "tool_result":
+                    # After a tool result, the next assistant message is definitely a new turn
+                    last_event_was_tool = True
+
+                # Still call _handle_event for events we don't handle here (progress, events)
+                _handle_event(evt, tool_calls) 
 
                 evt_sid = evt.get("session_id")
                 if evt_sid and evt_sid != captured_gemini_sid:
@@ -187,20 +219,39 @@ def gemini_task(
 
     gemini_session_id = captured_gemini_sid or (final or {}).get("session_id")
     fin = final or {}
+    stats = fin.get("stats") or {}
+    
+    # Map stats to UI expected format
+    tokens = {
+        "input": stats.get("input_tokens") or stats.get("input") or 0,
+        "output": stats.get("output_tokens") or 0,
+        "cached": stats.get("cached") or 0,
+        "total": stats.get("total_tokens") or 0,
+    }
+    
+    cost_usd = fin.get("total_cost_usd") or stats.get("cost_usd")
+    duration_ms = stats.get("duration_ms") or fin.get("duration_ms")
+    num_turns = fin.get("num_turns") or stats.get("num_turns") or num_assistant_messages
 
-    usage = fin.get("usage") or {}
     update_progress(1.0, "done")
     append_event({
         "kind": "done",
         "tool_count": len(tool_calls),
+        "cost_usd": cost_usd,
+        "num_turns": num_turns,
+        "input_tokens": tokens["input"],
+        "output_tokens": tokens["output"],
     })
 
     return {
-        "result": fin.get("result", ""),
+        "result": "\n\n".join(accumulated_text) or fin.get("result", ""),
         "session_id": sid,
         "gemini_session_id": gemini_session_id,
-        "duration_ms": fin.get("duration_ms"),
-        "num_turns": fin.get("num_turns"),
+        "cost_usd": cost_usd,
+        "duration_ms": duration_ms,
+        "num_turns": num_turns,
+        "tokens": tokens,
         "tool_calls": tool_calls,
         "log_path": str(log_path),
     }
+
