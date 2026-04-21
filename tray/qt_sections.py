@@ -790,6 +790,19 @@ def _logs(window) -> QWidget:
     ]
     MAX_TAIL_BYTES = 512 * 1024  # last ~512 KB is plenty for UI
 
+    def _get_log_files():
+        """Get all standard log files + any in task_logs."""
+        out = list(LOG_FILES)
+        try:
+            task_log_dir = _sp().parent / "data" / "task_logs"
+            if task_log_dir.exists():
+                for f in task_log_dir.iterdir():
+                    if f.is_file() and f.suffix in (".log", ".jsonl"):
+                        out.append(f"task_logs/{f.name}")
+        except Exception:
+            pass
+        return out
+
     class LogHighlighter(QSyntaxHighlighter):
         """Color timestamps, levels, logger names, tracebacks, numbers."""
         def __init__(self, doc):
@@ -836,12 +849,28 @@ def _logs(window) -> QWidget:
     top.setSpacing(8)
 
     picker = QComboBox()
-    for n in LOG_FILES:
-        picker.addItem(n)
-    picker.setMinimumWidth(200)
+    def _refresh_picker():
+        cur = picker.currentText()
+        picker.blockSignals(True)
+        picker.clear()
+        files = _get_log_files()
+        for n in files:
+            picker.addItem(n)
+        if cur in files:
+            picker.setCurrentText(cur)
+        picker.blockSignals(False)
+
+    _refresh_picker()
+    picker.setMinimumWidth(240)
 
     size_label = QLabel("—")
     size_label.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
+
+    refresh_picker_btn = QPushButton("↻")
+    refresh_picker_btn.setToolTip("Refresh file list")
+    refresh_picker_btn.setProperty("class", "ghost icon")
+    refresh_picker_btn.setFixedWidth(30)
+    refresh_picker_btn.clicked.connect(_refresh_picker)
 
     follow_cb = Toggle()
     follow_cb.setChecked(True)
@@ -856,6 +885,7 @@ def _logs(window) -> QWidget:
     reveal_btn.setProperty("class", "ghost")
 
     top.addWidget(picker)
+    top.addWidget(refresh_picker_btn)
     top.addWidget(size_label)
     top.addStretch(1)
     top.addWidget(follow_lbl)
@@ -884,6 +914,8 @@ def _logs(window) -> QWidget:
     state: dict[str, Any] = {"path": None, "pos": 0, "size": 0}
 
     def _log_path(name: str):
+        if name.startswith("task_logs/"):
+            return _sp().parent / "data" / "task_logs" / name[10:]
         return _sp().parent / "data" / "logs" / name
 
     def _human_bytes(n: int) -> str:
