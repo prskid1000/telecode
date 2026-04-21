@@ -117,14 +117,12 @@ def gemini_task(
         model = llama_state.last_active_model() or "local"
         proxy_url = f"http://localhost:{app_config.proxy_port()}"
         
-        # Cover various possible env vars for custom base URL in Gemini CLI
+        # Primary env var for Gemini CLI custom endpoints
         env = {
             **os.environ,
             "GOOGLE_API_KEY": "local",
             "GEMINI_API_KEY": "local",
-            "GOOGLE_API_BASE_URL": proxy_url,
-            "GEMINI_BASE_URL": proxy_url,
-            "OPENAI_BASE_URL": proxy_url, # if it supports OpenAI compat mode
+            "GOOGLE_GEMINI_BASE_URL": proxy_url,
         }
         cmd += ["-m", model]
         logger.info(f"Local mode: using model {model} at {proxy_url}")
