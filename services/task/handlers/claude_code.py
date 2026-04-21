@@ -129,6 +129,7 @@ def claude_code_task(
         env=env,
         text=True,
         bufsize=1,
+        shell=True,
     )
 
     tool_calls: List[str] = []
