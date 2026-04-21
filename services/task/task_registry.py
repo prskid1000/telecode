@@ -7,6 +7,7 @@ from typing import Any, Dict
 
 from services.task.task_manager import get_task_queue
 from services.task.handlers.claude_code import claude_code_task
+from services.task.handlers.gemini import gemini_task
 
 logger = logging.getLogger("telecode.services.task")
 
@@ -42,4 +43,18 @@ def register_default_tasks():
         }
     )
 
-    logger.info("Task handlers registered (ECHO, CLAUDE_CODE)")
+    # 3. Gemini Task
+    queue.register_handler(
+        "GEMINI",
+        gemini_task,
+        description="Run Gemini CLI in a stateful session folder",
+        params_schema={
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "The prompt to send to Gemini"}
+            },
+            "required": ["prompt"]
+        }
+    )
+
+    logger.info("Task handlers registered (ECHO, CLAUDE_CODE, GEMINI)")
