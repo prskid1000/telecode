@@ -493,6 +493,8 @@ def _proxy(window) -> QWidget:
     body.addWidget(proto_row)
 
     body.addWidget(_section_header("Behavior"))
+    body.addWidget(_toggle_row("proxy.enable_session_tools", "Enable Sessions & Tasks",
+                                "Expose pythonmagic-style session/task tools to the model (restart required)."))
     body.addWidget(_toggle_row("proxy.tool_search", "Tool Search (BM25)",
                                 "Split client tools into core + deferred; deferred retrievable via ToolSearch."))
     body.addWidget(_toggle_row("proxy.auto_load_tools", "Auto-Load Tool Schemas",

@@ -26,6 +26,8 @@ from proxy import managed_tools  # noqa: F401  side-effect: registers tools
 from proxy import request_log
 from proxy import translate as xlate
 from proxy import tokenizer as toks
+from proxy import api_sessions
+from proxy import api_tasks
 from proxy.tool_registry import (
     proxy_system_instruction,
     strip_all_reminders,
@@ -541,6 +543,13 @@ async def _prepare_internal_body(
     ) or []
     # Honor live runtime toggles set via the control panel
     managed_inject: list[str] = [n for n in managed_inject_raw if _is_enabled(n)]
+    
+    # Filter session tools if disabled in config
+    if not config.enable_session_tools():
+        session_tools = {"session_create", "session_get", "session_list", "session_delete",
+                         "task_submit", "task_status", "task_list_types"}
+        managed_inject = [n for n in managed_inject if n not in session_tools]
+
     internal, deferred = _apply_tool_transforms(
         internal, profile, use_tool_search, managed_inject,
     )
@@ -1519,6 +1528,12 @@ async def handle_health(request: web.Request) -> web.Response:
         return web.json_response({"status": "error", "message": str(exc)}, status=503)
 
 
+async def handle_ui(request: web.Request) -> web.FileResponse:
+    """Serve the session management UI."""
+    path = Path(__file__).parent / "static" / "index.html"
+    return web.FileResponse(path)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # App factory
 # ═══════════════════════════════════════════════════════════════════════
@@ -1567,6 +1582,11 @@ def create_app() -> web.Application:
     # Embeddings + health forwarded to llama.cpp
     app.router.add_post("/v1/embeddings", handle_embeddings)
     app.router.add_get("/health", handle_health)
+    app.router.add_get("/ui", handle_ui)
+
+    # Session and Task Management (pythonmagic-style)
+    api_sessions.register_routes(app)
+    api_tasks.register_routes(app)
 
     return app
 

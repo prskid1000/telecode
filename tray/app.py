@@ -174,6 +174,18 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
     menu.addAction(open_settings_action)
     menu.setDefaultAction(open_settings_action)
 
+    def _open_ui():
+        import webbrowser
+        settings = read_settings()
+        host = get_path(settings, "proxy.host", "127.0.0.1")
+        if host == "0.0.0.0": host = "127.0.0.1"
+        port = get_path(settings, "proxy.port", 1235)
+        webbrowser.open(f"http://{host}:{port}/ui")
+
+    open_ui_action = QAction("Open Session UI (Browser)", menu)
+    open_ui_action.triggered.connect(_open_ui)
+    menu.addAction(open_ui_action)
+
     menu.addSeparator()
 
     quit_action = QAction("Quit Telecode", menu)
