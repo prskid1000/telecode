@@ -30,8 +30,27 @@ def _describe_tool(name: str, tool_input: Dict[str, Any]) -> str:
     return name
 
 def _handle_event(evt: Dict[str, Any], tool_calls: List[str]) -> None:
-    t = evt.get("type")
-    if t == "assistant":
+    etype = evt.get("type")
+    
+    # 1. Gemini CLI native format
+    if etype == "text":
+        text = evt.get("text", "").strip()
+        if text: append_event({"kind": "narrative", "text": text})
+    elif etype == "thought":
+        thought = evt.get("text", "").strip()
+        if thought: append_event({"kind": "thought", "text": thought})
+    elif etype == "tool_call":
+        name = evt.get("name", "?")
+        tool_calls.append(name)
+        append_event({
+            "kind": "tool",
+            "tool": name,
+            "summary": _describe_tool(name, evt.get("input", {})),
+        })
+        update_progress(min(0.9, 0.1 + 0.05 * len(tool_calls)), f"step {len(tool_calls)}: {name}")
+    
+    # 2. Compatibility / Anthropic-style format
+    elif etype == "assistant":
         for block in evt.get("message", {}).get("content", []):
             btype = block.get("type")
             if btype == "text" and block.get("text", "").strip():
@@ -44,9 +63,10 @@ def _handle_event(evt: Dict[str, Any], tool_calls: List[str]) -> None:
                     "tool": name,
                     "summary": _describe_tool(name, block.get("input", {})),
                 })
-                approx = min(0.9, 0.1 + 0.05 * len(tool_calls))
-                update_progress(approx, f"step {len(tool_calls)}: {name}")
-    elif t == "system" and evt.get("subtype") == "api_retry":
+                update_progress(min(0.9, 0.1 + 0.05 * len(tool_calls)), f"step {len(tool_calls)}: {name}")
+    
+    # 3. System events
+    elif etype == "system" and evt.get("subtype") == "api_retry":
         append_event({
             "kind": "retry",
             "attempt": evt.get("attempt"),

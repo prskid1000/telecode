@@ -296,6 +296,10 @@ QTableWidget {{
     alternate-background-color: #161c28;
     font-size: 11.5px;
 }}
+QHeaderView {{
+    background: {BG_ELEV};
+    border: none;
+}}
 QHeaderView::section {{
     background: {BG_ELEV};
     color: {FG_MUTE};
