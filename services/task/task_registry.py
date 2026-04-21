@@ -37,7 +37,8 @@ def register_default_tasks():
         params_schema={
             "type": "object",
             "properties": {
-                "prompt": {"type": "string", "description": "The prompt to send to Claude Code"}
+                "prompt": {"type": "string", "description": "The prompt to send to Claude Code"},
+                "is_local": {"type": "boolean", "description": "Point to the local proxy and currently loaded model", "default": False}
             },
             "required": ["prompt"]
         }
@@ -51,7 +52,8 @@ def register_default_tasks():
         params_schema={
             "type": "object",
             "properties": {
-                "prompt": {"type": "string", "description": "The prompt to send to Gemini"}
+                "prompt": {"type": "string", "description": "The prompt to send to Gemini"},
+                "is_local": {"type": "boolean", "description": "Point to the local proxy and currently loaded model", "default": False}
             },
             "required": ["prompt"]
         }
