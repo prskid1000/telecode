@@ -926,6 +926,25 @@ def _logs(window) -> QWidget:
             size /= 1024
         return f"{size:.1f} TB"
 
+    def _pretty_json(text: str) -> str:
+        """Best-effort line-by-line JSON pretty print (for JSONL files)."""
+        import json
+        lines = text.splitlines()
+        out = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("{") and line.endswith("}"):
+                try:
+                    data = json.loads(line)
+                    out.append(json.dumps(data, indent=2, ensure_ascii=False))
+                except Exception:
+                    out.append(line)
+            else:
+                out.append(line)
+        return "\n".join(out)
+
     def _load_initial(path):
         viewer.clear()
         if not path.exists():
@@ -945,6 +964,8 @@ def _logs(window) -> QWidget:
                 data = f.read()
                 state["pos"] = f.tell()
             text = data.decode("utf-8", errors="replace")
+            if path.suffix in (".json", ".jsonl"):
+                text = _pretty_json(text)
             if start > 0:
                 text = f"… (showing last {_human_bytes(len(data))} of {_human_bytes(size)}) …\n" + text
             viewer.setPlainText(text)
@@ -979,12 +1000,16 @@ def _logs(window) -> QWidget:
         if not data:
             return
         text = data.decode("utf-8", errors="replace")
+        if path.suffix in (".json", ".jsonl"):
+            text = _pretty_json(text)
         # preserve scroll unless follow is on
         at_bottom = follow_cb.isChecked() or (
             viewer.verticalScrollBar().value() >= viewer.verticalScrollBar().maximum() - 2
         )
         cursor = viewer.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
+        if not viewer.toPlainText().endswith("\n") and text:
+             cursor.insertText("\n")
         cursor.insertText(text)
         size_label.setText(_human_bytes(size))
         if at_bottom:
