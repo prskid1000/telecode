@@ -46,6 +46,12 @@ llama.cpp + dual-protocol proxy (for local models):
                    -> model swap if needed -> intercept loop -> upstream SSE
                    -> stream back as Anthropic or OpenAI (per client)
     See `## Proxy pipeline` for the full per-step breakdown.
+
+Session & Task system (pythonmagic-style):
+    - Background task queue for long-running agentic loops.
+    - Filesystem-backed sessions with persistent state.
+    - Specialized Claude Code task handler with JSON stream parsing.
+    - Web UI at `/ui` for monitoring and management.
 ```
 
 - **Session key:** `{backend}:{name}` -- colon is the separator; do not use colons in names.
@@ -120,6 +126,12 @@ llama.cpp + dual-protocol proxy (for local models):
 | `proxy/config.py` | Proxy settings (port, protocols, CORS, core tools, client_profiles, model_mapping) |
 | `proxy/instructions/system.md` | Default Claude Code system instruction (tool_search path) |
 | `proxy/instructions/office.md` | Office add-in profile system instruction |
+| `proxy/api_sessions.py` | AIOHTTP routes for task sessions (pythonmagic-style) |
+| `proxy/api_tasks.py` | AIOHTTP routes for background task queue |
+| `services/session/session_store.py` | Filesystem-backed persistent sessions |
+| `services/task/task_manager.py` | Async task queue with status/event tracking |
+| `services/task/task_utils.py` | Task progress and event logging helpers |
+| `services/task/handlers/claude_code.py` | Background Claude Code task with JSON stream parsing |
 | `mcp_server/app.py` | FastMCP instance (stateless streamable HTTP) |
 | `mcp_server/server.py` | Background startup (daemon thread, like proxy) |
 | `mcp_server/__main__.py` | Standalone entry: `python -m mcp_server` |

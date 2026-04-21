@@ -82,6 +82,15 @@ To run in the background without a console window (Windows):
 pythonw main.py
 ```
 
+### Session & Task Management (pythonmagic-style)
+
+Telecode now includes a fully-featured, stateful **Session and Task Management** system, identical in architecture to `pythonmagic`. This enables long-running agentic loops where the model can manage persistent workspaces and background jobs.
+
+- **Stateful Workspaces**: Isolated filesystem directories for each session, with persistent metadata and `data` carrying state across multiple tasks/turns.
+- **Background Task Queue**: Submit jobs (like `CLAUDE_CODE`) that run asynchronously. The model can poll for status and rich tool-use events.
+- **Web Interface**: A dedicated UI is available at `http://localhost:1235/ui` for monitoring tasks and managing files.
+- **Configurable**: Enable via `proxy.enable_session_tools: true` in `settings.json`. Once enabled, tools like `session_create`, `task_submit`, and `session_upload_file` are automatically injected into supported client profiles (like `claude-code`).
+
 ### System tray UI + settings window
 
 `python main.py` (or `pythonw main.py` for no console) starts the

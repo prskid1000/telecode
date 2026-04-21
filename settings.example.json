@@ -167,6 +167,7 @@
     "host": "127.0.0.1",
     "port": 1235,
     "protocols": ["anthropic", "openai"],
+    "enable_session_tools": false,
     "debug": false,
 
     "tool_search": false,
@@ -215,7 +216,19 @@
         "strip_reminders": true,
         "auto_load_tools": true,
         "core_tools": ["Bash", "Edit", "Read", "Write", "Glob", "Grep", "Agent", "Skill"],
-        "inject_managed": ["web_search"],
+        "inject_managed": [
+          "web_search",
+          "session_create",
+          "session_get",
+          "session_list",
+          "session_delete",
+          "session_upload_file",
+          "session_read_file",
+          "session_files_list",
+          "task_submit",
+          "task_status",
+          "task_list_types"
+        ],
         "strip_tool_names": []
       }
     ]
