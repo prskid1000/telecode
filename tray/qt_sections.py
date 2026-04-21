@@ -830,6 +830,10 @@ def _logs(window) -> QWidget:
                 (QRegularExpression(r"^\s*\w*(Error|Exception):.*$"), fmt(ERR)),
                 # URLs
                 (QRegularExpression(r"https?://\S+"), fmt(ACCENT)),
+                # JSON Highlighting (for JSONL task logs)
+                (QRegularExpression(r'"[^"\\]*(?:\\.[^"\\]*)*"\s*:'), fmt(ACCENT, True)),   # keys
+                (QRegularExpression(r':\s*"[^"\\]*(?:\\.[^"\\]*)*"'), fmt(OK)),              # string vals
+                (QRegularExpression(r'\b(true|false|null)\b'),        fmt(WARN, True)),      # keywords
                 # numbers (soft)
                 (QRegularExpression(r"\b\d+(\.\d+)?\b"), fmt("#a8b3c7")),
             ]
