@@ -61,7 +61,7 @@ def claude_code_task(
     task_id = get_task_id() or "no-task"
     
     import config as app_config
-    log_dir = Path(app_config._settings_dir()) / "data" / "claude_runs"
+    log_dir = Path(app_config._settings_dir()) / "data" / "task_logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"{task_id}.jsonl"
 
