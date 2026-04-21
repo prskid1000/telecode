@@ -1033,6 +1033,7 @@ _MODEL_DEFAULTS: dict[str, Any] = {
         "top_p": 0.95,
         "top_k": 40,
         "presence_penalty": 0.0,
+        "repeat_penalty": 1.0,
         "reasoning": {
             "enabled": False,
             "start": "<think>",
@@ -1156,6 +1157,7 @@ def _models(window) -> QWidget:
         form_layout.addWidget(_number_row(f"{ip}.top_p",            "Top-P",            0.0, 1.0, 0.01, 2))
         form_layout.addWidget(_number_row(f"{ip}.top_k",            "Top-K",            0,   200, 1,    0))
         form_layout.addWidget(_number_row(f"{ip}.presence_penalty", "Presence Penalty", 0.0, 2.0, 0.05, 2))
+        form_layout.addWidget(_number_row(f"{ip}.repeat_penalty",   "Repeat Penalty",   0.5, 2.0, 0.01, 2))
 
         form_layout.addWidget(_section_header("Reasoning"))
         rp = f"{ip}.reasoning"
