@@ -30,6 +30,7 @@ from proxy import translate as xlate
 from proxy import tokenizer as toks
 from proxy import api_sessions
 from proxy import api_tasks
+from proxy import api_team
 from proxy.tool_registry import (
     proxy_system_instruction,
     strip_all_reminders,
@@ -1573,8 +1574,8 @@ async def handle_health(request: web.Request) -> web.Response:
 
 
 async def handle_ui(request: web.Request) -> web.FileResponse:
-    """Serve the session management UI."""
-    path = Path(__file__).parent / "static" / "index.html"
+    """Serve the Agent Team UI."""
+    path = Path(__file__).parent / "static" / "team.html"
     return web.FileResponse(path)
 
 
@@ -1631,6 +1632,7 @@ def create_app() -> web.Application:
     # Session and Task Management (pythonmagic-style)
     api_sessions.register_routes(app)
     api_tasks.register_routes(app)
+    api_team.register_routes(app)
 
     return app
 
