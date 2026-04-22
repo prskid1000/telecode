@@ -53,27 +53,27 @@
   main { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
   .top-bar { padding: 16px 24px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--bg); z-index: 10; }
   
-  .board { flex: 1; display: flex; flex-direction: column; overflow-y: auto; background: #0d1117; }
+  .board { flex: 1; display: flex; flex-direction: column; overflow-y: auto; background: #0d1117; display: none; }
   
-  .swimlane { display: flex; border-bottom: 1px solid var(--border); min-height: 140px; transition: 0.2s; }
+  .swimlane { display: flex; border-bottom: 1px solid var(--border); min-height: 100px; flex-shrink: 0; }
   .swimlane:hover { background: rgba(255,255,255,0.01); }
   
   .lane-rail { 
     width: 60px; flex-shrink: 0; background: rgba(0,0,0,0.2); border-right: 1px solid var(--border);
-    display: flex; flex-direction: column; align-items: center; padding: 20px 0; gap: 12px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px 0; gap: 8px;
   }
   .lane-label { 
-    writing-mode: vertical-rl; text-transform: uppercase; font-size: 10px; font-weight: 700; 
-    letter-spacing: 0.2em; color: var(--muted); transform: rotate(180deg);
+    writing-mode: vertical-rl; text-transform: uppercase; font-size: 11px; font-weight: 700; 
+    letter-spacing: 0.2em; color: var(--muted); transform: rotate(180deg); white-space: nowrap;
   }
-  .lane-count { font-size: 11px; font-weight: 600; color: var(--accent); background: rgba(83,155,245,0.1); padding: 4px 8px; border-radius: 10px; }
+  .lane-count { font-size: 10px; font-weight: 700; color: var(--accent); background: rgba(83,155,245,0.1); padding: 2px 6px; border-radius: 4px; }
 
   .lane-content { padding: 20px; flex: 1; display: flex; flex-wrap: wrap; gap: 16px; align-content: flex-start; }
 
   .card { 
-    background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px; 
-    width: 280px; cursor: grab; transition: 0.2s ease; box-shadow: 0 4px 12px rgba(0,0,0,0.15); 
-    position: relative; display: flex; flex-direction: column; gap: 12px;
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 12px; 
+    width: 280px; cursor: grab; transition: 0.15s ease; box-shadow: 0 4px 10px rgba(0,0,0,0.2); 
+    position: relative; display: flex; flex-direction: column; gap: 10px;
   }
   .card:active { cursor: grabbing; }
   .card:hover { border-color: var(--accent); transform: translateY(-2px); }
@@ -135,34 +135,21 @@
     <div style="display:flex; align-items:center; gap:12px">
       <i data-lucide="monitor" style="color:var(--accent); width:18px"></i>
       <h2 id="currentWorkspaceTitle" style="margin:0; font-size:16px; font-weight:600">Select Workspace</h2>
-      <button class="btn" style="padding:4px 10px; border-radius:6px; font-size:11px" onclick="openGovernance()"><i data-lucide="shield-check" style="width:12px"></i> Governance</button>
+      <button id="govBtn" class="btn" style="padding:4px 10px; border-radius:6px; font-size:11px; display:none" onclick="openGovernance()"><i data-lucide="shield-check" style="width:12px"></i> Governance</button>
     </div>
-    <div style="display:flex; gap:12px">
+    <div style="display:flex; gap:12px" id="mainActions">
       <button class="btn btn-icon" onclick="syncRelay()"><i data-lucide="rotate-cw" style="width:16px"></i></button>
       <button class="btn btn-primary" onclick="openTicketModal()"><i data-lucide="plus"></i> New Assignment</button>
     </div>
   </div>
 
-  <div class="board">
-    <div class="swimlane" ondragover="event.preventDefault()" ondrop="dropToColumn(event, 'blocked')">
-      <div class="lane-rail"><div class="lane-label">Blocked</div><div class="lane-count" id="blocked-count">0</div></div>
-      <div class="lane-content" id="cnt-blocked"></div>
-    </div>
-    <div class="swimlane" ondragover="event.preventDefault()" ondrop="dropToColumn(event, 'todo')">
-      <div class="lane-rail"><div class="lane-label">To Do</div><div class="lane-count" id="todo-count">0</div></div>
-      <div class="lane-content" id="cnt-todo"></div>
-    </div>
-    <div class="swimlane" ondragover="event.preventDefault()" ondrop="dropToColumn(event, 'inprogress')">
-      <div class="lane-rail"><div class="lane-label">In Shift</div><div class="lane-count" id="inprogress-count">0</div></div>
-      <div class="lane-content" id="cnt-inprogress"></div>
-    </div>
-    <div class="swimlane" ondragover="event.preventDefault()" ondrop="dropToColumn(event, 'done')">
-      <div class="lane-rail"><div class="lane-label">Done</div><div class="lane-count" id="done-count">0</div></div>
-      <div class="lane-content" id="cnt-done"></div>
-    </div>
-    <div class="swimlane" ondragover="event.preventDefault()" ondrop="dropToColumn(event, 'failed')">
-      <div class="lane-rail"><div class="lane-label">Downtime</div><div class="lane-count" id="failed-count">0</div></div>
-      <div class="lane-content" id="cnt-failed"></div>
+  <div class="board" id="boardContent"></div>
+
+  <div id="emptyState" style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--muted); gap:20px;">
+    <i data-lucide="layers" style="width:64px; height:64px; opacity:0.2"></i>
+    <div style="text-align:center">
+      <h3 style="margin:0; color:var(--text-bright)">No Workspace Active</h3>
+      <p style="margin:8px 0 0; font-size:13px">Select a project domain from the sidebar to manage assignments.</p>
     </div>
   </div>
 
@@ -281,7 +268,19 @@
     const r = await api("/api/v1/workspaces"); workspaces = r.workspaces;
     document.getElementById("workspaceList").innerHTML = workspaces.map(w => `<div class="side-item ${w.id === currentWorkspaceId ? 'active' : ''}" onclick="switchWorkspace('${w.id}')"><i data-lucide="monitor"></i><span>${w.name}</span><i data-lucide="trash-2" class="trash" onclick="event.stopPropagation(); deleteWorkspace('${w.id}')"></i></div>`).join("");
     const curr = workspaces.find(w => w.id === currentWorkspaceId);
-    if (curr) document.getElementById("currentWorkspaceTitle").textContent = curr.name;
+    if (curr) {
+      document.getElementById("currentWorkspaceTitle").textContent = curr.name;
+      document.getElementById("govBtn").style.display = "inline-flex";
+      document.getElementById("mainActions").style.display = "flex";
+      document.getElementById("boardContent").style.display = "flex";
+      document.getElementById("emptyState").style.display = "none";
+    } else {
+      document.getElementById("currentWorkspaceTitle").textContent = "Select Workspace";
+      document.getElementById("govBtn").style.display = "none";
+      document.getElementById("mainActions").style.display = "none";
+      document.getElementById("boardContent").style.display = "none";
+      document.getElementById("emptyState").style.display = "flex";
+    }
     refreshIcons();
   }
 
@@ -295,14 +294,33 @@
     refreshIcons();
   }
 
+  function renderBoardStructure() {
+    const states = [
+      {id: 'blocked', label: 'Blocked'},
+      {id: 'todo', label: 'To Do'},
+      {id: 'inprogress', label: 'In Shift'},
+      {id: 'done', label: 'Done'},
+      {id: 'failed', label: 'Downtime'}
+    ];
+    document.getElementById("boardContent").innerHTML = states.map(s => `
+      <div class="swimlane" ondragover="event.preventDefault()" ondrop="dropToColumn(event, '${s.id}')">
+        <div class="lane-rail"><div class="lane-label">${s.label}</div><div class="lane-count" id="${s.id}-count">0</div></div>
+        <div class="lane-content" id="cnt-${s.id}"></div>
+      </div>
+    `).join("");
+  }
+
   async function syncRelay() {
     if (!currentWorkspaceId) return;
     try {
+      if (!document.getElementById("cnt-todo")) renderBoardStructure();
       await api("/api/v1/relay/sync", {method: "POST"});
       const r = await api(`/api/v1/workspaces/${currentWorkspaceId}/tickets`); board = r.board;
       ["blocked", "todo", "inprogress", "done", "failed"].forEach(status => {
-        document.getElementById(`${status}-count`).textContent = (board[status]||[]).length;
-        document.getElementById(`cnt-${status}`).innerHTML = (board[status]||[]).map(t => {
+        const countEl = document.getElementById(`${status}-count`);
+        const cntEl = document.getElementById(`cnt-${status}`);
+        if (countEl) countEl.textContent = (board[status]||[]).length;
+        if (cntEl) cntEl.innerHTML = (board[status]||[]).map(t => {
           const s = specialists.find(x => x.id === t.agent_id);
           const avClass = s ? '' : 'avatar-unassigned';
           const avIcon = s ? s.avatar : '?';
