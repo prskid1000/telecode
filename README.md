@@ -4,15 +4,6 @@ Telegram bot that connects AI coding CLIs (Claude Code, Codex), screen image cap
 
 Developer docs (architecture, internals, extending) are in [CLAUDE.md](CLAUDE.md).
 
-## Workspace OS
-
-Telecode now features a professional, autonomous **Workspace Operating System** for AI talent orchestration. Access it at: `http://localhost:1235/ui`
-
-- **Talent Board**: A professional Kanban interface to visualize your project roadmap.
-- **Persistent Specialists**: Onboard AI talent with "Work Files" they carry across shifts.
-- **Autonomous Relays**: Chain assignments together; the system handles handoffs and working files automatically.
-- **Project Governance**: Centralized control over shift limits, deadlines, and the Ground Truth Vault.
-
 ## Setup
 
 ### Requirements
@@ -97,6 +88,7 @@ Telecode now includes a fully-featured, stateful **Session and Task Management**
 
 - **Stateful Workspaces**: Isolated filesystem directories for each session, with persistent metadata and `data` carrying state across multiple tasks/turns.
 - **Background Task Queue**: Submit jobs (like `CLAUDE_CODE`) that run asynchronously. The model can poll for status and rich tool-use events.
+- **Web Interface**: A dedicated UI is available at `http://localhost:1235/ui` for monitoring tasks and managing files.
 - **Configurable**: Enable via `proxy.enable_session_tools: true` in `settings.json`. Once enabled, tools like `session_create`, `task_submit`, and `session_upload_file` are automatically injected into supported client profiles (like `claude-code`).
 
 ### System tray UI + settings window
