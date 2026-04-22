@@ -1,6 +1,7 @@
 import logging
 import json
 import os
+import shutil
 import traceback
 from pathlib import Path
 from aiohttp import web
@@ -15,6 +16,8 @@ def _error_json(exc: Exception):
     logger.error(f"API Error: {exc}\n{tb}")
     return web.json_response({"success": False, "error": str(exc), "traceback": tb}, status=500)
 
+TALENT_DIR = Path("data/talent")
+
 # ─── Specialists ───────────────────────────────────────────────────────────
 
 async def list_specialists(request: web.Request):
@@ -24,7 +27,8 @@ async def list_specialists(request: web.Request):
 async def onboard_specialist(request: web.Request):
     try:
         d = await request.json()
-        sid = get_team_store().add_agent(name=d.get("name"), task_type=d.get("task_type"), instructions=d.get("instructions", ""), is_local=d.get("is_local", True), avatar=d.get("avatar", "👤"), equipment=d.get("equipment", []))
+        sid = get_team_store().add_agent(name=d.get("name"), task_type=d.get("task_type"), instructions=d.get("instructions", ""), is_local=d.get("is_local", True), avatar=d.get("avatar", "👤"))
+        (TALENT_DIR / sid).mkdir(parents=True, exist_ok=True)
         return web.json_response({"success": True, "specialist_id": sid})
     except Exception as e: return _error_json(e)
 
@@ -42,7 +46,54 @@ async def update_specialist(request: web.Request):
 
 async def fire_specialist(request: web.Request):
     try:
-        get_team_store().delete_agent(request.match_info["specialist_id"])
+        sid = request.match_info["specialist_id"]
+        get_team_store().delete_agent(sid)
+        if (TALENT_DIR / sid).exists():
+            shutil.rmtree(TALENT_DIR / sid)
+        return web.json_response({"success": True})
+    except Exception as e: return _error_json(e)
+
+# ─── Specialist Files (Talent Vault) ───────────────────────────────────────
+
+async def list_specialist_files(request: web.Request):
+    try:
+        sid = request.match_info["specialist_id"]
+        path = TALENT_DIR / sid
+        path.mkdir(parents=True, exist_ok=True)
+        files = []
+        for root, dirs, filenames in os.walk(path):
+            for f in filenames:
+                rel = os.path.relpath(os.path.join(root, f), path)
+                files.append({"path": rel.replace("\\", "/")})
+        return web.json_response({"success": True, "files": files})
+    except Exception as e: return _error_json(e)
+
+async def upload_specialist_files(request: web.Request):
+    try:
+        sid = request.match_info["specialist_id"]
+        reader = await request.multipart()
+        target_dir = TALENT_DIR / sid
+        target_dir.mkdir(parents=True, exist_ok=True)
+        while True:
+            part = await reader.next()
+            if part is None: break
+            if part.name == 'files':
+                filename = part.filename
+                with open(target_dir / filename, 'wb') as f:
+                    while True:
+                        chunk = await part.read_chunk()
+                        if not chunk: break
+                        f.write(chunk)
+        return web.json_response({"success": True})
+    except Exception as e: return _error_json(e)
+
+async def delete_specialist_file(request: web.Request):
+    try:
+        sid = request.match_info["specialist_id"]
+        file_path = request.match_info["path"]
+        target = TALENT_DIR / sid / file_path
+        if target.exists() and target.is_file():
+            target.unlink()
         return web.json_response({"success": True})
     except Exception as e: return _error_json(e)
 
@@ -124,20 +175,14 @@ async def update_ticket(request: web.Request):
         
         # --- STATE MACHINE VALIDATION ---
         new_status = d.get("status", ticket["status"])
-        
-        # 1. Blocked is immutable until auto-unlocked
         if ticket["status"] == "blocked" and new_status != "blocked":
-             # Only allow manual override if dependency is gone
              if ticket.get("depends_on"):
                  dep = next((x for x in store.get_tickets() if x["id"] == ticket["depends_on"]), None)
                  if dep and dep["status"] != "done":
                      return web.json_response({"success": False, "error": "Cannot manually unblock while dependency is active."}, status=403)
-
-        # 2. Cannot drag into "In Progress" (Shift must be started via API)
         if new_status == "inprogress" and ticket["status"] != "inprogress":
              return web.json_response({"success": False, "error": "Shifts must be started via the 'Start Shift' command."}, status=403)
 
-        # Handle specialist swap logic
         if ticket["status"] == "inprogress" and "agent_id" in d and d["agent_id"] != ticket["agent_id"]:
             if ticket.get("task_id"): get_task_queue().cancel_task(ticket["task_id"])
             store.add_event(ticket["session_id"], "specialist_swapped", f"Hot-swapped specialist on '{ticket['title']}'")
@@ -172,10 +217,18 @@ async def _execute_shift_logic(tid):
     spec = {a["id"]: a for a in store.get_agents()}.get(ticket["agent_id"])
     if not spec: raise Exception("Specialist not found")
     
-    # Deploy Work Files
+    from process import get_supervisor
+    work_dir = (await get_supervisor()).get_session_folder(ticket["session_id"])
+
+    # Deploy Specialist Vault (Personal persistent files)
+    talent_vault = TALENT_DIR / spec["id"]
+    if talent_vault.exists():
+        for item in talent_vault.iterdir():
+            if item.is_file():
+                shutil.copy2(item, Path(work_dir) / item.name)
+
+    # Deploy Work Files (Manual path/content pairs - if any still exist in profile)
     if spec.get("equipment"):
-        from process import get_supervisor
-        work_dir = (await get_supervisor()).get_session_folder(ticket["session_id"])
         for item in spec["equipment"]:
             try: 
                 p = Path(work_dir) / item["path"]
@@ -229,21 +282,17 @@ async def sync_relay(request: web.Request):
         store = get_team_store()
         queue = get_task_queue()
         for t in store.get_tickets():
-            # Coordinate with Active Shifts
             if t["status"] == "inprogress" and t["task_id"]:
                 task = queue.get_task(t["task_id"])
                 if task and task.status.value in ("completed", "failed"): 
                     new_status = "done" if task.status.value == "completed" else "failed"
                     store.update_ticket(t["id"], status=new_status)
                     store.add_event(t["session_id"], "shift_ended", f"Task '{t['title']}' marked as {new_status.upper()}", {"task_id": t["task_id"]})
-            
-            # Coordinate Relays
             if t["status"] == "blocked" and t.get("depends_on"):
                 dep = next((x for x in store.get_tickets() if x["id"] == t["depends_on"]), None)
                 if dep and dep["status"] == "done":
                     store.update_ticket(t["id"], status="todo")
-                    store.add_event(t["session_id"], "relay_unlocked", f"Relay unlocked for '{t['title']}' (Dependency Resolved)")
-                    
+                    store.add_event(t["session_id"], "relay_unlocked", f"Relay unlocked for '{t['title']}'")
         return web.json_response({"success": True})
     except Exception as e: return _error_json(e)
 
@@ -252,6 +301,9 @@ def register_routes(app: web.Application):
     app.router.add_post("/api/v1/specialists", onboard_specialist)
     app.router.add_patch("/api/v1/specialists/{specialist_id}", update_specialist)
     app.router.add_delete("/api/v1/specialists/{specialist_id}", fire_specialist)
+    app.router.add_get("/api/v1/specialists/{specialist_id}/files", list_specialist_files)
+    app.router.add_post("/api/v1/specialists/{specialist_id}/files", upload_specialist_files)
+    app.router.add_delete("/api/v1/specialists/{specialist_id}/files/{path:.*}", delete_specialist_file)
     app.router.add_get("/api/v1/workspaces", list_workspaces)
     app.router.add_post("/api/v1/workspaces", create_workspace)
     app.router.add_delete("/api/v1/workspaces/{workspace_id}", delete_workspace)
