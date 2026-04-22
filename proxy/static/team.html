@@ -119,7 +119,7 @@
 <div id="error-toast"></div>
 
 <aside>
-  <div class="side-hdr"><i data-lucide="layers" style="color:var(--accent)"></i> Workspace OS</div>
+  <div class="side-hdr"><i data-lucide="zap" style="color:var(--accent)"></i> Workspace OS</div>
   <div class="side-sec">
     <div class="side-label">Project Domains</div>
     <div id="workspaceList"></div>
@@ -147,7 +147,7 @@
   <div class="board" id="boardContent"></div>
 
   <div id="emptyState" style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--muted); gap:20px;">
-    <i data-lucide="layers" style="width:64px; height:64px; opacity:0.2"></i>
+    <i data-lucide="zap" style="width:64px; height:64px; opacity:0.1"></i>
     <div style="text-align:center">
       <h3 style="margin:0; color:var(--text-bright)">No Workspace Active</h3>
       <p style="margin:8px 0 0; font-size:13px">Select a project domain from the sidebar to manage assignments.</p>
@@ -215,20 +215,30 @@
 </div>
 
 <div class="modal-overlay" id="specialistModal">
-  <div class="modal"><h3>Talent Onboarding</h3>
+  <div class="modal" style="width: 800px;"><h3>Talent Onboarding</h3>
     <input type="hidden" id="sId">
-    <div class="field"><label>Specialist Name</label><input type="text" id="sName"></div>
-    <div class="field"><label>Agency Provider</label><select id="sType"><option value="CLAUDE_CODE">Claude Code</option><option value="GEMINI">Gemini CLI</option></select></div>
-    <div class="field"><label>System Directives</label><textarea id="sInstr" rows="4"></textarea></div>
-    <div class="field">
-      <label>Work Files (Brought to every Shift)</label>
-      <div id="equipmentList"></div>
-      <button class="btn" style="font-size:11px; margin-top:8px" onclick="addEquipmentItem()"><i data-lucide="plus" style="width:12px"></i> Add File</button>
+    <div style="display:flex; gap:32px">
+      <div style="flex:1">
+        <div class="field"><label>Specialist Name</label><input type="text" id="sName"></div>
+        <div class="field"><label>Agency Provider</label><select id="sType"><option value="CLAUDE_CODE">Claude Code</option><option value="GEMINI">Gemini CLI</option></select></div>
+        <div class="field"><label>System Directives</label><textarea id="sInstr" rows="4"></textarea></div>
+        <div class="field" style="display:flex; align-items:center; gap:10px; background:rgba(0,0,0,0.2); padding:12px; border-radius:8px; margin-top:20px">
+          <input type="checkbox" id="sLocal" checked style="width:auto"><label style="margin:0; text-transform:none">Direct Tool Access (Local Mode)</label>
+        </div>
+      </div>
+      
+      <div style="flex:1">
+        <div class="side-label">Personal Vault (Persistent Files) <button class="btn" style="padding:2px 6px; font-size:10px" onclick="document.getElementById('talentUpload').click()"><i data-lucide="upload" style="width:10px"></i></button></div>
+        <div id="talentVaultList" class="file-tree" style="height: 300px;"></div>
+        <input type="file" id="talentUpload" multiple style="display:none" onchange="uploadToTalent(this.files)">
+        <p style="font-size:11px; color:var(--muted); margin-top:12px">These files are automatically deployed to any workspace this specialist enters.</p>
+      </div>
     </div>
-    <div class="field" style="display:flex; align-items:center; gap:10px; background:rgba(0,0,0,0.2); padding:12px; border-radius:8px; margin-top:20px">
-      <input type="checkbox" id="sLocal" checked style="width:auto"><label style="margin:0; text-transform:none">Direct Tool Access (Local Mode)</label>
+    
+    <div style="display:flex; justify-content:flex-end; gap:12px; margin-top:32px; padding-top:20px; border-top:1px solid var(--border)">
+      <button class="btn" onclick="closeModals()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitSpecialist()">Save Specialist</button>
     </div>
-    <div style="display:flex; justify-content:flex-end; gap:12px; margin-top:32px"><button class="btn" onclick="closeModals()">Cancel</button><button class="btn btn-primary" onclick="submitSpecialist()">Save Specialist</button></div>
   </div>
 </div>
 
@@ -427,29 +437,40 @@
   async function deleteCurrentWorkspace() { deleteWorkspace(currentWorkspaceId); closeModals(); }
   async function fireSpecialist(id) { if(confirm("Fire Specialist?")) { await api(`/api/v1/specialists/${id}`, {method: "DELETE"}); loadSpecialists(); } }
   
-  function editSpecialist(id) { const s = specialists.find(x => x.id === id); document.getElementById("sId").value = s.id; document.getElementById("sName").value = s.name; document.getElementById("sType").value = s.task_type; document.getElementById("sInstr").value = s.instructions; document.getElementById("sLocal").checked = s.is_local; document.getElementById("equipmentList").innerHTML = ""; (s.equipment || []).forEach(e => addEquipmentItem(e.path, e.content)); document.getElementById("specialistModal").style.display = "flex"; }
-  function addEquipmentItem(p="", c="") { 
-    const div = document.createElement("div"); 
-    div.className = "file-item";
-    div.style.flexDirection = "column";
-    div.style.alignItems = "stretch";
-    div.style.gap = "8px";
-    div.style.padding = "12px";
-    div.style.background = "rgba(255,255,255,0.02)";
-    div.style.marginBottom = "8px";
-    div.style.border = "1px solid var(--border)";
-    div.innerHTML = `
-      <div style="display:flex; align-items:center; gap:8px">
-        <i data-lucide="file-code" style="width:14px; color:var(--accent)"></i>
-        <input type="text" placeholder="path/to/file.py" class="eq-path" value="${p}" style="flex:1; padding:4px 8px; font-size:12px">
-        <button class="btn btn-danger" style="padding:4px 8px" onclick="this.parentElement.parentElement.remove()"><i data-lucide="trash-2" style="width:12px"></i></button>
-      </div>
-      <textarea placeholder="File content..." class="eq-content" style="height:80px; font-size:11px; font-family:var(--font-mono); margin-top:4px">${c}</textarea>
-    `; 
-    document.getElementById("equipmentList").appendChild(div);
+  async function refreshTalentFiles(sid) {
+    const r = await api(`/api/v1/specialists/${sid}/files`);
+    document.getElementById("talentVaultList").innerHTML = r.files.map(f => `<div class="file-item"><i data-lucide="file-code" style="color:var(--accent)"></i> <span>${f.path}</span><i data-lucide="trash-2" class="trash" style="margin-left:auto" onclick="deleteTalentFile('${sid}', '${f.path}')"></i></div>`).join("") || '<div style="color:var(--muted); font-size:12px; padding:20px; text-align:center">No persistent files.</div>';
     refreshIcons();
   }
-  async function submitSpecialist() { const id = document.getElementById("sId").value; const equipment = Array.from(document.querySelectorAll("#equipmentList > div")).map(div => ({path: div.querySelector(".eq-path").value, content: div.querySelector(".eq-content").value})); const payload = {name: document.getElementById("sName").value, task_type: document.getElementById("sType").value, instructions: document.getElementById("sInstr").value, is_local: document.getElementById("sLocal").checked, equipment}; if (id) await api(`/api/v1/specialists/${id}`, {method: "PATCH", body: payload}); else await api("/api/v1/specialists", {method: "POST", body: payload}); closeModals(); loadSpecialists(); }
+
+  async function uploadToTalent(files) {
+    const sid = document.getElementById("sId").value;
+    if (!sid) { alert("Save specialist first."); return; }
+    for(let f of files) { const fd = new FormData(); fd.append("files", f); await fetch(`/api/v1/specialists/${sid}/files`, {method:"POST", body:fd}); }
+    refreshTalentFiles(sid);
+  }
+
+  async function deleteTalentFile(sid, path) { if(confirm("Delete specialist file?")) { await api(`/api/v1/specialists/${sid}/files/${encodeURIComponent(path)}`, {method:"DELETE"}); refreshTalentFiles(sid); } }
+
+  function editSpecialist(id) { 
+    const s = specialists.find(x => x.id === id); 
+    document.getElementById("sId").value = s.id; 
+    document.getElementById("sName").value = s.name; 
+    document.getElementById("sType").value = s.task_type; 
+    document.getElementById("sInstr").value = s.instructions; 
+    document.getElementById("sLocal").checked = s.is_local; 
+    refreshTalentFiles(s.id);
+    document.getElementById("specialistModal").style.display = "flex"; 
+  }
+
+  async function submitSpecialist() { 
+    const id = document.getElementById("sId").value; 
+    const payload = {name: document.getElementById("sName").value, task_type: document.getElementById("sType").value, instructions: document.getElementById("sInstr").value, is_local: document.getElementById("sLocal").checked}; 
+    if (id) await api(`/api/v1/specialists/${id}`, {method: "PATCH", body: payload}); 
+    else await api("/api/v1/specialists", {method: "POST", body: payload}); 
+    closeModals(); loadSpecialists(); 
+  }
+
   function openTicketModal() { const all = [].concat(...Object.values(board)); document.getElementById("tDepends").innerHTML = '<option value="">No Dependency</option>' + all.map(t => `<option value="${t.id}">After: ${t.title}</option>`).join(""); document.getElementById("ticketModal").style.display = "flex"; }
   async function submitTicket() { await api(`/api/v1/workspaces/${currentWorkspaceId}/tickets`, {method: "POST", body: {title: document.getElementById("tTitle").value, specialist_id: document.getElementById("tAgentSelect").value, prompt: document.getElementById("tPrompt").value, depends_on: document.getElementById("tDepends").value}}); closeModals(); syncRelay(); }
   async function startShift(id) { await api(`/api/v1/tickets/${id}/start`, {method: "POST"}); syncRelay(); }
@@ -462,7 +483,7 @@
   async function dropToColumn(ev, status) { ev.preventDefault(); const tid = ev.dataTransfer.getData("ticket_id"); if(tid) { try { await api(`/api/v1/tickets/${tid}`, {method:"PATCH", body:{status:status}}); syncRelay(); } catch(e) {} } }
   function switchWorkspace(id) { currentWorkspaceId = id; localStorage.setItem("telecode_wid", id); loadWorkspaces(); syncRelay(); }
   function closeModals() { document.querySelectorAll(".modal-overlay").forEach(m => m.style.display = "none"); }
-  function openSpecialistModal() { document.getElementById("sId").value=""; document.getElementById("equipmentList").innerHTML=""; document.getElementById("specialistModal").style.display="flex"; }
+  function openSpecialistModal() { document.getElementById("sId").value=""; document.getElementById("talentVaultList").innerHTML='<div style="color:var(--muted); font-size:12px; padding:20px; text-align:center">Save specialist to unlock Personal Vault.</div>'; document.getElementById("specialistModal").style.display="flex"; }
   function closeFlyout() { document.getElementById("flyout").classList.remove("open"); currentTicketId = null; }
   init();
 </script>
