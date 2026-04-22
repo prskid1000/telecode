@@ -346,12 +346,20 @@
           const avClass = s ? '' : 'avatar-unassigned';
           const avIcon = s ? s.avatar : '?';
           const avName = s ? s.name : 'Unassigned';
-          const prog = t.progress ? `<div class="progress-bar"><div class="progress-fill" style="width:${t.progress*100}%"></div></div>` : '';
-          const progMsg = t.progress_message ? `<div style="font-size:9px; color:var(--accent); margin-top:4px">${t.progress_message}</div>` : '';
           
+          let statusOverlay = "";
+          if (t.status === "inprogress") {
+            statusOverlay = `<div class="progress-bar"><div class="progress-fill" style="width:${(t.progress||0)*100}%"></div></div>
+                             <div style="font-size:9px; color:var(--accent); margin-top:4px; font-weight:600; text-transform:uppercase; letter-spacing:0.02em">${t.progress_message || "Executing..." }</div>`;
+          } else if (t.status === "done") {
+            statusOverlay = `<div style="display:flex; align-items:center; gap:4px; margin-top:6px; color:var(--success); font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em"><i data-lucide="check-circle-2" style="width:12px; height:12px"></i> Mission Accomplished</div>`;
+          } else if (t.status === "failed") {
+            statusOverlay = `<div style="display:flex; align-items:center; gap:4px; margin-top:6px; color:var(--error); font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em"><i data-lucide="alert-circle" style="width:12px; height:12px"></i> Mission Aborted</div>`;
+          }
+
           return `<div class="card" draggable="true" ondragstart="dragTicket(event, '${t.id}')" ondragover="event.preventDefault()" ondrop="dropSpecialistToTicket(event, '${t.id}')" onclick="openTicket('${t.id}')">
             <div class="card-title">${t.title}</div>
-            ${prog}${progMsg}
+            ${statusOverlay}
             <div class="card-footer">
               <div class="card-specialist">
                 <div class="avatar ${avClass}" style="width:18px; height:18px; font-size:10px">${avIcon}</div>
@@ -394,7 +402,16 @@
     const act = document.getElementById("flyAction");
     if (t.status === "todo") act.innerHTML = `<button class="btn btn-primary" onclick="startShift('${id}')"><i data-lucide="play"></i> Start Shift</button>`;
     else if (t.status === "inprogress") act.innerHTML = `<button class="btn btn-danger" onclick="pauseShift('${id}')"><i data-lucide="pause"></i> Pause Shift</button>`;
-    else act.innerHTML = `<span class="badge" style="background:${t.status==='done'?'var(--success)':'var(--error)'}; color:white; padding:4px 12px">${t.status.toUpperCase()}</span>`;
+    else {
+      act.innerHTML = `
+        <div style="display:flex; flex-direction:column; gap:10px; align-items:flex-end">
+          <div style="display:flex; gap:8px; align-items:center">
+            <input type="text" id="followupText" placeholder="Refine objective..." style="width:250px; padding:6px 12px; font-size:12px">
+            <button class="btn btn-primary" style="padding:6px 12px; font-size:12px" onclick="sendFollowup('${id}')"><i data-lucide="send" style="width:12px"></i> Send</button>
+          </div>
+          <span class="badge" style="background:${t.status==='done'?'var(--success)':'var(--error)'}; color:white; padding:4px 12px; font-size:10px">${t.status.toUpperCase()}</span>
+        </div>`;
+    }
     document.getElementById("flyout").classList.add("open");
     refreshTicketDetail();
   }
@@ -420,22 +437,38 @@
       const r = await fetch(`/api/sessions/${t.session_id}/files`).then(r => r.json());
       document.getElementById("flyVault").innerHTML = r.files.filter(f => f.path.startsWith(".vault/")).map(f => `<div class="file-item"><i data-lucide="book"></i> <span>${f.path.replace(".vault/","")}</span></div>`).join("") || '<div style="color:var(--muted);font-size:12px">Vault empty.</div>';
       document.getElementById("flyFiles").innerHTML = r.files.filter(f => !f.path.startsWith(".vault/")).map(f => `<a href="/api/sessions/${t.session_id}/files/${encodeURIComponent(f.path)}" target="_blank" class="file-item"><i data-lucide="file-text"></i> <span>${f.path}</span></a>`).join("");
-      if (t.task_id) {
+      const t_ids = t.task_ids || (t.task_id ? [t.task_id] : []);
+      if (t_ids.length > 0) {
         try {
-          const rT = await fetch(`/api/tasks/${t.task_id}`).then(r => {
-             if (r.status === 404) return { metadata: { events: [{ kind: "system", text: "Shift history lost due to server restart." }] } };
-             return r.json();
+          const tasks = await Promise.all(t_ids.map(id => 
+            fetch(`/api/tasks/${id}`).then(r => r.status === 404 ? null : r.json())
+          ));
+          
+          let allEvents = [];
+          let finalResult = null;
+          let finalError = null;
+
+          tasks.filter(x => x).forEach(rT => {
+            const evs = (rT.metadata?.events || []).map(e => ({...e, _rT: rT}));
+            allEvents = allEvents.concat(evs);
+            if (rT.result) finalResult = rT.result;
+            if (rT.error) finalError = rT.error;
           });
-          let eventsHtml = (rT.metadata?.events || []).map(e => {
+
+          let eventsHtml = allEvents.map(e => {
+            const rT = e._rT;
             let kind = (e.kind || "info").toUpperCase();
             let text = e.text || e.summary || "";
             let color = "var(--text-bright)";
             let extra = "";
 
             if (e.kind === "start") {
-              text = `Shift initiated in workspace domain.`;
-              extra = `<div style="font-size:10px; color:var(--muted); margin:8px 0 4px">TECHNICAL PAYLOAD:</div>
-                       <pre style="font-size:11px; background:#000; padding:12px; border-radius:6px; overflow-x:auto; border:1px solid var(--border); max-height:180px">${formatJson(e)}</pre>`;
+              const title = rT.metadata?.ticket_title || "Mission Objective";
+              const promptSnippet = e.prompt ? e.prompt.split('\n').find(l => l.startsWith('GOAL:'))?.replace('GOAL:','') || e.prompt.substring(0, 100) + "..." : "";
+              text = `Executing: ${title}`;
+              extra = `<div style="font-size:11px; color:var(--muted); margin:4px 0 10px 0; line-height:1.4">${promptSnippet}</div>
+                       <details style="margin-top:8px"><summary style="font-size:10px; color:var(--muted); cursor:pointer">View Shift Manifest</summary>
+                       <pre style="font-size:11px; background:#000; padding:12px; border-radius:6px; overflow-x:auto; border:1px solid var(--border); margin-top:8px">${formatJson(e)}</pre></details>`;
             }
             if (e.kind === "narrative") {
               color = "var(--accent)";
@@ -443,76 +476,70 @@
             }
             if (e.kind === "progress") {
               color = "var(--success)";
-              text = `${(e.progress * 100).toFixed(0)}% - ${e.text || "Working..."}`;
+              text = `${(e.progress * 100).toFixed(0)}% - ${e.text || "In Progress..."}`;
             }
             if (e.kind === "tool") {
               kind = "ACTION";
               color = "var(--warn)";
-              text = `Specialist invoked ${e.tool}: ${e.summary || ""}`;
+              text = `Executing tool: ${e.tool}`;
+              extra = `<div style="font-size:11px; color:var(--muted); margin-left:10px; font-style:italic">${e.summary || ""}</div>`;
             }
             if (e.kind === "done") {
-              kind = "SUMMARY";
+              kind = "COMPLETED";
               color = "var(--success)";
-              text = "Shift completed successfully.";
+              text = "Work shift finalized.";
               extra = `<div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:10px; margin-top:10px; background:rgba(255,255,255,0.03); padding:10px; border-radius:6px; border:1px solid rgba(255,255,255,0.05)">
-                <div style="font-size:10px"><div style="color:var(--muted)">COST</div><div style="color:var(--text-bright); font-weight:600">$${(e.cost_usd || 0).toFixed(4)}</div></div>
-                <div style="font-size:10px"><div style="color:var(--muted)">TURNS</div><div style="color:var(--text-bright); font-weight:600">${e.num_turns || 0}</div></div>
-                <div style="font-size:10px"><div style="color:var(--muted)">TOOLS</div><div style="color:var(--text-bright); font-weight:600">${e.tool_count || 0}</div></div>
-                <div style="font-size:10px"><div style="color:var(--muted)">INPUT TOK</div><div style="color:var(--text-bright); font-weight:600">${e.input_tokens || e.tokens?.input || 0}</div></div>
-                <div style="font-size:10px"><div style="color:var(--muted)">OUTPUT TOK</div><div style="color:var(--text-bright); font-weight:600">${e.output_tokens || e.tokens?.output || 0}</div></div>
-                <div style="font-size:10px"><div style="color:var(--muted)">DURATION</div><div style="color:var(--text-bright); font-weight:600">${((e.duration_ms || 0)/1000).toFixed(1)}s</div></div>
+                <div style="font-size:10px"><div style="color:var(--muted)">BILLING</div><div style="color:var(--text-bright); font-weight:600">$${(e.cost_usd || 0).toFixed(4)}</div></div>
+                <div style="font-size:10px"><div style="color:var(--muted)">INTERACTIONS</div><div style="color:var(--text-bright); font-weight:600">${e.num_turns || 0} cycles</div></div>
+                <div style="font-size:10px"><div style="color:var(--muted)">THROUGHPUT</div><div style="color:var(--text-bright); font-weight:600">${e.output_tokens || e.tokens?.output || 0} tokens</div></div>
               </div>
-              <div style="font-size:10px; color:var(--muted); margin:12px 0 4px">FINAL TELEMETRY:</div>
-              <pre style="font-size:11px; background:#000; padding:12px; border-radius:6px; overflow-x:auto; border:1px solid var(--border)">${formatJson(e)}</pre>`;
+              <details style="margin-top:8px"><summary style="font-size:10px; color:var(--muted); cursor:pointer">View Full Telemetry</summary>
+              <pre style="font-size:11px; background:#000; padding:12px; border-radius:6px; overflow-x:auto; border:1px solid var(--border); margin-top:8px">${formatJson(e)}</pre></details>`;
             }
             if (e.kind === "error") {
               color = "var(--error)";
-              text = e.text || "An unexpected error occurred.";
+              text = "Shift interrupted by system error.";
+              extra = `<div style="font-size:12px; color:var(--error); margin-top:4px; padding:10px; background:rgba(229,83,75,0.1); border-radius:4px">${e.text || "Unknown failure."}</div>`;
             }
             
-            return `<div style="font-size:12px; margin-bottom:16px; padding-left:10px; border-left:2px solid ${e.kind==='narrative'?'var(--accent)':'transparent'}">
-              <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px">
-                <span style="color:var(--muted); font-family:var(--font-mono); font-size:9px; font-weight:700">[${kind}]</span>
+            return `<div style="font-size:13px; margin-bottom:20px; padding-left:14px; border-left:2px solid ${e.kind==='narrative'?'var(--accent)':'rgba(255,255,255,0.1)'}">
+              <div style="display:flex; align-items:center; gap:10px; margin-bottom:4px">
+                <span style="color:var(--muted); font-family:var(--font-mono); font-size:9px; font-weight:700; letter-spacing:0.05em">${kind}</span>
                 <span style="color:${color}; font-weight:500">${text}</span>
               </div>
               ${extra}
             </div>`;
           }).join("");
 
-          if (rT.result) {
-            const resultObj = rT.result;
-            const brief = resultObj.message || resultObj.result || (typeof resultObj === 'string' ? resultObj : "");
-            
-            eventsHtml += `<div style="margin-top:24px; border-radius:12px; overflow:hidden; border:1px solid rgba(83,155,245,0.2)">
-              <div style="background:rgba(83,155,245,0.1); padding:12px 20px; font-size:11px; color:var(--accent); font-weight:700; text-transform:uppercase; border-bottom:1px solid rgba(83,155,245,0.2)">Final Briefing</div>
-              <div style="padding:20px; background:rgba(83,155,245,0.02)">
-                <div style="font-size:14px; color:var(--text-bright); line-height:1.7; white-space:pre-wrap; margin-bottom:16px">${brief || '<span style="color:var(--muted); font-style:italic">No descriptive message returned.</span>'}</div>
-                <div style="font-size:10px; color:var(--muted); margin-bottom:6px">EXTENDED RESULT DATA:</div>
-                <pre style="font-size:11px; background:#000; padding:12px; border-radius:6px; overflow-x:auto; border:1px solid var(--border)">${formatJson(resultObj)}</pre>
+          if (finalResult) {
+            const brief = finalResult.message || finalResult.result || (typeof finalResult === 'string' ? finalResult : "");
+            eventsHtml += `<div style="margin-top:32px; border-radius:12px; overflow:hidden; border:1px solid rgba(83,155,245,0.3); background:rgba(83,155,245,0.02)">
+              <div style="background:rgba(83,155,245,0.1); padding:14px 24px; display:flex; justify-content:space-between; align-items:center">
+                <div style="font-size:12px; color:var(--accent); font-weight:700; text-transform:uppercase; letter-spacing:0.08em">Project Briefing</div>
+                <i data-lucide="check-circle-2" style="width:16px; color:var(--success)"></i>
+              </div>
+              <div style="padding:24px">
+                <div style="font-size:15px; color:var(--text-bright); line-height:1.7; white-space:pre-wrap; margin-bottom:16px">${brief || '<span style="color:var(--muted); font-style:italic">The specialist completed the assignment but provided no summary.</span>'}</div>
+                <details style="margin-top:24px; border-top:1px solid rgba(255,255,255,0.05); padding-top:16px">
+                  <summary style="font-size:11px; color:var(--muted); cursor:pointer">Technical Data Assets</summary>
+                  <pre style="font-size:11px; background:#000; padding:12px; border-radius:6px; overflow-x:auto; border:1px solid var(--border); margin-top:12px">${formatJson(finalResult)}</pre>
+                </details>
               </div>
             </div>`;
           }
-
-          if (rT.error) {
-            eventsHtml += `<div style="margin-top:24px; border-radius:12px; overflow:hidden; border:1px solid rgba(229,83,75,0.2)">
+          
+          if (finalError) {
+             eventsHtml += `<div style="margin-top:24px; border-radius:12px; overflow:hidden; border:1px solid rgba(229,83,75,0.2)">
               <div style="background:rgba(229,83,75,0.1); padding:12px 20px; font-size:11px; color:var(--error); font-weight:700; text-transform:uppercase; border-bottom:1px solid rgba(229,83,75,0.2)">Critical Failure</div>
               <div style="padding:20px; background:rgba(229,83,75,0.02)">
-                <div style="font-size:13px; color:var(--text-bright); font-family:var(--font-mono); line-height:1.6">${rT.error}</div>
+                <div style="font-size:13px; color:var(--text-bright); font-family:var(--font-mono); line-height:1.6">${finalError}</div>
               </div>
-            </div>`;
-          }
-
-          document.getElementById("flyLog").innerHTML = eventsHtml;
-
-          if (rT.error) {
-            eventsHtml += `<div style="margin-top:24px; padding:20px; background:rgba(229,83,75,0.05); border:1px dashed rgba(229,83,75,0.3); border-radius:12px">
-              <div style="font-size:11px; color:var(--error); font-weight:700; text-transform:uppercase; margin-bottom:12px; letter-spacing:0.05em">Critical Failure</div>
-              <div style="font-size:13px; color:var(--text-bright); font-family:var(--font-mono); line-height:1.5">${rT.error}</div>
             </div>`;
           }
 
           document.getElementById("flyLog").innerHTML = eventsHtml;
           document.getElementById("flyLog").scrollTop = 99999;
+          refreshIcons();
         } catch(e) {
           document.getElementById("flyLog").innerHTML = '<div style="color:var(--muted)">Task details unavailable.</div>';
         }

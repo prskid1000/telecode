@@ -62,6 +62,7 @@ class TeamStore:
             "session_id": session_id,
             "depends_on": depends_on,
             "task_id": None,
+            "task_ids": [], # Track all shifts for this ticket
             "status": "blocked" if depends_on else "todo",
             "created_at": datetime.now().isoformat()
         }
