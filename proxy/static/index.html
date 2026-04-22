@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Telecode Session UI</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1f232c; --border: #2a2f3a;
+    --text: #e6e8eb; --muted: #9aa3b2; --accent: #7cc4ff; --ok: #4ade80;
+    --warn: #fbbf24; --err: #f87171; --mono: ui-monospace, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif; display: flex; flex-direction: column; }
+  header { padding: 14px 20px; background: var(--panel); border-bottom: 1px solid var(--border); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; flex: 0 0 auto; }
+  header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+  header label { color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: center; }
+  input[type=text], input[type=number], textarea { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font: 13px var(--mono); }
+  textarea { width: 100%; min-height: 90px; resize: vertical; }
+  button { background: var(--accent); color: #052034; border: 0; padding: 7px 14px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px; }
+  button.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); font-weight: 500; }
+  button.danger { background: var(--err); color: #3a0b0b; }
+  button.icon { font-size: 15px; padding: 5px 10px; line-height: 1; }
+  button.icon.danger-hover:hover { background: var(--err); color: #3a0b0b; border-color: var(--err); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  main { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 14px; flex: 1 1 auto; min-height: 0; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px; overflow: auto; display: flex; flex-direction: column; min-height: 0; }
+  .panel > .events { flex: 1 1 auto; max-height: none; }
+  .panel h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+  .row label { color: var(--muted); font-size: 12px; min-width: 82px; }
+  .grow { flex: 1 1 auto; }
+  .drop { border: 2px dashed var(--border); border-radius: 8px; padding: 18px; text-align: center; color: var(--muted); cursor: pointer; transition: border-color 0.15s; }
+  .drop.over { border-color: var(--accent); color: var(--accent); }
+  .files { margin-top: 10px; font-family: var(--mono); font-size: 12px; }
+  .files .f { display: flex; justify-content: space-between; padding: 4px 8px; border-radius: 4px; background: var(--panel2); margin-bottom: 4px; }
+  .files .f button { padding: 0 6px; font-size: 11px; background: transparent; color: var(--muted); }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; }
+  .pill.pending { background: #3a3a1a; color: var(--warn); }
+  .pill.running { background: #10324f; color: var(--accent); }
+  .pill.completed { background: #113b1f; color: var(--ok); }
+  .pill.failed, .pill.cancelled { background: #3b1414; color: var(--err); }
+  .pill.resumed { background: #1b2d3a; color: var(--accent); }
+  .bar { height: 6px; border-radius: 3px; background: var(--panel2); overflow: hidden; margin: 6px 0; }
+  .bar > span { display: block; height: 100%; background: var(--accent); transition: width 0.3s; }
+  .events { font-family: var(--mono); font-size: 12px; max-height: 320px; overflow: auto; background: var(--panel2); border-radius: 6px; padding: 8px; }
+  .ev { padding: 4px 0; border-bottom: 1px dashed var(--border); }
+  .ev:last-child { border: 0; }
+  .ev .k { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; margin-right: 8px; }
+  .ev.narrative { color: var(--text); }
+  .ev.tool { color: var(--accent); }
+  .ev.retry { color: var(--warn); }
+  .ev.start, .ev.done { color: var(--ok); }
+  pre { margin: 0; font-family: var(--mono); font-size: 12px; color: var(--text); white-space: pre-wrap; word-break: break-word; background: var(--panel2); padding: 8px; border-radius: 6px; max-height: 200px; overflow: auto; }
+  .stat { background: var(--panel2); border-radius: 6px; padding: 6px 10px; font-family: var(--mono); font-size: 13px; }
+  .stat .muted { font-family: system-ui, sans-serif; font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .task-list .task { padding: 8px; background: var(--panel2); border-radius: 6px; margin-bottom: 6px; font-size: 12px; cursor: pointer; }
+  .task-list .task:hover { outline: 1px solid var(--accent); }
+  .task-list .task.active { outline: 2px solid var(--accent); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Telecode Session UI</h1>
+  <label>session_id <input type="text" id="sid" placeholder="(blank = auto)" style="width:260px"/></label>
+  <label>namespace <input type="text" id="ns" placeholder="(blank = legacy)" style="width:140px"/></label>
+  <span id="sessionBadge" class="muted"></span>
+  <span class="grow"></span>
+  <button class="ghost icon" id="pullSession" title="Refresh session">↻</button>
+  <button class="ghost icon danger-hover" id="deleteSession" title="Delete session">🗑</button>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>Upload context files</h2>
+    <div id="drop" class="drop">Drop files here or click to pick — they go into the session folder</div>
+    <input type="file" id="picker" multiple style="display:none"/>
+    <div class="files" id="staged"></div>
+    <div class="row"><button id="upload">Upload to session</button><span id="uploadMsg" class="muted"></span></div>
+
+    <h2 style="margin-top:20px;display:flex;align-items:center;gap:6px">
+      <span>Session files</span>
+      <span class="grow"></span>
+      <button class="ghost" id="downloadAll" style="font-size:11px;padding:3px 10px">Download all</button>
+    </h2>
+    <div id="fileList" class="files"><span class="muted">No session yet.</span></div>
+
+    <h2 style="margin-top:20px">Submit task</h2>
+    <div class="row">
+      <label>prompt</label>
+      <textarea id="prompt" placeholder="Follow CLAUDE.md.">Follow CLAUDE.md.</textarea>
+    </div>
+    <div class="row">
+      <label>task type</label>
+      <select id="taskType" style="width:200px; background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font: 13px var(--mono);">
+        <option value="CLAUDE_CODE">CLAUDE_CODE</option>
+        <option value="GEMINI">GEMINI</option>
+      </select>
+      <label style="min-width:auto;margin-left:10px">
+        <input type="checkbox" id="isLocal"/> local mode
+      </label>
+    </div>
+    <div class="row">
+      <label>session idle</label>
+      <input type="number" id="sessTimeout" value="86400" style="width:120px"/><span class="muted">seconds</span>
+    </div>
+    <div class="row">
+      <button id="submit">Submit task</button>
+      <span id="submitMsg" class="muted"></span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Active task</h2>
+    <div id="active"><span class="muted">No task yet. Submit one on the left.</span></div>
+
+    <h2 style="margin-top:20px">Recent tasks</h2>
+    <div id="taskList" class="task-list"></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const base = () => location.origin;
+
+let staged = [];   // [{file, rel}]
+let activeTaskId = null;
+let pollTimer = null;
+
+function badge(text, cls) {
+  return `<span class="pill ${cls}">${text}</span>`;
+}
+
+function fmtTime(s) { if (!s) return ""; return new Date(s).toLocaleTimeString(); }
+
+async function api(path, opts = {}) {
+  const r = await fetch(base() + path, opts);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.error || r.statusText);
+  return body;
+}
+
+function withNs(url) {
+  const n = $("ns").value.trim();
+  if (!n) return url;
+  return url + (url.includes("?") ? "&" : "?") + "namespace=" + encodeURIComponent(n);
+}
+
+$("pullSession").onclick = () => { refreshSession(); refreshTasks(); };
+$("ns").onchange = () => { refreshSession(); };
+
+$("deleteSession").onclick = async () => {
+  const sid = $("sid").value.trim();
+  if (!sid) return;
+  if (!confirm(`Delete session ${sid}?`)) return;
+  try { await api(withNs(`/api/sessions/${encodeURIComponent(sid)}`), { method: "DELETE" }); }
+  catch(e) { alert(e.message); return; }
+  $("sid").value = "";
+  $("sessionBadge").textContent = "deleted";
+};
+
+async function refreshSession() {
+  const sid = $("sid").value.trim();
+  if (!sid) { $("sessionBadge").textContent = ""; refreshFiles(); return; }
+  try {
+    const r = await api(withNs(`/api/sessions/${encodeURIComponent(sid)}`));
+    const s = r.session;
+    const claudeSid = (s.data || {}).last_claude_session_id;
+    const parts = [
+      `tasks=${(s.task_ids || []).length}`,
+      `last_used=${fmtTime(s.last_used_at)}`,
+    ];
+    if (s.namespace) parts.unshift(`ns=${escapeHtml(s.namespace)}`);
+    if (claudeSid) parts.push(`<span class="pill resumed">resumable</span> claude=${claudeSid.slice(0, 8)}…`);
+    $("sessionBadge").innerHTML = parts.join(" · ");
+  } catch (e) {
+    $("sessionBadge").innerHTML = `<span class="pill failed">${e.message}</span>`;
+  }
+  refreshFiles();
+}
+
+const drop = $("drop");
+drop.onclick = () => $("picker").click();
+$("picker").onchange = (e) => addFiles(e.target.files);
+["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", (e) => addFiles(e.dataTransfer.files));
+
+function addFiles(fl) {
+  for (const f of fl) staged.push({ file: f, rel: f.name });
+  renderStaged();
+}
+function renderStaged() {
+  $("staged").innerHTML = staged.map((s, i) =>
+    `<div class="f"><span>${s.rel} <span style="color:var(--muted)">(${s.file.size}b)</span></span>
+     <button onclick="removeStaged(${i})">✕</button></div>`
+  ).join("");
+}
+window.removeStaged = (i) => { staged.splice(i, 1); renderStaged(); };
+
+let lastFiles = [];
+async function refreshFiles() {
+  const sid = $("sid").value.trim();
+  if (!sid) { $("fileList").innerHTML = '<span class="muted">No session yet.</span>'; lastFiles = []; return; }
+  try {
+    const r = await api(withNs(`/api/sessions/${encodeURIComponent(sid)}/files`));
+    lastFiles = r.files;
+    if (!r.files.length) { $("fileList").innerHTML = '<span class="muted">(empty)</span>'; return; }
+    $("fileList").innerHTML = r.files.map(f => {
+      const p = encodeURIComponent(f.path);
+      const dlUrl = base() + withNs(`/api/sessions/${encodeURIComponent(sid)}/files/${p}`);
+      const viewUrl = dlUrl;
+      return `
+        <div class="f">
+          <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${escapeHtml(f.path)} <span style="color:var(--muted)">${f.bytes}b</span>
+          </span>
+          <span>
+            <a href="${viewUrl}" target="_blank" style="color:var(--accent);text-decoration:none;margin-right:10px">view</a>
+            <button class="icon danger-hover ghost" title="Delete" onclick="deleteFile('${escapeHtml(f.path).replace(/'/g, "\\'")}')">✕</button>
+          </span>
+        </div>`;
+    }).join("");
+  } catch (e) { $("fileList").innerHTML = `<span class="muted">${e.message}</span>`; lastFiles = []; }
+}
+
+window.deleteFile = async (path) => {
+  const sid = $("sid").value.trim();
+  if (!sid) return;
+  if (!confirm(`Delete ${path}?`)) return;
+  try {
+    await api(withNs(`/api/sessions/${encodeURIComponent(sid)}/files/${encodeURIComponent(path)}`), { method: "DELETE" });
+    refreshFiles();
+  } catch (e) { alert(e.message); }
+};
+
+$("upload").onclick = async () => {
+  if (!staged.length) { $("uploadMsg").textContent = "no files staged"; return; }
+  let sid = $("sid").value.trim();
+  if (!sid) {
+    try {
+      const body = { session_idle_timeout_seconds: +$("sessTimeout").value };
+      const ns = $("ns").value.trim();
+      if (ns) body.namespace = ns;
+      const r = await api("/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      sid = r.session.session_id;
+      $("sid").value = sid;
+    } catch (e) { $("uploadMsg").textContent = "create failed: " + e.message; return; }
+  }
+  const fd = new FormData();
+  for (const s of staged) { fd.append("files", s.file); }
+  $("uploadMsg").textContent = "uploading...";
+  try {
+    const r = await api(withNs(`/api/sessions/${encodeURIComponent(sid)}/files`), { method: "POST", body: fd });
+    $("uploadMsg").textContent = `✓ uploaded`;
+    staged = []; renderStaged();
+    refreshSession();
+  } catch (e) { $("uploadMsg").textContent = "✗ " + e.message; }
+};
+
+$("submit").onclick = async () => {
+  const sid = $("sid").value.trim() || undefined;
+  const taskType = $("taskType").value.trim();
+  const isLocal = $("isLocal").checked;
+  
+  const params = taskType === "ECHO" ? { text: $("prompt").value } : { prompt: $("prompt").value };
+  if (taskType === "CLAUDE_CODE" || taskType === "GEMINI") {
+    params.is_local = isLocal;
+  }
+
+  const body = {
+    task_type: taskType,
+    params: params,
+    session_idle_timeout_seconds: +$("sessTimeout").value,
+  };
+  if (sid) body.session_id = sid;
+  const taskNs = $("ns").value.trim();
+  if (taskNs) body.session_namespace = taskNs;
+
+  $("submitMsg").textContent = "submitting...";
+  try {
+    const r = await api("/api/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!$("sid").value.trim()) $("sid").value = r.task.session_id;
+    $("submitMsg").textContent = `✓ ${r.task_id}`;
+    watchTask(r.task_id);
+    refreshSession();
+    refreshTasks();
+  } catch (e) { $("submitMsg").textContent = "✗ " + e.message; }
+};
+
+function watchTask(id) {
+  activeTaskId = id;
+  if (pollTimer) clearInterval(pollTimer);
+  const tick = async () => {
+    try {
+      const r = await api(`/api/tasks/${encodeURIComponent(id)}`);
+      renderActive(r);
+      if (["completed", "failed", "cancelled"].includes(r.status)) {
+        clearInterval(pollTimer); pollTimer = null;
+        refreshSession(); refreshTasks();
+      }
+    } catch (e) { }
+  };
+  tick();
+  pollTimer = setInterval(tick, 1000);
+}
+
+function fmtNum(n) { return (n == null) ? "—" : Number(n).toLocaleString(); }
+function fmtCost(n) { return (n == null) ? "—" : "$" + Number(n).toFixed(4); }
+function fmtMs(n) { if (n == null) return "—"; return n < 1000 ? `${n}ms` : `${(n/1000).toFixed(1)}s`; }
+
+function renderResult(r) {
+  if (typeof r === "string") return `<h2 style="margin-top:12px">Result</h2><pre>${escapeHtml(r)}</pre>`;
+  const text = r.result || "";
+  const tok = r.tokens || {};
+  const stats = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-top:6px">
+      <div class="stat"><div class="muted">cost</div><div>${fmtCost(r.cost_usd)}</div></div>
+      <div class="stat"><div class="muted">duration</div><div>${fmtMs(r.duration_ms)}</div></div>
+      <div class="stat"><div class="muted">turns</div><div>${fmtNum(r.num_turns)}</div></div>
+      <div class="stat"><div class="muted">input tok</div><div>${fmtNum(tok.input)}</div></div>
+      <div class="stat"><div class="muted">output tok</div><div>${fmtNum(tok.output)}</div></div>
+    </div>`;
+  const textBlock = text ? `<pre style="margin-top:8px">${escapeHtml(text)}</pre>` : "";
+  return `<h2 style="margin-top:12px">Result</h2>${stats}${textBlock}`;
+}
+
+function renderActive(t) {
+  const pct = Math.round((t.progress || 0) * 100);
+  const evList = (t.metadata && t.metadata.events) || [];
+  const events = evList.slice(-200).map(e => {
+    const k = e.kind || "info";
+    const body = e.text || e.summary || JSON.stringify(e);
+    return `<div class="ev ${k}"><span class="k">${k}</span>${escapeHtml(body)}</div>`;
+  }).join("");
+  const progressMsg = (t.metadata && t.metadata.progress_message) || "";
+  const result = t.result ? renderResult(t.result) : "";
+  const err = t.error ? `<h2 style="margin-top:12px">Error</h2><pre style="color:var(--err)">${escapeHtml(t.error)}</pre>` : "";
+  $("active").innerHTML = `
+    <div class="row">
+      ${badge(t.status, t.status)}
+      <span class="muted">${t.task_id}</span>
+      <span class="grow"></span>
+      <button class="danger" ${["pending","running"].includes(t.status) ? "" : "disabled"} onclick="cancelActive()">cancel</button>
+    </div>
+    <div class="bar"><span style="width:${pct}%"></span></div>
+    <div class="muted">${escapeHtml(progressMsg)} · ${pct}%</div>
+    <div class="events">${events || '<span class="muted">no events</span>'}</div>
+    ${result}${err}
+  `;
+}
+
+window.cancelActive = async () => {
+  if (!activeTaskId) return;
+  await api(`/api/tasks/${encodeURIComponent(activeTaskId)}/cancel`, { method: "POST" });
+};
+
+function escapeHtml(s) { return (s || "").replace(/[&<>]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c])); }
+
+async function refreshTasks() {
+  try {
+    const r = await api("/api/tasks");
+    const all = [].concat(r.running, r.pending, r.completed, r.failed, r.cancelled).slice(0, 40);
+    $("taskList").innerHTML = all.map(t => `
+      <div class="task ${t.task_id === activeTaskId ? 'active' : ''}" onclick="watchTask('${t.task_id}')">
+        ${badge(t.status, t.status)}
+        <span style="font-family:var(--mono)">${t.task_id.slice(0,8)}…</span>
+        <span class="muted">· ${t.task_type} · sid=${(t.session_id || '').slice(0,8)}…</span>
+        <span class="muted"> · ${fmtTime(t.created_at)}</span>
+      </div>
+    `).join("");
+  } catch (e) { }
+}
+
+refreshTasks();
+setInterval(refreshTasks, 5000);
+</script>
+</body>
+</html>
