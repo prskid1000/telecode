@@ -428,7 +428,27 @@
   async function fireSpecialist(id) { if(confirm("Fire Specialist?")) { await api(`/api/v1/specialists/${id}`, {method: "DELETE"}); loadSpecialists(); } }
   
   function editSpecialist(id) { const s = specialists.find(x => x.id === id); document.getElementById("sId").value = s.id; document.getElementById("sName").value = s.name; document.getElementById("sType").value = s.task_type; document.getElementById("sInstr").value = s.instructions; document.getElementById("sLocal").checked = s.is_local; document.getElementById("equipmentList").innerHTML = ""; (s.equipment || []).forEach(e => addEquipmentItem(e.path, e.content)); document.getElementById("specialistModal").style.display = "flex"; }
-  function addEquipmentItem(p="", c="") { const div = document.createElement("div"); div.style.display="flex"; div.style.gap="8px"; div.style.marginBottom="8px"; div.innerHTML = `<input type="text" placeholder="path" class="eq-path" value="${p}" style="flex:1"><textarea placeholder="content" class="eq-content" style="flex:2; height:32px">${c}</textarea><button class="btn" onclick="this.parentElement.remove()">X</button>`; document.getElementById("equipmentList").appendChild(div); }
+  function addEquipmentItem(p="", c="") { 
+    const div = document.createElement("div"); 
+    div.className = "file-item";
+    div.style.flexDirection = "column";
+    div.style.alignItems = "stretch";
+    div.style.gap = "8px";
+    div.style.padding = "12px";
+    div.style.background = "rgba(255,255,255,0.02)";
+    div.style.marginBottom = "8px";
+    div.style.border = "1px solid var(--border)";
+    div.innerHTML = `
+      <div style="display:flex; align-items:center; gap:8px">
+        <i data-lucide="file-code" style="width:14px; color:var(--accent)"></i>
+        <input type="text" placeholder="path/to/file.py" class="eq-path" value="${p}" style="flex:1; padding:4px 8px; font-size:12px">
+        <button class="btn btn-danger" style="padding:4px 8px" onclick="this.parentElement.parentElement.remove()"><i data-lucide="trash-2" style="width:12px"></i></button>
+      </div>
+      <textarea placeholder="File content..." class="eq-content" style="height:80px; font-size:11px; font-family:var(--font-mono); margin-top:4px">${c}</textarea>
+    `; 
+    document.getElementById("equipmentList").appendChild(div);
+    refreshIcons();
+  }
   async function submitSpecialist() { const id = document.getElementById("sId").value; const equipment = Array.from(document.querySelectorAll("#equipmentList > div")).map(div => ({path: div.querySelector(".eq-path").value, content: div.querySelector(".eq-content").value})); const payload = {name: document.getElementById("sName").value, task_type: document.getElementById("sType").value, instructions: document.getElementById("sInstr").value, is_local: document.getElementById("sLocal").checked, equipment}; if (id) await api(`/api/v1/specialists/${id}`, {method: "PATCH", body: payload}); else await api("/api/v1/specialists", {method: "POST", body: payload}); closeModals(); loadSpecialists(); }
   function openTicketModal() { const all = [].concat(...Object.values(board)); document.getElementById("tDepends").innerHTML = '<option value="">No Dependency</option>' + all.map(t => `<option value="${t.id}">After: ${t.title}</option>`).join(""); document.getElementById("ticketModal").style.display = "flex"; }
   async function submitTicket() { await api(`/api/v1/workspaces/${currentWorkspaceId}/tickets`, {method: "POST", body: {title: document.getElementById("tTitle").value, specialist_id: document.getElementById("tAgentSelect").value, prompt: document.getElementById("tPrompt").value, depends_on: document.getElementById("tDepends").value}}); closeModals(); syncRelay(); }

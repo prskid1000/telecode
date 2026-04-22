@@ -47,11 +47,17 @@ llama.cpp + dual-protocol proxy (for local models):
                    -> stream back as Anthropic or OpenAI (per client)
     See `## Proxy pipeline` for the full per-step breakdown.
 
+Workspace OS Orchestrator:
+    - Persistent project domains with isolated file systems.
+    - Professional Kanban state machine (Blocked -> To Do -> In Shift -> Done).
+    - Talent Roster management with persistent Specialist Work Files.
+    - Autonomous relay engine with Relay Brief (task.result) capture.
+    - Web UI served at `/ui` via `proxy/api_team.py`.
+
 Session & Task system (pythonmagic-style):
     - Background task queue for long-running agentic loops.
     - Filesystem-backed sessions with persistent state.
     - Specialized Claude Code task handler with JSON stream parsing.
-    - Web UI at `/ui` for monitoring and management.
 ```
 
 - **Session key:** `{backend}:{name}` -- colon is the separator; do not use colons in names.
