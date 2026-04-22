@@ -215,11 +215,15 @@ async def delete_ticket(request: web.Request):
 async def start_shift(request: web.Request):
     try:
         tid = request.match_info["ticket_id"]
-        shift_id = await _execute_shift_logic(tid)
+        d = {}
+        if request.has_body:
+            try: d = await request.json()
+            except: pass
+        shift_id = await _execute_shift_logic(tid, custom_prompt=d.get("prompt"))
         return web.json_response({"success": True, "shift_id": shift_id})
     except Exception as e: return _error_json(e)
 
-async def _execute_shift_logic(tid):
+async def _execute_shift_logic(tid, custom_prompt=None):
     store = get_team_store()
     ticket = next((t for t in store.get_tickets() if t["id"] == tid), None)
     if not ticket: raise Exception("Ticket not found")
@@ -262,16 +266,46 @@ async def _execute_shift_logic(tid):
             task = get_task_queue().get_task(prev["task_id"])
             if task and task.result: relay = f"\n\nRELAY BRIEF:\n{json.dumps(task.result)}"
 
+    # --- STRATEGIC INITIALIZATION PROTOCOL ---
+    # Determine if specialist needs rule injection (Turn 1) or just the mission (Turn 2+)
+    initialized_key = f"init_{spec['id']}"
+    is_initialized = sess.get("data", {}).get(initialized_key, False)
+    
+    system_ctx = f"ROLE: {spec['name']}\nGOV: {spec['instructions']}{v_ctx}{relay}"
+    mission_ctx = f"GOAL: {ticket['title'].upper()}\n{ticket['prompt']}"
+
+    if custom_prompt:
+        # Priority: Follow-up instruction
+        prompt = custom_prompt
+    elif not is_initialized:
+        # Turn 1: Handshake (Establish Rules)
+        prompt = f"{system_ctx}\n\nI am ready for my assignment. Please acknowledge these directives and I will begin the mission."
+        # Mark as initialized for next time
+        session_store.patch_data(ticket["session_id"], {initialized_key: True})
+    else:
+        # Turn 2+: Mission only
+        prompt = mission_ctx
+
     task_id = get_task_queue().submit_task(
         task_type=spec["task_type"],
-        params={"prompt": f"ROLE: {spec['name']}\nGOV: {spec['instructions']}{v_ctx}{relay}\n\nGOAL: {ticket['prompt']}", "is_local": spec["is_local"]},
+        params={"prompt": prompt, "is_local": spec["is_local"]},
         session_id=ticket["session_id"],
         task_timeout_seconds=int(gov.get("task_timeout")) if gov.get("task_timeout") else None,
         absolute_ttl_seconds=int(gov.get("absolute_ttl")) if gov.get("absolute_ttl") else None,
         session_namespace=gov.get("namespace"),
-        metadata={"ticket_id": tid, "specialist_name": spec["name"], "specialist_avatar": spec["avatar"]}
+        metadata={
+            "ticket_id": tid, 
+            "ticket_title": ticket["title"], 
+            "specialist_name": spec["name"], 
+            "specialist_avatar": spec["avatar"],
+            "is_handshake": not is_initialized
+        }
     )
-    store.update_ticket(tid, status="inprogress", task_id=task_id)
+    task_ids = ticket.get("task_ids") or []
+    if not isinstance(task_ids, list): task_ids = []
+    task_ids.append(task_id)
+
+    store.update_ticket(tid, status="inprogress", task_id=task_id, task_ids=task_ids)
     store.add_event(ticket["session_id"], "shift_started", f"{spec['name']} started shift on '{ticket['title']}'", {"task_id": task_id})
     return task_id
 
@@ -299,6 +333,12 @@ async def sync_relay(request: web.Request):
             if t["status"] == "inprogress" and t["task_id"]:
                 task = queue.get_task(t["task_id"])
                 if task and task.status.value in ("completed", "failed"): 
+                    # --- AUTO-HANDSHAKE ENGINE ---
+                    # If it was a handshake and it finished successfully, immediately trigger the real mission.
+                    if task.metadata.get("is_handshake") and task.status.value == "completed":
+                        await _execute_shift_logic(t["id"])
+                        continue # Keep ticket as "inprogress" but with the new mission task_id
+
                     new_status = "done" if task.status.value == "completed" else "failed"
                     store.update_ticket(t["id"], status=new_status)
                     store.add_event(t["session_id"], "shift_ended", f"Task '{t['title']}' marked as {new_status.upper()}", {"task_id": t["task_id"]})
