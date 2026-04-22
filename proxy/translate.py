@@ -849,7 +849,15 @@ class AnthropicStreamState:
     _message_id: str = ""
     _message_started: bool = False
     _stop_reason: str = "end_turn"
-    _usage: dict[str, int] = field(default_factory=lambda: {"input_tokens": 0, "output_tokens": 0})
+    _usage: dict[str, int] = field(default_factory=lambda: {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "thinking_tokens": 0,
+        "audio_tokens": 0
+    })
+    _extra_meta: dict[str, Any] = field(default_factory=dict)
 
     # Content block bookkeeping
     _next_index: int = 0
@@ -879,7 +887,14 @@ class AnthropicStreamState:
                 "content": [],
                 "stop_reason": None,
                 "stop_sequence": None,
-                "usage": {"input_tokens": 0, "output_tokens": 0},
+                "usage": {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                    "thinking_tokens": 0,
+                    "audio_tokens": 0
+                },
             },
         }
         return _sse_event("message_start", msg)
@@ -939,13 +954,33 @@ class AnthropicStreamState:
         if not self._message_started:
             out += self.start_message()
 
+        # Always capture usage if present in any chunk
+        usage = chunk.get("usage")
+        if usage:
+            prompt_total = int(usage.get("prompt_tokens", 0) or 0)
+            completion_total = int(usage.get("completion_tokens", 0) or 0)
+
+            # OpenAI/llama.cpp breakdown
+            pd = usage.get("prompt_tokens_details") or {}
+            cd = usage.get("completion_tokens_details") or {}
+            cached = int(pd.get("cached_tokens", 0) or 0)
+            reasoning = int(cd.get("reasoning_tokens", 0) or 0)
+            audio = int(pd.get("audio_tokens", 0) or 0) + int(cd.get("audio_tokens", 0) or 0)
+
+            self._usage["input_tokens"] = prompt_total - cached
+            self._usage["output_tokens"] = completion_total
+            self._usage["cache_read_input_tokens"] = cached
+            self._usage["cache_creation_input_tokens"] = 0
+            self._usage["thinking_tokens"] = reasoning
+            self._usage["audio_tokens"] = audio
+
+        # Capture all other non-OpenAI metadata from llama.cpp (timings, id_slot, etc)
+        for k, v in chunk.items():
+            if k not in ["id", "object", "created", "model", "choices", "usage"]:
+                self._extra_meta[k] = v
+
         choices = chunk.get("choices", [])
         if not choices:
-            # Usage-only final chunk
-            usage = chunk.get("usage")
-            if usage:
-                self._usage["input_tokens"] = int(usage.get("prompt_tokens", 0) or 0)
-                self._usage["output_tokens"] = int(usage.get("completion_tokens", 0) or 0)
             return bytes(out)
 
         choice = choices[0]
@@ -1019,18 +1054,23 @@ class AnthropicStreamState:
 
             self._stop_reason = _finish_reason_to_anthropic(finish)
 
-            # message_delta with stop info + usage. Both input_tokens and
-            # output_tokens MUST be present — claude-cli reads input_tokens
-            # to compute the /context "current usage", and a missing field
-            # surfaces as 0/200k (looks like the entire context is empty).
-            out += _sse_event("message_delta", {
+            # message_delta with stop info + usage + extra metadata.
+            delta_payload: dict[str, Any] = {
                 "type": "message_delta",
                 "delta": {"stop_reason": self._stop_reason, "stop_sequence": None},
                 "usage": {
                     "input_tokens":  self._usage["input_tokens"],
                     "output_tokens": self._usage["output_tokens"],
+                    "cache_read_input_tokens": self._usage["cache_read_input_tokens"],
+                    "cache_creation_input_tokens": self._usage["cache_creation_input_tokens"],
+                    "thinking_tokens": self._usage["thinking_tokens"],
+                    "audio_tokens": self._usage["audio_tokens"],
                 },
-            })
+            }
+            # Spread timings, id_slot, generation_settings etc. into the payload
+            delta_payload.update(self._extra_meta)
+            
+            out += _sse_event("message_delta", delta_payload)
             out += _sse_event("message_stop", {"type": "message_stop"})
 
         return bytes(out)
@@ -1171,7 +1211,16 @@ def openai_response_to_anthropic(
         content_blocks.append({"type": "text", "text": ""})
 
     usage = body.get("usage") or {}
-    return {
+    prompt_total = int(usage.get("prompt_tokens", 0) or 0)
+    completion_total = int(usage.get("completion_tokens", 0) or 0)
+
+    pd = usage.get("prompt_tokens_details") or {}
+    cd = usage.get("completion_tokens_details") or {}
+    cached = int(pd.get("cached_tokens", 0) or 0)
+    reasoning = int(cd.get("reasoning_tokens", 0) or 0)
+    audio = int(pd.get("audio_tokens", 0) or 0) + int(cd.get("audio_tokens", 0) or 0)
+
+    out = {
         "id": body.get("id") or _gen_id("msg"),
         "type": "message",
         "role": "assistant",
@@ -1180,10 +1229,19 @@ def openai_response_to_anthropic(
         "stop_reason": _finish_reason_to_anthropic(choice.get("finish_reason") or "stop"),
         "stop_sequence": None,
         "usage": {
-            "input_tokens": int(usage.get("prompt_tokens", 0) or 0),
-            "output_tokens": int(usage.get("completion_tokens", 0) or 0),
+            "input_tokens": prompt_total - cached,
+            "output_tokens": completion_total,
+            "cache_read_input_tokens": cached,
+            "cache_creation_input_tokens": 0,
+            "thinking_tokens": reasoning,
+            "audio_tokens": audio,
         },
     }
+    # Capture all other non-OpenAI metadata from llama.cpp (timings, id_slot, etc)
+    for k, v in body.items():
+        if k not in ["id", "choices", "usage", "model", "object", "created"]:
+            out[k] = v
+    return out
 
 
 # ── OpenAI response → Anthropic (count_tokens) ───────────────────────────

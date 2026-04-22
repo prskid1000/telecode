@@ -1449,7 +1449,49 @@ async def handle_count_tokens(request: web.Request) -> web.Response:
 
     messages = internal.get("messages", [])
     count = await toks.count_tokens(messages)
-    return web.json_response({"input_tokens": count})
+
+    if inbound_protocol == "openai":
+        return web.json_response({
+            "object": "list",
+            "data": [{"object": "token_count", "token_count": count}],
+            "model": active_model,
+            "usage": {
+                "prompt_tokens": count,
+                "completion_tokens": 0,
+                "total_tokens": count,
+                "prompt_tokens_details": {
+                    "cached_tokens": 0,
+                    "audio_tokens": 0
+                },
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0
+                }
+            }
+        })
+    else:
+        return web.json_response({
+            "input_tokens": count,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "thinking_tokens": 0,
+            "audio_tokens": 0,
+            "id_slot": 0,
+            "generation_settings": {},
+            "timings": {
+                "prompt_n": count,
+                "prompt_ms": 0,
+                "prompt_per_token_ms": 0,
+                "prompt_per_second": 0,
+                "predicted_n": 0,
+                "predicted_ms": 0,
+                "predicted_per_token_ms": 0,
+                "predicted_per_second": 0
+            }
+        })
 
 
 def _is_anthropic_request(request: web.Request) -> bool:
