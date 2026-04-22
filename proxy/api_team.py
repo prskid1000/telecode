@@ -154,7 +154,18 @@ async def get_workspace_history(request: web.Request):
 
 async def list_tickets(request: web.Request):
     try:
-        tickets = [t for t in get_team_store().get_tickets() if t["session_id"] == request.match_info["workspace_id"]]
+        store = get_team_store()
+        queue = get_task_queue()
+        tickets = [t for t in store.get_tickets() if t["session_id"] == request.match_info["workspace_id"]]
+        
+        # Inject live progress/metadata for active shifts
+        for t in tickets:
+            if t["status"] == "inprogress" and t.get("task_id"):
+                task = queue.get_task(t["task_id"])
+                if task:
+                    t["progress"] = task.progress
+                    t["progress_message"] = task.metadata.get("progress_message")
+
         return web.json_response({"success": True, "board": {s: [t for t in tickets if t["status"] == s] for s in ["blocked", "todo", "inprogress", "done", "failed"]}})
     except Exception as e: return _error_json(e)
 
@@ -217,15 +228,20 @@ async def _execute_shift_logic(tid):
     spec = {a["id"]: a for a in store.get_agents()}.get(ticket["agent_id"])
     if not spec: raise Exception("Specialist not found")
     
-    from process import get_supervisor
-    work_dir = (await get_supervisor()).get_session_folder(ticket["session_id"])
+    sess = session_store.get(ticket["session_id"])
+    gov = sess.get("data") or {}
+    namespace = sess.get("namespace")
+
+    from services.session.session_store import _session_dir
+    work_dir = _session_dir(ticket["session_id"], namespace=namespace)
 
     # Deploy Specialist Vault (Personal persistent files)
     talent_vault = TALENT_DIR / spec["id"]
     if talent_vault.exists():
         for item in talent_vault.iterdir():
             if item.is_file():
-                shutil.copy2(item, Path(work_dir) / item.name)
+                try: shutil.copy2(item, Path(work_dir) / item.name)
+                except Exception: pass
 
     # Deploy Work Files (Manual path/content pairs - if any still exist in profile)
     if spec.get("equipment"):
@@ -236,8 +252,6 @@ async def _execute_shift_logic(tid):
                 p.write_text(item["content"], encoding="utf-8")
             except Exception: pass
 
-    sess = session_store.get(ticket["session_id"])
-    gov = sess.get("data") or {}
     vault = (await fetch_files(ticket["session_id"]))
     v_ctx = "\n\nVAULT:\n" + "\n".join([f"- {f['path']}" for f in vault if f['path'].startswith(".vault/")])
     
