@@ -77,7 +77,7 @@ def claude_code_task(
     resume_id = (meta.get("data") or {}).get("last_claude_session_id")
 
     cmd = [
-        "claude", "-p", prompt,
+        "claude", "-p", json.dumps(prompt),
         "--dangerously-skip-permissions",
         "--output-format", "stream-json",
         "--verbose",
@@ -135,6 +135,7 @@ def claude_code_task(
     tool_calls: List[str] = []
     final: Optional[Dict[str, Any]] = None
     captured_claude_sid: Optional[str] = None
+    accumulated_text: List[str] = []
 
     try:
         with log_path.open("w", encoding="utf-8") as log_fh:
@@ -151,6 +152,8 @@ def claude_code_task(
                 try:
                     evt = json.loads(line)
                 except json.JSONDecodeError:
+                    if line.strip():
+                        accumulated_text.append(line.strip())
                     continue
 
                 _handle_event(evt, tool_calls)
@@ -169,7 +172,7 @@ def claude_code_task(
             proc.kill()
 
     stderr = (proc.stderr.read() if proc.stderr else "") or ""
-    if proc.returncode != 0 and final is None:
+    if proc.returncode != 0 and final is None and not accumulated_text:
         raise RuntimeError(f"claude exited with code {proc.returncode}: {stderr.strip()[:500]}")
 
     claude_session_id = captured_claude_sid or (final or {}).get("session_id")
@@ -181,6 +184,12 @@ def claude_code_task(
     total_input = (usage.get("input_tokens") or 0) + cache_reads + cache_writes
 
     update_progress(1.0, "done")
+    
+    # Narrative events for raw lines if no JSON narrative found
+    if not final and accumulated_text:
+        for txt in accumulated_text:
+            append_event({"kind": "narrative", "text": txt})
+
     append_event({
         "kind": "done",
         "tool_count": len(tool_calls),
@@ -193,16 +202,16 @@ def claude_code_task(
     })
 
     return {
-        "result": fin.get("result", ""),
+        "result": fin.get("result") or "\n".join(accumulated_text),
         "session_id": sid,
         "claude_session_id": claude_session_id,
-        "cost_usd": fin.get("total_cost_usd"),
-        "duration_ms": fin.get("duration_ms"),
-        "duration_api_ms": fin.get("duration_api_ms"),
-        "num_turns": fin.get("num_turns"),
+        "cost_usd": fin.get("total_cost_usd") or 0,
+        "duration_ms": fin.get("duration_ms") or 0,
+        "duration_api_ms": fin.get("duration_api_ms") or 0,
+        "num_turns": fin.get("num_turns") or 0,
         "tokens": {
-            "input": usage.get("input_tokens"),
-            "output": usage.get("output_tokens"),
+            "input": usage.get("input_tokens") or 0,
+            "output": usage.get("output_tokens") or 0,
             "cache_read": cache_reads,
             "cache_write": cache_writes,
             "total_input_incl_cache": total_input,

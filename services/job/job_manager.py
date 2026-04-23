@@ -51,6 +51,7 @@ class JobManager:
             "workspace_id": data.get("workspace_id"),
             "actions": data.get("actions", []),
             "tasks": data.get("tasks", []),
+            "task_description": data.get("task_description", ""),
             "created_at": now,
             "updated_at": now
         }
@@ -72,7 +73,7 @@ class JobManager:
         if not job:
             return None
         
-        for key in ["title", "actions", "tasks"]:
+        for key in ["title", "actions", "tasks", "task_description"]:
             if key in data:
                 job[key] = data[key]
         

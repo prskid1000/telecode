@@ -671,8 +671,16 @@
   }
 
   async function switchTask(tid, sid) {
+    const area = document.getElementById('execution-area');
+    
+    // If clicking the same task that's already active, toggle visibility (minimize/expand)
+    if (state.executionTaskId === tid) {
+      area.style.display = area.style.display === 'none' ? 'block' : 'none';
+      return;
+    }
+
     state.executionTaskId = tid;
-    document.getElementById('execution-area').style.display = 'block';
+    area.style.display = 'block';
     if (state.executionTimer) clearInterval(state.executionTimer);
     
     const t = await api(`/api/tasks/${encodeURIComponent(tid)}`);
@@ -1006,6 +1014,18 @@
     const isLocal = document.getElementById('run-local').checked;
     closeModal();
     
+    // Auto-save if we are currently viewing this job
+    if (state.activeType === 'job' && state.activeId === jobId) {
+      const title = document.getElementById('job-title').value;
+      const task_description = document.getElementById('job-prompt').value;
+      await api(`/api/jobs/${jobId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, task_description })
+      });
+      await refreshJobs();
+    }
+    
     const execArea = document.getElementById('execution-area');
     execArea.style.display = 'block';
     execArea.innerHTML = '<div class="muted">Initializing environment...</div>';
@@ -1117,6 +1137,8 @@
       if (typeof r === 'string') agentMessage = r;
       else if (r.result && typeof r.result === 'string') agentMessage = r.result;
       else if (r.result && r.result.result) agentMessage = r.result.result;
+      
+      if (!agentMessage && t.status === 'completed') agentMessage = "Task finished without a final text response.";
 
       const stats = `
         <div class="stats-grid" style="margin-top:10px;">
