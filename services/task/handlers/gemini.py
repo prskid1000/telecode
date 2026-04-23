@@ -104,7 +104,7 @@ def gemini_task(
     resume_id = (meta.get("data") or {}).get("last_gemini_session_id")
 
     cmd = [
-        "gemini", "-p", prompt,
+        "gemini", "-p", json.dumps(prompt),
         "--yolo",
         "--output-format", "stream-json",
     ]
@@ -227,9 +227,9 @@ def gemini_task(
         "total": stats.get("total_tokens") or 0,
     }
     
-    cost_usd = fin.get("total_cost_usd") or stats.get("cost_usd")
-    duration_ms = stats.get("duration_ms") or fin.get("duration_ms")
-    num_turns = fin.get("num_turns") or stats.get("num_turns") or num_assistant_messages
+    cost_usd = fin.get("total_cost_usd") or stats.get("cost_usd") or 0
+    duration_ms = stats.get("duration_ms") or fin.get("duration_ms") or 0
+    num_turns = fin.get("num_turns") or stats.get("num_turns") or num_assistant_messages or 0
 
     update_progress(1.0, "done")
     append_event({
@@ -247,6 +247,7 @@ def gemini_task(
         "gemini_session_id": gemini_session_id,
         "cost_usd": cost_usd,
         "duration_ms": duration_ms,
+        "duration_api_ms": stats.get("duration_api_ms") or 0,
         "num_turns": num_turns,
         "tokens": tokens,
         "tool_calls": tool_calls,
