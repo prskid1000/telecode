@@ -198,6 +198,29 @@ def patch_data(session_id: str, patch: Dict[str, Any], namespace: Optional[str] 
         _atomic_write_json(_session_json_path(session_id, namespace), meta)
         return meta
 
+def update_session(
+    sid: str,
+    namespace: Optional[str] = None,
+    session_idle_timeout_seconds: Optional[int] = None,
+    absolute_ttl_seconds: Optional[int] = None,
+    data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    with _lock_for(sid, namespace):
+        meta = _read_session(sid, namespace)
+        if not meta:
+            raise FileNotFoundError(f"Session {sid} not found")
+        
+        if session_idle_timeout_seconds is not None:
+            meta["session_idle_timeout_seconds"] = int(session_idle_timeout_seconds)
+        if absolute_ttl_seconds is not None:
+            meta["absolute_ttl_seconds"] = int(absolute_ttl_seconds)
+        if data is not None:
+            meta.setdefault("data", {}).update(data)
+            
+        meta["last_used_at"] = _now_iso()
+        _atomic_write_json(_session_json_path(sid, namespace), meta)
+        return meta
+
 def append_task_id(session_id: str, task_id: str, namespace: Optional[str] = None) -> None:
     with _lock_for(session_id, namespace):
         meta = _read_session(session_id, namespace)

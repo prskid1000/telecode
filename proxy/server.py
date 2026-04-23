@@ -30,6 +30,8 @@ from proxy import translate as xlate
 from proxy import tokenizer as toks
 from proxy import api_sessions
 from proxy import api_tasks
+from proxy import api_agents
+from proxy import api_jobs
 from proxy.tool_registry import (
     proxy_system_instruction,
     strip_all_reminders,
@@ -1433,7 +1435,8 @@ async def handle_count_tokens(request: web.Request) -> web.Response:
     except json.JSONDecodeError:
         return web.json_response({"error": "Invalid JSON"}, status=400)
 
-    prep = await _prepare_internal_body(body, request, "anthropic")
+    inbound_protocol = "anthropic" if _is_anthropic_request(request) else "openai"
+    prep = await _prepare_internal_body(body, request, inbound_protocol)
     internal = prep["body"]
     active_model = prep["active_model"]
 
@@ -1573,7 +1576,16 @@ async def handle_health(request: web.Request) -> web.Response:
 
 
 async def handle_ui(request: web.Request) -> web.FileResponse:
-    """Serve the session management UI."""
+    """Serve the new Telecode UI."""
+    path = Path(__file__).parent / "static" / "telecode.html"
+    if not path.exists():
+        # Fallback to legacy if new UI doesn't exist yet
+        path = Path(__file__).parent / "static" / "index.html"
+    return web.FileResponse(path)
+
+
+async def handle_legacy_ui(request: web.Request) -> web.FileResponse:
+    """Serve the legacy session management UI."""
     path = Path(__file__).parent / "static" / "index.html"
     return web.FileResponse(path)
 
@@ -1631,6 +1643,10 @@ def create_app() -> web.Application:
     # Session and Task Management (pythonmagic-style)
     api_sessions.register_routes(app)
     api_tasks.register_routes(app)
+    api_agents.register_routes(app)
+    api_jobs.register_routes(app)
+
+    app.router.add_get("/ui/legacy", handle_legacy_ui)
 
     return app
 

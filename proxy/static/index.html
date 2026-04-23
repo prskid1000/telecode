@@ -13,7 +13,8 @@
   html, body { height: 100%; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif; display: flex; flex-direction: column; }
   header { padding: 14px 20px; background: var(--panel); border-bottom: 1px solid var(--border); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; flex: 0 0 auto; }
-  header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+  .grow { flex-grow: 1; }
+  h1 { margin: 0; font-size: 16px; font-weight: 600; flex-shrink: 0; }
   header label { color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: center; }
   input[type=text], input[type=number], textarea { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font: 13px var(--mono); }
   textarea { width: 100%; min-height: 90px; resize: vertical; }
@@ -29,7 +30,6 @@
   .panel h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
   .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
   .row label { color: var(--muted); font-size: 12px; min-width: 82px; }
-  .grow { flex: 1 1 auto; }
   .drop { border: 2px dashed var(--border); border-radius: 8px; padding: 18px; text-align: center; color: var(--muted); cursor: pointer; transition: border-color 0.15s; }
   .drop.over { border-color: var(--accent); color: var(--accent); }
   .files { margin-top: 10px; font-family: var(--mono); font-size: 12px; }
@@ -63,11 +63,12 @@
 <body>
 
 <header>
-  <h1>Telecode Session UI</h1>
+  <h1>Telecode</h1>
+  <button class="ghost" onclick="window.location.href='/ui'">Team Mode</button>
+  <div class="grow"></div>
   <label>session_id <input type="text" id="sid" placeholder="(blank = auto)" style="width:260px"/></label>
   <label>namespace <input type="text" id="ns" placeholder="(blank = legacy)" style="width:140px"/></label>
   <span id="sessionBadge" class="muted"></span>
-  <span class="grow"></span>
   <button class="ghost icon" id="pullSession" title="Refresh session">↻</button>
   <button class="ghost icon danger-hover" id="deleteSession" title="Delete session">🗑</button>
 </header>
@@ -128,6 +129,7 @@ const base = () => location.origin;
 let staged = [];   // [{file, rel}]
 let activeTaskId = null;
 let pollTimer = null;
+let lastFiles = [];
 
 function badge(text, cls) {
   return `<span class="pill ${cls}">${text}</span>`;
@@ -159,6 +161,24 @@ $("deleteSession").onclick = async () => {
   catch(e) { alert(e.message); return; }
   $("sid").value = "";
   $("sessionBadge").textContent = "deleted";
+};
+
+$("downloadAll").onclick = async () => {
+  if (!lastFiles || !lastFiles.length) return alert("No files to download");
+  const sid = $("sid").value.trim();
+  if (!sid) return;
+
+  for (const f of lastFiles) {
+    const p = encodeURIComponent(f.path);
+    const dlUrl = base() + withNs(`/api/sessions/${encodeURIComponent(sid)}/files/${p}`);
+    const a = document.createElement("a");
+    a.href = dlUrl;
+    a.download = f.path.split("/").pop();
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    await new Promise(r => setTimeout(r, 150));
+  }
 };
 
 async function refreshSession() {
@@ -200,7 +220,6 @@ function renderStaged() {
 }
 window.removeStaged = (i) => { staged.splice(i, 1); renderStaged(); };
 
-let lastFiles = [];
 async function refreshFiles() {
   const sid = $("sid").value.trim();
   if (!sid) { $("fileList").innerHTML = '<span class="muted">No session yet.</span>'; lastFiles = []; return; }
