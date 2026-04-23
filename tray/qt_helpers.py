@@ -21,17 +21,38 @@ def read_settings() -> dict:
     try:
         with open(settings_path(), encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except Exception as exc:
+        log.error("failed to read settings from %s: %s", settings_path(), exc)
         return {}
 
 
 def get_path(d: dict, dotted: str, default=None):
     node: Any = d
-    for k in dotted.split("."):
+    for k in _split_path(dotted):
         if not isinstance(node, dict) or k not in node:
             return default
         node = node[k]
     return node
+
+
+def _split_path(path: str) -> list[str]:
+    """Split dotpath by '.' but allow escaping dots with '\\.'."""
+    parts = []
+    current = []
+    escaped = False
+    for char in path:
+        if escaped:
+            current.append(char)
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == ".":
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+    parts.append("".join(current))
+    return parts
 
 
 def _set_nested(root: dict, path: str, value: Any) -> None:
@@ -39,7 +60,7 @@ def _set_nested(root: dict, path: str, value: Any) -> None:
     created on demand. Unlike the previous version, every branch that can
     lose the write logs a warning — silent no-ops are how the voxtype
     hotkey-rebind bug hid for so long."""
-    keys = path.split(".")
+    keys = _split_path(path)
     node = root
     for i, k in enumerate(keys[:-1]):
         if isinstance(node, list):
@@ -99,7 +120,7 @@ def remove_path(path: str) -> None:
     import config as app_config
     sp = settings_path()
     raw = app_config.raw()
-    keys = path.split(".")
+    keys = _split_path(path)
     node: Any = raw
     for k in keys[:-1]:
         if not isinstance(node, dict) or k not in node:
