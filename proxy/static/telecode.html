@@ -21,22 +21,25 @@
   /* Sidebar */
   #sidebar {
     width: var(--sidebar-w); background: var(--panel); border-right: 1px solid var(--border);
-    display: flex; flex-direction: column; flex-shrink: 0;
+    display: flex; flex-direction: column; flex-shrink: 0; height: 100vh;
   }
-  .sidebar-header { padding: 14px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .sidebar-header { padding: 14px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
   .sidebar-header h1 { margin: 0; font-size: 16px; font-weight: 600; color: var(--text); font-family: inherit; }
   
-  .sidebar-section { padding: 14px; border-bottom: 1px solid var(--border); }
-  .sidebar-title { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; font-family: inherit; }
+  .sidebar-section { padding: 14px; border-bottom: 1px solid var(--border); flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .sidebar-title { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; font-family: inherit; flex-shrink: 0; }
+  
+  .nav-list, #ws-list, #agent-list, #job-list { flex: 1; overflow-y: auto; padding-right: 4px; min-height: 0; }
   
   .nav-item {
     padding: 8px 12px; cursor: pointer; border-radius: 6px; font-size: 12px;
-    transition: all 0.15s; color: var(--text); display: flex; align-items: center; gap: 8px;
-    margin-bottom: 6px; background: var(--panel2); font-family: inherit;
+    transition: all 0.15s; color: var(--text); display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    margin-bottom: 6px; background: var(--panel2); font-family: inherit; border: 1px solid transparent;
   }
-  .nav-item:hover { outline: 1px solid var(--accent); }
-  .nav-item.active { outline: 2px solid var(--accent); }
-  .nav-item .uid { font-size: 11px; color: var(--muted); font-family: var(--mono); margin-left: auto; }
+  .nav-item:hover { border-color: var(--accent); }
+  .nav-item.active { border-color: var(--accent); background: var(--accent-dark); }
+  .nav-item .uid { font-size: 10px; color: var(--muted); font-family: var(--mono); margin-left: auto; flex-shrink: 0; }
+  .nav-item-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-grow: 1; }
 
   /* Main Content */
   #main { flex-grow: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); padding: 14px; }
@@ -349,6 +352,7 @@
              onclick="selectWorkspace('${ws.session_id}')">
           <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(name)}</span>
           <span class="uid">${ws.session_id.slice(0, 4)}</span>
+          <button class="icon small danger ghost sidebar-del" onclick="event.stopPropagation(); deleteWorkspacePrompt('${ws.session_id}')" title="Delete Workspace">${SVGS.delete}</button>
         </div>
       `;
     }).join('') || '<div class="muted" style="padding:8px;">No workspaces</div>';
@@ -358,6 +362,7 @@
       <div class="nav-item ${state.activeType === 'agent' && state.activeId === a.id ? 'active' : ''}" 
            onclick="selectAgent('${a.id}')">
         <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(a.name)}</span>
+        <button class="icon small danger ghost sidebar-del" onclick="event.stopPropagation(); deleteAgentPrompt('${a.id}')" title="Delete Agent">${SVGS.delete}</button>
       </div>
     `).join('') || '<div class="muted" style="padding:8px;">No agents</div>';
 
@@ -366,6 +371,7 @@
       <div class="nav-item ${state.activeType === 'job' && state.activeId === j.id ? 'active' : ''}" 
            onclick="selectJob('${j.id}')">
         <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(j.title)}</span>
+        <button class="icon small danger ghost sidebar-del" onclick="event.stopPropagation(); deleteJobPrompt('${j.id}')" title="Delete Job">${SVGS.delete}</button>
       </div>
     `).join('') || '<div class="muted" style="padding:8px;">No jobs</div>';
   }
