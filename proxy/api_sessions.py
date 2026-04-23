@@ -96,6 +96,32 @@ async def list_files(request: web.Request) -> web.Response:
         request_log.finish(rid, 400, str(exc))
         return web.json_response({"success": False, "error": str(exc)}, status=400)
 
+async def update_session(request: web.Request) -> web.Response:
+    rid = _log_req(request)
+    session_id = request.match_info["session_id"]
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+
+    namespace = request.query.get("namespace")
+    try:
+        meta = session_store.update_session(
+            sid=session_id,
+            namespace=namespace,
+            session_idle_timeout_seconds=data.get("session_idle_timeout_seconds"),
+            absolute_ttl_seconds=data.get("absolute_ttl_seconds"),
+            data=data.get("data")
+        )
+        request_log.finish(rid, 200)
+        return web.json_response({"success": True, "session": meta})
+    except FileNotFoundError as exc:
+        request_log.finish(rid, 404, str(exc))
+        return web.json_response({"success": False, "error": str(exc)}, status=404)
+    except Exception as exc:
+        request_log.finish(rid, 400, str(exc))
+        return web.json_response({"success": False, "error": str(exc)}, status=400)
+
 async def upload_files(request: web.Request) -> web.Response:
     rid = _log_req(request)
     session_id = request.match_info["session_id"]
@@ -159,6 +185,7 @@ def register_routes(app: web.Application):
     app.router.add_get("/api/sessions", list_sessions)
     app.router.add_post("/api/sessions", create_session)
     app.router.add_get("/api/sessions/{session_id}", get_session)
+    app.router.add_put("/api/sessions/{session_id}", update_session)
     app.router.add_delete("/api/sessions/{session_id}", delete_session)
     
     app.router.add_get("/api/sessions/{session_id}/files", list_files)
