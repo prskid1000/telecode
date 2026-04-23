@@ -51,7 +51,8 @@ Session & Task system (pythonmagic-style):
     - Background task queue for long-running agentic loops.
     - Filesystem-backed sessions with persistent state.
     - Specialized Claude Code task handler with JSON stream parsing.
-    - Web UI at `/ui` for monitoring and management.
+    - Web UI: **Team Mode** (`/ui`) and **Task Mode** (`/ui/legacy`).
+    - Themed browser titles ("Telecode-Team"/"Telecode-Task") and icons per mode.
 ```
 
 - **Session key:** `{backend}:{name}` -- colon is the separator; do not use colons in names.

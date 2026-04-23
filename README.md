@@ -88,7 +88,10 @@ Telecode now includes a fully-featured, stateful **Session and Task Management**
 
 - **Stateful Workspaces**: Isolated filesystem directories for each session, with persistent metadata and `data` carrying state across multiple tasks/turns.
 - **Background Task Queue**: Submit jobs (like `CLAUDE_CODE`) that run asynchronously. The model can poll for status and rich tool-use events.
-- **Web Interface**: A dedicated UI is available at `http://localhost:1235/ui` for monitoring tasks and managing files.
+- **Web Interface**: Dual-mode UI for monitoring tasks and managing files:
+  - **Team Mode** (`/ui`): Advanced agentic workspace management (workspaces, agents, jobs).
+  - **Task Mode** (`/ui/legacy`): Simplified session-based task submission and monitoring.
+  - Browser titles ("Telecode-Team" / "Telecode-Task") and icons match the active mode for easy navigation.
 - **Configurable**: Enable via `proxy.enable_session_tools: true` in `settings.json`. Once enabled, tools like `session_create`, `task_submit`, and `session_upload_file` are automatically injected into supported client profiles (like `claude-code`).
 
 ### System tray UI + settings window
