@@ -35,7 +35,7 @@ HELLO_WORLD_AUDIO = base64.b64decode(
 )
 
 
-async def transcribe(audio_bytes: bytes, filename: str = "voice.ogg") -> str | None:
+async def transcribe(audio_bytes: bytes, filename: str = "voice.ogg", timeout: float = 30.0) -> str | None:
     url = f"{config.stt_base_url().rstrip('/')}/audio/transcriptions"
     ext = (filename or "").lower()
     ct = "audio/ogg"
@@ -48,7 +48,7 @@ async def transcribe(audio_bytes: bytes, filename: str = "voice.ogg") -> str | N
         form.add_field("file", io.BytesIO(audio_bytes), filename=filename, content_type=ct)
         form.add_field("model", config.stt_model())
         async with aiohttp.ClientSession() as s:
-            async with s.post(url, data=form, timeout=aiohttp.ClientTimeout(total=30)) as r:
+            async with s.post(url, data=form, timeout=aiohttp.ClientTimeout(total=timeout)) as r:
                 if r.status != 200:
                     body = (await r.text())[:200]
                     log.warning("STT HTTP %s: %s", r.status, body)

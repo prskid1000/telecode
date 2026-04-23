@@ -15,7 +15,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
     QScrollArea, QGridLayout, QComboBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QLineEdit,
+    QHeaderView, QLineEdit, QSpinBox,
 )
 
 from tray.qt_widgets import Toggle, NumberEditor, row_label
@@ -458,6 +458,10 @@ def _proxy(window) -> QWidget:
     body.addWidget(_toggle_row("proxy.enabled", "Enabled",
                                 "Serves /v1/messages and /v1/chat/completions. Port change needs restart."))
 
+    body.addWidget(_section_header("Network"))
+    body.addWidget(_line_row("proxy.host", "Host", "127.0.0.1"))
+    body.addWidget(_number_row("proxy.port", "Port", 1024, 65535, 1, 0))
+
     # Protocols — multi-checkbox
     body.addWidget(_section_header("Protocols"))
     proto_row = QWidget()
@@ -522,37 +526,79 @@ def _proxy(window) -> QWidget:
 # ══════════════════════════════════════════════════════════════════════
 
 def _mcp(window) -> QWidget:
+    import pkgutil
+    import os
+    import mcp_server.tools as _tools_pkg
+    from proxy.runtime_state import set_tool, is_mcp_tool_enabled
+
     scroll, _, layout = _page()
     card, body = _card("MCP Server")
     body.addWidget(_toggle_row("mcp_server.enabled", "Enabled",
                                 "Streamable HTTP MCP server for external clients. Restart required."))
+
+    body.addWidget(_section_header("Network"))
+    body.addWidget(_line_row("mcp_server.host", "Host", "127.0.0.1"))
+    body.addWidget(_number_row("mcp_server.port", "Port", 1024, 65535, 1, 0))
+
     body.addWidget(_section_header("Registered Tools"))
     tools_wrap = QWidget()
     tw = QVBoxLayout(tools_wrap)
     tw.setContentsMargins(0, 0, 0, 0)
-    tw.setSpacing(4)
+    tw.setSpacing(10)
     body.addWidget(tools_wrap)
     layout.addWidget(card)
     layout.addStretch(1)
 
-    def refresh() -> None:
+    # Cache for toggles so refresh can sync state
+    toggles: dict[str, Toggle] = {}
+
+    def _rebuild() -> None:
         for i in reversed(range(tw.count())):
             w = tw.itemAt(i).widget()
-            if w:
-                w.deleteLater()
-        st = build_status().get("mcp", {})
-        tools = st.get("registered_tools", [])
-        if not tools:
-            l = QLabel("—  None")
+            if w: w.deleteLater()
+        toggles.clear()
+
+        pkg_dir = os.path.dirname(_tools_pkg.__file__)
+        tool_modules = [name for _, name, _ in pkgutil.iter_modules([pkg_dir])]
+
+        if not tool_modules:
+            l = QLabel("—  No tool modules found")
             l.setStyleSheet(f"color: {FG_MUTE};")
             tw.addWidget(l)
             return
-        for name in tools:
-            l = QLabel(f"·  {humanize(name)}")
-            l.setStyleSheet(f"color: {FG_DIM};")
-            tw.addWidget(l)
+
+        for name in sorted(tool_modules):
+            enabled = is_mcp_tool_enabled(name)
+            t = Toggle()
+            t.setChecked(enabled)
+            def _toggle(_s, n=name, widget=t):
+                set_tool("mcp_tools", n, widget.isChecked())
+            t.stateChanged.connect(_toggle)
+            toggles[name] = t
+
+            tw.addWidget(_row(row_label(humanize(name), "", name),
+                               _wrap_align(t, Qt.AlignmentFlag.AlignLeft)))
+
+            nl = name.lower()
+            if nl == "stt":
+                tw.addWidget(_line_row("mcp_server.stt_url", "  └─ Whisper Endpoint", "http://127.0.0.1:6600"))
+                tw.addWidget(_enum_row_strs("voice.stt.model", "  └─ Whisper Model", _WHISPER_MODELS))
+            elif nl == "tts":
+                tw.addWidget(_line_row("mcp_server.tts_url", "  └─ Kokoro Endpoint", "http://127.0.0.1:6500"))
+
+    def refresh() -> None:
+        # For now, just sync toggles with runtime_state
+        from proxy.runtime_state import load
+        current_state = load().get("mcp_tools", {})
+        for name, t in toggles.items():
+            enabled = current_state.get(name, True)
+            if t.isChecked() != enabled:
+                t.blockSignals(True)
+                t.setChecked(enabled)
+                t.blockSignals(False)
+
+    _rebuild()
     scroll.refresh = refresh  # type: ignore[attr-defined]
-    refresh()
     return scroll
 
 
@@ -563,7 +609,9 @@ def _managed(window) -> QWidget:
     rows_wrap = QVBoxLayout()
     rows_wrap.setSpacing(10)
     body.addLayout(rows_wrap)
+
     layout.addWidget(card)
+
     layout.addStretch(1)
 
     # name -> Toggle widget, so refresh can sync state without rebuilding.
@@ -588,6 +636,7 @@ def _managed(window) -> QWidget:
         from proxy.runtime_state import set_tool
         for t in tools:
             name = t.get("name", "?")
+            nl = name.lower()
             enabled = t.get("enabled", True)
             t_widget = Toggle()
             t_widget.setChecked(enabled)
@@ -597,6 +646,12 @@ def _managed(window) -> QWidget:
             toggles[name] = t_widget
             rows_wrap.addWidget(_row(row_label(humanize(name), "", name),
                                       _wrap_align(t_widget, Qt.AlignmentFlag.AlignLeft)))
+
+            if nl == "transcribe":
+                rows_wrap.addWidget(_line_row("mcp_server.stt_url", "  └─ Whisper Endpoint", "http://127.0.0.1:6600"))
+                rows_wrap.addWidget(_enum_row_strs("voice.stt.model", "  └─ Whisper Model", _WHISPER_MODELS))
+            elif nl == "speak":
+                rows_wrap.addWidget(_line_row("mcp_server.tts_url", "  └─ Kokoro Endpoint", "http://127.0.0.1:6500"))
 
     def refresh() -> None:
         nonlocal last_names
@@ -640,6 +695,17 @@ def _telegram(window) -> QWidget:
     return scroll
 
 
+_WHISPER_MODELS = [
+    ("Tiny (fastest)", "tiny"),
+    ("Base", "base"),
+    ("Small (default)", "small"),
+    ("Medium", "medium"),
+    ("Large v3 (best)", "large-v3"),
+    ("Turbo", "distil-large-v3"),
+    ("OpenAI (whisper-1)", "whisper-1"),
+]
+
+
 def _voice(window) -> QWidget:
     from voice.health import get_status as _voice_status
 
@@ -652,13 +718,13 @@ def _voice(window) -> QWidget:
     # calls (no probe). Refreshed by the window's 1s tick.
     pill = QLabel("⚪ untested")
     pill.setProperty("class", "stat_pill")
-    url_lbl = QLabel("")
-    url_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
     body.addWidget(_row(row_label("Health",
                                     "Reflects the outcome of the most recent transcribe request. "
                                     "No background probing — status only changes when a voice message is processed."),
                          _wrap_align(pill, Qt.AlignmentFlag.AlignLeft)))
-    body.addWidget(_row(row_label("Endpoint", ""), url_lbl))
+
+    body.addWidget(_line_row("voice.stt.base_url", "Endpoint", "http://localhost:6600/v1"))
+    body.addWidget(_enum_row_strs("voice.stt.model", "Model", _WHISPER_MODELS))
 
     # Test button
     from voice.stt import transcribe, HELLO_WORLD_AUDIO
@@ -672,14 +738,17 @@ def _voice(window) -> QWidget:
 
         async def _run() -> None:
             try:
-                # Use a .wav filename since we provided a WAV header
-                await transcribe(HELLO_WORLD_AUDIO, filename="test.wav")
+                # Use a .wav filename since we provided a WAV header.
+                # Use a shorter timeout (5s) for the UI test button.
+                await transcribe(HELLO_WORLD_AUDIO, filename="test.wav", timeout=5.0)
+                refresh()
+            except Exception as e:
+                print(f"STT Test Error: {e}")
             finally:
                 test_btn.setEnabled(True)
                 test_btn.setText("Run Test")
-                refresh()
 
-        schedule(window.bot_loop(), _run())
+        schedule(window.bot_loop, _run())
 
     test_btn.clicked.connect(run_test)
 
@@ -689,7 +758,7 @@ def _voice(window) -> QWidget:
     import config as _cfg
     def refresh() -> None:
         vs = _voice_status()
-        url_lbl.setText(_cfg.stt_base_url())
+        print(f"DEBUG: Voice refresh, vs={vs}")
         if not vs.stt_configured:
             pill.setText("⚫ disabled")
             pill.setProperty("class", "stat_pill")

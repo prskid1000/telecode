@@ -21,6 +21,14 @@ mcp_app = FastMCP("telecode", stateless_http=True, host=_host, port=_port)
 async def _run_with_cors() -> None:  # pragma: no cover
     """Wrap the Starlette app with CORSMiddleware before starting uvicorn."""
     import uvicorn
+    import sys
+
+    # Fix for pythonw.exe where sys.stdout/stderr are None, causing uvicorn's
+    # default logging formatter (which checks isatty()) to crash.
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w")
 
     starlette_app = mcp_app.streamable_http_app()
 
