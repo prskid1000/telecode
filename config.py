@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-_SETTINGS_PATH = Path(os.environ.get("TELECODE_SETTINGS", "settings.json"))
+_SETTINGS_PATH = Path(os.environ.get("TELECODE_SETTINGS", "settings.json")).resolve()
 
 
 def _settings_dir() -> Path:
@@ -68,7 +68,7 @@ def raw() -> dict[str, Any]:
 
 
 def set_nested(dotpath: str, value: Any) -> None:
-    keys = dotpath.split(".")
+    keys = _split_path(dotpath)
     node = _raw
     for key in keys[:-1]:
         node = node.setdefault(key, {})
@@ -78,11 +78,31 @@ def set_nested(dotpath: str, value: Any) -> None:
 
 def get_nested(dotpath: str, default: Any = None) -> Any:
     node = _raw
-    for key in dotpath.split("."):
+    for key in _split_path(dotpath):
         if not isinstance(node, dict) or key not in node:
             return default
         node = node[key]
     return node
+
+
+def _split_path(path: str) -> list[str]:
+    """Split dotpath by '.' but allow escaping dots with '\\.'."""
+    parts = []
+    current = []
+    escaped = False
+    for char in path:
+        if escaped:
+            current.append(char)
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == ".":
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+    parts.append("".join(current))
+    return parts
 
 
 # ── Telegram ──────────────────────────────────────────────────────────────────

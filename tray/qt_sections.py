@@ -99,7 +99,7 @@ def _row(left: QWidget, right: QWidget) -> QWidget:
     l = QHBoxLayout(w)
     l.setContentsMargins(0, 0, 0, 0)
     l.setSpacing(14)
-    left.setFixedWidth(240)
+    left.setFixedWidth(280)
     l.addWidget(left, 0, Qt.AlignmentFlag.AlignTop)
     l.addWidget(right, 1)
     return w
@@ -1193,7 +1193,9 @@ def _models(window) -> QWidget:
 
     def _build_form(key: str):
         _clear_form()
-        p = f"llamacpp.models.{key}"
+        # Escape dots in the model name so get_path/patch_settings doesn't split it
+        ek = key.replace(".", r"\.")
+        p = f"llamacpp.models.{ek}"
         form_layout.addWidget(_section_header("Paths"))
         form_layout.addWidget(_line_row(f"{p}.path",   "GGUF Path",
                                          "D:/models/foo.gguf",
@@ -1298,7 +1300,8 @@ def _models(window) -> QWidget:
             QMessageBox.warning(content, "Exists", f"Model '{name}' already exists.")
             return
         # deepcopy so nested dicts are never shared with _MODEL_DEFAULTS
-        patch_settings(f"llamacpp.models.{name}", copy.deepcopy(_MODEL_DEFAULTS))
+        ename = name.replace(".", r"\.")
+        patch_settings(f"llamacpp.models.{ename}", copy.deepcopy(_MODEL_DEFAULTS))
         _refresh_picker(preserve_key=name)
 
     def _on_remove():
@@ -1307,7 +1310,8 @@ def _models(window) -> QWidget:
             return
         if QMessageBox.question(content, "Remove", f"Delete model '{key}'?") != QMessageBox.StandardButton.Yes:
             return
-        remove_path(f"llamacpp.models.{key}")
+        ek = key.replace(".", r"\.")
+        remove_path(f"llamacpp.models.{ek}")
         # If default pointed at it, clear default
         if get_path(read_settings(), "llamacpp.default_model") == key:
             patch_settings("llamacpp.default_model", "")
@@ -1535,7 +1539,8 @@ def _tools(window) -> QWidget:
         picker.clear()
         for k in list(get_path(read_settings(), "tools", {}) or {}):
             display = k
-            nm = get_path(read_settings(), f"tools.{k}.name", "") or humanize(k)
+            ek = k.replace(".", r"\.")
+            nm = get_path(read_settings(), f"tools.{ek}.name", "") or humanize(k)
             display = f"{k}  —  {nm}"
             picker.addItem(display, k)
         if preserve_key:
@@ -1570,7 +1575,8 @@ def _tools(window) -> QWidget:
             return
         default = copy.deepcopy(_TOOL_DEFAULTS_CLI)
         default["name"] = humanize(name)
-        patch_settings(f"tools.{name}", default)
+        ename = name.replace(".", r"\.")
+        patch_settings(f"tools.{ename}", default)
         _refresh_picker(preserve_key=name)
 
     def _on_remove():
@@ -1579,7 +1585,8 @@ def _tools(window) -> QWidget:
             return
         if QMessageBox.question(content, "Remove", f"Delete tool '{key}'?") != QMessageBox.StandardButton.Yes:
             return
-        remove_path(f"tools.{key}")
+        ek = key.replace(".", r"\.")
+        remove_path(f"tools.{ek}")
         _refresh_picker()
 
     picker.currentIndexChanged.connect(_on_pick)
