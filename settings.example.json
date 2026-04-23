@@ -100,6 +100,8 @@
         "draft_n": 5,
         "draft_n_min": 0,
         "draft_p_min": 0.75,
+        "lookup_cache_static": "",
+        "lookup_cache_dynamic": "",
 
         "lora": "",
         "lora_scale": 1.0,

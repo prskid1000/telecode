@@ -29,6 +29,13 @@ def start_mcp_background(host: str, port: int) -> threading.Thread | None:
         pass  # standalone mode, always start
 
     def _run() -> None:
+        import sys
+        import os
+        if sys.stdout is None:
+            sys.stdout = open(os.devnull, "w")
+        if sys.stderr is None:
+            sys.stderr = open(os.devnull, "w")
+
         from mcp_server.app import mcp_app, register_all
         register_all()
 

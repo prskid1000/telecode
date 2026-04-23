@@ -11,4 +11,10 @@ import os
 
 _pkg_dir = os.path.dirname(__file__)
 for _, name, _ in pkgutil.iter_modules([_pkg_dir]):
+    try:
+        from proxy.runtime_state import is_mcp_tool_enabled
+        if not is_mcp_tool_enabled(name):
+            continue
+    except ImportError:
+        pass
     importlib.import_module(f".{name}", __name__)
