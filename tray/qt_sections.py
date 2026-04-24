@@ -400,15 +400,55 @@ def _llama(window) -> QWidget:
 
     layout.addWidget(master)
 
+    # Server (binary + binding)
+    srv_card, srv_body = _card("Server", "llamacpp.* — binary + binding (restart required)")
+    srv_body.addWidget(_line_row("llamacpp.binary", "Binary Path", "llama-server",
+                                  "Path to llama-server executable. Bare name = use PATH."))
+    srv_body.addWidget(_line_row("llamacpp.host", "Host", "127.0.0.1",
+                                  "0.0.0.0 to expose on LAN. Internal callers always use 127.0.0.1."))
+    srv_body.addWidget(_number_row("llamacpp.port", "Port", 1024, 65535, 1, 0))
+    srv_body.addWidget(_password_row("llamacpp.api_key", "API Key",
+                                      "leave empty to disable",
+                                      "Optional --api-key. Clients must send Authorization: Bearer <key>."))
+    srv_body.addWidget(_json_row("llamacpp.extra_args", "Extra CLI Args",
+                                  default=[], height=80,
+                                  help_text='Appended to every spawn. JSON list of [["--flag","value"], ...].'))
+    layout.addWidget(srv_card)
+
     # Sampling card
     samp, samp_body = _card("Sampling defaults")
-    samp_body.addWidget(_number_row("llamacpp.inference.temperature",      "Temperature",     0.0, 1.5, 0.05, 2))
-    samp_body.addWidget(_number_row("llamacpp.inference.top_p",            "Top-P",           0.0, 1.0, 0.01, 2))
-    samp_body.addWidget(_number_row("llamacpp.inference.top_k",            "Top-K",           0,   200, 1,    0))
-    samp_body.addWidget(_number_row("llamacpp.inference.min_p",            "Min-P",           0.0, 1.0, 0.01, 2))
-    samp_body.addWidget(_number_row("llamacpp.inference.repeat_penalty",   "Repeat Penalty",  0.5, 2.0, 0.01, 2))
-    samp_body.addWidget(_number_row("llamacpp.inference.presence_penalty", "Presence Penalty", 0.0, 2.0, 0.05, 2))
+    samp_body.addWidget(_number_row("llamacpp.inference.temperature",       "Temperature",       0.0, 1.5, 0.05, 2))
+    samp_body.addWidget(_number_row("llamacpp.inference.top_p",             "Top-P",             0.0, 1.0, 0.01, 2))
+    samp_body.addWidget(_number_row("llamacpp.inference.top_k",             "Top-K",             0,   200, 1,    0))
+    samp_body.addWidget(_number_row("llamacpp.inference.min_p",             "Min-P",             0.0, 1.0, 0.01, 2))
+    samp_body.addWidget(_number_row("llamacpp.inference.repeat_penalty",    "Repeat Penalty",    0.5, 2.0, 0.01, 2))
+    samp_body.addWidget(_number_row("llamacpp.inference.presence_penalty",  "Presence Penalty",  0.0, 2.0, 0.05, 2))
+    samp_body.addWidget(_number_row("llamacpp.inference.frequency_penalty", "Frequency Penalty", 0.0, 2.0, 0.05, 2))
+    samp_body.addWidget(_number_row("llamacpp.inference.max_tokens",        "Max Tokens",       -1,  1048576, 64, 0, "tok",
+                                      "Hard cap on generated tokens. -1 = unlimited / model-default."))
+    samp_body.addWidget(_list_row("llamacpp.inference.stop", "Stop Strings",
+                                   "Generation halts when any of these appears (one per line).",
+                                   "</s>"))
+    samp_body.addWidget(_enum_row("llamacpp.inference.context_overflow", "Context Overflow",
+                                   [("Truncate Middle", "truncate_middle"),
+                                    ("Truncate Left",   "truncate_left"),
+                                    ("Truncate Right",  "truncate_right"),
+                                    ("Error",           "error")],
+                                   "What to do when prompt exceeds ctx_size."))
     layout.addWidget(samp)
+
+    # Structured output card
+    so_card, so_body = _card("Structured Output", "llamacpp.inference.structured_output.* — JSON schema / GBNF grammar")
+    so_body.addWidget(_toggle_row("llamacpp.inference.structured_output.enabled",
+                                   "Enabled",
+                                   "Force JSON schema or GBNF grammar on every generation."))
+    so_body.addWidget(_json_row("llamacpp.inference.structured_output.schema",
+                                 "JSON Schema", default=None, height=140,
+                                 help_text="JSON Schema object — overrides response shape via response_format."))
+    so_body.addWidget(_line_row("llamacpp.inference.structured_output.grammar",
+                                 "GBNF Grammar", "(empty)",
+                                 "Inline GBNF — alternative to JSON Schema."))
+    layout.addWidget(so_card)
 
     # Reasoning card
     rcard, rbody = _card("Reasoning")
@@ -431,6 +471,161 @@ def _llama(window) -> QWidget:
                                  "Drop Prior-Turn Thinking",
                                  "On (default): strip thinking blocks from prior assistant turns before sending upstream — llama.cpp regenerates. Off: reinject as <think>...</think> for trained-adaptive models that need prior reasoning for multi-turn coherence."))
     layout.addWidget(rcard)
+
+    # ── Reasoning Effort Map card ────────────────────────────────────
+    from PySide6.QtWidgets import QInputDialog as _QInputDialog, QMessageBox as _QMessageBox
+    from tray.qt_theme import BG_ELEV as _BG_ELEV_MAP
+
+    map_card, map_body = _card("Reasoning Effort Map",
+        "Per-request effort presets — selected when the client sends "
+        "reasoning_effort: \"low\"/\"medium\"/... Merged into chat_template_kwargs.")
+
+    rows_host = QWidget()
+    rows_layout = QVBoxLayout(rows_host)
+    rows_layout.setContentsMargins(0, 0, 0, 0)
+    rows_layout.setSpacing(8)
+    map_body.addWidget(rows_host)
+
+    add_bar = QWidget()
+    ab = QHBoxLayout(add_bar)
+    ab.setContentsMargins(0, 4, 0, 0)
+    ab.setSpacing(8)
+    add_key_edit = QLineEdit()
+    add_key_edit.setPlaceholderText("preset key (e.g. ultra)")
+    add_key_edit.setMaximumWidth(200)
+    add_preset_btn = QPushButton("+ Add Preset")
+    add_preset_btn.setProperty("class", "primary")
+    ab.addWidget(add_key_edit)
+    ab.addWidget(add_preset_btn)
+    ab.addStretch(1)
+    map_body.addWidget(add_bar)
+
+    _ENABLE_OPTIONS = [("(default)", None), ("on", True), ("off", False)]
+
+    def _build_effort_row(key: str, data: dict) -> QWidget:
+        ek = key.replace(".", r"\.")
+        base = f"llamacpp.inference.reasoning_effort_map.{ek}"
+
+        row = QFrame()
+        row.setStyleSheet(
+            f"QFrame {{ background: {_BG_ELEV_MAP}; border: 1px solid {BORDER};"
+            f" border-radius: 6px; }}"
+        )
+        rl = QGridLayout(row)
+        rl.setContentsMargins(10, 8, 10, 10)
+        rl.setHorizontalSpacing(10)
+        rl.setVerticalSpacing(6)
+
+        head = QLabel(f"<b style='color:{FG}'>{key}</b>")
+        head.setTextFormat(Qt.TextFormat.RichText)
+        rm_btn = QPushButton("Remove")
+        rm_btn.setProperty("class", "danger")
+        rm_btn.setMaximumWidth(90)
+        rl.addWidget(head, 0, 0, 1, 2)
+        rl.addWidget(rm_btn, 0, 2, alignment=Qt.AlignmentFlag.AlignRight)
+
+        # thinking_budget_tokens
+        tbt_lbl = QLabel("Budget Tokens"); tbt_lbl.setStyleSheet(f"color: {FG_DIM};")
+        tbt = NumberEditor(0, 262144, 256, 0, "tok")
+        tbt.setValue(float(data.get("thinking_budget_tokens", 0) or 0))
+        tbt.valueChanged.connect(
+            lambda v, b=base: patch_settings(f"{b}.thinking_budget_tokens", int(v))
+        )
+        rl.addWidget(tbt_lbl, 1, 0)
+        rl.addWidget(tbt, 1, 1, 1, 2)
+
+        # reasoning_effort (string; empty = field omitted)
+        re_lbl = QLabel("Effort"); re_lbl.setStyleSheet(f"color: {FG_DIM};")
+        re_edit = QLineEdit()
+        re_edit.setText(str(data.get("reasoning_effort", "") or ""))
+        re_edit.setPlaceholderText("low / medium / high (blank = omit)")
+        def _commit_effort(b=base, e=re_edit):
+            val = e.text().strip()
+            if val:
+                patch_settings(f"{b}.reasoning_effort", val)
+            else:
+                remove_path(f"{b}.reasoning_effort")
+        re_edit.editingFinished.connect(_commit_effort)
+        rl.addWidget(re_lbl, 2, 0)
+        rl.addWidget(re_edit, 2, 1, 1, 2)
+
+        # enable_thinking — tri-state (default / on / off)
+        et_lbl = QLabel("Enable Thinking"); et_lbl.setStyleSheet(f"color: {FG_DIM};")
+        et_combo = QComboBox()
+        for disp, _val in _ENABLE_OPTIONS:
+            et_combo.addItem(disp)
+        cur = data.get("enable_thinking", None)
+        if "enable_thinking" not in data:
+            et_combo.setCurrentIndex(0)
+        elif bool(cur):
+            et_combo.setCurrentIndex(1)
+        else:
+            et_combo.setCurrentIndex(2)
+
+        def _commit_enable(_i, b=base, c=et_combo):
+            disp, val = _ENABLE_OPTIONS[c.currentIndex()]
+            if val is None:
+                remove_path(f"{b}.enable_thinking")
+            else:
+                patch_settings(f"{b}.enable_thinking", bool(val))
+        et_combo.currentIndexChanged.connect(_commit_enable)
+        rl.addWidget(et_lbl, 3, 0)
+        rl.addWidget(et_combo, 3, 1, 1, 2)
+
+        def _on_remove(b=base, k=key):
+            if _QMessageBox.question(content, "Remove Preset",
+                                      f"Delete reasoning effort preset '{k}'?") \
+                    != _QMessageBox.StandardButton.Yes:
+                return
+            remove_path(b)
+            _refresh_effort_map()
+        rm_btn.clicked.connect(_on_remove)
+
+        return row
+
+    def _refresh_effort_map() -> None:
+        # Clear existing rows
+        while rows_layout.count():
+            item = rows_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        emap = get_path(read_settings(), "llamacpp.inference.reasoning_effort_map", {}) or {}
+        if not isinstance(emap, dict) or not emap:
+            empty_lbl = QLabel("No presets — add one below.")
+            empty_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11.5px; padding: 6px;")
+            rows_layout.addWidget(empty_lbl)
+            return
+        for k, v in emap.items():
+            rows_layout.addWidget(_build_effort_row(k, v if isinstance(v, dict) else {}))
+
+    def _on_add_preset() -> None:
+        key = (add_key_edit.text() or "").strip()
+        if not key:
+            key, ok = _QInputDialog.getText(content, "Add Effort Preset",
+                                             "Preset key (e.g. ultra):")
+            if not ok:
+                return
+            key = key.strip()
+        if not key:
+            return
+        if not re.match(r"^[A-Za-z0-9_-]+$", key):
+            _QMessageBox.warning(content, "Invalid Key",
+                                  "Use letters, digits, underscore, or dash only.")
+            return
+        existing = get_path(read_settings(), "llamacpp.inference.reasoning_effort_map", {}) or {}
+        if key in existing:
+            _QMessageBox.warning(content, "Exists", f"Preset '{key}' already exists.")
+            return
+        patch_settings(f"llamacpp.inference.reasoning_effort_map.{key}", {
+            "thinking_budget_tokens": 4096,
+        })
+        add_key_edit.clear()
+        _refresh_effort_map()
+
+    add_preset_btn.clicked.connect(_on_add_preset)
+    _refresh_effort_map()
+    layout.addWidget(map_card)
 
     # ── Speed Test card ──────────────────────────────────────────────
     from PySide6.QtCore import QObject, Signal as _Signal
@@ -625,10 +820,227 @@ def _proxy(window) -> QWidget:
     body.addWidget(_number_row("proxy.ping_interval", "Ping Interval",
                                 1, 60, 1, 0, "s",
                                 "Anthropic `event: ping` frame cadence during long generations."))
+    body.addWidget(_line_row("proxy.location", "Location",
+                              "auto via ip-api.com",
+                              "Appended to system prompt when inject_date_location=true. Empty = auto-detect."))
+
+    body.addWidget(_section_header("Tool Set"))
+    body.addWidget(_list_row("proxy.core_tools", "Core Tools",
+                              "Names that stay always-loaded for clients (one per line). "
+                              "Everything else becomes deferred and goes through ToolSearch.",
+                              "Bash"))
+    body.addWidget(_list_row("proxy.cors_origins", "CORS Origins",
+                              "Allowed origins for the proxy HTTP server (one per line).",
+                              "https://example.com"))
+
+    body.addWidget(_section_header("Model Mapping"))
+    body.addWidget(_kv_row("proxy.model_mapping", "Aliases",
+                            "Rewrites body.model on each request (one ALIAS=target per line). "
+                            "Useful for tricking Claude/OpenAI clients into pointing at your local model.",
+                            typed=False))
     layout.addWidget(master)
+
+    # Client profiles — picker + per-profile editor
+    layout.addWidget(_proxy_profiles_card())
 
     layout.addStretch(1)
     return scroll
+
+
+def _proxy_profiles_card() -> QFrame:
+    """Editor for proxy.client_profiles[] — pick → edit → add/remove."""
+    from PySide6.QtWidgets import QInputDialog as _QInputDialog, QMessageBox as _QMessageBox
+
+    card, body = _card("Client Profiles",
+                       "proxy.client_profiles[] — per-client overrides matched by request header")
+
+    top = QHBoxLayout(); top.setSpacing(8)
+    picker = QComboBox(); picker.setMinimumWidth(220)
+    add_btn = QPushButton("+ Add Profile"); add_btn.setProperty("class", "primary")
+    rm_btn  = QPushButton("Remove");        rm_btn.setProperty("class", "danger")
+    top.addWidget(picker); top.addStretch(1); top.addWidget(add_btn); top.addWidget(rm_btn)
+    body.addLayout(top)
+
+    form_host = QWidget()
+    form_layout = QVBoxLayout(form_host)
+    form_layout.setContentsMargins(0, 4, 0, 0)
+    form_layout.setSpacing(8)
+    body.addWidget(form_host)
+
+    def _profiles() -> list[dict]:
+        v = get_path(read_settings(), "proxy.client_profiles", []) or []
+        return list(v) if isinstance(v, list) else []
+
+    def _save_profiles(profs: list[dict]) -> None:
+        patch_settings("proxy.client_profiles", profs)
+
+    def _clear():
+        _flush_pending(form_host)
+        while form_layout.count():
+            it = form_layout.takeAt(0)
+            w = it.widget()
+            if w: w.deleteLater()
+
+    def _build_form(idx: int):
+        _clear()
+        profs = _profiles()
+        if idx < 0 or idx >= len(profs):
+            return
+        prof = profs[idx]
+
+        def _patch(field: str, value):
+            ps = _profiles()
+            if 0 <= idx < len(ps):
+                if value is None:
+                    ps[idx].pop(field, None)
+                else:
+                    ps[idx][field] = value
+                _save_profiles(ps)
+
+        def _patch_match(sub: str, value):
+            ps = _profiles()
+            if 0 <= idx < len(ps):
+                m = dict(ps[idx].get("match", {}) or {})
+                if value:
+                    m[sub] = value
+                else:
+                    m.pop(sub, None)
+                ps[idx]["match"] = m
+                _save_profiles(ps)
+
+        # Identity
+        form_layout.addWidget(_section_header("Identity"))
+        name_le = QLineEdit(); name_le.setText(str(prof.get("name", "")))
+        name_le.editingFinished.connect(lambda: _patch("name", name_le.text()))
+        form_layout.addWidget(_row(row_label("Name", "Display name (must be unique)."), name_le))
+
+        # Match rule
+        form_layout.addWidget(_section_header("Match Rule"))
+        hdr_le = QLineEdit(); hdr_le.setText(str((prof.get("match") or {}).get("header", "")))
+        hdr_le.setPlaceholderText("User-Agent")
+        hdr_le.editingFinished.connect(lambda: _patch_match("header", hdr_le.text()))
+        form_layout.addWidget(_row(row_label("Match Header", "HTTP request header name to inspect."), hdr_le))
+
+        cont_le = QLineEdit(); cont_le.setText(str((prof.get("match") or {}).get("contains", "")))
+        cont_le.setPlaceholderText("substring")
+        cont_le.editingFinished.connect(lambda: _patch_match("contains", cont_le.text()))
+        form_layout.addWidget(_row(row_label("Contains", "Substring required in the header value."), cont_le))
+
+        # Behavior toggles
+        form_layout.addWidget(_section_header("Behavior"))
+        for field, label, hlp in [
+            ("tool_search",          "Tool Search",         "BM25 tool retrieval for this client."),
+            ("auto_load_tools",      "Auto-Load Tools",     "First blind call injects schema."),
+            ("strip_reminders",      "Strip Reminders",     "Drop <system-reminder> blocks."),
+            ("inject_date_location", "Inject Date/Location","Append today's date + location to system prompt."),
+        ]:
+            cur_val = bool(prof.get(field, False))
+            t = Toggle(); t.setChecked(cur_val)
+            def _make(field=field, widget=t):
+                def _h(_s: int):
+                    _patch(field, bool(widget.isChecked()))
+                return _h
+            t.stateChanged.connect(_make())
+            form_layout.addWidget(_row(row_label(label, hlp), _wrap_align(t, Qt.AlignmentFlag.AlignLeft)))
+
+        # System instruction
+        form_layout.addWidget(_section_header("System Instruction"))
+        si_le = QLineEdit(); si_le.setText(str(prof.get("system_instruction", "") or ""))
+        si_le.setPlaceholderText("system.md / office.md / (empty)")
+        si_le.editingFinished.connect(lambda: _patch("system_instruction", si_le.text() or None))
+        form_layout.addWidget(_row(row_label("Instruction File",
+                                              "Filename in proxy/instructions/. Empty = no injection."), si_le))
+
+        # Lists
+        form_layout.addWidget(_section_header("Tool Lists"))
+        from PySide6.QtWidgets import QPlainTextEdit
+        def _list_editor(field: str, label: str, hlp: str) -> QWidget:
+            te = QPlainTextEdit()
+            te.setFixedHeight(80)
+            te.setPlaceholderText("one name per line")
+            cur = prof.get(field, []) or []
+            te.setPlainText("\n".join(str(x) for x in cur))
+            def _commit():
+                vals = [l.strip() for l in te.toPlainText().splitlines() if l.strip()]
+                _patch(field, vals)
+            _debounced_commit(te, _commit)
+            return _row(row_label(label, hlp), te)
+
+        form_layout.addWidget(_list_editor("inject_managed", "Inject Managed",
+                                            "Managed tool names to inject for this client."))
+        form_layout.addWidget(_list_editor("core_tools", "Core Tools (override)",
+                                            "Override the global proxy.core_tools for this client. Empty = inherit."))
+        form_layout.addWidget(_list_editor("strip_tool_names", "Strip Tool Names",
+                                            "Tool names to remove from the client-supplied tool set."))
+
+    def _refresh_picker(preserve_idx: int | None = None):
+        picker.blockSignals(True)
+        picker.clear()
+        profs = _profiles()
+        for i, p in enumerate(profs):
+            picker.addItem(f"{p.get('name', f'profile-{i}')}", i)
+        picker.blockSignals(False)
+        if profs:
+            idx = preserve_idx if (preserve_idx is not None and 0 <= preserve_idx < len(profs)) else 0
+            picker.setCurrentIndex(idx)
+            _build_form(idx)
+        else:
+            _clear()
+            empty = QLabel("No profiles — add one above.")
+            empty.setStyleSheet(f"color: {FG_MUTE}; font-size: 11.5px; padding: 6px;")
+            form_layout.addWidget(empty)
+
+    def _on_pick(_i: int):
+        idx = picker.currentData()
+        if idx is not None:
+            _build_form(int(idx))
+
+    def _on_add():
+        name, ok = _QInputDialog.getText(card, "Add Profile", "Profile name:")
+        if not ok:
+            return
+        name = (name or "").strip()
+        if not name:
+            return
+        profs = _profiles()
+        if any(p.get("name") == name for p in profs):
+            _QMessageBox.warning(card, "Exists", f"Profile '{name}' already exists.")
+            return
+        profs.append({
+            "name": name,
+            "match": {"header": "User-Agent", "contains": ""},
+            "tool_search": False,
+            "auto_load_tools": False,
+            "strip_reminders": False,
+            "inject_date_location": False,
+            "inject_managed": [],
+            "core_tools": [],
+            "strip_tool_names": [],
+        })
+        _save_profiles(profs)
+        _refresh_picker(preserve_idx=len(profs) - 1)
+
+    def _on_remove():
+        idx = picker.currentData()
+        if idx is None:
+            return
+        idx = int(idx)
+        profs = _profiles()
+        if idx < 0 or idx >= len(profs):
+            return
+        nm = profs[idx].get("name", f"profile-{idx}")
+        if _QMessageBox.question(card, "Remove Profile", f"Delete '{nm}'?") \
+                != _QMessageBox.StandardButton.Yes:
+            return
+        del profs[idx]
+        _save_profiles(profs)
+        _refresh_picker()
+
+    picker.currentIndexChanged.connect(_on_pick)
+    add_btn.clicked.connect(_on_add)
+    rm_btn.clicked.connect(_on_remove)
+    _refresh_picker()
+    return card
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -649,6 +1061,9 @@ def _mcp(window) -> QWidget:
     body.addWidget(_section_header("Network"))
     body.addWidget(_line_row("mcp_server.host", "Host", "127.0.0.1"))
     body.addWidget(_number_row("mcp_server.port", "Port", 1024, 65535, 1, 0))
+    body.addWidget(_list_row("mcp_server.cors_origins", "CORS Origins",
+                              "Allowed origins for the MCP HTTP server (one per line). Empty = no CORS.",
+                              "https://example.com"))
 
     body.addWidget(_section_header("Registered Tools"))
     tools_wrap = QWidget()
@@ -789,6 +1204,25 @@ def _managed(window) -> QWidget:
 
 def _telegram(window) -> QWidget:
     scroll, _, layout = _page()
+
+    bot_card, bb = _card("Telegram Bot", "telegram.* — token + group + access")
+    bb.addWidget(_password_row("telegram.bot_token", "Bot Token", "123456:ABC-DEF...",
+                                "From @BotFather. Restart required after change."))
+    bb.addWidget(_number_row("telegram.group_id", "Group ID",
+                              -10000000000000.0, 10000000000000.0, 1, 0, "",
+                              "Numeric chat id (negative for supergroups). Restart required."))
+    bb.addWidget(_int_list_row("telegram.allowed_user_ids", "Allowed User IDs",
+                                "Whitelist of Telegram user ids. Empty = anyone in the group.",
+                                "one user_id per line"))
+    layout.addWidget(bot_card)
+
+    paths_card, pb = _card("Paths", "paths.* — file locations (relative paths anchor to settings.json directory)")
+    pb.addWidget(_line_row("paths.store_path", "Store Path", "./data/telecode.json",
+                            "Topic mapping JSON — survives restarts."))
+    pb.addWidget(_line_row("paths.logs_dir", "Logs Dir", "./data/logs",
+                            "Where telecode/llama/proxy/mcp/voice logs are written."))
+    layout.addWidget(paths_card)
+
     stream_card, sb = _card("Streaming", "Telegram message edit + PTY flush tuning")
     sb.addWidget(_number_row("streaming.interval_sec",       "Edit Interval",        0.3, 3.0, 0.1, 1, "s"))
     sb.addWidget(_number_row("streaming.max_message_length", "Max Message Length",   500, 4096, 100, 0))
@@ -893,10 +1327,32 @@ def _voice(window) -> QWidget:
 def _computer(window) -> QWidget:
     scroll, _, layout = _page()
     card, body = _card("Computer Control", "Vision LLM that clicks/types on any window")
+
+    body.addWidget(_section_header("LLM Endpoint"))
     body.addWidget(_enum_row("tools.computer.api.format", "API Format",
-                              [("OpenAI", "openai"), ("Anthropic", "anthropic")]))
+                              [("OpenAI", "openai"),
+                               ("Anthropic", "anthropic"),
+                               ("Claude Code CLI", "claude-code")]))
+    body.addWidget(_line_row("tools.computer.api.base_url", "Base URL",
+                              "http://localhost:1235/v1",
+                              "Vision-capable LLM endpoint. Local proxy: http://localhost:1235/v1"))
+    body.addWidget(_password_row("tools.computer.api.api_key", "API Key",
+                                  "leave empty for local",
+                                  "OPENAI_API_KEY / ANTHROPIC_API_KEY / Bearer token."))
+    body.addWidget(_line_row("tools.computer.api.model", "Model",
+                              "qwen3.6-35b",
+                              "Model name passed in the request. Vision-capable required."))
+
+    body.addWidget(_section_header("Behavior"))
     body.addWidget(_number_row("tools.computer.capture_interval", "Capture Interval", 1, 30, 1, 0, "s"))
-    body.addWidget(_number_row("tools.computer.max_history",      "Max History",      5, 100, 5, 0))
+    body.addWidget(_number_row("tools.computer.max_history",      "Max History",      5, 100, 5, 0,
+                                "", "Rolling conversation window (turns)."))
+
+    body.addWidget(_section_header("System Prompt Override"))
+    body.addWidget(_json_row("tools.computer.system_prompt", "System Prompt",
+                              default="", height=140,
+                              help_text="String — overrides the built-in computer-control prompt. "
+                                        "Empty/null = use default. (JSON-quoted because of escaping.)"))
     layout.addWidget(card)
     layout.addStretch(1)
     return scroll
@@ -1300,7 +1756,6 @@ _MODEL_DEFAULTS: dict[str, Any] = {
     "fit": False,
     "fit_ctx": 0,
     "fit_target": 0,
-    "reasoning_budget": -1,
     "inference_defaults": {
         "temperature": 0.7,
         "top_p": 0.95,
@@ -1412,13 +1867,59 @@ def _models(window) -> QWidget:
         form_layout.addWidget(_section_header("Cache"))
         form_layout.addWidget(_enum_row_strs(f"{p}.cache_type_k", "Cache Type (K)", _CACHE_TYPES))
         form_layout.addWidget(_enum_row_strs(f"{p}.cache_type_v", "Cache Type (V)", _CACHE_TYPES))
+        form_layout.addWidget(_number_row(f"{p}.cache_reuse",     "Cache Reuse",          0,   8192, 32, 0, "tok",
+                                           "--cache-reuse: tokens to retain when reusing an existing slot."))
 
         form_layout.addWidget(_section_header("Flags"))
-        form_layout.addWidget(_toggle_row(f"{p}.flash_attn", "Flash Attention"))
-        form_layout.addWidget(_toggle_row(f"{p}.mlock",      "Mlock"))
-        form_layout.addWidget(_toggle_row(f"{p}.no_mmap",    "No mmap"))
-        form_layout.addWidget(_toggle_row(f"{p}.jinja",      "Jinja Chat Template",
+        form_layout.addWidget(_toggle_row(f"{p}.preload",       "Preload",
+                                           "Load this model at telecode startup regardless of auto_start."))
+        form_layout.addWidget(_toggle_row(f"{p}.flash_attn",    "Flash Attention"))
+        form_layout.addWidget(_toggle_row(f"{p}.mlock",         "Mlock"))
+        form_layout.addWidget(_toggle_row(f"{p}.no_mmap",       "No mmap"))
+        form_layout.addWidget(_toggle_row(f"{p}.cont_batching", "Continuous Batching",
+                                           "--cont-batching: process multiple requests in one batch."))
+        form_layout.addWidget(_toggle_row(f"{p}.no_kv_offload", "No KV Offload",
+                                           "--no-kv-offload: keep KV cache on CPU."))
+        form_layout.addWidget(_toggle_row(f"{p}.kv_unified",    "Unified KV",
+                                           "--kv-unified: merge K + V into single allocation."))
+        form_layout.addWidget(_toggle_row(f"{p}.cpu_moe",       "CPU MoE (all experts)",
+                                           "--cpu-moe: keep ALL MoE expert layers on CPU (overrides n_cpu_moe)."))
+        form_layout.addWidget(_toggle_row(f"{p}.jinja",         "Jinja Chat Template",
                                            "Use the built-in tokenizer chat template (required for tools)."))
+        form_layout.addWidget(_line_row(f"{p}.chat_template",   "Chat Template Override",
+                                         "(empty = use model's built-in)",
+                                         "--chat-template: override the GGUF's chat template by name."))
+
+        form_layout.addWidget(_section_header("RoPE / NUMA / GPU"))
+        form_layout.addWidget(_line_row(f"{p}.rope_scaling",     "RoPE Scaling",
+                                         "none / linear / yarn",
+                                         "--rope-scaling. Empty = model default."))
+        form_layout.addWidget(_number_row(f"{p}.rope_freq_base", "RoPE Freq Base",       0, 10000000, 1000, 0, "",
+                                           "--rope-freq-base. 0 = model default."))
+        form_layout.addWidget(_number_row(f"{p}.rope_freq_scale","RoPE Freq Scale",      0, 4.0, 0.05, 2, "",
+                                           "--rope-freq-scale. 0 = model default."))
+        form_layout.addWidget(_number_row(f"{p}.yarn_orig_ctx",  "YaRN Orig Ctx",        0, 1048576, 1024, 0, "tok",
+                                           "--yarn-orig-ctx: original training context for YaRN scaling."))
+        form_layout.addWidget(_number_row(f"{p}.keep",           "Keep Tokens",          0, 8192, 32, 0, "tok",
+                                           "--keep: tokens from prompt always kept when truncating."))
+        form_layout.addWidget(_number_row(f"{p}.seed",           "Seed",                -1, 2147483647, 1, 0, "",
+                                           "--seed: -1 = random."))
+        form_layout.addWidget(_line_row(f"{p}.numa",             "NUMA Strategy",
+                                         "distribute / isolate / numactl",
+                                         "--numa. Empty = no NUMA tweaks."))
+        form_layout.addWidget(_number_row(f"{p}.main_gpu",       "Main GPU",             0, 16, 1, 0, "",
+                                           "--main-gpu: index of the primary CUDA/ROCm device."))
+        form_layout.addWidget(_line_row(f"{p}.tensor_split",     "Tensor Split",
+                                         "e.g. 0.5,0.5",
+                                         "--tensor-split: comma-separated weights for multi-GPU split."))
+        form_layout.addWidget(_enum_row(f"{p}.split_mode",       "Split Mode",
+                                         [("Layer (default)", "layer"),
+                                          ("Row",             "row"),
+                                          ("None",            "none")],
+                                         "--split-mode: how layers are sharded across GPUs."))
+        form_layout.addWidget(_line_row(f"{p}.slot_save_path",   "Slot Save Path",
+                                         "./data/slots",
+                                         "--slot-save-path: directory for /slots/save & /slots/restore."))
 
         form_layout.addWidget(_section_header("Speculative Decoding"))
         form_layout.addWidget(_line_row(f"{p}.draft_model", "Draft Model (GGUF)",
@@ -1452,8 +1953,6 @@ def _models(window) -> QWidget:
         form_layout.addWidget(_line_row(f"{rp}.start",                  "Start Tag", "<think>"))
         form_layout.addWidget(_line_row(f"{rp}.end",                    "End Tag",   "</think>"))
         form_layout.addWidget(_toggle_row(f"{rp}.emit_thinking_blocks", "Emit Thinking Blocks"))
-        form_layout.addWidget(_number_row(f"{p}.reasoning_budget",      "Reasoning Budget", -1, 1048576, 256, 0, "tok",
-                                           "--reasoning-budget: max thinking tokens. -1 = unlimited, 0 = disable thinking."))
 
         form_layout.addWidget(_section_header("Chat Template Kwargs"))
         form_layout.addWidget(_kv_row(f"{ip}.chat_template_kwargs",
@@ -1462,6 +1961,36 @@ def _models(window) -> QWidget:
             "JSON-parsed — use `enable_thinking=false`, `reasoning_effort=low`, "
             "`budget=4096`. Anything the model's jinja template reads.",
             typed=True))
+
+        form_layout.addWidget(_section_header("LoRA"))
+        form_layout.addWidget(_line_row(f"{p}.lora",        "LoRA Adapter (path)",
+                                         "/path/to/adapter.gguf",
+                                         "--lora: GGUF LoRA adapter file."))
+        form_layout.addWidget(_number_row(f"{p}.lora_scale", "LoRA Scale",
+                                           0.0, 4.0, 0.05, 2, "",
+                                           "--lora-scaled: blend strength (1.0 = full)."))
+
+        form_layout.addWidget(_section_header("Grammar"))
+        form_layout.addWidget(_line_row(f"{p}.grammar",       "GBNF Grammar (inline)",
+                                         "(empty)",
+                                         "--grammar: inline GBNF for constrained decoding."))
+        form_layout.addWidget(_line_row(f"{p}.grammar_file",  "Grammar File",
+                                         "/path/to/grammar.gbnf",
+                                         "--grammar-file: load GBNF from disk."))
+
+        form_layout.addWidget(_section_header("Extra CLI Args"))
+        form_layout.addWidget(_json_row(f"{p}.extra_args", "Extra Args", default=[], height=80,
+            help_text='Per-model escape hatch — JSON list of [["--flag","value"], ...]. '
+                      'Top-level llamacpp.extra_args is also appended.'))
+
+        form_layout.addWidget(_section_header("Per-Model Reasoning Override"))
+        form_layout.addWidget(_number_row(f"{p}.reasoning_budget",        "Reasoning Budget",   -1, 1048576, 256, 0, "tok",
+                                           "--reasoning-budget. -1 = unlimited, 0 = disable thinking."))
+        form_layout.addWidget(_number_row(f"{p}.reasoning_budget_message","Reasoning Budget (per message)", -1, 1048576, 256, 0, "tok",
+                                           "--reasoning-budget-message. Per-turn cap."))
+        form_layout.addWidget(_line_row(f"{p}.reasoning_format",          "Reasoning Format",
+                                         "deepseek / none",
+                                         "--reasoning-format: how the server tags think blocks."))
 
     def _refresh_picker(preserve_key: str | None = None):
         picker.blockSignals(True)
@@ -1651,6 +2180,68 @@ def _kv_row(path: str, label: str, help_text: str = "",
     return _row(row_label(label, help_text, path), te)
 
 
+def _json_row(path: str, label: str, default: Any = None,
+              height: int = 100, help_text: str = "") -> QWidget:
+    """Generic JSON value editor — for arrays/objects too complex for line/kv editors.
+
+    Saves silently on parse error so user can keep typing without losing state."""
+    import json as _json
+    from PySide6.QtWidgets import QPlainTextEdit
+    te = QPlainTextEdit()
+    te.setFixedHeight(height)
+    cur = get_path(read_settings(), path, default)
+    try:
+        te.setPlainText(_json.dumps(cur, indent=2, ensure_ascii=False))
+    except Exception:
+        te.setPlainText("")
+    def _commit():
+        txt = te.toPlainText().strip()
+        if not txt:
+            patch_settings(path, default)
+            return
+        try:
+            patch_settings(path, _json.loads(txt))
+        except Exception:
+            pass  # invalid JSON — keep buffer, retry on next pause
+    _debounced_commit(te, _commit, delay_ms=800)
+    return _row(row_label(label, help_text, path), te)
+
+
+def _int_list_row(path: str, label: str, help_text: str = "",
+                  placeholder: str = "one per line") -> QWidget:
+    """List-of-ints editor (newline-separated)."""
+    from PySide6.QtWidgets import QPlainTextEdit
+    te = QPlainTextEdit()
+    te.setPlaceholderText(placeholder)
+    te.setFixedHeight(72)
+    cur = get_path(read_settings(), path, []) or []
+    te.setPlainText("\n".join(str(int(x)) for x in cur if str(x).strip()))
+    def _commit():
+        out: list[int] = []
+        for line in te.toPlainText().splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            try:
+                out.append(int(s))
+            except ValueError:
+                continue
+        patch_settings(path, out)
+    _debounced_commit(te, _commit)
+    return _row(row_label(label, help_text, path), te)
+
+
+def _password_row(path: str, label: str, placeholder: str = "",
+                  help_text: str = "") -> QWidget:
+    """String row with masked input — used for tokens / API keys."""
+    le = QLineEdit()
+    le.setPlaceholderText(placeholder)
+    le.setEchoMode(QLineEdit.EchoMode.Password)
+    le.setText(str(get_path(read_settings(), path, "") or ""))
+    le.editingFinished.connect(lambda: patch_settings(path, le.text()))
+    return _row(row_label(label, help_text, path), le)
+
+
 def _tools(window) -> QWidget:
     from PySide6.QtWidgets import QInputDialog, QMessageBox
 
@@ -1731,6 +2322,14 @@ def _tools(window) -> QWidget:
             form_layout.addWidget(_line_row(f"{p}.session.resume_id",
                                              "Resume ID",
                                              "Set by the bot — used to reattach to prior runs."))
+
+            form_layout.addWidget(_section_header("Streaming Overrides"))
+            form_layout.addWidget(_number_row(f"{p}.streaming.idle_sec",     "PTY Idle Threshold",
+                                               0.0, 10.0, 0.1, 1, "s",
+                                               "Per-tool override of streaming.idle_sec. 0 = inherit global."))
+            form_layout.addWidget(_number_row(f"{p}.streaming.max_wait_sec", "PTY Max Wait",
+                                               0.0, 30.0, 0.5, 1, "s",
+                                               "Per-tool override of streaming.max_wait_sec. 0 = inherit global."))
 
     def _refresh_picker(preserve_key: str | None = None):
         picker.blockSignals(True)
