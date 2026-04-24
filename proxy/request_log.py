@@ -159,3 +159,19 @@ def clear() -> None:
     with _lock:
         _entries.clear()
         _by_rid.clear()
+
+
+def clear_disk_dumps() -> int:
+    """Delete every req_*.json file in the dumps dir. Returns count removed."""
+    n = 0
+    try:
+        d = _dumps_dir()
+        for p in d.glob("req_*.json"):
+            try:
+                p.unlink()
+                n += 1
+            except Exception as exc:
+                log.debug("failed to remove %s: %s", p, exc)
+    except Exception as exc:
+        log.debug("clear_disk_dumps failed: %s", exc)
+    return n

@@ -376,6 +376,7 @@ def _apply_tool_transforms(
     profile: dict | None,
     use_tool_search: bool,
     managed_inject_names: list[str],
+    sort_tools: bool = False,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Split tools into core + deferred for the internal body.
 
@@ -454,6 +455,9 @@ def _apply_tool_transforms(
         tools = managed_oa + core_tools_out
     else:
         tools = managed_oa + tools
+
+    if sort_tools and tools:
+        tools.sort(key=_fn_name)
 
     if tools:
         body["tools"] = tools
@@ -534,6 +538,7 @@ async def _prepare_internal_body(
     inject_date_loc = _pget("inject_date_location", True)
     use_strip_reminders = _pget("strip_reminders", proxy_config.strip_reminders())
     use_auto_load = _pget("auto_load_tools", proxy_config.auto_load_tools())
+    use_sort_tools = _pget("sort_tools", proxy_config.sort_tools())
 
     # 4. System-prompt injection
     internal = await _inject_system_prompt(internal, profile, inject_date_loc)
@@ -556,6 +561,7 @@ async def _prepare_internal_body(
 
     internal, deferred = _apply_tool_transforms(
         internal, profile, use_tool_search, managed_inject,
+        sort_tools=use_sort_tools,
     )
 
     # 6. Inject deferred-listing reminder into first user message
@@ -1655,6 +1661,11 @@ async def start_proxy_background() -> web.AppRunner | None:
     """Start proxy as a background task (non-blocking)."""
     if not proxy_config.enabled():
         return None
+
+    request_log.clear()
+    removed = request_log.clear_disk_dumps()
+    if removed:
+        log.info("cleared %d previous request dump(s) on startup", removed)
 
     port = proxy_config.proxy_port()
     app = create_app()

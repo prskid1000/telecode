@@ -89,6 +89,15 @@ def auto_load_tools() -> bool:
     return bool(app_config.get_nested("proxy.auto_load_tools", False))
 
 
+def sort_tools() -> bool:
+    """When true, sort body.tools alphabetically by name before sending
+    to llama.cpp. Stabilises the prompt prefix across turns when a client
+    reorders its tool list, at the cost of overriding any deliberate
+    primacy ordering. Off by default — enable per-profile for known-bad
+    clients."""
+    return bool(app_config.get_nested("proxy.sort_tools", False))
+
+
 def location() -> str:
     """User's location for context injection. Empty = omit."""
     return str(app_config.get_nested("proxy.location", "") or "")
