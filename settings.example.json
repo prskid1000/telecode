@@ -52,6 +52,42 @@
 
     "default_model": "your-model",
 
+    "threads": 12,
+    "threads_batch": 0,
+    "batch_size": 2048,
+    "ubatch_size": 512,
+    "parallel": 1,
+    "cont_batching": true,
+
+    "mlock": false,
+    "no_mmap": false,
+
+    "main_gpu": 0,
+    "tensor_split": "",
+    "split_mode": "layer",
+    "numa": "",
+
+    "seed": -1,
+    "keep": 0,
+
+    "kv_offload": true,
+    "kv_unified": false,
+    "cache_prompt": true,
+    "clear_idle": false,
+    "cache_ram": 0,
+    "swa_full": false,
+    "ctx_checkpoints": 0,
+    "checkpoint_every_n_tokens": 0,
+    "defrag_thold": 0,
+    "slot_save_path": "",
+
+    "spec_type": "",
+    "spec_ngram_size_n": 0,
+    "spec_ngram_size_m": 0,
+    "spec_ngram_min_hits": 0,
+    "threads_draft": 0,
+    "threads_batch_draft": 0,
+
     "models": {
       "your-model": {
         "path": "/absolute/path/to/model.gguf",
@@ -60,17 +96,8 @@
 
         "ctx_size": 32768,
         "n_gpu_layers": 99,
-        "threads": 12,
-        "batch_size": 2048,
-        "ubatch_size": 512,
-        "parallel": 1,
-        "cont_batching": true,
 
         "flash_attn": true,
-        "mlock": false,
-        "no_mmap": false,
-        "no_kv_offload": false,
-        "kv_unified": false,
 
         "cache_type_k": "f16",
         "cache_type_v": "f16",
@@ -84,19 +111,15 @@
         "rope_freq_scale": 0,
         "yarn_orig_ctx": 0,
 
-        "keep": 0,
-        "seed": -1,
-        "numa": "",
-        "main_gpu": 0,
-        "tensor_split": "",
-        "split_mode": "layer",
-
-        "slot_save_path": "",
-
         "chat_template": "",
         "jinja": true,
 
         "draft_model": "",
+        "ctx_size_draft": 0,
+        "n_gpu_layers_draft": 0,
+        "cache_type_k_draft": "",
+        "cache_type_v_draft": "",
+        "device_draft": "",
         "draft_n": 5,
         "draft_n_min": 0,
         "draft_p_min": 0.75,
