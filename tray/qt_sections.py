@@ -810,6 +810,10 @@ def _proxy(window) -> QWidget:
                                 "First blind call to a deferred tool injects its schema automatically."))
     body.addWidget(_toggle_row("proxy.strip_reminders", "Strip System Reminders",
                                 "Remove <system-reminder> blocks from message history before forwarding."))
+    body.addWidget(_toggle_row("proxy.sort_tools", "Sort Tools Alphabetically",
+                                "Sort body.tools by name before forwarding. Stabilises the prompt prefix when "
+                                "a client reorders its tool list (cache-friendly), at the cost of overriding "
+                                "any deliberate primacy ordering. Off by default."))
     body.addWidget(_toggle_row("proxy.debug", "Debug Logging",
                                 "Dump full request/response JSON under data/logs/proxy_full_*.json."))
 
@@ -932,6 +936,7 @@ def _proxy_profiles_card() -> QFrame:
             ("tool_search",          "Tool Search",         "BM25 tool retrieval for this client."),
             ("auto_load_tools",      "Auto-Load Tools",     "First blind call injects schema."),
             ("strip_reminders",      "Strip Reminders",     "Drop <system-reminder> blocks."),
+            ("sort_tools",           "Sort Tools",          "Sort body.tools alphabetically (cache-stable)."),
             ("inject_date_location", "Inject Date/Location","Append today's date + location to system prompt."),
         ]:
             cur_val = bool(prof.get(field, False))
@@ -1012,6 +1017,7 @@ def _proxy_profiles_card() -> QFrame:
             "tool_search": False,
             "auto_load_tools": False,
             "strip_reminders": False,
+            "sort_tools": False,
             "inject_date_location": False,
             "inject_managed": [],
             "core_tools": [],
