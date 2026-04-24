@@ -432,6 +432,116 @@ def _llama(window) -> QWidget:
                                  "On (default): strip thinking blocks from prior assistant turns before sending upstream — llama.cpp regenerates. Off: reinject as <think>...</think> for trained-adaptive models that need prior reasoning for multi-turn coherence."))
     layout.addWidget(rcard)
 
+    # ── Speed Test card ──────────────────────────────────────────────
+    from PySide6.QtCore import QObject, Signal as _Signal
+    from tray.qt_theme import BG_ELEV as _BG_ELEV
+
+    class _BenchBridge(QObject):
+        finished = _Signal(dict)
+        progress = _Signal(str)
+
+    bench = _BenchBridge()
+
+    sp_card, sp_body = _card("Speed Test",
+                             "Benchmark prompt-eval and generation throughput against llama-server (bypasses proxy)")
+
+    ctx_editor = NumberEditor(0, 262144, 256, 0, "tok")
+    ctx_editor.setValue(2048)
+    sp_body.addWidget(_row(row_label("Prompt Tokens",
+                                      "Synthetic prompt size to feed for prompt-eval timing. "
+                                      "Slider goes 0 → 256K — match it to your model's ctx_size to "
+                                      "see how throughput scales with context."),
+                            ctx_editor))
+
+    gen_editor = NumberEditor(8, 4096, 8, 0, "tok")
+    gen_editor.setValue(128)
+    sp_body.addWidget(_row(row_label("Generated Tokens",
+                                      "How many tokens to generate (gen-speed sample). "
+                                      "Larger = more accurate gen rate but slower test."),
+                            gen_editor))
+
+    ctrl_w = QWidget()
+    ctrl_layout = QHBoxLayout(ctrl_w)
+    ctrl_layout.setContentsMargins(0, 0, 0, 0)
+    ctrl_layout.setSpacing(8)
+    run_btn = QPushButton("Run Test")
+    run_btn.setProperty("class", "primary")
+    sp_status = QLabel("")
+    sp_status.setStyleSheet(f"color: {FG_MUTE}; font-size: 11.5px;")
+    ctrl_layout.addWidget(run_btn)
+    ctrl_layout.addWidget(sp_status, 1)
+    sp_body.addWidget(ctrl_w)
+
+    sp_results = QLabel("")
+    sp_results.setTextFormat(Qt.TextFormat.RichText)
+    sp_results.setWordWrap(True)
+    sp_results.setStyleSheet(
+        f"color: {FG};"
+        f" background: {_BG_ELEV};"
+        f" border: 1px solid {BORDER};"
+        f" border-radius: 6px;"
+        f" padding: 10px 12px;"
+        f" font-family: 'JetBrains Mono', Consolas, 'Cascadia Mono', monospace;"
+        f" font-size: 12px;"
+    )
+    sp_results.hide()
+    sp_body.addWidget(sp_results)
+
+    def _on_bench_finished(res: dict) -> None:
+        run_btn.setEnabled(True)
+        if not res.get("ok"):
+            sp_status.setText(f"Error: {res.get('error') or 'failed'}")
+            sp_results.hide()
+            return
+        wall_s = float(res.get("wall_ms", 0)) / 1000.0
+        model = res.get("model") or "?"
+        sp_status.setText(f"Done in {wall_s:.2f}s · model: {model}")
+
+        actual = int(res.get("actual_prompt_tokens", 0))
+        pn = int(res.get("prompt_n", 0)); pps = float(res.get("prompt_per_second", 0)); pms = float(res.get("prompt_ms", 0))
+        gn = int(res.get("predicted_n", 0)); gps = float(res.get("predicted_per_second", 0)); gms = float(res.get("predicted_ms", 0))
+        total_tok = pn + gn
+        total_s = (pms + gms) / 1000.0 if (pms + gms) > 0 else wall_s
+
+        def _fmt_tps(v: float) -> str:
+            return f"<b style='color:{OK}'>{v:,.1f}</b> tok/s"
+
+        rows = [
+            f"<b>Prompt Eval</b> &nbsp; {pn:,} tok &nbsp;·&nbsp; {_fmt_tps(pps)} &nbsp;·&nbsp; {pms:,.0f} ms"
+            + (f" &nbsp;<span style='color:{FG_MUTE}'>(requested {actual:,})</span>" if actual and actual != pn else ""),
+            f"<b>Generation</b> &nbsp; {gn:,} tok &nbsp;·&nbsp; {_fmt_tps(gps)} &nbsp;·&nbsp; {gms:,.0f} ms",
+            f"<b>Combined</b> &nbsp;&nbsp;&nbsp; {total_tok:,} tok &nbsp;·&nbsp; {total_s:.2f} s wall &nbsp;·&nbsp; "
+            f"first-token latency ≈ <b>{pms:,.0f} ms</b>",
+        ]
+        sp_results.setText("<br>".join(rows))
+        sp_results.show()
+
+    def _on_bench_progress(msg: str) -> None:
+        sp_status.setText(msg)
+
+    bench.finished.connect(_on_bench_finished)
+    bench.progress.connect(_on_bench_progress)
+
+    def _run_bench() -> None:
+        target = int(ctx_editor.value())
+        n_pred = int(gen_editor.value())
+        run_btn.setEnabled(False)
+        bench.progress.emit(f"Running ({target:,} prompt tok → {n_pred:,} gen tok)…")
+        sp_results.hide()
+
+        async def _do() -> None:
+            try:
+                from llamacpp.benchmark import run_speed_test
+                res = await run_speed_test(target, n_predict=n_pred)
+            except Exception as exc:
+                res = {"ok": False, "error": str(exc)}
+            bench.finished.emit(res)
+
+        schedule(window.bot_loop, _do())
+
+    run_btn.clicked.connect(_run_bench)
+    layout.addWidget(sp_card)
+
     layout.addStretch(1)
 
     # Refresh on timer (models list may change from settings.json edit)
@@ -1177,6 +1287,7 @@ _MODEL_DEFAULTS: dict[str, Any] = {
     "ctx_size": 4096,
     "n_gpu_layers": 0,
     "threads": 8,
+    "batch_size": 2048,
     "ubatch_size": 512,
     "parallel": 1,
     "flash_attn": True,
@@ -1186,10 +1297,15 @@ _MODEL_DEFAULTS: dict[str, Any] = {
     "no_mmap": False,
     "n_cpu_moe": 0,
     "jinja": True,
+    "fit": False,
+    "fit_ctx": 0,
+    "fit_target": 0,
+    "reasoning_budget": -1,
     "inference_defaults": {
         "temperature": 0.7,
         "top_p": 0.95,
         "top_k": 40,
+        "min_p": 0.0,
         "presence_penalty": 0.0,
         "repeat_penalty": 1.0,
         "reasoning": {
@@ -1280,8 +1396,18 @@ def _models(window) -> QWidget:
         form_layout.addWidget(_number_row(f"{p}.n_cpu_moe",    "CPU MoE Layers",     0,   200,     1,   0, "",
                                            "MoE experts kept on CPU. 0 = all on GPU."))
         form_layout.addWidget(_number_row(f"{p}.threads",      "Threads",            1,   128,     1,   0))
+        form_layout.addWidget(_number_row(f"{p}.batch_size",   "Batch Size",         32,  8192,    32,  0, "tok",
+                                           "Logical batch size (-b). Tokens processed per upstream step."))
         form_layout.addWidget(_number_row(f"{p}.ubatch_size",  "Micro-Batch Size",   32,  8192,    32,  0, "tok"))
         form_layout.addWidget(_number_row(f"{p}.parallel",     "Parallel Slots",     1,   32,      1,   0))
+
+        form_layout.addWidget(_section_header("Context Fitting"))
+        form_layout.addWidget(_toggle_row(f"{p}.fit",          "Fit Context",
+                                           "--fit on: auto-shrink ctx_size to what the model + KV actually fits in available memory."))
+        form_layout.addWidget(_number_row(f"{p}.fit_ctx",      "Fit Ctx Ceiling",    0,   2097152, 1024, 0, "tok",
+                                           "--fit-ctx: max ctx the fitter is allowed to grow to. 0 = use ctx_size."))
+        form_layout.addWidget(_number_row(f"{p}.fit_target",   "Fit Target Headroom", 0,  16384,   16,   0, "MB",
+                                           "--fit-target: free VRAM/RAM (MB) to leave after fitting."))
 
         form_layout.addWidget(_section_header("Cache"))
         form_layout.addWidget(_enum_row_strs(f"{p}.cache_type_k", "Cache Type (K)", _CACHE_TYPES))
@@ -1316,6 +1442,7 @@ def _models(window) -> QWidget:
         form_layout.addWidget(_number_row(f"{ip}.temperature",      "Temperature",      0.0, 1.5, 0.05, 2))
         form_layout.addWidget(_number_row(f"{ip}.top_p",            "Top-P",            0.0, 1.0, 0.01, 2))
         form_layout.addWidget(_number_row(f"{ip}.top_k",            "Top-K",            0,   200, 1,    0))
+        form_layout.addWidget(_number_row(f"{ip}.min_p",            "Min-P",            0.0, 1.0, 0.01, 2))
         form_layout.addWidget(_number_row(f"{ip}.presence_penalty", "Presence Penalty", 0.0, 2.0, 0.05, 2))
         form_layout.addWidget(_number_row(f"{ip}.repeat_penalty",   "Repeat Penalty",   0.5, 2.0, 0.01, 2))
 
@@ -1325,6 +1452,8 @@ def _models(window) -> QWidget:
         form_layout.addWidget(_line_row(f"{rp}.start",                  "Start Tag", "<think>"))
         form_layout.addWidget(_line_row(f"{rp}.end",                    "End Tag",   "</think>"))
         form_layout.addWidget(_toggle_row(f"{rp}.emit_thinking_blocks", "Emit Thinking Blocks"))
+        form_layout.addWidget(_number_row(f"{p}.reasoning_budget",      "Reasoning Budget", -1, 1048576, 256, 0, "tok",
+                                           "--reasoning-budget: max thinking tokens. -1 = unlimited, 0 = disable thinking."))
 
         form_layout.addWidget(_section_header("Chat Template Kwargs"))
         form_layout.addWidget(_kv_row(f"{ip}.chat_template_kwargs",

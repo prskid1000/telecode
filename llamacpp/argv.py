@@ -66,6 +66,9 @@ _MODEL_FLAG_SPECS: list[tuple[str, str, str]] = [
     ("reasoning_budget",         "--reasoning-budget",         "value"),
     ("reasoning_budget_message", "--reasoning-budget-message", "value"),
     ("reasoning_format",         "--reasoning-format",         "value"),
+    ("fit",                      "--fit",                      "onoff"),
+    ("fit_ctx",                  "--fit-ctx",                  "value"),
+    ("fit_target",               "--fit-target",               "value"),
 ]
 
 
