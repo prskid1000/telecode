@@ -415,6 +415,95 @@ def _llama(window) -> QWidget:
                                   help_text='Appended to every spawn. JSON list of [["--flag","value"], ...].'))
     layout.addWidget(srv_card)
 
+    # Spawn / compute card — server-wide, not per-model
+    spawn_card, spawn_body = _card("Spawn / Compute",
+                                    "llamacpp.* — CPU, batching, memory, GPU layout (restart required)")
+    spawn_body.addWidget(_number_row("llamacpp.threads",        "Threads",           1,  128, 1, 0, "",
+                                      "--threads: CPU threads for generation."))
+    spawn_body.addWidget(_number_row("llamacpp.threads_batch",  "Threads (batch)",   0,  128, 1, 0, "",
+                                      "--threads-batch: CPU threads for prompt processing. 0 = match --threads."))
+    spawn_body.addWidget(_number_row("llamacpp.batch_size",     "Batch Size",        32, 8192, 32, 0, "tok",
+                                      "--batch-size: logical batch size. Tokens processed per upstream step."))
+    spawn_body.addWidget(_number_row("llamacpp.ubatch_size",    "Micro-Batch Size",  32, 8192, 32, 0, "tok",
+                                      "--ubatch-size: physical sub-batch. Usually = batch_size / 2 or / 4."))
+    spawn_body.addWidget(_number_row("llamacpp.parallel",       "Parallel Slots",    1,  32,  1, 0, "",
+                                      "--parallel: number of concurrent request slots."))
+    spawn_body.addWidget(_toggle_row("llamacpp.cont_batching",  "Continuous Batching",
+                                      "--cont-batching: process multiple requests in one batch."))
+    spawn_body.addWidget(_toggle_row("llamacpp.mlock",          "Mlock",
+                                      "--mlock: force the OS to keep model pages in RAM."))
+    spawn_body.addWidget(_toggle_row("llamacpp.no_mmap",        "No mmap",
+                                      "--no-mmap: load the model fully into RAM instead of memory-mapping it."))
+    spawn_body.addWidget(_number_row("llamacpp.main_gpu",       "Main GPU",          0,  16,  1, 0, "",
+                                      "--main-gpu: index of the primary CUDA/ROCm device."))
+    spawn_body.addWidget(_line_row("llamacpp.tensor_split",     "Tensor Split",
+                                    "e.g. 0.5,0.5",
+                                    "--tensor-split: comma-separated weights for multi-GPU split."))
+    spawn_body.addWidget(_enum_row("llamacpp.split_mode",       "Split Mode",
+                                    [("Layer (default)", "layer"),
+                                     ("Row",             "row"),
+                                     ("None",            "none")],
+                                    "--split-mode: how layers are sharded across GPUs."))
+    spawn_body.addWidget(_line_row("llamacpp.numa",             "NUMA Strategy",
+                                    "distribute / isolate / numactl",
+                                    "--numa. Empty = no NUMA tweaks."))
+    spawn_body.addWidget(_number_row("llamacpp.seed",           "Seed",             -1, 2147483647, 1, 0, "",
+                                      "--seed: -1 = random."))
+    spawn_body.addWidget(_number_row("llamacpp.keep",           "Keep Tokens",       0, 8192, 32, 0, "tok",
+                                      "--keep: tokens from prompt always kept when truncating."))
+    layout.addWidget(spawn_card)
+
+    # Caching policy card — server-wide
+    cache_card, cache_body = _card("Caching",
+                                    "llamacpp.* — KV cache & slot / checkpoint policy")
+    cache_body.addWidget(_toggle_row("llamacpp.kv_offload",     "KV Offload (GPU)",
+                                      "--kv-offload / --no-kv-offload: keep KV cache on GPU. Toggle off to stay on CPU."))
+    cache_body.addWidget(_toggle_row("llamacpp.kv_unified",     "Unified KV",
+                                      "--kv-unified / --no-kv-unified: single KV buffer shared across all slots."))
+    cache_body.addWidget(_toggle_row("llamacpp.cache_prompt",   "Cache Prompt",
+                                      "--cache-prompt / --no-cache-prompt: reuse KV across requests with shared prefixes."))
+    cache_body.addWidget(_toggle_row("llamacpp.clear_idle",     "Clear Idle Slots",
+                                      "--clear-idle / --no-clear-idle: save and clear idle slots when a new task arrives."))
+    cache_body.addWidget(_number_row("llamacpp.cache_ram",      "Cache RAM Ceiling", 0, 524288, 128, 0, "MiB",
+                                      "-cram, --cache-ram: maximum host-memory cache size. 0 = unset."))
+    cache_body.addWidget(_toggle_row("llamacpp.swa_full",       "SWA Full Cache",
+                                      "--swa-full: allocate full-size SWA (sliding-window attention) cache."))
+    cache_body.addWidget(_number_row("llamacpp.ctx_checkpoints",           "Ctx Checkpoints",          0, 256, 1, 0, "",
+                                      "--ctx-checkpoints: max number of context checkpoints per slot."))
+    cache_body.addWidget(_number_row("llamacpp.checkpoint_every_n_tokens", "Checkpoint Every N",       0, 100000, 256, 0, "tok",
+                                      "--checkpoint-every-n-tokens: create a checkpoint during prefill every N tokens."))
+    cache_body.addWidget(_number_row("llamacpp.defrag_thold",   "Defrag Threshold",  0.0, 1.0, 0.05, 2, "",
+                                      "--defrag-thold (deprecated). Fragmentation ratio above which KV is defragged."))
+    cache_body.addWidget(_line_row("llamacpp.slot_save_path",   "Slot Save Path",
+                                    "./data/slots",
+                                    "--slot-save-path: directory for /slots/save & /slots/restore."))
+    layout.addWidget(cache_card)
+
+    # Speculative decoding card — server-wide algorithm, per-model draft pair
+    spec_card, spec_body = _card("Speculative Decoding",
+                                  "llamacpp.* — algorithm choice & tuning. Draft model lives per-model.")
+    spec_body.addWidget(_enum_row("llamacpp.spec_type", "Spec Type",
+                                   [("(auto — default)",         ""),
+                                    ("None (disable)",           "none"),
+                                    ("N-gram Simple (prompt-lookup)", "ngram-simple"),
+                                    ("N-gram Map-K",             "ngram-map-k"),
+                                    ("N-gram Map-K4V",           "ngram-map-k4v"),
+                                    ("N-gram Mod",               "ngram-mod"),
+                                    ("N-gram Cache (on-disk)",   "ngram-cache")],
+                                   "--spec-type. Auto = server picks based on whether a draft model is set. "
+                                   "ngram-cache is the only mode that reads --lookup-cache-* files."))
+    spec_body.addWidget(_number_row("llamacpp.spec_ngram_size_n",   "N-gram N",            0, 16, 1, 0, "",
+                                     "--spec-ngram-size-n: lookup key length. 0 = default."))
+    spec_body.addWidget(_number_row("llamacpp.spec_ngram_size_m",   "N-gram M",            0, 16, 1, 0, "",
+                                     "--spec-ngram-size-m: draft length per match. 0 = default."))
+    spec_body.addWidget(_number_row("llamacpp.spec_ngram_min_hits", "N-gram Min Hits",     0, 64, 1, 0, "",
+                                     "--spec-ngram-min-hits: minimum match frequency for map-based modes."))
+    spec_body.addWidget(_number_row("llamacpp.threads_draft",       "Threads (draft)",     0, 128, 1, 0, "",
+                                     "--threads-draft: CPU threads for draft-model generation. 0 = match --threads."))
+    spec_body.addWidget(_number_row("llamacpp.threads_batch_draft", "Threads (draft batch)", 0, 128, 1, 0, "",
+                                     "--threads-batch-draft: CPU threads for draft-model prompt processing."))
+    layout.addWidget(spec_card)
+
     # Sampling card
     samp, samp_body = _card("Sampling defaults")
     samp_body.addWidget(_number_row("llamacpp.inference.temperature",       "Temperature",       0.0, 1.5, 0.05, 2))
@@ -1850,17 +1939,12 @@ def _models(window) -> QWidget:
                                          "D:/models/mmproj.gguf",
                                          "Optional — only needed for vision-capable GGUFs (Qwen-VL etc)."))
 
-        form_layout.addWidget(_section_header("Capacity / Compute"))
+        form_layout.addWidget(_section_header("Capacity"))
         form_layout.addWidget(_number_row(f"{p}.ctx_size",     "Context Size",       512, 1048576, 256, 0, "tok"))
         form_layout.addWidget(_number_row(f"{p}.n_gpu_layers", "GPU Layers",         0,   200,     1,   0, "",
                                            "Layers offloaded to GPU. Higher = faster, more VRAM."))
         form_layout.addWidget(_number_row(f"{p}.n_cpu_moe",    "CPU MoE Layers",     0,   200,     1,   0, "",
                                            "MoE experts kept on CPU. 0 = all on GPU."))
-        form_layout.addWidget(_number_row(f"{p}.threads",      "Threads",            1,   128,     1,   0))
-        form_layout.addWidget(_number_row(f"{p}.batch_size",   "Batch Size",         32,  8192,    32,  0, "tok",
-                                           "Logical batch size (-b). Tokens processed per upstream step."))
-        form_layout.addWidget(_number_row(f"{p}.ubatch_size",  "Micro-Batch Size",   32,  8192,    32,  0, "tok"))
-        form_layout.addWidget(_number_row(f"{p}.parallel",     "Parallel Slots",     1,   32,      1,   0))
 
         form_layout.addWidget(_section_header("Context Fitting"))
         form_layout.addWidget(_toggle_row(f"{p}.fit",          "Fit Context",
@@ -1880,14 +1964,6 @@ def _models(window) -> QWidget:
         form_layout.addWidget(_toggle_row(f"{p}.preload",       "Preload",
                                            "Load this model at telecode startup regardless of auto_start."))
         form_layout.addWidget(_toggle_row(f"{p}.flash_attn",    "Flash Attention"))
-        form_layout.addWidget(_toggle_row(f"{p}.mlock",         "Mlock"))
-        form_layout.addWidget(_toggle_row(f"{p}.no_mmap",       "No mmap"))
-        form_layout.addWidget(_toggle_row(f"{p}.cont_batching", "Continuous Batching",
-                                           "--cont-batching: process multiple requests in one batch."))
-        form_layout.addWidget(_toggle_row(f"{p}.no_kv_offload", "No KV Offload",
-                                           "--no-kv-offload: keep KV cache on CPU."))
-        form_layout.addWidget(_toggle_row(f"{p}.kv_unified",    "Unified KV",
-                                           "--kv-unified: merge K + V into single allocation."))
         form_layout.addWidget(_toggle_row(f"{p}.cpu_moe",       "CPU MoE (all experts)",
                                            "--cpu-moe: keep ALL MoE expert layers on CPU (overrides n_cpu_moe)."))
         form_layout.addWidget(_toggle_row(f"{p}.jinja",         "Jinja Chat Template",
@@ -1896,7 +1972,7 @@ def _models(window) -> QWidget:
                                          "(empty = use model's built-in)",
                                          "--chat-template: override the GGUF's chat template by name."))
 
-        form_layout.addWidget(_section_header("RoPE / NUMA / GPU"))
+        form_layout.addWidget(_section_header("RoPE"))
         form_layout.addWidget(_line_row(f"{p}.rope_scaling",     "RoPE Scaling",
                                          "none / linear / yarn",
                                          "--rope-scaling. Empty = model default."))
@@ -1906,43 +1982,38 @@ def _models(window) -> QWidget:
                                            "--rope-freq-scale. 0 = model default."))
         form_layout.addWidget(_number_row(f"{p}.yarn_orig_ctx",  "YaRN Orig Ctx",        0, 1048576, 1024, 0, "tok",
                                            "--yarn-orig-ctx: original training context for YaRN scaling."))
-        form_layout.addWidget(_number_row(f"{p}.keep",           "Keep Tokens",          0, 8192, 32, 0, "tok",
-                                           "--keep: tokens from prompt always kept when truncating."))
-        form_layout.addWidget(_number_row(f"{p}.seed",           "Seed",                -1, 2147483647, 1, 0, "",
-                                           "--seed: -1 = random."))
-        form_layout.addWidget(_line_row(f"{p}.numa",             "NUMA Strategy",
-                                         "distribute / isolate / numactl",
-                                         "--numa. Empty = no NUMA tweaks."))
-        form_layout.addWidget(_number_row(f"{p}.main_gpu",       "Main GPU",             0, 16, 1, 0, "",
-                                           "--main-gpu: index of the primary CUDA/ROCm device."))
-        form_layout.addWidget(_line_row(f"{p}.tensor_split",     "Tensor Split",
-                                         "e.g. 0.5,0.5",
-                                         "--tensor-split: comma-separated weights for multi-GPU split."))
-        form_layout.addWidget(_enum_row(f"{p}.split_mode",       "Split Mode",
-                                         [("Layer (default)", "layer"),
-                                          ("Row",             "row"),
-                                          ("None",            "none")],
-                                         "--split-mode: how layers are sharded across GPUs."))
-        form_layout.addWidget(_line_row(f"{p}.slot_save_path",   "Slot Save Path",
-                                         "./data/slots",
-                                         "--slot-save-path: directory for /slots/save & /slots/restore."))
 
-        form_layout.addWidget(_section_header("Speculative Decoding"))
+        form_layout.addWidget(_section_header("Draft Model (Speculative)"))
         form_layout.addWidget(_line_row(f"{p}.draft_model", "Draft Model (GGUF)",
                                          "D:/models/draft-0.6b.gguf",
-                                         "Separate small LM for draft tokens. Leave empty to use prompt-lookup self-speculation."))
+                                         "--model-draft: separate small LM for draft tokens. "
+                                         "Leave empty + Spec Type=ngram-simple for prompt-lookup self-speculation."))
+        form_layout.addWidget(_number_row(f"{p}.ctx_size_draft",     "Draft Ctx Size",   0, 1048576, 256, 0, "tok",
+                                           "--ctx-size-draft: context size for the draft model. 0 = match main."))
+        form_layout.addWidget(_number_row(f"{p}.n_gpu_layers_draft", "Draft GPU Layers", 0, 200, 1, 0, "",
+                                           "--n-gpu-layers-draft / -ngld: layers of the draft model on GPU."))
+        form_layout.addWidget(_enum_row_strs(f"{p}.cache_type_k_draft", "Draft Cache (K)", [("(default)", "")] + _CACHE_TYPES,
+                                              "--cache-type-k-draft: K-cache dtype for the draft model."))
+        form_layout.addWidget(_enum_row_strs(f"{p}.cache_type_v_draft", "Draft Cache (V)", [("(default)", "")] + _CACHE_TYPES,
+                                              "--cache-type-v-draft: V-cache dtype for the draft model."))
+        form_layout.addWidget(_line_row(f"{p}.device_draft",         "Draft Devices",
+                                         "e.g. CUDA0,CUDA1",
+                                         "--device-draft / -devd: comma-separated device list for draft offload."))
+        form_layout.addWidget(_number_row(f"{p}.draft_n",     "Draft Max Tokens",  0, 32,   1,    0, "",
+                                           "--draft-max: max draft tokens per step. 0 = disabled. Typical: 8."))
+        form_layout.addWidget(_number_row(f"{p}.draft_n_min", "Draft Min Tokens",  0, 32,   1,    0, "",
+                                           "--draft-min: minimum draft length before accepting. Typical: 0–2."))
+        form_layout.addWidget(_number_row(f"{p}.draft_p_min", "Draft Min Probability", 0.0, 1.0, 0.05, 2, "",
+                                           "--draft-p-min: reject draft tokens below this probability. "
+                                           "Draft-model: 0.5–0.75. N-gram: 0.1."))
         form_layout.addWidget(_line_row(f"{p}.lookup_cache_static", "Lookup Cache (static)",
                                          "./data/lookup-static.bin",
-                                         "Precomputed n-gram cache from llama-lookup-create. Read-only at runtime."))
+                                         "--lookup-cache-static. Only used when Spec Type = ngram-cache. "
+                                         "Precomputed via llama-lookup-create; read-only at runtime."))
         form_layout.addWidget(_line_row(f"{p}.lookup_cache_dynamic", "Lookup Cache (dynamic)",
                                          "./data/lookup-dyn.bin",
-                                         "Self-speculation n-gram cache. Created on first run, grows over time. No draft model needed."))
-        form_layout.addWidget(_number_row(f"{p}.draft_n",     "Draft Max Tokens",  0, 32,   1,    0, "",
-                                           "Max draft tokens per step. 0 = disabled. Typical: 8."))
-        form_layout.addWidget(_number_row(f"{p}.draft_n_min", "Draft Min Tokens",  0, 32,   1,    0, "",
-                                           "Minimum draft length before accepting. Typical: 2."))
-        form_layout.addWidget(_number_row(f"{p}.draft_p_min", "Draft Min Probability", 0.0, 1.0, 0.05, 2, "",
-                                           "Reject draft tokens below this probability. Typical: 0.5."))
+                                         "--lookup-cache-dynamic. Only loaded when Spec Type = ngram-cache. "
+                                         "NOTE: llama-server does not persist writes — file will not be created or updated."))
 
         form_layout.addWidget(_section_header("Inference Defaults"))
         ip = f"{p}.inference_defaults"
