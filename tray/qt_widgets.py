@@ -156,7 +156,10 @@ class NumberEditor(QWidget):
     def _sync_widgets(self, v: float) -> None:
         fmt = f"{{:.{self._decimals}f}}"
         self._emit_silence = True
-        self.edit.setText(fmt.format(v))
+        # Don't clobber the text while the user is typing — refresh timers
+        # call setRange/setValue every second and would reset the cursor.
+        if not self.edit.hasFocus():
+            self.edit.setText(fmt.format(v))
         span = self._max - self._min
         pos = 0 if span == 0 else int(round(1000 * (v - self._min) / span))
         self.slider.setValue(pos)

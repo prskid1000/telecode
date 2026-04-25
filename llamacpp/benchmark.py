@@ -37,6 +37,64 @@ def _build_prompt(target_tokens: int) -> str:
     return (_SEED_TEXT * repeats)[:char_target]
 
 
+async def _tokenize(sess: aiohttp.ClientSession, base: str, text: str) -> int:
+    async with sess.post(f"{base}/tokenize", json={"content": text}) as r:
+        data = await r.json()
+    return len(data.get("tokens", []) or [])
+
+
+async def _build_exact_prompt(
+    sess: aiohttp.ClientSession, base: str, target_tokens: int,
+) -> tuple[str, int]:
+    """Build a prompt that tokenizes to <= target_tokens, as close as possible.
+
+    We never exceed target — overshooting can blow the model's ctx_size.
+    """
+    if target_tokens <= 0:
+        return " ", 0
+
+    seed_tok = await _tokenize(sess, base, _SEED_TEXT)
+    if seed_tok <= 0:
+        prompt = _build_prompt(target_tokens)
+        return prompt, await _tokenize(sess, base, prompt)
+
+    chars_per_tok = len(_SEED_TEXT) / seed_tok
+    # Start slightly under target; grow if there is headroom.
+    char_len = max(1, int(target_tokens * chars_per_tok * 0.97))
+    repeats = (char_len // len(_SEED_TEXT)) + 1
+    prompt = (_SEED_TEXT * repeats)[:char_len]
+    actual = await _tokenize(sess, base, prompt)
+
+    for _ in range(6):
+        if actual == target_tokens:
+            return prompt, actual
+        if actual > target_tokens:
+            # Trim by the observed ratio to land at-or-under target.
+            ratio = target_tokens / max(1, actual)
+            new_len = max(1, int(len(prompt) * ratio))
+            if new_len >= len(prompt):
+                new_len = len(prompt) - 1
+            prompt = prompt[:new_len]
+        else:
+            need = target_tokens - actual
+            add_chars = max(1, int(need * chars_per_tok * 0.97))
+            extra_repeats = (add_chars // len(_SEED_TEXT)) + 1
+            prompt = prompt + (_SEED_TEXT * extra_repeats)[:add_chars]
+        actual = await _tokenize(sess, base, prompt)
+        if actual <= target_tokens and target_tokens - actual <= max(2, target_tokens // 1000):
+            return prompt, actual
+
+    # Final safety: if still over target, hard-trim by ratio until under.
+    while actual > target_tokens and len(prompt) > 1:
+        ratio = target_tokens / max(1, actual)
+        new_len = max(1, int(len(prompt) * ratio * 0.98))
+        if new_len >= len(prompt):
+            new_len = len(prompt) - 1
+        prompt = prompt[:new_len]
+        actual = await _tokenize(sess, base, prompt)
+    return prompt, actual
+
+
 async def run_speed_test(
     target_prompt_tokens: int,
     n_predict: int = 128,
@@ -49,7 +107,6 @@ async def run_speed_test(
         predicted_n, predicted_ms, predicted_per_second, wall_ms, model
     """
     base = cfg.upstream_url()
-    prompt = _build_prompt(target_prompt_tokens)
 
     timeout = aiohttp.ClientTimeout(total=timeout_sec)
     out: dict = {
@@ -74,9 +131,8 @@ async def run_speed_test(
 
     async with aiohttp.ClientSession(timeout=timeout) as sess:
         try:
-            async with sess.post(f"{base}/tokenize", json={"content": prompt}) as r:
-                tok_resp = await r.json()
-                out["actual_prompt_tokens"] = len(tok_resp.get("tokens", []) or [])
+            prompt, actual = await _build_exact_prompt(sess, base, target_prompt_tokens)
+            out["actual_prompt_tokens"] = actual
         except Exception as exc:
             out["error"] = f"tokenize failed: {exc}"
             return out

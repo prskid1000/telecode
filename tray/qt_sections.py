@@ -410,9 +410,9 @@ def _llama(window) -> QWidget:
     srv_body.addWidget(_password_row("llamacpp.api_key", "API Key",
                                       "leave empty to disable",
                                       "Optional --api-key. Clients must send Authorization: Bearer <key>."))
-    srv_body.addWidget(_json_row("llamacpp.extra_args", "Extra CLI Args",
-                                  default=[], height=80,
-                                  help_text='Appended to every spawn. JSON list of [["--flag","value"], ...].'))
+    srv_body.addWidget(_pair_list_row("llamacpp.extra_args", "Extra CLI Args",
+                                  'Appended to every spawn. One [flag, value] pair per row '
+                                  '— leave value empty for flag-only switches.'))
     layout.addWidget(srv_card)
 
     # Spawn / compute card — server-wide, not per-model
@@ -534,9 +534,10 @@ def _llama(window) -> QWidget:
     so_body.addWidget(_json_row("llamacpp.inference.structured_output.schema",
                                  "JSON Schema", default=None, height=140,
                                  help_text="JSON Schema object — overrides response shape via response_format."))
-    so_body.addWidget(_line_row("llamacpp.inference.structured_output.grammar",
+    so_body.addWidget(_code_row("llamacpp.inference.structured_output.grammar",
                                  "GBNF Grammar", "(empty)",
-                                 "Inline GBNF — alternative to JSON Schema."))
+                                 "Inline GBNF — alternative to JSON Schema.",
+                                 height=180, highlighter=_GbnfHighlighter))
     layout.addWidget(so_card)
 
     # Reasoning card
@@ -600,18 +601,41 @@ def _llama(window) -> QWidget:
             f"QFrame {{ background: {_BG_ELEV_MAP}; border: 1px solid {BORDER};"
             f" border-radius: 6px; }}"
         )
-        rl = QGridLayout(row)
-        rl.setContentsMargins(10, 8, 10, 10)
-        rl.setHorizontalSpacing(10)
-        rl.setVerticalSpacing(6)
+        outer = QVBoxLayout(row)
+        outer.setContentsMargins(10, 8, 10, 10)
+        outer.setSpacing(6)
 
+        head_w = QWidget()
+        head_l = QHBoxLayout(head_w)
+        head_l.setContentsMargins(0, 0, 0, 0)
+        head_l.setSpacing(8)
+        chev = QPushButton("▶")
+        chev.setFlat(True)
+        chev.setCursor(Qt.CursorShape.PointingHandCursor)
+        chev.setFixedWidth(22)
+        chev.setStyleSheet(
+            f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent;"
+            f" padding: 0; font-size: 11px; }}"
+            f" QPushButton:hover {{ color: {FG}; }}"
+        )
         head = QLabel(f"<b style='color:{FG}'>{key}</b>")
         head.setTextFormat(Qt.TextFormat.RichText)
+        head.setCursor(Qt.CursorShape.PointingHandCursor)
         rm_btn = QPushButton("Remove")
         rm_btn.setProperty("class", "danger")
         rm_btn.setMaximumWidth(90)
-        rl.addWidget(head, 0, 0, 1, 2)
-        rl.addWidget(rm_btn, 0, 2, alignment=Qt.AlignmentFlag.AlignRight)
+        head_l.addWidget(chev)
+        head_l.addWidget(head, 1)
+        head_l.addWidget(rm_btn)
+        outer.addWidget(head_w)
+
+        body = QWidget()
+        body.setStyleSheet("QWidget { background: transparent; border: none; }")
+        rl = QGridLayout(body)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setHorizontalSpacing(10)
+        rl.setVerticalSpacing(6)
+        outer.addWidget(body)
 
         # thinking_budget_tokens
         tbt_lbl = QLabel("Budget Tokens"); tbt_lbl.setStyleSheet(f"color: {FG_DIM};")
@@ -620,8 +644,8 @@ def _llama(window) -> QWidget:
         tbt.valueChanged.connect(
             lambda v, b=base: patch_settings(f"{b}.thinking_budget_tokens", int(v))
         )
-        rl.addWidget(tbt_lbl, 1, 0)
-        rl.addWidget(tbt, 1, 1, 1, 2)
+        rl.addWidget(tbt_lbl, 0, 0)
+        rl.addWidget(tbt, 0, 1)
 
         # reasoning_effort (string; empty = field omitted)
         re_lbl = QLabel("Effort"); re_lbl.setStyleSheet(f"color: {FG_DIM};")
@@ -635,8 +659,8 @@ def _llama(window) -> QWidget:
             else:
                 remove_path(f"{b}.reasoning_effort")
         re_edit.editingFinished.connect(_commit_effort)
-        rl.addWidget(re_lbl, 2, 0)
-        rl.addWidget(re_edit, 2, 1, 1, 2)
+        rl.addWidget(re_lbl, 1, 0)
+        rl.addWidget(re_edit, 1, 1)
 
         # enable_thinking — tri-state (default / on / off)
         et_lbl = QLabel("Enable Thinking"); et_lbl.setStyleSheet(f"color: {FG_DIM};")
@@ -658,8 +682,18 @@ def _llama(window) -> QWidget:
             else:
                 patch_settings(f"{b}.enable_thinking", bool(val))
         et_combo.currentIndexChanged.connect(_commit_enable)
-        rl.addWidget(et_lbl, 3, 0)
-        rl.addWidget(et_combo, 3, 1, 1, 2)
+        rl.addWidget(et_lbl, 2, 0)
+        rl.addWidget(et_combo, 2, 1)
+        rl.setColumnStretch(1, 1)
+
+        body.setVisible(False)
+
+        def _toggle(_=None, b=body, c=chev):
+            new_state = not b.isVisible()
+            b.setVisible(new_state)
+            c.setText("▼" if new_state else "▶")
+        chev.clicked.connect(_toggle)
+        head.mousePressEvent = lambda ev, t=_toggle: t()
 
         def _on_remove(b=base, k=key):
             if _QMessageBox.question(content, "Remove Preset",
@@ -731,11 +765,20 @@ def _llama(window) -> QWidget:
 
     ctx_editor = NumberEditor(0, 262144, 256, 0, "tok")
     ctx_editor.setValue(2048)
+    prompt_hint = QLabel("")
+    prompt_hint.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px; padding-top: 2px;")
+
+    prompt_col = QWidget()
+    pc_l = QVBoxLayout(prompt_col)
+    pc_l.setContentsMargins(0, 0, 0, 0)
+    pc_l.setSpacing(2)
+    pc_l.addWidget(ctx_editor)
+    pc_l.addWidget(prompt_hint)
     sp_body.addWidget(_row(row_label("Prompt Tokens",
                                       "Synthetic prompt size to feed for prompt-eval timing. "
-                                      "Slider goes 0 → 256K — match it to your model's ctx_size to "
-                                      "see how throughput scales with context."),
-                            ctx_editor))
+                                      "Capped at the active model's ctx_size minus gen tokens "
+                                      "and a small chat-template overhead."),
+                            prompt_col))
 
     gen_editor = NumberEditor(8, 4096, 8, 0, "tok")
     gen_editor.setValue(128)
@@ -743,6 +786,35 @@ def _llama(window) -> QWidget:
                                       "How many tokens to generate (gen-speed sample). "
                                       "Larger = more accurate gen rate but slower test."),
                             gen_editor))
+
+    _TMPL_OVERHEAD = 512  # chat-template + BOS/role tokens headroom
+
+    def _active_ctx_size() -> tuple[str, int]:
+        try:
+            from llamacpp import config as _lc
+            m = _lc.default_model()
+            ctx = int((_lc.model_cfg(m) or {}).get("ctx_size", 0) or 0)
+            return m, ctx
+        except Exception:
+            return "", 0
+
+    def _update_prompt_cap() -> None:
+        model, ctx = _active_ctx_size()
+        n_pred = int(gen_editor.value())
+        cap = max(256, ctx - n_pred - _TMPL_OVERHEAD) if ctx > 0 else 262144
+        ctx_editor.setRange(0, float(cap))
+        if ctx > 0:
+            prompt_hint.setText(
+                f"max {cap:,} tok · model ctx {ctx:,} · reserved {n_pred + _TMPL_OVERHEAD:,} "
+                f"(gen {n_pred:,} + overhead {_TMPL_OVERHEAD:,})"
+            )
+        else:
+            prompt_hint.setText("no active model — slider uncapped")
+        if ctx_editor.value() > cap:
+            ctx_editor.setValue(cap)
+
+    gen_editor.valueChanged.connect(lambda *_: _update_prompt_cap())
+    _update_prompt_cap()
 
     ctrl_w = QWidget()
     ctrl_layout = QHBoxLayout(ctrl_w)
@@ -836,6 +908,7 @@ def _llama(window) -> QWidget:
         load_btn.setEnabled(not alive)
         unload_btn.setEnabled(alive)
         restart_btn.setEnabled(alive)
+        _update_prompt_cap()
     scroll.refresh = refresh  # type: ignore[attr-defined]
     refresh()
     return scroll
@@ -1049,16 +1122,86 @@ def _proxy_profiles_card() -> QFrame:
         form_layout.addWidget(_section_header("Tool Lists"))
         from PySide6.QtWidgets import QPlainTextEdit
         def _list_editor(field: str, label: str, hlp: str) -> QWidget:
-            te = QPlainTextEdit()
-            te.setFixedHeight(80)
-            te.setPlaceholderText("one name per line")
-            cur = prof.get(field, []) or []
-            te.setPlainText("\n".join(str(x) for x in cur))
-            def _commit():
-                vals = [l.strip() for l in te.toPlainText().splitlines() if l.strip()]
+            from tray.qt_theme import BG_ELEV as _BG_ELEV
+
+            host = QWidget()
+            hl = QVBoxLayout(host)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.setSpacing(6)
+
+            rows_host = QWidget()
+            rows_layout = QVBoxLayout(rows_host)
+            rows_layout.setContentsMargins(0, 0, 0, 0)
+            rows_layout.setSpacing(6)
+            hl.addWidget(rows_host)
+
+            add_w = QWidget()
+            add_l = QHBoxLayout(add_w)
+            add_l.setContentsMargins(0, 0, 0, 0)
+            add_l.setSpacing(6)
+            add_btn = QPushButton("+ Add")
+            add_btn.setProperty("class", "primary")
+            add_btn.setMaximumWidth(110)
+            add_l.addWidget(add_btn)
+            add_l.addStretch(1)
+            hl.addWidget(add_w)
+
+            entries: list[tuple[QLineEdit, QWidget]] = []
+
+            def _commit() -> None:
+                vals = [e.text().strip() for e, _ in entries if e.text().strip()]
                 _patch(field, vals)
-            _debounced_commit(te, _commit)
-            return _row(row_label(label, hlp), te)
+
+            def _build_row(value: str = "") -> QWidget:
+                row = QFrame()
+                row.setStyleSheet(
+                    f"QFrame {{ background: {_BG_ELEV}; border: 1px solid {BORDER};"
+                    f" border-radius: 6px; }}"
+                )
+                rl = QHBoxLayout(row)
+                rl.setContentsMargins(8, 6, 8, 6)
+                rl.setSpacing(6)
+                edit = QLineEdit(); edit.setText(value)
+                edit.setPlaceholderText("name")
+                rm_btn = QPushButton("✕")
+                rm_btn.setFlat(True)
+                rm_btn.setFixedWidth(28)
+                rm_btn.setStyleSheet(
+                    f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
+                    f" QPushButton:hover {{ color: #ff6b6b; }}"
+                )
+                rl.addWidget(edit, 1)
+                rl.addWidget(rm_btn)
+
+                entry = (edit, row)
+                entries.append(entry)
+                edit.editingFinished.connect(_commit)
+
+                def _remove():
+                    try:
+                        entries.remove(entry)
+                    except ValueError:
+                        pass
+                    row.setParent(None)
+                    row.deleteLater()
+                    _commit()
+                rm_btn.clicked.connect(_remove)
+
+                rows_layout.addWidget(row)
+                return row
+
+            for item in (prof.get(field, []) or []):
+                _build_row(str(item))
+
+            def _on_add():
+                row = _build_row("")
+                try:
+                    row.findChild(QLineEdit).setFocus()
+                except Exception:
+                    pass
+            add_btn.clicked.connect(_on_add)
+
+            return _row(row_label(label, hlp), host)
 
         form_layout.addWidget(_list_editor("inject_managed", "Inject Managed",
                                             "Managed tool names to inject for this client."))
@@ -1883,6 +2026,78 @@ def _line_row(path: str, label: str, placeholder: str = "", help_text: str = "")
     return _row(row_label(label, help_text, path), le)
 
 
+def _code_row(path: str, label: str, placeholder: str = "",
+              help_text: str = "", *, height: int = 160,
+              highlighter: type | None = None) -> QWidget:
+    """Multi-line free-text editor with monospace font + optional highlighter."""
+    from PySide6.QtWidgets import QPlainTextEdit
+    from PySide6.QtGui import QFontDatabase
+    te = QPlainTextEdit()
+    te.setFixedHeight(height)
+    mono = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+    mono.setPointSize(10)
+    te.setFont(mono)
+    te.setPlaceholderText(placeholder)
+    te.setPlainText(str(get_path(read_settings(), path, "") or ""))
+    if highlighter is not None:
+        highlighter(te.document())
+
+    def _commit():
+        patch_settings(path, te.toPlainText())
+    _debounced_commit(te, _commit, delay_ms=600)
+    return _row(row_label(label, help_text, path), te)
+
+
+def _make_rule_highlighter(rules: list[tuple[str, str, bool]]) -> type:
+    """Build a QSyntaxHighlighter subclass from (regex, color, bold) tuples.
+
+    Later rules win on overlap (last setFormat call overrides)."""
+    from PySide6.QtGui import QSyntaxHighlighter, QTextCharFormat, QColor, QFont
+    from PySide6.QtCore import QRegularExpression as QRE
+
+    compiled = []
+    for pattern, color, bold in rules:
+        f = QTextCharFormat()
+        f.setForeground(QColor(color))
+        if bold:
+            f.setFontWeight(QFont.Weight.Bold)
+        compiled.append((QRE(pattern), f))
+
+    class _RuleBased(QSyntaxHighlighter):
+        def highlightBlock(self, text):
+            for pattern, fmt in compiled:
+                it = pattern.globalMatch(text)
+                while it.hasNext():
+                    m = it.next()
+                    self.setFormat(m.capturedStart(), m.capturedLength(), fmt)
+
+    return _RuleBased
+
+
+# GBNF: comments → strings/char-classes → operators → rule heads
+_GbnfHighlighter = _make_rule_highlighter([
+    (r'"(?:[^"\\]|\\.)*"',                "#a3e635", False),  # terminal strings
+    (r"\[(?:[^\]\\]|\\.)*\]",            "#f0abfc", False),  # char classes
+    (r"[*+?|()]",                         "#fb923c", True),   # quantifiers / alt
+    (r"::=",                              "#fb923c", True),   # rule operator
+    (r"^\s*[A-Za-z_][A-Za-z0-9_-]*(?=\s*::=)",
+                                          "#7dd3fc", True),   # rule head
+    (r"#[^\n]*",                          "#64748b", False),  # comments
+])
+
+# Jinja: comments → strings → keywords → tag delimiters (last so they win)
+_JinjaHighlighter = _make_rule_highlighter([
+    (r"'(?:[^'\\]|\\.)*'",                "#a3e635", False),
+    (r'"(?:[^"\\]|\\.)*"',                "#a3e635", False),
+    (r"\b(?:if|elif|else|endif|for|endfor|in|not|and|or|is|set|"
+     r"endset|block|endblock|extends|include|macro|endmacro|with|"
+     r"endwith|true|false|none|loop|self)\b",
+                                          "#fb923c", True),
+    (r"\{#.*?#\}",                        "#64748b", False),
+    (r"\{%-?|-?%\}|\{\{-?|-?\}\}",       "#7dd3fc", True),
+])
+
+
 def _enum_row_strs(path: str, label: str, options: list[tuple[str, str]],
                    help_text: str = "") -> QWidget:
     return _enum_row(path, label, [(d, v) for d, v in options], help_text)
@@ -1968,9 +2183,11 @@ def _models(window) -> QWidget:
                                            "--cpu-moe: keep ALL MoE expert layers on CPU (overrides n_cpu_moe)."))
         form_layout.addWidget(_toggle_row(f"{p}.jinja",         "Jinja Chat Template",
                                            "Use the built-in tokenizer chat template (required for tools)."))
-        form_layout.addWidget(_line_row(f"{p}.chat_template",   "Chat Template Override",
+        form_layout.addWidget(_code_row(f"{p}.chat_template",   "Chat Template Override",
                                          "(empty = use model's built-in)",
-                                         "--chat-template: override the GGUF's chat template by name."))
+                                         "--chat-template: override the GGUF's chat template by name "
+                                         "or paste an inline jinja template.",
+                                         height=200, highlighter=_JinjaHighlighter))
 
         form_layout.addWidget(_section_header("RoPE"))
         form_layout.addWidget(_line_row(f"{p}.rope_scaling",     "RoPE Scaling",
@@ -2048,17 +2265,18 @@ def _models(window) -> QWidget:
                                            "--lora-scaled: blend strength (1.0 = full)."))
 
         form_layout.addWidget(_section_header("Grammar"))
-        form_layout.addWidget(_line_row(f"{p}.grammar",       "GBNF Grammar (inline)",
+        form_layout.addWidget(_code_row(f"{p}.grammar",       "GBNF Grammar (inline)",
                                          "(empty)",
-                                         "--grammar: inline GBNF for constrained decoding."))
+                                         "--grammar: inline GBNF for constrained decoding.",
+                                         height=180, highlighter=_GbnfHighlighter))
         form_layout.addWidget(_line_row(f"{p}.grammar_file",  "Grammar File",
                                          "/path/to/grammar.gbnf",
                                          "--grammar-file: load GBNF from disk."))
 
         form_layout.addWidget(_section_header("Extra CLI Args"))
-        form_layout.addWidget(_json_row(f"{p}.extra_args", "Extra Args", default=[], height=80,
-            help_text='Per-model escape hatch — JSON list of [["--flag","value"], ...]. '
-                      'Top-level llamacpp.extra_args is also appended.'))
+        form_layout.addWidget(_pair_list_row(f"{p}.extra_args", "Extra Args",
+            'Per-model escape hatch — one [flag, value] pair per row. '
+            'Top-level llamacpp.extra_args is also appended.'))
 
         form_layout.addWidget(_section_header("Per-Model Reasoning Override"))
         form_layout.addWidget(_number_row(f"{p}.reasoning_budget",        "Reasoning Budget",   -1, 1048576, 256, 0, "tok",
@@ -2195,35 +2413,153 @@ def _valid_key(name: str) -> tuple[bool, str]:
 
 
 def _list_row(path: str, label: str, help_text: str = "",
-              placeholder: str = "one per line") -> QWidget:
-    """List-of-strings editor (newline-separated, debounced)."""
-    from PySide6.QtWidgets import QPlainTextEdit
-    te = QPlainTextEdit()
-    te.setPlaceholderText(placeholder)
-    te.setFixedHeight(72)
+              placeholder: str = "value") -> QWidget:
+    """Structured list-of-strings editor (one row per entry, add/remove)."""
+    return _build_array_row(path, label, help_text, placeholder, int_only=False)
+
+
+def _build_array_row(path: str, label: str, help_text: str,
+                      placeholder: str, *, int_only: bool) -> QWidget:
+    from tray.qt_theme import BG_ELEV as _BG_ELEV
+    from PySide6.QtGui import QIntValidator
+
+    host = QWidget()
+    hl = QVBoxLayout(host)
+    hl.setContentsMargins(0, 0, 0, 0)
+    hl.setSpacing(6)
+
+    rows_host = QWidget()
+    rows_layout = QVBoxLayout(rows_host)
+    rows_layout.setContentsMargins(0, 0, 0, 0)
+    rows_layout.setSpacing(6)
+    hl.addWidget(rows_host)
+
+    add_w = QWidget()
+    add_l = QHBoxLayout(add_w)
+    add_l.setContentsMargins(0, 0, 0, 0)
+    add_l.setSpacing(6)
+    add_btn = QPushButton("+ Add")
+    add_btn.setProperty("class", "primary")
+    add_btn.setMaximumWidth(110)
+    add_l.addWidget(add_btn)
+    add_l.addStretch(1)
+    hl.addWidget(add_w)
+
+    entries: list[tuple[QLineEdit, QWidget]] = []
+
+    def _commit() -> None:
+        if int_only:
+            out_i: list[int] = []
+            for edit, _w in entries:
+                s = edit.text().strip()
+                if not s:
+                    continue
+                try:
+                    out_i.append(int(s))
+                except ValueError:
+                    continue
+            patch_settings(path, out_i)
+        else:
+            out_s = [edit.text() for edit, _w in entries if edit.text().strip() != ""]
+            patch_settings(path, out_s)
+
+    def _build_row(value: str = "") -> QWidget:
+        row = QFrame()
+        row.setStyleSheet(
+            f"QFrame {{ background: {_BG_ELEV}; border: 1px solid {BORDER};"
+            f" border-radius: 6px; }}"
+        )
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(8, 6, 8, 6)
+        rl.setSpacing(6)
+
+        edit = QLineEdit(); edit.setText(value)
+        edit.setPlaceholderText(placeholder)
+        if int_only:
+            edit.setValidator(QIntValidator())
+        rm_btn = QPushButton("✕")
+        rm_btn.setFlat(True)
+        rm_btn.setFixedWidth(28)
+        rm_btn.setStyleSheet(
+            f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
+            f" QPushButton:hover {{ color: #ff6b6b; }}"
+        )
+        rl.addWidget(edit, 1)
+        rl.addWidget(rm_btn)
+
+        entry = (edit, row)
+        entries.append(entry)
+        edit.editingFinished.connect(_commit)
+
+        def _remove():
+            try:
+                entries.remove(entry)
+            except ValueError:
+                pass
+            row.setParent(None)
+            row.deleteLater()
+            _commit()
+        rm_btn.clicked.connect(_remove)
+
+        rows_layout.addWidget(row)
+        return row
+
     cur = get_path(read_settings(), path, []) or []
-    te.setPlainText("\n".join(str(x) for x in cur))
-    def _commit():
-        vals = [l for l in te.toPlainText().splitlines() if l.strip() != ""]
-        patch_settings(path, vals)
-    _debounced_commit(te, _commit)
-    return _row(row_label(label, help_text, path), te)
+    if isinstance(cur, list):
+        for item in cur:
+            s = str(item)
+            if int_only:
+                try:
+                    int(s)
+                except ValueError:
+                    continue
+            _build_row(s)
+
+    def _on_add():
+        row = _build_row("")
+        try:
+            row.findChild(QLineEdit).setFocus()
+        except Exception:
+            pass
+    add_btn.clicked.connect(_on_add)
+
+    return _row(row_label(label, help_text, path), host)
 
 
 def _kv_row(path: str, label: str, help_text: str = "",
             typed: bool = False) -> QWidget:
-    """Key=value dict editor (one `K=V` per line, debounced).
+    """Structured key→value dict editor (one row per pair).
 
     typed=True: values go through JSON parsing — so `enable_thinking=false`
     becomes {"enable_thinking": false} (bool), `budget=4096` becomes int,
     `voice=alloy` stays string. Needed for places like chat_template_kwargs
     where downstream jinja templates distinguish `false` from `"false"`."""
     import json as _json
-    from PySide6.QtWidgets import QPlainTextEdit
-    te = QPlainTextEdit()
-    te.setPlaceholderText("KEY=value")
-    te.setFixedHeight(120)
-    cur = get_path(read_settings(), path, {}) or {}
+    from tray.qt_theme import BG_ELEV as _BG_ELEV
+
+    host = QWidget()
+    hl = QVBoxLayout(host)
+    hl.setContentsMargins(0, 0, 0, 0)
+    hl.setSpacing(6)
+
+    rows_host = QWidget()
+    rows_layout = QVBoxLayout(rows_host)
+    rows_layout.setContentsMargins(0, 0, 0, 0)
+    rows_layout.setSpacing(6)
+    hl.addWidget(rows_host)
+
+    add_w = QWidget()
+    add_l = QHBoxLayout(add_w)
+    add_l.setContentsMargins(0, 0, 0, 0)
+    add_l.setSpacing(6)
+    add_btn = QPushButton("+ Add")
+    add_btn.setProperty("class", "primary")
+    add_btn.setMaximumWidth(110)
+    add_l.addWidget(add_btn)
+    add_l.addStretch(1)
+    hl.addWidget(add_w)
+
+    pairs: list[tuple[QLineEdit, QLineEdit, QWidget]] = []
 
     def _stringify(v: Any) -> str:
         if typed and not isinstance(v, str):
@@ -2233,79 +2569,319 @@ def _kv_row(path: str, label: str, help_text: str = "",
                 return str(v)
         return str(v)
 
-    te.setPlainText("\n".join(f"{k}={_stringify(v)}" for k, v in cur.items()))
-
     def _parse(v: str) -> Any:
         if not typed:
             return v
-        v = v.strip()
+        s = v.strip()
         try:
-            return _json.loads(v)
+            return _json.loads(s)
         except Exception:
-            return v  # fall back to raw string
+            return v
 
-    def _commit():
+    def _commit() -> None:
         out: dict[str, Any] = {}
-        for line in te.toPlainText().splitlines():
-            if "=" in line:
-                k, v = line.split("=", 1)
-                k = k.strip()
-                if k:
-                    out[k] = _parse(v)
+        for k_edit, v_edit, _w in pairs:
+            k = k_edit.text().strip()
+            if not k:
+                continue
+            out[k] = _parse(v_edit.text())
         patch_settings(path, out)
-    _debounced_commit(te, _commit)
-    return _row(row_label(label, help_text, path), te)
+
+    def _build_row(k: str = "", v: str = "") -> QWidget:
+        row = QFrame()
+        row.setStyleSheet(
+            f"QFrame {{ background: {_BG_ELEV}; border: 1px solid {BORDER};"
+            f" border-radius: 6px; }}"
+        )
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(8, 6, 8, 6)
+        rl.setSpacing(6)
+
+        k_edit = QLineEdit(); k_edit.setText(k)
+        k_edit.setPlaceholderText("KEY")
+        k_edit.setMinimumWidth(160)
+        eq = QLabel("="); eq.setStyleSheet(f"color: {FG_DIM}; padding: 0 2px;")
+        v_edit = QLineEdit(); v_edit.setText(v)
+        v_edit.setPlaceholderText("value")
+        rm_btn = QPushButton("✕")
+        rm_btn.setFlat(True)
+        rm_btn.setFixedWidth(28)
+        rm_btn.setStyleSheet(
+            f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
+            f" QPushButton:hover {{ color: #ff6b6b; }}"
+        )
+
+        rl.addWidget(k_edit)
+        rl.addWidget(eq)
+        rl.addWidget(v_edit, 1)
+        rl.addWidget(rm_btn)
+
+        entry: tuple[QLineEdit, QLineEdit, QWidget] = (k_edit, v_edit, row)
+        pairs.append(entry)
+
+        k_edit.editingFinished.connect(_commit)
+        v_edit.editingFinished.connect(_commit)
+
+        def _remove():
+            try:
+                pairs.remove(entry)
+            except ValueError:
+                pass
+            row.setParent(None)
+            row.deleteLater()
+            _commit()
+        rm_btn.clicked.connect(_remove)
+
+        rows_layout.addWidget(row)
+        return row
+
+    cur = get_path(read_settings(), path, {}) or {}
+    if isinstance(cur, dict):
+        for k, v in cur.items():
+            _build_row(str(k), _stringify(v))
+
+    def _on_add():
+        row = _build_row("", "")
+        # focus the new key field for immediate typing
+        try:
+            row.findChild(QLineEdit).setFocus()
+        except Exception:
+            pass
+    add_btn.clicked.connect(_on_add)
+
+    return _row(row_label(label, help_text, path), host)
 
 
 def _json_row(path: str, label: str, default: Any = None,
               height: int = 100, help_text: str = "") -> QWidget:
-    """Generic JSON value editor — for arrays/objects too complex for line/kv editors.
+    """Generic JSON value editor with syntax highlighting + format/error feedback.
 
     Saves silently on parse error so user can keep typing without losing state."""
     import json as _json
     from PySide6.QtWidgets import QPlainTextEdit
+    from PySide6.QtGui import QFont, QFontDatabase
+
+    host = QWidget()
+    hl = QVBoxLayout(host)
+    hl.setContentsMargins(0, 0, 0, 0)
+    hl.setSpacing(4)
+
     te = QPlainTextEdit()
     te.setFixedHeight(height)
+    mono = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+    mono.setPointSize(10)
+    te.setFont(mono)
+    te.setTabChangesFocus(False)
     cur = get_path(read_settings(), path, default)
     try:
         te.setPlainText(_json.dumps(cur, indent=2, ensure_ascii=False))
     except Exception:
         te.setPlainText("")
-    def _commit():
+    _JsonHighlighter(te.document())
+    hl.addWidget(te)
+
+    bar = QWidget()
+    bar_l = QHBoxLayout(bar)
+    bar_l.setContentsMargins(0, 0, 0, 0)
+    bar_l.setSpacing(8)
+    fmt_btn = QPushButton("Format")
+    fmt_btn.setMaximumWidth(80)
+    fmt_btn.setStyleSheet(
+        f"QPushButton {{ color: {FG_DIM}; background: transparent;"
+        f" border: 1px solid {BORDER}; border-radius: 4px; padding: 2px 8px; font-size: 11px; }}"
+        f" QPushButton:hover {{ color: {FG}; }}"
+    )
+    status = QLabel("")
+    status.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
+    bar_l.addWidget(fmt_btn)
+    bar_l.addWidget(status, 1)
+    hl.addWidget(bar)
+
+    def _validate() -> tuple[bool, Any]:
         txt = te.toPlainText().strip()
         if not txt:
-            patch_settings(path, default)
+            return True, default
+        try:
+            return True, _json.loads(txt)
+        except _json.JSONDecodeError as e:
+            status.setText(f"✕ {e.msg} (line {e.lineno}, col {e.colno})")
+            status.setStyleSheet("color: #ff6b6b; font-size: 11px;")
+            return False, None
+
+    def _commit():
+        ok, val = _validate()
+        if not ok:
+            return
+        patch_settings(path, val)
+        status.setText("✓ saved")
+        status.setStyleSheet(f"color: {OK}; font-size: 11px;")
+
+    def _on_format():
+        ok, val = _validate()
+        if not ok:
             return
         try:
-            patch_settings(path, _json.loads(txt))
+            te.setPlainText(_json.dumps(val, indent=2, ensure_ascii=False))
+            status.setText("✓ formatted")
+            status.setStyleSheet(f"color: {OK}; font-size: 11px;")
         except Exception:
-            pass  # invalid JSON — keep buffer, retry on next pause
+            pass
+    fmt_btn.clicked.connect(_on_format)
+
     _debounced_commit(te, _commit, delay_ms=800)
-    return _row(row_label(label, help_text, path), te)
+    return _row(row_label(label, help_text, path), host)
+
+
+class _JsonHighlighter:
+    """Lightweight JSON syntax highlighter — strings, numbers, literals, keys."""
+    def __init__(self, doc):
+        from PySide6.QtGui import QSyntaxHighlighter, QTextCharFormat, QColor, QFont
+        from PySide6.QtCore import QRegularExpression as QRE
+
+        def make_fmt(color: str, bold: bool = False):
+            f = QTextCharFormat()
+            f.setForeground(QColor(color))
+            if bold:
+                f.setFontWeight(QFont.Weight.Bold)
+            return f
+
+        # Order matters — later rules overwrite earlier formatting on overlap.
+        rules = [
+            # Numbers (won't overlap with strings since they're outside quotes)
+            (QRE(r'(?<![A-Za-z_"])-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b'),
+             make_fmt("#f0abfc")),
+            # Literals
+            (QRE(r'\b(?:true|false|null)\b'), make_fmt("#fb923c", bold=True)),
+            # String values (any quoted token); applied before keys so keys win.
+            (QRE(r'"(?:[^"\\]|\\.)*"'), make_fmt("#a3e635")),
+            # Keys: a quoted token followed by a colon — overrides the string color
+            (QRE(r'"(?:[^"\\]|\\.)*"(?=\s*:)'), make_fmt("#7dd3fc", bold=True)),
+        ]
+
+        class _Inner(QSyntaxHighlighter):
+            def highlightBlock(self, text):
+                for pattern, fmt in rules:
+                    it = pattern.globalMatch(text)
+                    while it.hasNext():
+                        m = it.next()
+                        self.setFormat(m.capturedStart(), m.capturedLength(), fmt)
+
+        self._inner = _Inner(doc)
 
 
 def _int_list_row(path: str, label: str, help_text: str = "",
-                  placeholder: str = "one per line") -> QWidget:
-    """List-of-ints editor (newline-separated)."""
-    from PySide6.QtWidgets import QPlainTextEdit
-    te = QPlainTextEdit()
-    te.setPlaceholderText(placeholder)
-    te.setFixedHeight(72)
-    cur = get_path(read_settings(), path, []) or []
-    te.setPlainText("\n".join(str(int(x)) for x in cur if str(x).strip()))
-    def _commit():
-        out: list[int] = []
-        for line in te.toPlainText().splitlines():
-            s = line.strip()
-            if not s:
+                  placeholder: str = "value") -> QWidget:
+    """Structured list-of-ints editor (one row per entry, add/remove)."""
+    return _build_array_row(path, label, help_text, placeholder, int_only=True)
+
+
+def _pair_list_row(path: str, label: str, help_text: str = "",
+                    flag_placeholder: str = "--flag",
+                    value_placeholder: str = "value (optional)") -> QWidget:
+    """Structured editor for `[[flag, value], ...]` style CLI arg lists.
+
+    Rows preserve order; both fields are free-text. A row with empty flag is
+    skipped on commit. A row with empty value commits as `[flag]` (single-element
+    list — flag-only switch)."""
+    from tray.qt_theme import BG_ELEV as _BG_ELEV
+
+    host = QWidget()
+    hl = QVBoxLayout(host)
+    hl.setContentsMargins(0, 0, 0, 0)
+    hl.setSpacing(6)
+
+    rows_host = QWidget()
+    rows_layout = QVBoxLayout(rows_host)
+    rows_layout.setContentsMargins(0, 0, 0, 0)
+    rows_layout.setSpacing(6)
+    hl.addWidget(rows_host)
+
+    add_w = QWidget()
+    add_l = QHBoxLayout(add_w)
+    add_l.setContentsMargins(0, 0, 0, 0)
+    add_l.setSpacing(6)
+    add_btn = QPushButton("+ Add")
+    add_btn.setProperty("class", "primary")
+    add_btn.setMaximumWidth(110)
+    add_l.addWidget(add_btn)
+    add_l.addStretch(1)
+    hl.addWidget(add_w)
+
+    pairs: list[tuple[QLineEdit, QLineEdit, QWidget]] = []
+
+    def _commit() -> None:
+        out: list[list[str]] = []
+        for f_edit, v_edit, _w in pairs:
+            f = f_edit.text().strip()
+            if not f:
                 continue
-            try:
-                out.append(int(s))
-            except ValueError:
-                continue
+            v = v_edit.text()
+            out.append([f, v] if v != "" else [f])
         patch_settings(path, out)
-    _debounced_commit(te, _commit)
-    return _row(row_label(label, help_text, path), te)
+
+    def _build_row(flag: str = "", value: str = "") -> QWidget:
+        row = QFrame()
+        row.setStyleSheet(
+            f"QFrame {{ background: {_BG_ELEV}; border: 1px solid {BORDER};"
+            f" border-radius: 6px; }}"
+        )
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(8, 6, 8, 6)
+        rl.setSpacing(6)
+
+        f_edit = QLineEdit(); f_edit.setText(flag)
+        f_edit.setPlaceholderText(flag_placeholder)
+        f_edit.setMinimumWidth(160)
+        v_edit = QLineEdit(); v_edit.setText(value)
+        v_edit.setPlaceholderText(value_placeholder)
+        rm_btn = QPushButton("✕")
+        rm_btn.setFlat(True)
+        rm_btn.setFixedWidth(28)
+        rm_btn.setStyleSheet(
+            f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
+            f" QPushButton:hover {{ color: #ff6b6b; }}"
+        )
+        rl.addWidget(f_edit)
+        rl.addWidget(v_edit, 1)
+        rl.addWidget(rm_btn)
+
+        entry = (f_edit, v_edit, row)
+        pairs.append(entry)
+        f_edit.editingFinished.connect(_commit)
+        v_edit.editingFinished.connect(_commit)
+
+        def _remove():
+            try:
+                pairs.remove(entry)
+            except ValueError:
+                pass
+            row.setParent(None)
+            row.deleteLater()
+            _commit()
+        rm_btn.clicked.connect(_remove)
+
+        rows_layout.addWidget(row)
+        return row
+
+    cur = get_path(read_settings(), path, []) or []
+    if isinstance(cur, list):
+        for item in cur:
+            if isinstance(item, list) and item:
+                f = str(item[0])
+                v = str(item[1]) if len(item) > 1 else ""
+                _build_row(f, v)
+            elif isinstance(item, str) and item:
+                _build_row(item, "")
+
+    def _on_add():
+        row = _build_row("", "")
+        try:
+            row.findChild(QLineEdit).setFocus()
+        except Exception:
+            pass
+    add_btn.clicked.connect(_on_add)
+
+    return _row(row_label(label, help_text, path), host)
 
 
 def _password_row(path: str, label: str, placeholder: str = "",
