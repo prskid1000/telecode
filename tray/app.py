@@ -39,6 +39,7 @@ def start_tray_in_thread(bot_app, bot_loop: asyncio.AbstractEventLoop) -> thread
 
 
 def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
+    log.info("tray: Qt thread starting")
     # Import Qt only inside the thread that'll own it — keeps qApp bound here.
     from PySide6.QtCore import Qt, QCoreApplication
     from PySide6.QtGui import QIcon, QPixmap, QAction
@@ -313,6 +314,8 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
     _refresh_info()
 
     tray.show()
+    log.info("tray: icon shown (visible=%s, supported=%s)",
+             tray.isVisible(), QSystemTrayIcon.isSystemTrayAvailable())
 
     # Block this thread on the Qt event loop
     app.exec()

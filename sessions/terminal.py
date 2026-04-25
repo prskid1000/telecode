@@ -40,6 +40,38 @@ from typing import Callable
 
 import pyte
 
+# pyte 0.8.2 bug: streams.py:_parser_fsm passes `private=True` to every CSI
+# dispatch handler when the sequence starts with `?`, but Screen handlers
+# like select_graphic_rendition only accept *attrs. Modern CLIs (Gemini CLI,
+# anything using ink/react) emit private CSI sequences and pyte raises
+# TypeError, aborting the rest of the read — so output goes missing.
+# Wrap the affected handlers to swallow `private`.
+def _patch_pyte_for_private_kwarg() -> None:
+    cls = pyte.screens.Screen
+    for name in (
+        "select_graphic_rendition",
+        "set_mode", "reset_mode",
+        "cursor_position", "cursor_up", "cursor_down",
+        "cursor_forward", "cursor_back",
+        "erase_in_display", "erase_in_line",
+        "insert_lines", "delete_lines",
+        "insert_characters", "delete_characters",
+        "report_device_attributes", "report_device_status",
+    ):
+        original = getattr(cls, name, None)
+        if original is None:
+            continue
+        def make_wrapper(orig):
+            def wrapper(self, *args, **kwargs):
+                kwargs.pop("private", None)
+                return orig(self, *args, **kwargs)
+            wrapper.__name__ = orig.__name__
+            return wrapper
+        setattr(cls, name, make_wrapper(original))
+
+_patch_pyte_for_private_kwarg()
+
+
 _IS_WIN = sys.platform == "win32"
 _COLS, _ROWS = 200, 300
 _HISTORY = 5000       # lines of scrollback history to keep
