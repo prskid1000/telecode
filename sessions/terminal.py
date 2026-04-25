@@ -73,6 +73,75 @@ _patch_pyte_for_private_kwarg()
 
 
 _IS_WIN = sys.platform == "win32"
+
+
+# ── win32-input-mode key encoder ─────────────────────────────────────────────
+# When a child enables CSI ? 9001 h (win32-input-mode), it expects keystrokes
+# delivered as escape sequences:
+#   ESC [ Vk ; Sc ; Uc ; Kd ; Cs ; Rc _
+# - Vk = virtual key code (Windows VK_* constant)
+# - Sc = scan code (set 1 BIOS code)
+# - Uc = unicode codepoint of the character
+# - Kd = 1 (key down) or 0 (key up)
+# - Cs = control key state bitmask (SHIFT=0x10, CTRL=0x08, ALT=0x01)
+# - Rc = repeat count (1 for a single press)
+# We emit a key-down + key-up pair per character.
+# Ref: https://learn.microsoft.com/en-us/windows/console/key-event-record-str
+#      https://learn.microsoft.com/en-us/windows/console/console-virtual-terminal-sequences#win32-input-mode
+
+# Scan codes for Set 1 (PC/AT). 0 is fine when scan code isn't checked.
+_WIN32_SCAN_CODES: dict[str, int] = {
+    "\r": 0x1C, "\n": 0x1C, "\t": 0x0F, "\x1b": 0x01, "\x08": 0x0E, " ": 0x39,
+}
+# Virtual key codes for control characters / common keys.
+_WIN32_VK_RETURN = 0x0D
+_WIN32_VK_TAB    = 0x09
+_WIN32_VK_ESCAPE = 0x1B
+_WIN32_VK_BACK   = 0x08
+_WIN32_VK_SPACE  = 0x20
+
+
+def _win32_vk_for(c: str) -> tuple[int, int]:
+    """Return (virtual_key_code, control_state) for a single char."""
+    if c == "\r" or c == "\n":
+        return _WIN32_VK_RETURN, 0
+    if c == "\t":
+        return _WIN32_VK_TAB, 0
+    if c == "\x1b":
+        return _WIN32_VK_ESCAPE, 0
+    if c == "\x08" or c == "\x7f":
+        return _WIN32_VK_BACK, 0
+    if c == " ":
+        return _WIN32_VK_SPACE, 0
+    o = ord(c)
+    if "0" <= c <= "9":
+        return o, 0
+    if "a" <= c <= "z":
+        # VK for letters is uppercase ASCII; lowercase needs no SHIFT.
+        return o - 32, 0
+    if "A" <= c <= "Z":
+        # SHIFT_PRESSED = 0x10
+        return o, 0x10
+    if 0x20 <= o < 0x7F:
+        # Punctuation / symbols — VK 0 is fine, the unicode field is what
+        # ink/readline reads for text. SHIFT may be needed for some symbols
+        # but most apps don't strictly require it.
+        return 0, 0
+    # Control chars (Ctrl+A..Ctrl+Z = 0x01..0x1A) → uppercase letter Vk + Ctrl.
+    if 0x01 <= o <= 0x1A:
+        return 0x40 + o, 0x08  # CTRL_PRESSED
+    return 0, 0
+
+
+def _win32_key_seq(c: str) -> str:
+    """Encode a single character as a win32-input-mode keydown+keyup pair."""
+    vk, cs = _win32_vk_for(c)
+    sc = _WIN32_SCAN_CODES.get(c, 0)
+    uc = ord(c)
+    return (
+        f"\x1b[{vk};{sc};{uc};1;{cs};1_"   # key down
+        f"\x1b[{vk};{sc};{uc};0;{cs};1_"   # key up
+    )
 _COLS, _ROWS = 200, 300
 _HISTORY = 5000       # lines of scrollback history to keep
 _IDLE_SEC = 2.0       # seconds of silence after last data → streaming is done, send
@@ -445,6 +514,16 @@ class PTYProcess:
         self._poll_task: asyncio.Task | None = None
         self._watch_task: asyncio.Task | None = None
 
+        # win32-input-mode tracking (CSI ? 9001 h / l). Some Node.js/ink-based
+        # CLIs (notably Gemini CLI 0.39+) enable this at startup, after which
+        # they expect keystrokes formatted as
+        #   ESC [ Vk ; Sc ; Uc ; KeyDown ; CtrlState ; Repeat _
+        # instead of plain bytes. pywinpty/ConPTY does not auto-translate our
+        # writes into that format, so plain `\r` is never recognized as Enter
+        # and message submission silently fails.
+        # See: https://learn.microsoft.com/en-us/windows/console/console-virtual-terminal-sequences#win32-input-mode
+        self._win32_input_mode = False
+
         # Optional raw-PTY byte dump (settings: streaming.dump_raw_pty: true).
         # Writes every chunk read from the PTY to data/logs/pty_<cmd>_<pid>.bin
         # as binary, plus a side .txt file with hex+ASCII pairs. For diagnosing
@@ -538,9 +617,16 @@ class PTYProcess:
                     pass
 
     async def send(self, text: str) -> None:
+        """Send a line of input + Enter. When the child has enabled
+        win32-input-mode, encode text and Enter as proper key events so
+        ink-based CLIs (e.g. Gemini CLI) recognize the submission."""
         if not self.alive:
             raise RuntimeError("Process is not running")
-        await self.send_raw(text + "\r")
+        if self._win32_input_mode and _IS_WIN:
+            payload = "".join(_win32_key_seq(c) for c in text) + _win32_key_seq("\r")
+            await self.send_raw(payload)
+        else:
+            await self.send_raw(text + "\r")
 
     async def send_raw(self, data: str) -> None:
         """Write raw data to the PTY without appending a newline."""
@@ -565,6 +651,16 @@ class PTYProcess:
 
     def _process_raw(self, raw: str) -> None:
         """Feed raw PTY data into pyte and manage streaming timers."""
+        # Track win32-input-mode toggles in the output stream so we know how
+        # to format input on the way back. The child writes CSI ? 9001 h to
+        # request the mode and CSI ? 9001 l to disable it.
+        if "\x1b[?9001h" in raw and not self._win32_input_mode:
+            self._win32_input_mode = True
+            log.info("PTY: win32-input-mode enabled by child")
+        elif "\x1b[?9001l" in raw and self._win32_input_mode:
+            self._win32_input_mode = False
+            log.info("PTY: win32-input-mode disabled by child")
+
         self._stream.feed(raw)
 
         if not self._loop:
