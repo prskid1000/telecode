@@ -137,71 +137,159 @@ def capture_window(hwnd: int) -> bytes | None:
 
 # ── Windows ──────────────────────────────────────────────────────────────────
 
-def _capture_window_win32(hwnd: int) -> bytes | None:
+def _resolve_visible_hwnd_win32(hwnd: int) -> int:
+    """If hwnd has a degenerate rect (e.g. Delphi TApplication coordinator),
+    find the actual visible user-facing window in the same process and return
+    its hwnd. Otherwise return hwnd unchanged.
+
+    Heuristic: among top-level windows in the same PID, prefer ones that are
+    visible, non-cloaked, non-minimized, with a non-empty title and a sensible
+    on-screen rect. Pick the smallest-area such window (the actual dialog,
+    not a maximized invisible parent / layered host).
+    """
     import ctypes
     from ctypes import wintypes
-    from PIL import Image
 
     user32 = ctypes.windll.user32
-    gdi32 = ctypes.windll.gdi32
+    dwmapi = ctypes.windll.dwmapi
 
     rect = wintypes.RECT()
-    if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+    if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+        if (rect.right - rect.left) > 1 and (rect.bottom - rect.top) > 1:
+            return hwnd
+
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    if not pid.value:
+        return hwnd
+
+    target_pid = pid.value
+    DWMWA_CLOAKED = 14
+    candidates: list[tuple[int, int]] = []  # (area, hwnd)
+
+    PROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+
+    def _cb(h, _):
+        p = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(h, ctypes.byref(p))
+        if p.value != target_pid:
+            return True
+        if not user32.IsWindowVisible(h):
+            return True
+        if user32.IsIconic(h):
+            return True
+        cloaked = wintypes.DWORD(0)
+        dwmapi.DwmGetWindowAttribute(
+            h, DWMWA_CLOAKED, ctypes.byref(cloaked), ctypes.sizeof(cloaked)
+        )
+        if cloaked.value:
+            return True
+        # Skip windows without a title — phantom/IME/message-only windows
+        # often have huge bogus rects but no title.
+        title_len = user32.GetWindowTextLengthW(h)
+        if title_len <= 0:
+            return True
+        r = wintypes.RECT()
+        if not user32.GetWindowRect(h, ctypes.byref(r)):
+            return True
+        w = r.right - r.left
+        ht = r.bottom - r.top
+        if w <= 1 or ht <= 1:
+            return True
+        # Reject windows entirely off-screen (negative rects far from desktop).
+        if r.right < -1000 or r.bottom < -1000:
+            return True
+        candidates.append((w * ht, int(h)))
+        return True
+
+    user32.EnumWindows.argtypes = [PROC, wintypes.LPARAM]
+    user32.EnumWindows.restype = ctypes.c_bool
+    user32.EnumWindows(PROC(_cb), 0)
+    if not candidates:
+        return hwnd
+    # Smallest area first — the actual dialog, not a giant invisible host.
+    candidates.sort()
+    resolved = candidates[0][1]
+    if resolved != hwnd:
+        log.debug("Redirecting capture from hwnd %d (degenerate rect) to %d in PID %d",
+                  hwnd, resolved, target_pid)
+    return resolved
+
+
+_WGC_AVAILABLE: bool | None = None
+
+
+def _capture_window_winrt(hwnd: int) -> bytes | None:
+    """Capture via Windows Graphics Capture API (WinRT).
+
+    Captures from the DWM compositor — works through occlusion and does not
+    require the target's UI thread to service WM_PRINT. Returns JPEG bytes
+    or None on failure / not installed.
+    """
+    global _WGC_AVAILABLE
+    if _WGC_AVAILABLE is False:
         return None
-    width = rect.right - rect.left
-    height = rect.bottom - rect.top
-    if width <= 0 or height <= 0:
+    try:
+        from windows_capture import WindowsCapture, Frame, InternalCaptureControl
+        from PIL import Image
+    except ImportError:
+        _WGC_AVAILABLE = False
+        return None
+    _WGC_AVAILABLE = True
+
+    import threading
+    result: dict = {"jpeg": None}
+    done = threading.Event()
+
+    try:
+        cap = WindowsCapture(
+            cursor_capture=False,
+            draw_border=False,
+            window_hwnd=hwnd,
+        )
+    except Exception as e:
+        log.debug("WGC init failed for hwnd %d: %s", hwnd, e)
         return None
 
-    wnd_dc = user32.GetWindowDC(hwnd)
-    if not wnd_dc:
+    @cap.event
+    def on_frame_arrived(frame: Frame, ctrl: InternalCaptureControl):
+        try:
+            arr = frame.frame_buffer
+            h, w, _ = arr.shape
+            img = Image.frombuffer("RGBA", (w, h), arr.tobytes(), "raw", "BGRA", 0, 1)
+            buf = io.BytesIO()
+            img.convert("RGB").save(buf, format="JPEG", quality=80)
+            result["jpeg"] = buf.getvalue()
+        except Exception as e:
+            log.debug("WGC frame conversion failed: %s", e)
+        finally:
+            try:
+                ctrl.stop()
+            except Exception:
+                pass
+            done.set()
+
+    @cap.event
+    def on_closed():
+        done.set()
+
+    t = threading.Thread(target=cap.start, daemon=True)
+    t.start()
+    if not done.wait(2.0):
+        log.debug("WGC capture timed out for hwnd %d", hwnd)
         return None
-    mem_dc = gdi32.CreateCompatibleDC(wnd_dc)
-    bitmap = gdi32.CreateCompatibleBitmap(wnd_dc, width, height)
-    old_bmp = gdi32.SelectObject(mem_dc, bitmap)
+    t.join(0.5)
+    return result["jpeg"]
 
-    PW_RENDERFULLCONTENT = 2
-    result = user32.PrintWindow(hwnd, mem_dc, PW_RENDERFULLCONTENT)
-    if not result:
-        user32.PrintWindow(hwnd, mem_dc, 0)
 
-    class BITMAPINFOHEADER(ctypes.Structure):
-        _fields_ = [
-            ("biSize", ctypes.c_uint32),
-            ("biWidth", ctypes.c_long),
-            ("biHeight", ctypes.c_long),
-            ("biPlanes", ctypes.c_ushort),
-            ("biBitCount", ctypes.c_ushort),
-            ("biCompression", ctypes.c_uint32),
-            ("biSizeImage", ctypes.c_uint32),
-            ("biXPelsPerMeter", ctypes.c_long),
-            ("biYPelsPerMeter", ctypes.c_long),
-            ("biClrUsed", ctypes.c_uint32),
-            ("biClrImportant", ctypes.c_uint32),
-        ]
+def _capture_window_win32(hwnd: int) -> bytes | None:
+    """Capture a window on Windows via the Graphics Capture API (WinRT).
 
-    bmi = BITMAPINFOHEADER()
-    bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-    bmi.biWidth = width
-    bmi.biHeight = -height
-    bmi.biPlanes = 1
-    bmi.biBitCount = 32
-    bmi.biCompression = 0
-
-    pixel_buf = ctypes.create_string_buffer(width * height * 4)
-    gdi32.GetDIBits(mem_dc, bitmap, 0, height, pixel_buf, ctypes.byref(bmi), 0)
-
-    gdi32.SelectObject(mem_dc, old_bmp)
-    gdi32.DeleteObject(bitmap)
-    gdi32.DeleteDC(mem_dc)
-    user32.ReleaseDC(hwnd, wnd_dc)
-
-    img = Image.frombuffer("RGBA", (width, height), pixel_buf, "raw", "BGRA", 0, 1)
-    img = img.convert("RGB")
-
-    out = io.BytesIO()
-    img.save(out, format="JPEG", quality=80)
-    return out.getvalue()
+    Works through occlusion and on stalled UI threads (e.g. installers
+    during file unpacking).
+    """
+    hwnd = _resolve_visible_hwnd_win32(hwnd)
+    return _capture_window_winrt(hwnd)
 
 
 # ── macOS ────────────────────────────────────────────────────────────────────
@@ -816,12 +904,14 @@ class ScreenCapture:
                         None, self._capture_frame
                     )
                     if frame is None:
-                        log.warning("Window %d — capture returned None, stopping", self.hwnd)
-                        self.alive = False
-                        for cb in self._subscribers:
-                            cb(b"")
-                        break
-                    if frame:
+                        if not is_window_valid(self.hwnd):
+                            log.warning("Window %d gone — stopping capture", self.hwnd)
+                            self.alive = False
+                            for cb in self._subscribers:
+                                cb(b"")
+                            break
+                        log.debug("Window %d — transient capture failure, retrying", self.hwnd)
+                    elif frame:
                         for cb in self._subscribers:
                             cb(frame)
                 except Exception as e:
