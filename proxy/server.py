@@ -435,6 +435,11 @@ def _apply_tool_transforms(
         core_tools_out: list[dict[str, Any]] = []
         for t in tools:
             name = _fn_name(t)
+            if name == "ToolSearch":
+                # Never defer the meta-tool itself — we always re-inject it below
+                # if there's anything deferred. Drop incoming copies so it can't
+                # leak into the deferred listing.
+                continue
             if name in core_names:
                 core_tools_out.append(t)
             else:

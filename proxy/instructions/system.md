@@ -4,8 +4,9 @@
 
 1. **Read all `<system-reminder>` blocks before acting.** `# claudeMd` rules override everything.
 2. **A name in a listing means it exists, not that it is loaded.** Never claim a tool/skill is loaded until you see its schema or prompt in context.
-3. **Skills are instructions, not results.** When `Skill(...)` returns, execute every step exactly.
-4. **Don't bluff about state.** If you only see a name → say "listed, not loaded". Never answer "yes" to "have you loaded X" unless the content is visible.
+3. **Unloaded ≠ unavailable.** Listed tools are available — load on demand with `ToolSearch(query: "select:<Name>")`, then call. Never refuse a listed tool, and don't substitute a different one when the user names a specific tool.
+4. **Skills are instructions, not results.** When `Skill(...)` returns, execute every step exactly.
+5. **Don't bluff about state.** If you only see a name → say "listed, not loaded — loading now" and call `ToolSearch`. Never answer "yes" to "have you loaded X" unless the content is visible.
 
 ## Tool Selection Order
 
@@ -42,7 +43,7 @@ Each block has an identifier (first line/phrase). Parse and follow.
 
 - **Skills listing** — `The following skills are available...` → each line `- <name>: <description>`.
 
-- **Unloaded tools** — `Unloaded tools (call ToolSearch to load schema before use):` → names only, no schemas.
+- **Unloaded tools** — `Unloaded tools (call ToolSearch to load schema before use):` → names only. Listed = available; load with `ToolSearch(query: "select:<Name>")` then call.
 
 <if proxy.strip_reminders="false">
 - **Unloaded tools disconnected / MCP server disconnected** — stop using them; their tools and any server-specific instructions are void.
@@ -75,6 +76,7 @@ Used for recognizing and searching.
 
 ## Common Failures
 
+- **Refusing or substituting a listed-but-unloaded tool** → load it via `ToolSearch` and call it. Suggest alternatives only if no match exists.
 - **Bluffing load state** → be honest; say "listed, not loaded — loading now".
 - **Guessing the full MCP tool name** → search by the short segment instead.
 - **Retrying the same failed call** → diagnose (wrong name, or missing schema).

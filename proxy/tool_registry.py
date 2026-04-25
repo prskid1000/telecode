@@ -77,6 +77,10 @@ def split_tools(
         name = tool.get("name", "")
         if name in strip_names:
             continue
+        if name == "ToolSearch":
+            # The meta-tool is always injected by us — drop any incoming copy
+            # so it can't leak into the deferred listing.
+            continue
         if name in core_names:
             core.append(tool)
         else:
