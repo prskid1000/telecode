@@ -1467,6 +1467,8 @@ def _telegram(window) -> QWidget:
     sb.addWidget(_number_row("streaming.idle_timeout_sec",   "Session Idle Timeout", 60, 86400, 60, 0, "s"))
     sb.addWidget(_number_row("streaming.idle_sec",           "PTY Idle Threshold",   0.3, 10.0, 0.1, 1, "s"))
     sb.addWidget(_number_row("streaming.max_wait_sec",       "PTY Max Wait",         1.0, 30.0, 0.5, 1, "s"))
+    sb.addWidget(_toggle_row("streaming.dump_raw_pty",       "Dump Raw PTY",
+                              "Write raw PTY bytes to data/logs/pty_<cmd>_<timestamp>.bin + .txt for diagnosing missing-output issues. Restart the bot after toggling."))
     layout.addWidget(stream_card)
 
     cap_card, cb = _card("Capture", "Screen image / video intervals")
@@ -1690,7 +1692,7 @@ def _logs(window) -> QWidget:
     MAX_TAIL_BYTES = 512 * 1024  # last ~512 KB is plenty for UI
 
     def _get_log_files():
-        """Get all standard log files + any in task_logs."""
+        """Get all standard log files + any in task_logs + raw PTY dumps."""
         out = list(LOG_FILES)
         try:
             task_log_dir = _sp().parent / "data" / "task_logs"
@@ -1698,6 +1700,20 @@ def _logs(window) -> QWidget:
                 for f in task_log_dir.iterdir():
                     if f.is_file() and f.suffix in (".log", ".jsonl"):
                         out.append(f"task_logs/{f.name}")
+        except Exception:
+            pass
+        # Raw PTY dumps (.txt only — .bin is binary, not viewable)
+        try:
+            logs_dir = _sp().parent / "data" / "logs"
+            if logs_dir.exists():
+                pty_dumps = sorted(
+                    (f for f in logs_dir.iterdir()
+                     if f.is_file() and f.name.startswith("pty_") and f.suffix == ".txt"),
+                    key=lambda f: f.stat().st_mtime,
+                    reverse=True,
+                )
+                for f in pty_dumps[:20]:  # cap at 20 most recent
+                    out.append(f.name)
         except Exception:
             pass
         return out

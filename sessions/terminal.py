@@ -445,6 +445,48 @@ class PTYProcess:
         self._poll_task: asyncio.Task | None = None
         self._watch_task: asyncio.Task | None = None
 
+        # Optional raw-PTY byte dump (settings: streaming.dump_raw_pty: true).
+        # Writes every chunk read from the PTY to data/logs/pty_<cmd>_<pid>.bin
+        # as binary, plus a side .txt file with hex+ASCII pairs. For diagnosing
+        # cases where pyte fails to surface output despite the CLI being alive.
+        self._raw_dump_bin = None
+        self._raw_dump_txt = None
+        try:
+            import config as _cfg
+            if _cfg.get_nested("streaming.dump_raw_pty", False):
+                from datetime import datetime
+                logs_dir = _cfg.logs_dir()
+                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                base = (cmd[0] if cmd else "pty").rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+                p_bin = os.path.join(logs_dir, f"pty_{base}_{stamp}.bin")
+                p_txt = os.path.join(logs_dir, f"pty_{base}_{stamp}.txt")
+                self._raw_dump_bin = open(p_bin, "wb")
+                self._raw_dump_txt = open(p_txt, "w", encoding="utf-8")
+                log.info("PTY raw dump: %s + %s", p_bin, p_txt)
+        except Exception as e:
+            log.warning("raw PTY dump init failed: %s", e)
+
+    def _dump_raw(self, data) -> None:
+        """If raw dumping is on, append bytes + hex+ASCII repr to log files."""
+        if self._raw_dump_bin is None:
+            return
+        if isinstance(data, str):
+            payload = data.encode("utf-8", errors="replace")
+        else:
+            payload = bytes(data)
+        try:
+            self._raw_dump_bin.write(payload)
+            self._raw_dump_bin.flush()
+            # Hex preview, 16 bytes per line, with ASCII alongside
+            for i in range(0, len(payload), 16):
+                chunk = payload[i:i+16]
+                hex_part = " ".join(f"{b:02x}" for b in chunk)
+                ascii_part = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+                self._raw_dump_txt.write(f"{hex_part:<48}  {ascii_part}\n")
+            self._raw_dump_txt.flush()
+        except Exception:
+            pass
+
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
         env = os.environ.copy()
@@ -473,6 +515,12 @@ class PTYProcess:
             await self._stop_win()
         else:
             await self._stop_unix()
+        for fh in (self._raw_dump_bin, self._raw_dump_txt):
+            if fh is not None:
+                try:
+                    fh.close()
+                except Exception:
+                    pass
 
     async def interrupt(self) -> None:
         if _IS_WIN:
@@ -615,6 +663,7 @@ class PTYProcess:
                 log.warning("PTY reader error: %s", e)
                 break
             if raw:
+                self._dump_raw(raw)
                 try:
                     self._process_raw(raw)
                 except Exception as e:
@@ -651,6 +700,7 @@ class PTYProcess:
         try:
             raw = os.read(self._master_fd, 4096)
             if raw:
+                self._dump_raw(raw)
                 self._process_raw(raw.decode("utf-8", errors="replace"))
         except OSError:
             self.alive = False
