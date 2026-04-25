@@ -619,12 +619,20 @@ class PTYProcess:
     async def send(self, text: str) -> None:
         """Send a line of input + Enter. When the child has enabled
         win32-input-mode, encode text and Enter as proper key events so
-        ink-based CLIs (e.g. Gemini CLI) recognize the submission."""
+        ink-based CLIs (e.g. Gemini CLI) recognize the submission.
+
+        Keystrokes are sent one at a time with a small delay so that
+        ink/readline-style input handlers don't classify the burst as a
+        paste (which suppresses submit on Enter)."""
         if not self.alive:
             raise RuntimeError("Process is not running")
         if self._win32_input_mode and _IS_WIN:
-            payload = "".join(_win32_key_seq(c) for c in text) + _win32_key_seq("\r")
-            await self.send_raw(payload)
+            for c in text:
+                await self.send_raw(_win32_key_seq(c))
+                await asyncio.sleep(0.01)
+            # Brief pause before Enter so the input box has settled.
+            await asyncio.sleep(0.05)
+            await self.send_raw(_win32_key_seq("\r"))
         else:
             await self.send_raw(text + "\r")
 
