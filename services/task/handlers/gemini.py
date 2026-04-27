@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from services.session import session_store
+from services.task.agent_prompt import resolve_prompt
 from services.task.task_utils import (
     append_event,
     get_session_folder,
@@ -83,10 +84,27 @@ def _handle_event(evt: Dict[str, Any], tool_calls: List[str]) -> None:
         })
 
 def gemini_task(
-    prompt: str,
+    prompt: Optional[str] = None,
     is_local: bool = False,
+    *,
+    agent: Optional[Dict[str, Any]] = None,
+    job: Optional[Dict[str, Any]] = None,
+    agent_files: Optional[List[Any]] = None,
+    job_files: Optional[List[Any]] = None,
 ) -> Dict[str, Any]:
-    """Run Gemini CLI in the session folder."""
+    """Run Gemini CLI in the session folder.
+
+    Accepts either a pre-rendered `prompt` string or structured fields
+    (`agent`, `job`, optional `agent_files`/`job_files`) which are rendered
+    into the shared <agent_task> XML via services.task.agent_prompt.
+    """
+    prompt = resolve_prompt({
+        "prompt": prompt,
+        "agent": agent,
+        "job": job,
+        "agent_files": agent_files,
+        "job_files": job_files,
+    })
     task_id = get_task_id() or "no-task"
     
     import config as app_config

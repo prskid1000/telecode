@@ -29,19 +29,44 @@ def register_default_tasks():
         }
     )
 
-    # 2. Claude Code Task (Identical to pythonmagic)
+    # Shared schema: pre-rendered prompt OR structured agent/job fields.
+    _agent_task_schema = {
+        "type": "object",
+        "properties": {
+            "prompt": {"type": "string", "description": "Pre-rendered prompt (text or XML). Mutually exclusive with agent+job."},
+            "is_local": {"type": "boolean", "description": "Point to the local proxy and currently loaded model", "default": False},
+            "agent": {
+                "type": "object",
+                "description": "Agent struct (id, name, instructions). Server renders <agent_task> XML.",
+                "properties": {
+                    "id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "instructions": {"type": "string"},
+                },
+            },
+            "job": {
+                "type": "object",
+                "description": "Job struct (workspace_id, task_description).",
+                "properties": {
+                    "workspace_id": {"type": "string"},
+                    "task_description": {"type": "string"},
+                },
+            },
+            "agent_files": {"type": "array", "items": {"type": "object"}, "description": "Optional list of {path: ...}"},
+            "job_files": {"type": "array", "items": {"type": "object"}, "description": "Optional list of {path: ...}"},
+        },
+        "oneOf": [
+            {"required": ["prompt"]},
+            {"required": ["agent", "job"]},
+        ],
+    }
+
+    # 2. Claude Code Task
     queue.register_handler(
         "CLAUDE_CODE",
         claude_code_task,
         description="Run Claude Code in a stateful session folder",
-        params_schema={
-            "type": "object",
-            "properties": {
-                "prompt": {"type": "string", "description": "The prompt to send to Claude Code"},
-                "is_local": {"type": "boolean", "description": "Point to the local proxy and currently loaded model", "default": False}
-            },
-            "required": ["prompt"]
-        }
+        params_schema=_agent_task_schema,
     )
 
     # 3. Gemini Task
@@ -49,14 +74,7 @@ def register_default_tasks():
         "GEMINI",
         gemini_task,
         description="Run Gemini CLI in a stateful session folder",
-        params_schema={
-            "type": "object",
-            "properties": {
-                "prompt": {"type": "string", "description": "The prompt to send to Gemini"},
-                "is_local": {"type": "boolean", "description": "Point to the local proxy and currently loaded model", "default": False}
-            },
-            "required": ["prompt"]
-        }
+        params_schema=_agent_task_schema,
     )
 
     logger.info("Task handlers registered (ECHO, CLAUDE_CODE, GEMINI)")

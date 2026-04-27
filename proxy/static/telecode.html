@@ -996,6 +996,30 @@
 
   // --- Execution Flow ---
 
+  function escXml(s) {
+    return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function buildAgentPromptXml(agent, job, agentFiles, jobFiles) {
+    const paths = [...(agentFiles || []), ...(jobFiles || [])].map(f => f.path);
+    const filesBlock = paths.length
+      ? `  <context_files>\n${paths.map(p => `    <file>${escXml(p)}</file>`).join('\n')}\n  </context_files>`
+      : `  <context_files/>`;
+    return [
+      `<agent_task version="1">`,
+      `  <agent id="${escXml(agent.id)}" name="${escXml(agent.name)}"/>`,
+      `  <workspace id="${escXml(job.workspace_id)}"/>`,
+      `  <instructions>`,
+      escXml(agent.instructions || ''),
+      `  </instructions>`,
+      `  <task_description>`,
+      escXml(job.task_description || ''),
+      `  </task_description>`,
+      filesBlock,
+      `</agent_task>`,
+    ].join('\n');
+  }
+
   function openRunModal(jobId) {
     const body = `
       <div class="flex-col" style="padding: 20px;">
@@ -1068,7 +1092,7 @@
       // 3. Combine prompt
       const agentRes = await api(`/api/agents/${agentId}`);
       const agent = agentRes.agent;
-      const prompt = `INSTRUCTIONS:\n${agent.instructions}\n\nTASKS:\n${job.task_description || ''}`;
+      const prompt = buildAgentPromptXml(agent, job, agentFiles, jobFiles);
 
       // 4. Submit Task
       const taskRes = await api('/api/tasks', {
