@@ -26,6 +26,10 @@
   button.icon.danger-hover:hover { background: var(--err); color: #3a0b0b; border-color: var(--err); }
   button:disabled { opacity: 0.45; cursor: not-allowed; }
   main { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 14px; flex: 1 1 auto; min-height: 0; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
+  .tabs .tab { background: transparent; color: var(--muted); border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 6px 14px; font-weight: 500; font-size: 13px; cursor: pointer; }
+  .tabs .tab:hover { color: var(--text); }
+  .tabs .tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
   .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px; overflow: auto; display: flex; flex-direction: column; min-height: 0; }
   .panel > .events { flex: 1 1 auto; max-height: none; }
   .panel h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
@@ -76,6 +80,12 @@
 
 <main>
   <section class="panel">
+    <div class="tabs">
+      <button class="tab active" data-tab="session">Session</button>
+      <button class="tab" data-tab="skills">Skills</button>
+    </div>
+
+    <div id="tabSession">
     <h2>Upload context files</h2>
     <div id="drop" class="drop">Drop files here or click to pick — they go into the session folder</div>
     <input type="file" id="picker" multiple style="display:none"/>
@@ -112,6 +122,40 @@
       <button id="submit">Submit task</button>
       <span id="submitMsg" class="muted"></span>
     </div>
+    </div><!-- /tabSession -->
+
+    <div id="tabSkills" style="display:none">
+      <div class="row" style="margin-bottom:6px">
+        <label>skill</label>
+        <select id="skillPicker" style="background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font:13px var(--mono);min-width:240px">
+          <option value="">— select a skill —</option>
+        </select>
+        <button class="ghost icon" id="skillRefresh" title="Refresh skills">↻</button>
+        <button id="skillNew" style="font-size:12px;padding:6px 12px">+ New</button>
+        <span class="grow"></span>
+        <button class="ghost danger-hover" id="skillDelete" disabled style="font-size:12px;padding:6px 12px">Delete skill</button>
+      </div>
+      <div id="skillBadge" class="muted" style="margin-bottom:14px">Skills mirror to <span style="font-family:var(--mono)">~/.claude/skills/</span> and <span style="font-family:var(--mono)">~/.gemini/skills/</span> — auto-discovered by both CLIs on every task.</div>
+
+      <h2>Upload reference file</h2>
+      <div id="skillDrop" class="drop">Drop a file here or click to pick — goes into the selected skill's folder</div>
+      <input type="file" id="skillFilePicker" style="display:none"/>
+      <div class="row" style="margin-top:8px">
+        <input type="text" id="skillFileRel" placeholder="rel/path.md (blank = use filename)" style="flex:1"/>
+        <button id="skillFileUpload" disabled>Upload</button>
+        <span id="skillUploadMsg" class="muted"></span>
+      </div>
+
+      <h2 style="margin-top:18px">Skill files</h2>
+      <div id="skillFileList" class="files"><span class="muted">No skill selected.</span></div>
+
+      <h2 style="margin-top:18px">SKILL.md</h2>
+      <textarea id="skillContent" placeholder="---&#10;name: my-skill&#10;description: One-line summary that triggers activation&#10;---&#10;&#10;# Body…" style="min-height:220px;font-family:var(--mono);font-size:12px"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button id="skillSave" disabled>Save SKILL.md</button>
+        <span id="skillMsg" class="muted"></span>
+      </div>
+    </div><!-- /tabSkills -->
   </section>
 
   <section class="panel">
@@ -404,6 +448,189 @@ async function refreshTasks() {
 
 refreshTasks();
 setInterval(refreshTasks, 5000);
+
+// ===== Tabs (Session / Skills) =====
+document.querySelectorAll(".tabs .tab").forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll(".tabs .tab").forEach(b => b.classList.toggle("active", b === btn));
+    const t = btn.dataset.tab;
+    $("tabSession").style.display = t === "session" ? "" : "none";
+    $("tabSkills").style.display = t === "skills" ? "" : "none";
+    if (t === "skills") refreshSkills();
+  };
+});
+
+// ===== Skills =====
+let skillCache = [];
+let activeSkill = null;   // {name, content, files, roots}
+
+function setSkillMsg(text, isErr) {
+  const el = $("skillMsg");
+  el.textContent = text || "";
+  el.style.color = isErr ? "var(--err)" : "var(--muted)";
+}
+
+function setSkillUploadMsg(text, isErr) {
+  const el = $("skillUploadMsg");
+  el.textContent = text || "";
+  el.style.color = isErr ? "var(--err)" : "var(--muted)";
+}
+
+function renderSkillOptions() {
+  const sel = $("skillPicker");
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">— select a skill —</option>' +
+    skillCache.map(s => {
+      const tag = (s.roots || []).join("+") || "?";
+      const desc = (s.description || "").slice(0, 60);
+      return `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)} [${escapeHtml(tag)}]${desc ? " — " + escapeHtml(desc) : ""}</option>`;
+    }).join("");
+  if (cur && skillCache.some(s => s.name === cur)) sel.value = cur;
+}
+
+function renderSkillFiles() {
+  const el = $("skillFileList");
+  if (!activeSkill) { el.innerHTML = '<span class="muted">No skill selected.</span>'; return; }
+  const refs = (activeSkill.files || []).filter(f => f.path !== "SKILL.md");
+  if (!refs.length) { el.innerHTML = '<span class="muted">No reference files.</span>'; return; }
+  el.innerHTML = refs.map(f => `
+    <div class="f">
+      <span>${escapeHtml(f.path)} <span class="muted">· ${f.bytes}b</span></span>
+      <button class="icon danger-hover ghost" title="Delete" onclick="deleteSkillFile('${escapeHtml(f.path).replace(/'/g, "\\'")}')">✕</button>
+    </div>
+  `).join("");
+}
+
+async function refreshSkills() {
+  try {
+    const r = await api("/api/skills");
+    skillCache = r.skills || [];
+    renderSkillOptions();
+  } catch (e) { setSkillMsg("List failed: " + e.message, true); }
+}
+
+async function loadSkill(name) {
+  if (!name) {
+    activeSkill = null;
+    $("skillContent").value = "";
+    $("skillSave").disabled = true;
+    $("skillDelete").disabled = true;
+    $("skillFileUpload").disabled = true;
+    renderSkillFiles();
+    return;
+  }
+  try {
+    const s = await api(`/api/skills/${encodeURIComponent(name)}`);
+    activeSkill = s;
+    $("skillContent").value = s.content || "";
+    $("skillSave").disabled = false;
+    $("skillDelete").disabled = false;
+    $("skillFileUpload").disabled = false;
+    renderSkillFiles();
+    setSkillMsg(`Loaded — roots: ${(s.roots || []).join(", ") || "?"}`);
+  } catch (e) { setSkillMsg("Load failed: " + e.message, true); }
+}
+
+$("skillPicker").onchange = (e) => loadSkill(e.target.value);
+$("skillRefresh").onclick = refreshSkills;
+
+$("skillNew").onclick = async () => {
+  const name = (window.prompt("New skill name (lowercase, digits, _ or -)") || "").trim();
+  if (!name) return;
+  const tpl = `---\nname: ${name}\ndescription: One-line summary that triggers activation\n---\n\n# ${name}\n\nWrite the SKILL.md body here. Both Claude Code and Gemini CLI auto-discover skills on every task.\n`;
+  try {
+    await api(`/api/skills/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: tpl }),
+    });
+    await refreshSkills();
+    $("skillPicker").value = name;
+    await loadSkill(name);
+  } catch (e) { setSkillMsg("Create failed: " + e.message, true); }
+};
+
+$("skillDelete").onclick = async () => {
+  if (!activeSkill) return;
+  if (!confirm(`Delete skill "${activeSkill.name}" from all roots?`)) return;
+  try {
+    await api(`/api/skills/${encodeURIComponent(activeSkill.name)}`, { method: "DELETE" });
+    activeSkill = null;
+    $("skillPicker").value = "";
+    $("skillContent").value = "";
+    $("skillSave").disabled = true;
+    $("skillDelete").disabled = true;
+    $("skillFileUpload").disabled = true;
+    renderSkillFiles();
+    await refreshSkills();
+    setSkillMsg("Deleted.");
+  } catch (e) { setSkillMsg("Delete failed: " + e.message, true); }
+};
+
+$("skillSave").onclick = async () => {
+  if (!activeSkill) return;
+  const content = $("skillContent").value;
+  try {
+    await api(`/api/skills/${encodeURIComponent(activeSkill.name)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    });
+    await loadSkill(activeSkill.name);
+    await refreshSkills();
+    setSkillMsg("Saved to " + (activeSkill.roots || []).join(", "));
+  } catch (e) { setSkillMsg("Save failed: " + e.message, true); }
+};
+
+// File drop / pick / upload
+const skillDrop = $("skillDrop");
+let skillStaged = null;   // File
+
+function setSkillStaged(file) {
+  skillStaged = file || null;
+  skillDrop.textContent = file ? `Ready: ${file.name} (${file.size}b)` : "Drop a file here or click to pick — goes into the selected skill's folder";
+}
+
+skillDrop.onclick = () => $("skillFilePicker").click();
+$("skillFilePicker").onchange = (e) => setSkillStaged(e.target.files[0]);
+skillDrop.ondragover = (e) => { e.preventDefault(); skillDrop.classList.add("over"); };
+skillDrop.ondragleave = () => skillDrop.classList.remove("over");
+skillDrop.ondrop = (e) => {
+  e.preventDefault();
+  skillDrop.classList.remove("over");
+  setSkillStaged(e.dataTransfer.files[0]);
+};
+
+$("skillFileUpload").onclick = async () => {
+  if (!activeSkill) { setSkillUploadMsg("Select a skill first.", true); return; }
+  if (!skillStaged) { setSkillUploadMsg("No file staged.", true); return; }
+  const rel = ($("skillFileRel").value.trim() || skillStaged.name);
+  try {
+    const buf = await skillStaged.arrayBuffer();
+    const r = await fetch(base() + `/api/skills/${encodeURIComponent(activeSkill.name)}/files/${rel.split("/").map(encodeURIComponent).join("/")}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: buf,
+    });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+    await loadSkill(activeSkill.name);
+    setSkillUploadMsg(`Uploaded ${rel}`);
+    setSkillStaged(null);
+    $("skillFileRel").value = "";
+  } catch (e) { setSkillUploadMsg("Upload failed: " + e.message, true); }
+};
+
+async function deleteSkillFile(rel) {
+  if (!activeSkill) return;
+  if (!confirm(`Delete ${rel} from "${activeSkill.name}"?`)) return;
+  try {
+    await api(`/api/skills/${encodeURIComponent(activeSkill.name)}/files/${rel.split("/").map(encodeURIComponent).join("/")}`, { method: "DELETE" });
+    await loadSkill(activeSkill.name);
+  } catch (e) { setSkillMsg("Delete file failed: " + e.message, true); }
+}
+window.deleteSkillFile = deleteSkillFile;
+
+refreshSkills();
 </script>
 </body>
 </html>
