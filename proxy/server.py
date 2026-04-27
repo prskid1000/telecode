@@ -1557,6 +1557,68 @@ async def handle_model_by_id(request: web.Request) -> web.Response:
     return web.json_response({"error": {"message": f"Model {model_id} not found", "type": "not_found"}}, status=404)
 
 
+async def handle_model_load(request: web.Request) -> web.Response:
+    """POST /v1/models/{model_id}/load — load (or swap to) a model."""
+    model_id = request.match_info["model_id"]
+    try:
+        supervisor = await get_supervisor()
+        resolved = await supervisor.ensure_model(model_id)
+    except Exception as exc:
+        return web.json_response(
+            {"error": {"type": "model_load_error", "message": str(exc)}},
+            status=503,
+        )
+    return web.json_response({
+        "status": "loaded",
+        "requested": model_id,
+        "active_model": resolved,
+        "loaded_at": supervisor.loaded_at(),
+    })
+
+
+async def handle_model_load_default(request: web.Request) -> web.Response:
+    """POST /v1/models/load — load the configured default model."""
+    try:
+        supervisor = await get_supervisor()
+        resolved = await supervisor.start_default()
+    except Exception as exc:
+        return web.json_response(
+            {"error": {"type": "model_load_error", "message": str(exc)}},
+            status=503,
+        )
+    return web.json_response({
+        "status": "loaded",
+        "active_model": resolved,
+        "loaded_at": supervisor.loaded_at(),
+    })
+
+
+async def handle_model_unload(request: web.Request) -> web.Response:
+    """POST /v1/models/unload — stop the active llama-server."""
+    try:
+        supervisor = await get_supervisor()
+        was_active = supervisor.active_model()
+        await supervisor.stop()
+    except Exception as exc:
+        return web.json_response(
+            {"error": {"type": "model_unload_error", "message": str(exc)}},
+            status=500,
+        )
+    return web.json_response({"status": "unloaded", "previous_model": was_active})
+
+
+async def handle_model_status(request: web.Request) -> web.Response:
+    """GET /v1/models/active — current supervisor state."""
+    supervisor = await get_supervisor()
+    return web.json_response({
+        "alive": supervisor.alive(),
+        "active_model": supervisor.active_model(),
+        "inflight": supervisor.inflight_count(),
+        "loaded_at": supervisor.loaded_at(),
+        "last_used": supervisor.last_used(),
+    })
+
+
 async def handle_embeddings(request: web.Request) -> web.Response:
     """POST /v1/embeddings — forward to llama.cpp unchanged."""
     body = await request.read()
@@ -1644,6 +1706,10 @@ def create_app() -> web.Application:
 
     # /v1/models routes are shared — shape chosen by header sniff
     app.router.add_get("/v1/models", handle_models)
+    app.router.add_get("/v1/models/active", handle_model_status)
+    app.router.add_post("/v1/models/load", handle_model_load_default)
+    app.router.add_post("/v1/models/unload", handle_model_unload)
+    app.router.add_post("/v1/models/{model_id}/load", handle_model_load)
     app.router.add_get("/v1/models/{model_id}", handle_model_by_id)
 
     # Embeddings + health forwarded to llama.cpp
