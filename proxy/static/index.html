@@ -6,11 +6,14 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'><path d='M13 10V3L4 14h7v7l9-11h-7z'/></svg>">
 <style>
   :root {
+    color-scheme: dark;
     --bg: #0f1115; --panel: #171a21; --panel2: #1f232c; --border: #2a2f3a;
     --text: #e6e8eb; --muted: #9aa3b2; --accent: #7cc4ff; --ok: #4ade80;
     --warn: #fbbf24; --err: #f87171; --mono: ui-monospace, Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; }
+  select { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font: 13px var(--mono); }
+  select option { background: var(--panel2); color: var(--text); font: 13px var(--mono); padding: 4px 8px; }
   html, body { height: 100%; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif; display: flex; flex-direction: column; }
   header { padding: 14px 20px; background: var(--panel); border-bottom: 1px solid var(--border); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; flex: 0 0 auto; }
@@ -106,7 +109,7 @@
     </div>
     <div class="row">
       <label>task type</label>
-      <select id="taskType" style="width:200px; background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font: 13px var(--mono);">
+      <select id="taskType" style="width:200px">
         <option value="CLAUDE_CODE">CLAUDE_CODE</option>
         <option value="GEMINI">GEMINI</option>
       </select>
@@ -127,7 +130,7 @@
     <div id="tabSkills" style="display:none">
       <div class="row" style="margin-bottom:6px">
         <label>skill</label>
-        <select id="skillPicker" style="background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font:13px var(--mono);min-width:240px">
+        <select id="skillPicker" style="min-width:240px;max-width:520px">
           <option value="">— select a skill —</option>
         </select>
         <button class="ghost icon" id="skillRefresh" title="Refresh skills">↻</button>
@@ -482,8 +485,8 @@ function renderSkillOptions() {
   sel.innerHTML = '<option value="">— select a skill —</option>' +
     skillCache.map(s => {
       const tag = (s.roots || []).join("+") || "?";
-      const desc = (s.description || "").slice(0, 60);
-      return `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)} [${escapeHtml(tag)}]${desc ? " — " + escapeHtml(desc) : ""}</option>`;
+      const desc = s.description || "";
+      return `<option value="${escapeHtml(s.name)}" title="${escapeHtml(desc)}">${escapeHtml(s.name)} [${escapeHtml(tag)}]</option>`;
     }).join("");
   if (cur && skillCache.some(s => s.name === cur)) sel.value = cur;
 }
@@ -527,7 +530,9 @@ async function loadSkill(name) {
     $("skillDelete").disabled = false;
     $("skillFileUpload").disabled = false;
     renderSkillFiles();
-    setSkillMsg(`Loaded — roots: ${(s.roots || []).join(", ") || "?"}`);
+    const roots = (s.roots || []).join(", ") || "?";
+    const desc = s.description ? ` · ${s.description}` : "";
+    setSkillMsg(`Loaded — roots: ${roots}${desc}`);
   } catch (e) { setSkillMsg("Load failed: " + e.message, true); }
 }
 
