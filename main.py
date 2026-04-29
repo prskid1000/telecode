@@ -335,8 +335,25 @@ async def _post_init(app) -> None:
     except Exception as exc:
         log.error("Tailscale funnel startup failed: %s", exc, exc_info=True)
 
+    # Heartbeat scheduler — fires HB jobs on cron schedule. Reads HEARTBEAT.md
+    # from each agent's storage and reconciles HB Jobs in the sidebar each tick.
+    try:
+        if config.heartbeat_enabled():
+            from services.heartbeat.scheduler import start_scheduler
+            await start_scheduler()
+    except Exception as exc:
+        log.error("Heartbeat scheduler startup failed: %s", exc, exc_info=True)
+
 
 async def _post_shutdown(app) -> None:
+    # Heartbeat scheduler — stop before the task queue's executors die so
+    # in-flight tracking can settle.
+    try:
+        from services.heartbeat.scheduler import stop_scheduler
+        await stop_scheduler()
+    except Exception:
+        pass
+
     # Tray is a daemon thread — dies with the interpreter; no explicit stop.
 
     # Stop proxy first (so no new requests land on a dying llama-server)

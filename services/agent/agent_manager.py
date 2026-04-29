@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import shutil
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,22 @@ from typing import Any, Dict, List, Optional
 import config
 
 logger = logging.getLogger("telecode.services.agent")
+
+INTERNAL_FILES = ("SOUL.md", "USER.md", "AGENT.md", "MEMORY.md", "HEARTBEAT.md")
+
+# Per-agent lock — protects writeback to data/agents/<id>/internal/ when
+# multiple parallel runs across different workspaces target the same agent.
+_agent_locks_guard = threading.Lock()
+_agent_locks: Dict[str, threading.Lock] = {}
+
+
+def _agent_lock(agent_id: str) -> threading.Lock:
+    with _agent_locks_guard:
+        lock = _agent_locks.get(agent_id)
+        if lock is None:
+            lock = threading.Lock()
+            _agent_locks[agent_id] = lock
+        return lock
 
 def get_agents_base_dir() -> Path:
     return Path(config._settings_dir()) / "data" / "agents"
@@ -32,6 +49,9 @@ class AgentManager:
     def _get_agent_files_dir(self, agent_id: str) -> Path:
         return self.base_dir / agent_id / "files"
 
+    def _get_agent_internal_dir(self, agent_id: str) -> Path:
+        return self.base_dir / agent_id / "internal"
+
     def list_agents(self) -> List[Dict[str, Any]]:
         agents = []
         for p in self.base_dir.glob("*.json"):
@@ -42,7 +62,7 @@ class AgentManager:
                 logger.error(f"Failed to load agent from {p}: {e}")
         return sorted(agents, key=lambda x: x.get("updated_at", ""), reverse=True)
 
-    def create_agent(self, name: str, instructions: str = "") -> Dict[str, Any]:
+    def create_agent(self, name: str, instructions: str = "", soul: str = "") -> Dict[str, Any]:
         agent_id = str(uuid.uuid4())
         now = _now_iso()
         agent_data = {
@@ -54,6 +74,12 @@ class AgentManager:
         }
         self._get_agent_path(agent_id).write_text(json.dumps(agent_data, indent=2), encoding="utf-8")
         self._get_agent_files_dir(agent_id).mkdir(parents=True, exist_ok=True)
+
+        internal_dir = self._get_agent_internal_dir(agent_id)
+        internal_dir.mkdir(parents=True, exist_ok=True)
+        for fname in INTERNAL_FILES:
+            content = soul if fname == "SOUL.md" else ""
+            (internal_dir / fname).write_text(content, encoding="utf-8")
         return agent_data
 
     def get_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:
@@ -124,6 +150,26 @@ class AgentManager:
             p.unlink()
             return True
         return False
+
+    def get_internal_files(self, agent_id: str) -> Dict[str, str]:
+        d = self._get_agent_internal_dir(agent_id)
+        out: Dict[str, str] = {}
+        for fname in INTERNAL_FILES:
+            p = d / fname
+            out[fname] = p.read_text(encoding="utf-8") if p.exists() else ""
+        return out
+
+    def set_internal_files(self, agent_id: str, files: Dict[str, str]) -> bool:
+        if not self.get_agent(agent_id):
+            return False
+        with _agent_lock(agent_id):
+            d = self._get_agent_internal_dir(agent_id)
+            d.mkdir(parents=True, exist_ok=True)
+            for fname, content in (files or {}).items():
+                if fname not in INTERNAL_FILES:
+                    continue
+                (d / fname).write_text(content or "", encoding="utf-8")
+        return True
 
 _manager = AgentManager()
 def get_agent_manager() -> AgentManager:

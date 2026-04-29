@@ -236,6 +236,14 @@ def mcp_server_tts_url() -> str:  return get_nested("mcp_server.tts_url", "http:
 def mcp_server_stt_url() -> str:  return get_nested("mcp_server.stt_url", "http://127.0.0.1:6600")
 
 
+# ── Heartbeat scheduler ──────────────────────────────────────────────────────
+def heartbeat_enabled()                  -> bool: return bool(get_nested("heartbeat.enabled", False))
+def heartbeat_tick_seconds()             -> int:  return int(get_nested("heartbeat.tick_seconds", 60))
+def heartbeat_ephemeral_ttl_seconds()    -> int:  return int(get_nested("heartbeat.ephemeral_ttl_seconds", 3600))
+def heartbeat_max_concurrent_fires()     -> int:  return int(get_nested("heartbeat.max_concurrent_fires", 2))
+def heartbeat_min_fire_gap_seconds()     -> int:  return int(get_nested("heartbeat.min_fire_gap_seconds", 60))
+
+
 # ── Proxy ─────────────────────────────────────────────────────────────────────
 def proxy_enabled()      -> bool: return bool(get_nested("proxy.enabled", False))
 def proxy_port()         -> int:  return int(get_nested("proxy.port", 1235))

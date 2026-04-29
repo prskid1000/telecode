@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from services.session import session_store
 from services.task.agent_prompt import resolve_prompt
+from services.task.staging import stage_for_run
 from services.task.task_utils import (
     append_event,
     get_session_folder,
@@ -60,6 +61,7 @@ def claude_code_task(
     prompt: Optional[str] = None,
     is_local: bool = False,
     *,
+    agent_id: Optional[str] = None,
     agent: Optional[Dict[str, Any]] = None,
     job: Optional[Dict[str, Any]] = None,
     agent_files: Optional[List[Any]] = None,
@@ -70,6 +72,10 @@ def claude_code_task(
     Accepts either a pre-rendered `prompt` string or structured fields
     (`agent`, `job`, optional `agent_files`/`job_files`) which are rendered
     into the shared <agent_task> XML via services.task.agent_prompt.
+
+    When `agent_id` is provided, the agent's internal files (SOUL/USER/MEMORY
+    + AGENT→CLAUDE.md) are staged into the workspace before the CLI starts and
+    written back / unstaged after it finishes. See services.task.staging.
     """
     prompt = resolve_prompt({
         "prompt": prompt,
@@ -78,8 +84,12 @@ def claude_code_task(
         "agent_files": agent_files,
         "job_files": job_files,
     })
+    # Resolve agent_id: explicit param wins, else fall back to agent dict
+    if not agent_id and isinstance(agent, dict):
+        agent_id = agent.get("id")
+
     task_id = get_task_id() or "no-task"
-    
+
     import config as app_config
     log_dir = Path(app_config._settings_dir()) / "data" / "task_logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -94,6 +104,28 @@ def claude_code_task(
     meta = session_store.get(sid, namespace=ns) or {}
     resume_id = (meta.get("data") or {}).get("last_claude_session_id")
 
+    with stage_for_run(agent_id, sid, work_dir, engine="claude"):
+        return _run_claude_subprocess(
+            prompt=prompt,
+            work_dir=work_dir,
+            sid=sid,
+            ns=ns,
+            resume_id=resume_id,
+            is_local=is_local,
+            log_path=log_path,
+        )
+
+
+def _run_claude_subprocess(
+    *,
+    prompt: str,
+    work_dir: Path,
+    sid: str,
+    ns: Optional[str],
+    resume_id: Optional[str],
+    is_local: bool,
+    log_path: Path,
+) -> Dict[str, Any]:
     cmd = [
         "claude", "-p", json.dumps(prompt),
         "--dangerously-skip-permissions",
@@ -104,6 +136,7 @@ def claude_code_task(
     if resume_id:
         cmd += ["--resume", resume_id]
 
+    import config as app_config
     env = None
     if is_local:
         import llamacpp.state as llama_state

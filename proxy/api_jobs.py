@@ -11,7 +11,9 @@ from services.job.job_manager import get_job_manager
 logger = logging.getLogger("telecode.proxy.api_jobs")
 
 async def list_jobs(request: web.Request) -> web.Response:
-    jobs = get_job_manager().list_jobs()
+    kind = request.query.get("kind")  # "user" | "heartbeat" | None
+    include_archived = request.query.get("include_archived") in ("1", "true", "yes")
+    jobs = get_job_manager().list_jobs(kind=kind, include_archived=include_archived)
     return web.json_response({"jobs": jobs})
 
 async def create_job(request: web.Request) -> web.Response:

@@ -54,6 +54,7 @@ async def submit_task(request: web.Request) -> web.Response:
         task_id = queue.submit_task(
             task_type=task_type,
             params=params,
+            metadata=data.get("metadata") or {},
             task_timeout_seconds=data.get("task_timeout_seconds"),
             session_id=data.get("session_id"),
             session_namespace=data.get("session_namespace") or data.get("namespace"),
