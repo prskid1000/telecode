@@ -73,10 +73,26 @@ def _agent_default_engine(agent_id: str) -> str:
     return "claude_code"
 
 
-def _build_step_prompt(job: Dict[str, Any], step: Dict[str, Any], prev_text: Optional[str]) -> str:
+def _build_step_prompt(job: Dict[str, Any], step: Dict[str, Any], prev_outputs: Optional[List[Dict[str, Any]]]) -> str:
+    """Compose the prompt for a step.
+
+    `prev_outputs` is a list of {step_id, name, text, status} from the previous
+    phase. When step.depends_on_text is true:
+      - 1 prior output → wrapped in <previous_output>
+      - >1 prior outputs → wrapped in <previous_outputs> with per-output tags
+    """
     base = step.get("prompt_override") or job.get("task_description") or ""
-    if step.get("depends_on_text") and prev_text:
-        base = f"{base}\n\n<previous_output>\n{prev_text}\n</previous_output>"
+    if step.get("depends_on_text") and prev_outputs:
+        non_empty = [o for o in prev_outputs if o.get("text")]
+        if non_empty:
+            if len(non_empty) == 1:
+                base = f"{base}\n\n<previous_output>\n{non_empty[0]['text']}\n</previous_output>"
+            else:
+                blocks = "\n".join(
+                    f'<output step="{(o.get("name") or o.get("step_id", "")[:8])}">\n{o["text"]}\n</output>'
+                    for o in non_empty
+                )
+                base = f"{base}\n\n<previous_outputs>\n{blocks}\n</previous_outputs>"
     return base.strip() or "(no prompt provided)"
 
 
@@ -162,14 +178,18 @@ def _drive_run(
     source: str,
     driver: _RunDriver,
 ):
+    """Phase-driven executor.
+
+    Group steps by `phase` index. For each phase in order:
+      - 1 step  → run inside the job's workspace (sequential semantics)
+      - >1 step → ephemeral session per step, run concurrently (parallel)
+    Outputs from a phase are passed forward to the next phase's steps that
+    have `depends_on_text`. First failure halts; remaining steps marked skipped.
+    """
     store = get_run_store()
     store.update_run(run_id, {"status": "running"})
-    mode = pipeline.get("mode", "single")
     try:
-        if mode == "parallel":
-            _run_parallel(run_id, job, pipeline, is_local, source, driver)
-        else:
-            _run_sequential(run_id, job, pipeline, is_local, source, driver)
+        _run_phased(run_id, job, pipeline, is_local, source, driver)
     except Exception as exc:
         logger.exception(f"Run {run_id} crashed: {exc}")
         store.update_run(run_id, {"status": "failed"})
@@ -179,87 +199,118 @@ def _drive_run(
             _drivers.pop(run_id, None)
 
 
-def _run_sequential(run_id, job, pipeline, is_local, source, driver: _RunDriver):
+def _run_phased(run_id, job, pipeline, is_local, source, driver: _RunDriver):
     store = get_run_store()
     queue = get_task_queue()
-
     workspace_id = job.get("workspace_id")
-    if not workspace_id:
-        # All sequential steps need a shared workspace
-        for s in pipeline.get("steps") or []:
-            store.update_step(run_id, s["step_id"], {"status": "failed", "error": "Job has no workspace_id"})
-        store.update_run(run_id, {"status": "failed"})
+    steps = pipeline.get("steps") or []
+    if not steps:
         return
 
-    prev_text: Optional[str] = None
+    # Group by phase index (preserve order of first appearance)
+    phases: Dict[int, List[Dict[str, Any]]] = {}
+    phase_order: List[int] = []
+    for s in steps:
+        p = int(s.get("phase") or 0)
+        if p not in phases:
+            phases[p] = []
+            phase_order.append(p)
+        phases[p].append(s)
+    phase_order.sort()
+
+    prev_outputs: List[Dict[str, Any]] = []
     halt = False
 
-    for step in pipeline.get("steps") or []:
-        if driver.cancel_event.is_set():
-            store.update_step(run_id, step["step_id"], {"status": "skipped"})
+    for phase_idx in phase_order:
+        phase_steps = phases[phase_idx]
+
+        if halt or driver.cancel_event.is_set():
+            for s in phase_steps:
+                store.update_step(run_id, s["step_id"], {"status": "skipped"})
             continue
-        if halt:
-            store.update_step(run_id, step["step_id"], {"status": "skipped"})
-            continue
 
-        engine = _agent_default_engine(step["agent_id"])
-        task_type = _engine_to_task_type(engine)
-        prompt = _build_step_prompt(job, step, prev_text)
+        if len(phase_steps) == 1:
+            step = phase_steps[0]
+            if not workspace_id:
+                store.update_step(run_id, step["step_id"], {
+                    "status": "failed", "error": "Job has no workspace_id",
+                })
+                halt = True
+                continue
+            outputs = _run_one_in_workspace(
+                run_id, step, job, workspace_id, prev_outputs,
+                is_local, source, driver, queue, store,
+            )
+        else:
+            outputs = _run_phase_parallel(
+                run_id, phase_steps, job, prev_outputs,
+                is_local, source, driver, queue, store,
+            )
 
-        store.update_step(run_id, step["step_id"], {
-            "status": "running",
-            "started_at": _now_iso(),
-            "session_id": workspace_id,
-        })
-
-        task_id = queue.submit_task(
-            task_type=task_type,
-            params={"prompt": prompt, "is_local": is_local, "agent_id": step["agent_id"]},
-            metadata={
-                "source": source,
-                "job_id": job["id"],
-                "run_id": run_id,
-                "step_id": step["step_id"],
-                "agent_id": step["agent_id"],
-            },
-            session_id=workspace_id,
-        )
-        driver.active_task_ids.append(task_id)
-        store.update_step(run_id, step["step_id"], {"task_id": task_id})
-
-        # Wait for completion
-        result_obj, status, error = _wait_for_task(task_id, driver)
-
-        prev_text = _result_preview(result_obj) if status == "completed" else None
-        store.update_step(run_id, step["step_id"], {
-            "status": status,
-            "completed_at": _now_iso(),
-            "result_preview": prev_text,
-            "error": error,
-        })
-
-        try:
-            driver.active_task_ids.remove(task_id)
-        except ValueError:
-            pass
-
-        if status != "completed":
+        prev_outputs = outputs
+        if any(o.get("status") != "completed" for o in outputs):
             halt = True
 
 
-def _run_parallel(run_id, job, pipeline, is_local, source, driver: _RunDriver):
-    store = get_run_store()
-    queue = get_task_queue()
-    steps = pipeline.get("steps") or []
+def _run_one_in_workspace(
+    run_id, step, job, workspace_id, prev_outputs,
+    is_local, source, driver: _RunDriver, queue, store,
+) -> List[Dict[str, Any]]:
+    engine = _agent_default_engine(step["agent_id"])
+    task_type = _engine_to_task_type(engine)
+    prompt = _build_step_prompt(job, step, prev_outputs)
 
-    # Each parallel step gets its own ephemeral session, fanned-out from the
-    # job's workspace contents (read-only-ish: only the staged agent files
-    # matter for identity; CLI may write artifacts in the ephemeral cwd).
+    store.update_step(run_id, step["step_id"], {
+        "status": "running",
+        "started_at": _now_iso(),
+        "session_id": workspace_id,
+    })
+
+    task_id = queue.submit_task(
+        task_type=task_type,
+        params={"prompt": prompt, "is_local": is_local, "agent_id": step["agent_id"]},
+        metadata={
+            "source": source,
+            "job_id": job["id"],
+            "run_id": run_id,
+            "step_id": step["step_id"],
+            "agent_id": step["agent_id"],
+        },
+        session_id=workspace_id,
+    )
+    driver.active_task_ids.append(task_id)
+    store.update_step(run_id, step["step_id"], {"task_id": task_id})
+
+    result_obj, status, error = _wait_for_task(task_id, driver)
+    text = _result_preview(result_obj) if status == "completed" else None
+    store.update_step(run_id, step["step_id"], {
+        "status": status,
+        "completed_at": _now_iso(),
+        "result_preview": text,
+        "error": error,
+    })
+    try:
+        driver.active_task_ids.remove(task_id)
+    except ValueError:
+        pass
+
+    return [{
+        "step_id": step["step_id"],
+        "name": step.get("name") or "",
+        "text": text,
+        "status": status,
+    }]
+
+
+def _run_phase_parallel(
+    run_id, phase_steps, job, prev_outputs,
+    is_local, source, driver: _RunDriver, queue, store,
+) -> List[Dict[str, Any]]:
     fan_sessions: Dict[str, str] = {}  # step_id -> ws_id
-
     job_ws_id = job.get("workspace_id")
 
-    for step in steps:
+    # Submit all steps' tasks against ephemeral sessions
+    for step in phase_steps:
         ws_id = f"run-{run_id[:8]}-{step['step_id'][:8]}"
         try:
             session_store.create(
@@ -273,7 +324,6 @@ def _run_parallel(run_id, job, pipeline, is_local, source, driver: _RunDriver):
             pass
         fan_sessions[step["step_id"]] = ws_id
 
-        # Best-effort: copy job workspace files into ephemeral cwd
         if job_ws_id:
             try:
                 _copy_workspace_files(job_ws_id, ws_id)
@@ -282,7 +332,7 @@ def _run_parallel(run_id, job, pipeline, is_local, source, driver: _RunDriver):
 
         engine = _agent_default_engine(step["agent_id"])
         task_type = _engine_to_task_type(engine)
-        prompt = _build_step_prompt(job, step, prev_text=None)
+        prompt = _build_step_prompt(job, step, prev_outputs)
 
         store.update_step(run_id, step["step_id"], {
             "status": "running",
@@ -307,30 +357,40 @@ def _run_parallel(run_id, job, pipeline, is_local, source, driver: _RunDriver):
         driver.active_task_ids.append(task_id)
         store.update_step(run_id, step["step_id"], {"task_id": task_id})
 
-    # Now wait for every task in parallel
-    for step in steps:
-        sid = step["step_id"]
-        cur = next((s for s in (store.get_run(run_id) or {}).get("steps", []) if s["step_id"] == sid), None)
+    outputs: List[Dict[str, Any]] = []
+    for step in phase_steps:
+        cur = next(
+            (s for s in (store.get_run(run_id) or {}).get("steps", []) if s["step_id"] == step["step_id"]),
+            None,
+        )
         if not cur or not cur.get("task_id"):
             continue
         result_obj, status, error = _wait_for_task(cur["task_id"], driver)
-        store.update_step(run_id, sid, {
+        text = _result_preview(result_obj) if status == "completed" else None
+        store.update_step(run_id, step["step_id"], {
             "status": status,
             "completed_at": _now_iso(),
-            "result_preview": _result_preview(result_obj) if status == "completed" else None,
+            "result_preview": text,
             "error": error,
         })
         try:
             driver.active_task_ids.remove(cur["task_id"])
         except ValueError:
             pass
+        outputs.append({
+            "step_id": step["step_id"],
+            "name": step.get("name") or "",
+            "text": text,
+            "status": status,
+        })
 
-    # Cleanup ephemeral sessions
-    for sid, ws_id in fan_sessions.items():
+    for _sid, ws_id in fan_sessions.items():
         try:
             session_store.delete(ws_id, namespace=EPHEMERAL_NS)
         except Exception as exc:
             logger.warning(f"could not delete ephemeral run session {ws_id}: {exc}")
+
+    return outputs
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────

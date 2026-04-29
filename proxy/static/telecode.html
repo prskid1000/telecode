@@ -628,61 +628,119 @@
     return 'step-' + Math.random().toString(36).slice(2, 10);
   }
 
+  // Group steps by phase (preserves first-seen order). Returns
+  // [{phase, steps:[{step,idx}]}] sorted by phase.
+  function groupStepsByPhase() {
+    const map = new Map();
+    state.pipelineDraft.steps.forEach((s, idx) => {
+      const p = (s.phase ?? idx);
+      if (!map.has(p)) map.set(p, []);
+      map.get(p).push({ step: s, idx });
+    });
+    return Array.from(map.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([phase, items]) => ({ phase, items }));
+  }
+
   function renderPipelineSteps(isHb) {
     const host = document.getElementById('pipeline-steps');
     if (!host) return;
     const steps = state.pipelineDraft.steps;
     const mode = state.pipelineDraft.mode;
-    const agentOptions = state.agents.map(a =>
-      `<option value="${a.id}">${escapeHtml(a.name)}</option>`
-    ).join('') || '<option value="">(no agents — create one first)</option>';
 
     if (steps.length === 0) {
-      host.innerHTML = `<div class="muted" style="padding: 10px;">No steps. ${isHb ? '' : 'Click <strong>+ Add step</strong> to define one.'}</div>`;
+      host.innerHTML = `<div class="muted" style="padding: 10px;">No steps. ${isHb ? '' : 'Click <strong>+ Add step</strong> below to define one.'}</div>`;
       return;
     }
 
+    if (mode === 'custom') {
+      renderPipelineCustom(host, isHb);
+    } else {
+      renderPipelineFlat(host, isHb, mode);
+    }
+  }
+
+  function renderStepCard(s, idx, opts) {
+    // opts: { isHb, showFeed, controlsHtml, label }
+    return `
+      <div class="step-card" style="border:1px solid var(--border); border-radius:6px; padding:10px; margin-bottom:8px; background:var(--panel2);">
+        <div class="flex" style="justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <div class="muted" style="font-family:var(--mono); font-size:11px;">${opts.label || ''}${s.name ? ' — ' + escapeHtml(s.name) : ''}</div>
+          <div class="flex" style="gap: 4px;">${opts.controlsHtml || ''}</div>
+        </div>
+        <div class="grid-2">
+          <div class="field-group" style="margin-bottom: 6px;">
+            <label>Agent</label>
+            <select onchange="updatePipelineStep(${idx}, 'agent_id', this.value)" ${opts.isHb ? 'disabled' : ''}>
+              ${state.agents.map(a => `<option value="${a.id}" ${a.id === s.agent_id ? 'selected' : ''}>${escapeHtml(a.name)}</option>`).join('')}
+              ${state.agents.length === 0 ? '<option value="">(no agents)</option>' : ''}
+            </select>
+          </div>
+          <div class="field-group" style="margin-bottom: 6px;">
+            <label>Step name (optional)</label>
+            <input value="${escapeHtml(s.name || '')}" oninput="updatePipelineStep(${idx}, 'name', this.value)" placeholder="e.g. Reviewer" ${opts.isHb ? 'readonly' : ''}>
+          </div>
+        </div>
+        <div class="field-group" style="margin-bottom: 6px;">
+          <label>Prompt override <span class="muted">(blank = use job's default prompt below)</span></label>
+          <textarea rows="3" oninput="updatePipelineStep(${idx}, 'prompt_override', this.value)" placeholder="" ${opts.isHb ? 'readonly' : ''}>${escapeHtml(s.prompt_override || '')}</textarea>
+        </div>
+        ${opts.showFeed ? `
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size: 12px;">
+            <input type="checkbox" ${s.depends_on_text ? 'checked' : ''} onchange="updatePipelineStep(${idx}, 'depends_on_text', this.checked)" style="width:auto;margin:0;" ${opts.isHb ? 'disabled' : ''}>
+            Feed previous phase's reply as <code>&lt;previous_output&gt;</code>
+          </label>` : ''}
+      </div>`;
+  }
+
+  function renderPipelineFlat(host, isHb, mode) {
+    const steps = state.pipelineDraft.steps;
     host.innerHTML = steps.map((s, idx) => {
       const showFeed = mode === 'sequential' && idx > 0;
-      const dragHandle = (mode === 'sequential' && !isHb && steps.length > 1) ? '⠿' : '';
       const upBtn = (mode === 'sequential' && !isHb && idx > 0)
         ? `<button class="icon small ghost" onclick="movePipelineStep(${idx}, -1)" title="Move up">▲</button>` : '';
       const downBtn = (mode === 'sequential' && !isHb && idx < steps.length - 1)
         ? `<button class="icon small ghost" onclick="movePipelineStep(${idx}, 1)" title="Move down">▼</button>` : '';
       const delBtn = (!isHb && (mode !== 'single' || steps.length > 1))
         ? `<button class="icon small danger ghost" onclick="removePipelineStep(${idx})" title="Remove">${SVGS.delete}</button>` : '';
+      return renderStepCard(s, idx, {
+        isHb, showFeed,
+        controlsHtml: `${upBtn}${downBtn}${delBtn}`,
+        label: `step ${idx + 1}`,
+      });
+    }).join('');
+  }
+
+  function renderPipelineCustom(host, isHb) {
+    const groups = groupStepsByPhase();
+    const totalPhases = groups.length;
+    host.innerHTML = groups.map((g, gi) => {
+      const phaseLabel = totalPhases > 1
+        ? `Phase ${gi + 1} ${g.items.length > 1 ? `<span class="muted">(${g.items.length} steps in parallel)</span>` : ''}`
+        : `Phase 1`;
+      const phaseControls = isHb ? '' : `
+        ${gi > 0 ? `<button class="icon small ghost" onclick="movePhase(${gi}, -1)" title="Move phase up">▲</button>` : ''}
+        ${gi < totalPhases - 1 ? `<button class="icon small ghost" onclick="movePhase(${gi}, 1)" title="Move phase down">▼</button>` : ''}
+        <button class="ghost" onclick="addParallelStepInPhase(${gi})" style="font-size:11px; padding:4px 10px;">+ parallel step</button>
+      `;
+      const stepCards = g.items.map(({ step, idx }) => {
+        const showFeed = gi > 0;
+        const removable = !isHb;
+        const delBtn = removable
+          ? `<button class="icon small danger ghost" onclick="removePipelineStep(${idx})" title="Remove">${SVGS.delete}</button>` : '';
+        return renderStepCard(step, idx, {
+          isHb, showFeed,
+          controlsHtml: delBtn,
+          label: `step ${idx + 1}`,
+        });
+      }).join('');
       return `
-        <div class="step-card" style="border:1px solid var(--border); border-radius:6px; padding:10px; margin-bottom:8px; background:var(--panel2);">
-          <div class="flex" style="justify-content: space-between; align-items: center; margin-bottom: 6px;">
-            <div class="muted" style="font-family:var(--mono); font-size:11px;">
-              ${dragHandle} step ${idx + 1}${s.name ? ' — ' + escapeHtml(s.name) : ''}
-            </div>
-            <div class="flex" style="gap: 4px;">
-              ${upBtn}${downBtn}${delBtn}
-            </div>
+        <div class="phase-card" style="border:1px solid var(--accent); border-radius:8px; padding:12px; margin-bottom:14px; background:rgba(124,196,255,0.04);">
+          <div class="flex" style="justify-content:space-between; align-items:center; margin-bottom:10px;">
+            <strong style="font-family:var(--mono); font-size:12px; color:var(--accent);">${phaseLabel}</strong>
+            <div class="flex" style="gap:6px;">${phaseControls}</div>
           </div>
-          <div class="grid-2">
-            <div class="field-group" style="margin-bottom: 6px;">
-              <label>Agent</label>
-              <select onchange="updatePipelineStep(${idx}, 'agent_id', this.value)" ${isHb ? 'disabled' : ''}>
-                ${state.agents.map(a => `<option value="${a.id}" ${a.id === s.agent_id ? 'selected' : ''}>${escapeHtml(a.name)}</option>`).join('')}
-                ${state.agents.length === 0 ? '<option value="">(no agents)</option>' : ''}
-              </select>
-            </div>
-            <div class="field-group" style="margin-bottom: 6px;">
-              <label>Step name (optional)</label>
-              <input value="${escapeHtml(s.name || '')}" oninput="updatePipelineStep(${idx}, 'name', this.value)" placeholder="e.g. Reviewer" ${isHb ? 'readonly' : ''}>
-            </div>
-          </div>
-          <div class="field-group" style="margin-bottom: 6px;">
-            <label>Prompt override <span class="muted">(blank = use job's default prompt below)</span></label>
-            <textarea rows="3" oninput="updatePipelineStep(${idx}, 'prompt_override', this.value)" placeholder="" ${isHb ? 'readonly' : ''}>${escapeHtml(s.prompt_override || '')}</textarea>
-          </div>
-          ${showFeed ? `
-            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size: 12px;">
-               <input type="checkbox" ${s.depends_on_text ? 'checked' : ''} onchange="updatePipelineStep(${idx}, 'depends_on_text', this.checked)" style="width:auto;margin:0;" ${isHb ? 'disabled' : ''}>
-               Feed previous step's reply as <code>&lt;previous_output&gt;</code>
-            </label>` : ''}
+          ${stepCards}
         </div>`;
     }).join('');
   }
@@ -693,26 +751,57 @@
     s[field] = value;
   }
 
-  function addPipelineStep() {
-    const firstAgent = (state.agents[0] || {}).id || '';
-    state.pipelineDraft.steps.push({
+  function _newStep(phase) {
+    return {
       step_id: genStepId(),
-      agent_id: firstAgent,
+      agent_id: (state.agents[0] || {}).id || '',
       name: '',
       prompt_override: '',
-      depends_on_text: state.pipelineDraft.mode === 'sequential' && state.pipelineDraft.steps.length > 0
-    });
-    if (state.pipelineDraft.mode === 'single' && state.pipelineDraft.steps.length > 1) {
-      // Bump mode out of single when multiple steps exist
-      state.pipelineDraft.mode = 'sequential';
-      const sel = document.getElementById('pipeline-mode');
-      if (sel) sel.value = 'sequential';
+      depends_on_text: false,
+      phase
+    };
+  }
+
+  // "+ Add step" at bottom of pipeline. Behaviour by mode:
+  //   single     → no-op when already 1 step (button hidden anyway)
+  //   sequential → append a step (own phase)
+  //   parallel   → append to phase 0
+  //   custom     → add a NEW phase with one step (use "+ parallel step" inside a phase to add to it)
+  function addPipelineStep() {
+    const mode = state.pipelineDraft.mode;
+    const steps = state.pipelineDraft.steps;
+    let phase;
+    if (mode === 'single') {
+      // Promote to sequential when adding a 2nd step
+      if (steps.length >= 1) {
+        state.pipelineDraft.mode = 'sequential';
+        const sel = document.getElementById('pipeline-mode');
+        if (sel) sel.value = 'sequential';
+      }
+      phase = steps.length;
+    } else if (mode === 'parallel') {
+      phase = 0;
+    } else if (mode === 'custom') {
+      const maxPhase = steps.reduce((m, s) => Math.max(m, s.phase ?? 0), -1);
+      phase = maxPhase + 1;
+    } else { // sequential
+      phase = steps.length;
     }
+    steps.push(_newStep(phase));
+    renderPipelineSteps(false);
+  }
+
+  function addParallelStepInPhase(groupIndex) {
+    const groups = groupStepsByPhase();
+    if (groupIndex < 0 || groupIndex >= groups.length) return;
+    const phaseValue = groups[groupIndex].phase;
+    state.pipelineDraft.steps.push(_newStep(phaseValue));
     renderPipelineSteps(false);
   }
 
   function removePipelineStep(idx) {
     state.pipelineDraft.steps.splice(idx, 1);
+    renumberPhases();
     renderPipelineSteps(false);
   }
 
@@ -721,15 +810,53 @@
     const steps = state.pipelineDraft.steps;
     if (target < 0 || target >= steps.length) return;
     const tmp = steps[idx]; steps[idx] = steps[target]; steps[target] = tmp;
+    // For sequential mode, phases are tied to index — re-derive on save (server normalises).
+    if (state.pipelineDraft.mode === 'sequential') {
+      steps.forEach((s, i) => { s.phase = i; });
+    }
     renderPipelineSteps(false);
+  }
+
+  // Custom-mode only: swap two phases by their group index.
+  function movePhase(groupIndex, delta) {
+    const groups = groupStepsByPhase();
+    const target = groupIndex + delta;
+    if (target < 0 || target >= groups.length) return;
+    const a = groups[groupIndex].phase;
+    const b = groups[target].phase;
+    state.pipelineDraft.steps.forEach(s => {
+      if (s.phase === a) s.phase = b;
+      else if (s.phase === b) s.phase = a;
+    });
+    renumberPhases();
+    renderPipelineSteps(false);
+  }
+
+  // Renumber phases to contiguous 0..N-1 preserving relative order.
+  function renumberPhases() {
+    const phases = Array.from(new Set(state.pipelineDraft.steps.map(s => s.phase ?? 0))).sort((a,b)=>a-b);
+    const remap = new Map(phases.map((p, i) => [p, i]));
+    state.pipelineDraft.steps.forEach(s => { s.phase = remap.get(s.phase ?? 0) ?? 0; });
   }
 
   function onPipelineModeChange() {
     const sel = document.getElementById('pipeline-mode');
     if (!sel) return;
-    state.pipelineDraft.mode = sel.value;
-    if (sel.value === 'single' && state.pipelineDraft.steps.length > 1) {
-      state.pipelineDraft.steps = state.pipelineDraft.steps.slice(0, 1);
+    const newMode = sel.value;
+    const steps = state.pipelineDraft.steps;
+    state.pipelineDraft.mode = newMode;
+
+    if (newMode === 'single' && steps.length > 1) {
+      state.pipelineDraft.steps = steps.slice(0, 1);
+      state.pipelineDraft.steps[0].phase = 0;
+    } else if (newMode === 'sequential') {
+      steps.forEach((s, i) => { s.phase = i; });
+    } else if (newMode === 'parallel') {
+      steps.forEach(s => { s.phase = 0; });
+    } else if (newMode === 'custom') {
+      // Preserve current phase values; if none had explicit phases, the
+      // existing assignment from the previous mode is already valid.
+      renumberPhases();
     }
     renderPipelineSteps(false);
   }
@@ -791,6 +918,7 @@
                 <option value="single" ${pipeMode === 'single' ? 'selected' : ''}>Single — one agent</option>
                 <option value="sequential" ${pipeMode === 'sequential' ? 'selected' : ''}>Sequential — feed step → step</option>
                 <option value="parallel" ${pipeMode === 'parallel' ? 'selected' : ''}>Parallel — fan-out, ephemeral</option>
+                <option value="custom" ${pipeMode === 'custom' ? 'selected' : ''}>Custom — phases (mix sequential + parallel)</option>
               </select>
             </div>
           </div>
