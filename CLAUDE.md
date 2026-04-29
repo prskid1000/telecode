@@ -57,7 +57,12 @@ Session & Task system (pythonmagic-style):
 Agent → Job → Run pipeline (Team Mode):
     Agent has 5 internal markdown files in data/agents/<id>/internal/:
         SOUL.md, USER.md, AGENT.md, MEMORY.md, HEARTBEAT.md
-    Job.pipeline = {mode: single|sequential|parallel, steps:[{agent_id, prompt_override, depends_on_text}]}
+    Job.pipeline = {mode: single|sequential|parallel|custom, steps:[{agent_id, prompt_override, depends_on_text, phase}]}
+    Steps are grouped by `phase` (int). Phases run sequentially; same-phase steps run in parallel.
+      single   = 1 step, phase 0
+      sequential = step i → phase i
+      parallel = all phase 0
+      custom   = arbitrary; UI exposes "+ Add phase" / "+ parallel step in phase"
     UI ▶ Run -> POST /api/jobs/:id/runs -> Run record -> executor thread
         per step:
             stage_for_run() copies SOUL/USER/MEMORY -> workspace/, AGENT.md -> workspace/CLAUDE.md (or GEMINI.md)
@@ -165,7 +170,7 @@ Heartbeat scheduler (off by default):
 | `services/agent/agent_manager.py` | Agent CRUD + `INTERNAL_FILES` whitelist + `get_internal_files`/`set_internal_files`. Per-agent `threading.Lock` around writeback. |
 | `services/job/job_manager.py` | Job CRUD with `kind` (`user`/`heartbeat`), `archived`, `heartbeat_entry`, and `pipeline = {mode, steps[]}`. `_normalize_pipeline` enforces shape. `find_heartbeat_job(agent_id, entry_name)` for the scheduler. |
 | `services/run/run_store.py` | `data/runs/<run_id>.json` — Run + per-step status (`pending/running/completed/failed/cancelled/skipped`). `finalise()` aggregates step statuses → run status. |
-| `services/run/executor.py` | Pipeline driver thread per Run. Sequential mode: shared workspace, threads `<previous_output>` via `depends_on_text`. Parallel mode: ephemeral session per step (namespace `run-parallel`), copies job workspace files in, awaits all, deletes sessions. `cancel_run(run_id)` signals driver and cancels in-flight tasks. |
+| `services/run/executor.py` | Pipeline driver thread per Run. Phase-based: groups steps by `phase` index, runs phases sequentially. Single-step phase → job workspace; multi-step phase → ephemeral session per step (namespace `run-parallel`, copies job workspace files in, deletes after). Threads previous phase's outputs via `<previous_output>` / `<previous_outputs>` when `depends_on_text` is set. `cancel_run(run_id)` signals driver and cancels in-flight tasks. |
 | `services/heartbeat/parser.py` | Extracts ` ```yaml ` fences from HEARTBEAT.md, validates each entry (name unique / cron valid / prompt present / workspace+workspace_id consistent / engine in whitelist). Returns `ParseResult` with entries + per-entry errors. `next_fires(entry)` returns ISO strings via croniter. |
 | `services/heartbeat/state.py` | Atomic JSON state at `data/heartbeat-state.json`, keyed by `<agent_id>:<entry_name>` → `{last_run, last_status, last_task_id}`. `prune_orphans(known_keys)` clears keys for entries deleted from YAML. |
 | `services/heartbeat/reconcile.py` | `reconcile_agent(agent_id)` syncs HEARTBEAT.md entries → `kind:"heartbeat"` Jobs. Creates new, updates drift, archives jobs whose YAML entry was removed. |

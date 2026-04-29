@@ -94,7 +94,7 @@ Telecode includes a fully-featured stateful **Session and Task Management** syst
   - **MEMORY.md** — long-term memory the agent self-curates
   - **HEARTBEAT.md** — YAML-fenced cron schedule (read by the scheduler, never staged into the workspace)
   - All five files live under `data/agents/<id>/internal/`. SOUL/USER/AGENT/MEMORY are **staged** into the workspace for the run, then **written back** verbatim on exit.
-- **Multi-agent Job Pipelines**: a Job's pipeline can be `single`, `sequential` (output of step N → context for step N+1), or `parallel` (fan-out to ephemeral sessions). Step-level prompt overrides; per-step "feed previous output" toggle.
+- **Multi-agent Job Pipelines**: a Job's pipeline can be `single`, `sequential` (output of step N → context for step N+1), `parallel` (fan-out to ephemeral sessions), or `custom` (phase-grouped — mix sequential and parallel, e.g. `A → [B ∥ C] → D`). Each step has an optional prompt override and "feed previous phase's output" toggle.
 - **Run + per-step monitor**: each ▶ Run creates a Run record with one task per step, status pills per step, stacked execution monitors with cost/duration/token stats and event streams.
 - **Heartbeat scheduler** (off by default — flip `heartbeat.enabled: true`): periodic tick reads each agent's HEARTBEAT.md, reconciles HB Jobs in the sidebar, fires due cron entries on either ephemeral or persistent workspaces. State persists across restarts in `data/heartbeat-state.json`.
 - **Background Task Queue**: Submit jobs (like `CLAUDE_CODE`) that run asynchronously. The model can poll for status and rich tool-use events.

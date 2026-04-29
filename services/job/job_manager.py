@@ -21,14 +21,19 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-VALID_PIPELINE_MODES = ("single", "sequential", "parallel")
+VALID_PIPELINE_MODES = ("single", "sequential", "parallel", "custom")
 
 
 def _normalize_pipeline(data: Dict[str, Any]) -> Dict[str, Any]:
     """Normalise / validate a pipeline dict in-place; return it.
 
-    Accepts inputs missing fields and falls back to safe defaults. Step ids
-    are auto-assigned if missing so reorders survive across saves.
+    Each step ends up with a `phase: int`. Phases run sequentially; steps
+    in the same phase run in parallel.
+      - single     → 1 step, phase 0
+      - sequential → step i has phase i
+      - parallel   → all steps share phase 0
+      - custom     → respects per-step phase; fills missing values from index;
+                     renumbers to contiguous 0..N-1 preserving relative order.
     """
     pipe = dict(data or {})
     mode = pipe.get("mode", "single")
@@ -47,12 +52,39 @@ def _normalize_pipeline(data: Dict[str, Any]) -> Dict[str, Any]:
             "name": s.get("name") or "",
             "prompt_override": s.get("prompt_override") or "",
             "depends_on_text": bool(s.get("depends_on_text", False)),
+            "phase": s.get("phase"),
         }
         if not step["agent_id"]:
             continue  # drop malformed steps
         out_steps.append(step)
+
     if mode == "single":
         out_steps = out_steps[:1]
+        for s in out_steps:
+            s["phase"] = 0
+    elif mode == "sequential":
+        for i, s in enumerate(out_steps):
+            s["phase"] = i
+    elif mode == "parallel":
+        for s in out_steps:
+            s["phase"] = 0
+    elif mode == "custom":
+        # Fill missing phase values (fall back to the step's index so adding
+        # a step without setting phase puts it on its own phase by default),
+        # then renumber to contiguous 0..N-1 preserving relative order.
+        for i, s in enumerate(out_steps):
+            if s["phase"] is None:
+                s["phase"] = i
+            else:
+                try:
+                    s["phase"] = int(s["phase"])
+                except (TypeError, ValueError):
+                    s["phase"] = i
+        unique_phases = sorted({s["phase"] for s in out_steps})
+        renumber = {p: i for i, p in enumerate(unique_phases)}
+        for s in out_steps:
+            s["phase"] = renumber[s["phase"]]
+
     pipe["steps"] = out_steps
     return pipe
 
