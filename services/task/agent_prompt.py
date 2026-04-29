@@ -41,7 +41,11 @@ def render_agent_prompt_xml(
 ) -> str:
     """Render an <agent_task> XML blob from structured fields.
 
-    `agent` requires `id`, `name`, `instructions`.
+    `agent` requires `id`, `name`. The agent's identity (SOUL/USER/MEMORY/AGENT)
+    is staged into the workspace as separate markdown files and auto-loaded by
+    the CLI from CLAUDE.md / GEMINI.md, so this XML does NOT carry an
+    <instructions> block.
+
     `job` requires `workspace_id`, `task_description`.
     `agent_files` / `job_files` are iterables of {"path": ...} or path strings.
     """
@@ -57,9 +61,6 @@ def render_agent_prompt_xml(
         f'<agent_task version="{PROMPT_VERSION}">',
         f'  <agent id="{_esc(agent.get("id"))}" name="{_esc(agent.get("name"))}"/>',
         f'  <workspace id="{_esc(job.get("workspace_id"))}"/>',
-        "  <instructions>",
-        _esc(agent.get("instructions") or ""),
-        "  </instructions>",
         "  <task_description>",
         _esc(job.get("task_description") or ""),
         "  </task_description>",

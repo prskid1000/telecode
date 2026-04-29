@@ -35,6 +35,7 @@ def register_default_tasks():
         "properties": {
             "prompt": {"type": "string", "description": "Pre-rendered prompt (text or XML). Mutually exclusive with agent+job."},
             "is_local": {"type": "boolean", "description": "Point to the local proxy and currently loaded model", "default": False},
+            "agent_id": {"type": "string", "description": "Agent UUID — when set, agent's internal files are staged into the workspace (SOUL/USER/MEMORY + AGENT→CLAUDE.md|GEMINI.md) for this run."},
             "agent": {
                 "type": "object",
                 "description": "Agent struct (id, name, instructions). Server renders <agent_task> XML.",

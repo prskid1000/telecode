@@ -20,6 +20,44 @@ def get_jobs_base_dir() -> Path:
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+
+VALID_PIPELINE_MODES = ("single", "sequential", "parallel")
+
+
+def _normalize_pipeline(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalise / validate a pipeline dict in-place; return it.
+
+    Accepts inputs missing fields and falls back to safe defaults. Step ids
+    are auto-assigned if missing so reorders survive across saves.
+    """
+    pipe = dict(data or {})
+    mode = pipe.get("mode", "single")
+    if mode not in VALID_PIPELINE_MODES:
+        mode = "single"
+    pipe["mode"] = mode
+
+    raw_steps = pipe.get("steps") or []
+    out_steps: List[Dict[str, Any]] = []
+    for s in raw_steps:
+        if not isinstance(s, dict):
+            continue
+        step = {
+            "step_id": s.get("step_id") or str(uuid.uuid4()),
+            "agent_id": s.get("agent_id"),
+            "name": s.get("name") or "",
+            "prompt_override": s.get("prompt_override") or "",
+            "depends_on_text": bool(s.get("depends_on_text", False)),
+        }
+        if not step["agent_id"]:
+            continue  # drop malformed steps
+        out_steps.append(step)
+    if mode == "single":
+        out_steps = out_steps[:1]
+    pipe["steps"] = out_steps
+    return pipe
+
+
+
 class JobManager:
     def __init__(self):
         self.base_dir = get_jobs_base_dir()
@@ -31,27 +69,50 @@ class JobManager:
     def _get_job_files_dir(self, job_id: str) -> Path:
         return self.base_dir / job_id / "files"
 
-    def list_jobs(self) -> List[Dict[str, Any]]:
+    def list_jobs(self, kind: Optional[str] = None, include_archived: bool = False) -> List[Dict[str, Any]]:
         jobs = []
         for p in self.base_dir.glob("*.json"):
             try:
-                data = json.loads(p.read_text(encoding="utf-8"))
-                jobs.append(data)
+                jobs.append(json.loads(p.read_text(encoding="utf-8")))
             except Exception as e:
                 logger.error(f"Failed to load job from {p}: {e}")
+        if kind:
+            jobs = [j for j in jobs if j.get("kind") == kind]
+        if not include_archived:
+            jobs = [j for j in jobs if not j.get("archived")]
         return sorted(jobs, key=lambda x: x.get("updated_at", ""), reverse=True)
 
     def create_job(self, data: Dict[str, Any]) -> Dict[str, Any]:
         job_id = str(uuid.uuid4())
         now = _now_iso()
+        kind = data.get("kind", "user")
+        if kind not in ("user", "heartbeat"):
+            kind = "user"
+
+        # Build pipeline from the explicit `pipeline` dict, or from a single
+        # `agent_id` (HB jobs and the simple create-job modal use this shape).
+        if "pipeline" in data:
+            pipeline = _normalize_pipeline(data["pipeline"])
+        elif data.get("agent_id"):
+            pipeline = _normalize_pipeline({
+                "mode": "single",
+                "steps": [{"agent_id": data["agent_id"]}],
+            })
+        else:
+            pipeline = {"mode": "single", "steps": []}
+
         job_data = {
             "id": job_id,
             "title": data.get("title", "Untitled Job"),
-            "agent_id": data.get("agent_id"),
+            "agent_id": data.get("agent_id"),  # kept for legacy reads
             "workspace_id": data.get("workspace_id"),
             "actions": data.get("actions", []),
             "tasks": data.get("tasks", []),
             "task_description": data.get("task_description", ""),
+            "pipeline": pipeline,
+            "kind": kind,
+            "heartbeat_entry": data.get("heartbeat_entry"),  # dict or None; only for kind=="heartbeat"
+            "archived": bool(data.get("archived", False)),
             "created_at": now,
             "updated_at": now
         }
@@ -72,14 +133,29 @@ class JobManager:
         job = self.get_job(job_id)
         if not job:
             return None
-        
-        for key in ["title", "actions", "tasks", "task_description"]:
+
+        # Mutable fields. heartbeat_entry/archived are mainly written by the
+        # reconciliation pass for kind=="heartbeat" jobs but accepted via API too.
+        for key in ["title", "actions", "tasks", "task_description",
+                    "agent_id", "workspace_id",
+                    "heartbeat_entry", "archived"]:
             if key in data:
                 job[key] = data[key]
-        
+        if "pipeline" in data:
+            job["pipeline"] = _normalize_pipeline(data["pipeline"])
+
         job["updated_at"] = _now_iso()
         self._get_job_path(job_id).write_text(json.dumps(job, indent=2), encoding="utf-8")
         return job
+
+    def find_heartbeat_job(self, agent_id: str, entry_name: str) -> Optional[Dict[str, Any]]:
+        for j in self.list_jobs(kind="heartbeat", include_archived=True):
+            if j.get("agent_id") != agent_id:
+                continue
+            entry = j.get("heartbeat_entry") or {}
+            if entry.get("name") == entry_name:
+                return j
+        return None
 
     def delete_job(self, job_id: str) -> bool:
         p = self._get_job_path(job_id)

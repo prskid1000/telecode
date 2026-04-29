@@ -84,12 +84,22 @@ pythonw main.py
 
 ### Session & Task Management (pythonmagic-style)
 
-Telecode now includes a fully-featured, stateful **Session and Task Management** system, identical in architecture to `pythonmagic`. This enables long-running agentic loops where the model can manage persistent workspaces and background jobs.
+Telecode includes a fully-featured stateful **Session and Task Management** system, with persistent **Agents**, multi-step **Job pipelines**, and a cron-style **Heartbeat scheduler** for self-running agents.
 
 - **Stateful Workspaces**: Isolated filesystem directories for each session, with persistent metadata and `data` carrying state across multiple tasks/turns.
+- **Persistent Agents** with five OpenClaw-style internal files:
+  - **SOUL.md** — identity, tone, values
+  - **USER.md** — who the user is, address conventions
+  - **AGENT.md** — operating rules / behavioural guidance (auto-renamed to `CLAUDE.md` or `GEMINI.md` in the workspace so the underlying CLI auto-loads it)
+  - **MEMORY.md** — long-term memory the agent self-curates
+  - **HEARTBEAT.md** — YAML-fenced cron schedule (read by the scheduler, never staged into the workspace)
+  - All five files live under `data/agents/<id>/internal/`. SOUL/USER/AGENT/MEMORY are **staged** into the workspace for the run, then **written back** verbatim on exit.
+- **Multi-agent Job Pipelines**: a Job's pipeline can be `single`, `sequential` (output of step N → context for step N+1), or `parallel` (fan-out to ephemeral sessions). Step-level prompt overrides; per-step "feed previous output" toggle.
+- **Run + per-step monitor**: each ▶ Run creates a Run record with one task per step, status pills per step, stacked execution monitors with cost/duration/token stats and event streams.
+- **Heartbeat scheduler** (off by default — flip `heartbeat.enabled: true`): periodic tick reads each agent's HEARTBEAT.md, reconciles HB Jobs in the sidebar, fires due cron entries on either ephemeral or persistent workspaces. State persists across restarts in `data/heartbeat-state.json`.
 - **Background Task Queue**: Submit jobs (like `CLAUDE_CODE`) that run asynchronously. The model can poll for status and rich tool-use events.
 - **Web Interface**: Dual-mode UI for monitoring tasks and managing files:
-  - **Team Mode** (`/ui`): Advanced agentic workspace management (workspaces, agents, jobs).
+  - **Team Mode** (`/ui`): Workspaces / Agents (with the 5-tab internal-file editor + YAML-validated HEARTBEAT.md) / Jobs (USER and HEARTBEAT sidebar tabs, pipeline builder, run history).
   - **Task Mode** (`/ui/legacy`): Simplified session-based task submission and monitoring.
   - Browser titles ("Telecode-Team" / "Telecode-Task") and icons match the active mode for easy navigation.
 - **Configurable**: Enable via `proxy.enable_session_tools: true` in `settings.json`. Once enabled, tools like `session_create`, `task_submit`, and `session_upload_file` are automatically injected into supported client profiles (like `claude-code`).
@@ -449,6 +459,34 @@ Activation is lazy: the first voice message hits the endpoint directly; health s
 Ships with `speak`, `transcribe`, `web_search`. Add new tools by dropping a `.py` file under `mcp_server/tools/`.
 
 Register with CC: `claude mcp add telecode --transport streamable-http --url http://127.0.0.1:1236/mcp`
+
+### `heartbeat` — cron-style scheduler for self-running agents
+
+Periodic loop that reads each agent's `HEARTBEAT.md`, parses the YAML schedule entries, reconciles the matching `kind:"heartbeat"` Jobs in the sidebar, and fires any due entries through the same task pipeline as user-triggered runs. Disabled by default.
+
+| Key | Description |
+|---|---|
+| `enabled` | Start the scheduler. Default `false`. |
+| `tick_seconds` | How often to evaluate cron expressions (default `60`). |
+| `ephemeral_ttl_seconds` | Safety-net TTL on ephemeral heartbeat sessions (default `3600`). Sessions are deleted right after the task completes; the TTL only matters if the bot crashes mid-run. |
+| `max_concurrent_fires` | Cap on heartbeat fires per tick (default `2`). Extra due entries spill over to the next tick — no piled-up backlog after a downtime. |
+| `min_fire_gap_seconds` | Hard floor between two fires of the same entry (default `60`). Defends against rapid-fire crons during catch-up windows. |
+
+`HEARTBEAT.md` syntax: free-form markdown notes plus one or more `\`\`\`yaml` fenced blocks. Each block is a YAML list of entries:
+
+```yaml
+- name: morning-briefing      # required, unique per file
+  cron: "0 9 * * *"           # required, 5-field cron (croniter)
+  prompt: |                   # required
+    Summarise today's calendar and unread mail.
+  workspace: ephemeral        # ephemeral (default) | persistent
+  engine: claude_code         # claude_code (default) | gemini
+  enabled: true               # default true
+```
+
+`workspace: persistent` requires `workspace_id: <existing-session-uuid>`. Ephemeral fires create a fresh session under namespace `heartbeat`, run the task, write back the agent's internal files to storage, then delete the session.
+
+State (`data/heartbeat-state.json`) tracks `(agent_id, entry_name) → {last_run, last_status, last_task_id}`. Missed fires during downtime are not backfilled — only the next scheduled fire runs.
 
 ### `proxy` — middleware for local models
 

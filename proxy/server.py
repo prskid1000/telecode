@@ -33,6 +33,7 @@ from proxy import api_tasks
 from proxy import api_agents
 from proxy import api_jobs
 from proxy import api_skills
+from proxy import api_runs
 from proxy.tool_registry import (
     proxy_system_instruction,
     strip_all_reminders,
@@ -1724,6 +1725,7 @@ def create_app() -> web.Application:
     api_agents.register_routes(app)
     api_jobs.register_routes(app)
     api_skills.register_routes(app)
+    api_runs.register_routes(app)
 
     app.router.add_get("/ui/legacy", handle_legacy_ui)
 

@@ -61,6 +61,26 @@
   }
   textarea { resize: none; }
   textarea#agent-instr, textarea#job-prompt { height: 200px; }
+  textarea.internal-editor { height: 360px; min-height: 240px; }
+
+  /* Internal-files tab editor */
+  .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 0; }
+  .tab {
+    padding: 8px 14px; cursor: pointer; font-size: 12px;
+    color: var(--muted); border-bottom: 2px solid transparent;
+    font-family: var(--mono); transition: color 0.15s, border-color 0.15s;
+    display: inline-flex; align-items: center; gap: 6px;
+    user-select: none;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--warn); opacity: 0; transition: opacity 0.15s;
+  }
+  .tab.dirty .tab-dot { opacity: 1; }
+  .internal-wrap { border: 1px solid var(--border); border-top: 0; border-radius: 0 0 6px 6px; background: var(--panel2); padding: 0; }
+  .internal-wrap textarea { border: 0; border-radius: 0 0 6px 6px; background: transparent; }
   input:focus, textarea:focus, select:focus { border-color: var(--accent); }
   
   button {
@@ -191,6 +211,10 @@
       <span>Jobs</span>
       <button onclick="createJobPrompt()" title="Add Job" class="icon" id="sidebar-add-job"></button>
     </div>
+    <div id="job-tabs" class="tabs" style="margin-bottom: 8px;">
+      <div class="tab active" onclick="selectJobTab('user')" id="job-tab-user">USER</div>
+      <div class="tab" onclick="selectJobTab('heartbeat')" id="job-tab-heartbeat">HEARTBEAT</div>
+    </div>
     <div id="job-list"></div>
   </div>
 </div>
@@ -239,6 +263,8 @@
   document.getElementById('sidebar-add-job').innerHTML = SVGS.plus;
   document.getElementById('modal-close-icon').innerHTML = SVGS.close;
 
+  const INTERNAL_FILES = ['SOUL.md', 'USER.md', 'AGENT.md', 'MEMORY.md', 'HEARTBEAT.md'];
+
   let state = {
     workspaces: [],
     agents: [],
@@ -246,8 +272,27 @@
     activeType: null,
     activeId: null,
     executionTaskId: null,
-    executionTimer: null
+    executionTimer: null,
+    internalContent: {},
+    internalDirty: {},
+    activeInternalFile: INTERNAL_FILES[0],
+    activeJobTab: 'user',
+    pipelineDraft: { mode: 'single', steps: [] },
+    activeRunId: null
   };
+
+  async function goToAgentHeartbeat(agentId) {
+    if (!agentId) return;
+    state.activeInternalFile = 'HEARTBEAT.md';
+    await selectAgent(agentId);
+  }
+
+  function selectJobTab(tab) {
+    state.activeJobTab = tab;
+    document.getElementById('job-tab-user').classList.toggle('active', tab === 'user');
+    document.getElementById('job-tab-heartbeat').classList.toggle('active', tab === 'heartbeat');
+    renderSidebar();
+  }
 
   function escapeHtml(s) {
     return (s || "").toString().replace(/[&<>]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c]));
@@ -368,13 +413,19 @@
     `).join('') || '<div class="muted" style="padding:8px;">No agents</div>';
 
     const jobList = document.getElementById('job-list');
-    jobList.innerHTML = state.jobs.map(j => `
-      <div class="nav-item ${state.activeType === 'job' && state.activeId === j.id ? 'active' : ''}" 
-           onclick="selectJob('${j.id}')">
-        <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(j.title)}</span>
-        <button class="icon small danger ghost sidebar-del" onclick="event.stopPropagation(); deleteJobPrompt('${j.id}')" title="Delete Job">${SVGS.delete}</button>
-      </div>
-    `).join('') || '<div class="muted" style="padding:8px;">No jobs</div>';
+    const filteredJobs = state.jobs.filter(j => (j.kind || 'user') === state.activeJobTab);
+    jobList.innerHTML = filteredJobs.map(j => {
+      const hbBadge = j.kind === 'heartbeat'
+        ? `<span class="uid" title="${escapeHtml((j.heartbeat_entry||{}).cron||'')}">⏱ ${escapeHtml((j.heartbeat_entry||{}).cron||'')}</span>`
+        : '';
+      return `
+        <div class="nav-item ${state.activeType === 'job' && state.activeId === j.id ? 'active' : ''}"
+             onclick="selectJob('${j.id}')">
+          <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(j.title)}</span>
+          ${hbBadge}
+          <button class="icon small danger ghost sidebar-del" onclick="event.stopPropagation(); deleteJobPrompt('${j.id}')" title="Delete Job">${SVGS.delete}</button>
+        </div>`;
+    }).join('') || `<div class="muted" style="padding:8px;">No ${state.activeJobTab === 'user' ? 'user jobs' : 'heartbeat jobs'}</div>`;
   }
 
   // --- Selection Logic ---
@@ -398,6 +449,7 @@
   async function selectJob(id) {
     state.activeType = 'job';
     state.activeId = id;
+    state.activeRunId = null;
     if (state.executionTimer) clearInterval(state.executionTimer);
     renderSidebar();
     renderJobViewer(id);
@@ -479,12 +531,21 @@
   async function renderAgentViewer(id) {
     const viewer = document.getElementById('viewer');
     viewer.innerHTML = '<div class="muted">Loading agent...</div>';
-    
+
     try {
-      const agentRes = await api(`/api/agents/${id}`);
+      const [agentRes, fileRes, internalRes] = await Promise.all([
+        api(`/api/agents/${id}`),
+        api(`/api/agents/${id}/files`),
+        api(`/api/agents/${id}/internal`),
+      ]);
       const agent = agentRes.agent;
-      const fileRes = await api(`/api/agents/${id}/files`);
       const files = fileRes.files || [];
+
+      state.internalContent = {};
+      state.internalDirty = {};
+      state.activeInternalFile = INTERNAL_FILES[0];
+      const loaded = internalRes.files || {};
+      for (const f of INTERNAL_FILES) state.internalContent[f] = loaded[f] || '';
 
       viewer.innerHTML = `
         <div class="flex-col">
@@ -505,8 +566,21 @@
           </div>
 
           <div class="field-group">
-            <label>Instructions</label>
-            <textarea id="agent-instr" rows="12" placeholder="Enter instructions for the agent...">${escapeHtml(agent.instructions)}</textarea>
+            <label>Internal Files</label>
+            <div id="agent-internal-tabs" class="tabs"></div>
+            <div class="internal-wrap">
+              <textarea id="agent-internal-content" class="internal-editor"
+                        oninput="markInternalDirty()"
+                        spellcheck="false"
+                        placeholder=""></textarea>
+            </div>
+            <div id="agent-internal-footer" style="display:none; margin-top:8px; padding:10px; background:var(--panel2); border:1px solid var(--border); border-radius:6px; flex-direction:column; gap:6px;">
+              <div class="flex" style="gap:10px;">
+                <button class="ghost" onclick="validateHeartbeat()">Validate</button>
+                <span class="muted" style="font-size:11px;">YAML schedule entries inside <code>\`\`\`yaml</code> fences. Free text outside fences is ignored.</span>
+              </div>
+              <div id="hb-validate-status" style="font-size:12px;"></div>
+            </div>
           </div>
 
           <div style="border-top: 1px solid var(--border); padding-top: 20px;">
@@ -539,9 +613,125 @@
           </div>
         </div>
       `;
+
+      renderInternalTabs();
+      const ta = document.getElementById('agent-internal-content');
+      if (ta) ta.value = state.internalContent[state.activeInternalFile] || '';
     } catch (e) {
       viewer.innerHTML = `<div style="color:var(--err)">Error: ${e.message}</div>`;
     }
+  }
+
+  // --- Pipeline editor (used inside Job viewer) ---
+
+  function genStepId() {
+    return 'step-' + Math.random().toString(36).slice(2, 10);
+  }
+
+  function renderPipelineSteps(isHb) {
+    const host = document.getElementById('pipeline-steps');
+    if (!host) return;
+    const steps = state.pipelineDraft.steps;
+    const mode = state.pipelineDraft.mode;
+    const agentOptions = state.agents.map(a =>
+      `<option value="${a.id}">${escapeHtml(a.name)}</option>`
+    ).join('') || '<option value="">(no agents — create one first)</option>';
+
+    if (steps.length === 0) {
+      host.innerHTML = `<div class="muted" style="padding: 10px;">No steps. ${isHb ? '' : 'Click <strong>+ Add step</strong> to define one.'}</div>`;
+      return;
+    }
+
+    host.innerHTML = steps.map((s, idx) => {
+      const showFeed = mode === 'sequential' && idx > 0;
+      const dragHandle = (mode === 'sequential' && !isHb && steps.length > 1) ? '⠿' : '';
+      const upBtn = (mode === 'sequential' && !isHb && idx > 0)
+        ? `<button class="icon small ghost" onclick="movePipelineStep(${idx}, -1)" title="Move up">▲</button>` : '';
+      const downBtn = (mode === 'sequential' && !isHb && idx < steps.length - 1)
+        ? `<button class="icon small ghost" onclick="movePipelineStep(${idx}, 1)" title="Move down">▼</button>` : '';
+      const delBtn = (!isHb && (mode !== 'single' || steps.length > 1))
+        ? `<button class="icon small danger ghost" onclick="removePipelineStep(${idx})" title="Remove">${SVGS.delete}</button>` : '';
+      return `
+        <div class="step-card" style="border:1px solid var(--border); border-radius:6px; padding:10px; margin-bottom:8px; background:var(--panel2);">
+          <div class="flex" style="justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <div class="muted" style="font-family:var(--mono); font-size:11px;">
+              ${dragHandle} step ${idx + 1}${s.name ? ' — ' + escapeHtml(s.name) : ''}
+            </div>
+            <div class="flex" style="gap: 4px;">
+              ${upBtn}${downBtn}${delBtn}
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="field-group" style="margin-bottom: 6px;">
+              <label>Agent</label>
+              <select onchange="updatePipelineStep(${idx}, 'agent_id', this.value)" ${isHb ? 'disabled' : ''}>
+                ${state.agents.map(a => `<option value="${a.id}" ${a.id === s.agent_id ? 'selected' : ''}>${escapeHtml(a.name)}</option>`).join('')}
+                ${state.agents.length === 0 ? '<option value="">(no agents)</option>' : ''}
+              </select>
+            </div>
+            <div class="field-group" style="margin-bottom: 6px;">
+              <label>Step name (optional)</label>
+              <input value="${escapeHtml(s.name || '')}" oninput="updatePipelineStep(${idx}, 'name', this.value)" placeholder="e.g. Reviewer" ${isHb ? 'readonly' : ''}>
+            </div>
+          </div>
+          <div class="field-group" style="margin-bottom: 6px;">
+            <label>Prompt override <span class="muted">(blank = use job's default prompt below)</span></label>
+            <textarea rows="3" oninput="updatePipelineStep(${idx}, 'prompt_override', this.value)" placeholder="" ${isHb ? 'readonly' : ''}>${escapeHtml(s.prompt_override || '')}</textarea>
+          </div>
+          ${showFeed ? `
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size: 12px;">
+               <input type="checkbox" ${s.depends_on_text ? 'checked' : ''} onchange="updatePipelineStep(${idx}, 'depends_on_text', this.checked)" style="width:auto;margin:0;" ${isHb ? 'disabled' : ''}>
+               Feed previous step's reply as <code>&lt;previous_output&gt;</code>
+            </label>` : ''}
+        </div>`;
+    }).join('');
+  }
+
+  function updatePipelineStep(idx, field, value) {
+    const s = state.pipelineDraft.steps[idx];
+    if (!s) return;
+    s[field] = value;
+  }
+
+  function addPipelineStep() {
+    const firstAgent = (state.agents[0] || {}).id || '';
+    state.pipelineDraft.steps.push({
+      step_id: genStepId(),
+      agent_id: firstAgent,
+      name: '',
+      prompt_override: '',
+      depends_on_text: state.pipelineDraft.mode === 'sequential' && state.pipelineDraft.steps.length > 0
+    });
+    if (state.pipelineDraft.mode === 'single' && state.pipelineDraft.steps.length > 1) {
+      // Bump mode out of single when multiple steps exist
+      state.pipelineDraft.mode = 'sequential';
+      const sel = document.getElementById('pipeline-mode');
+      if (sel) sel.value = 'sequential';
+    }
+    renderPipelineSteps(false);
+  }
+
+  function removePipelineStep(idx) {
+    state.pipelineDraft.steps.splice(idx, 1);
+    renderPipelineSteps(false);
+  }
+
+  function movePipelineStep(idx, delta) {
+    const target = idx + delta;
+    const steps = state.pipelineDraft.steps;
+    if (target < 0 || target >= steps.length) return;
+    const tmp = steps[idx]; steps[idx] = steps[target]; steps[target] = tmp;
+    renderPipelineSteps(false);
+  }
+
+  function onPipelineModeChange() {
+    const sel = document.getElementById('pipeline-mode');
+    if (!sel) return;
+    state.pipelineDraft.mode = sel.value;
+    if (sel.value === 'single' && state.pipelineDraft.steps.length > 1) {
+      state.pipelineDraft.steps = state.pipelineDraft.steps.slice(0, 1);
+    }
+    renderPipelineSteps(false);
   }
 
   // --- Job Viewer ---
@@ -549,7 +739,7 @@
   async function renderJobViewer(id) {
     const viewer = document.getElementById('viewer');
     viewer.innerHTML = '<div class="muted">Loading job...</div>';
-    
+
     try {
       const res = await api(`/api/jobs/${id}`);
       const job = res.job;
@@ -557,7 +747,15 @@
       const files = fileRes.files || [];
 
       const ws = state.workspaces.find(w => w.session_id === job.workspace_id);
-      const agent = state.agents.find(a => a.id === job.agent_id);
+
+      // Pipeline draft state — editable copy of job.pipeline.
+      const pipeline = job.pipeline || { mode: 'single', steps: [] };
+      state.pipelineDraft = {
+        mode: pipeline.mode || 'single',
+        steps: (pipeline.steps || []).map(s => ({...s})),
+      };
+      const pipeMode = state.pipelineDraft.mode;
+      const isHb = job.kind === 'heartbeat';
 
       viewer.innerHTML = `
         <div class="flex-col">
@@ -588,21 +786,45 @@
               <div class="uid-large">${ws ? escapeHtml((ws.data || {}).name || ws.session_id) : 'Missing Workspace'}</div>
             </div>
             <div class="field-group">
-              <label>Linked Agent</label>
-              <div class="uid-large">${agent ? escapeHtml(agent.name) : 'Missing Agent'}</div>
+              <label>Pipeline mode</label>
+              <select id="pipeline-mode" ${isHb ? 'disabled' : ''} onchange="onPipelineModeChange()">
+                <option value="single" ${pipeMode === 'single' ? 'selected' : ''}>Single — one agent</option>
+                <option value="sequential" ${pipeMode === 'sequential' ? 'selected' : ''}>Sequential — feed step → step</option>
+                <option value="parallel" ${pipeMode === 'parallel' ? 'selected' : ''}>Parallel — fan-out, ephemeral</option>
+              </select>
             </div>
           </div>
 
           <div class="field-group">
-            <label>Job Title</label>
-            <input id="job-title" value="${escapeHtml(job.title)}">
+            <label>Pipeline ${isHb ? '<span class="muted">(read-only — edit via HEARTBEAT.md)</span>' : ''}</label>
+            <div id="pipeline-steps"></div>
+            ${isHb ? '' : `<button class="ghost" onclick="addPipelineStep()" style="margin-top: 6px;">+ Add step</button>`}
           </div>
 
           <div class="field-group">
-            <label>Job Prompt (Execution Plan)</label>
-            <textarea id="job-prompt" rows="8">${escapeHtml(job.task_description || '')}</textarea>
+            <label>Job Title</label>
+            <input id="job-title" value="${escapeHtml(job.title)}" ${isHb ? 'readonly' : ''}>
           </div>
 
+          ${isHb ? `
+          <div class="field-group">
+            <label>Heartbeat schedule</label>
+            <div class="flex" style="gap:10px; padding:8px 12px; background:var(--panel2); border:1px solid var(--border); border-radius:6px; font-family:var(--mono); font-size:12px;">
+              <span>cron: <strong>${escapeHtml((job.heartbeat_entry||{}).cron||'')}</strong></span>
+              <span class="muted">|</span>
+              <span>workspace: <strong>${escapeHtml((job.heartbeat_entry||{}).workspace||'ephemeral')}</strong></span>
+              <span class="muted">|</span>
+              <span>${(job.heartbeat_entry||{}).enabled === false ? '⊘ disabled' : '✓ enabled'}</span>
+              <button class="ghost small" style="margin-left:auto;" onclick="goToAgentHeartbeat('${(job.agent_id)||''}')">Edit in HEARTBEAT.md</button>
+            </div>
+          </div>` : ''}
+
+          <div class="field-group">
+            <label>${isHb ? 'Heartbeat prompt (read-only — edit via HEARTBEAT.md)' : 'Job Prompt (Execution Plan)'}</label>
+            <textarea id="job-prompt" rows="8" ${isHb ? 'readonly' : ''}>${escapeHtml(job.task_description || '')}</textarea>
+          </div>
+
+          ${isHb ? '' : `
           <div style="border-top: 1px solid var(--border); padding-top: 20px;">
             <div class="sidebar-title">
               <span>Resources & Files</span>
@@ -626,37 +848,28 @@
                 </div>
               `).join('') || '<div style="padding:20px; text-align:center;" class="muted">No resources linked</div>'}
             </div>
-          </div>
+          </div>`}
         </div>
       `;
 
-      // Check for existing tasks for this workspace
-      const tasksRes = await api('/api/tasks');
-      const allTasks = [].concat(
-        tasksRes.running || [], 
-        tasksRes.pending || [],
-        tasksRes.completed || [],
-        tasksRes.failed || [],
-        tasksRes.cancelled || []
-      ).filter(t => t.session_id === job.workspace_id)
-       .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      renderPipelineSteps(isHb);
 
-      if (allTasks.length > 0) {
+      // Restore Run history for this job
+      const runsRes = await api(`/api/jobs/${encodeURIComponent(id)}/runs`);
+      const runs = runsRes.runs || [];
+      if (runs.length > 0) {
         document.getElementById('task-history-area').style.display = 'block';
-        renderTaskHistoryList(allTasks);
-        
-        if (!state.executionTaskId) {
-           const latest = allTasks[0];
-           state.executionTaskId = latest.task_id;
-           document.getElementById('execution-area').style.display = 'block';
-           if (['completed', 'failed', 'cancelled'].includes(latest.status)) {
-             const t = await api(`/api/tasks/${encodeURIComponent(latest.task_id)}`);
-             renderExecutionMonitor(t);
-           } else {
-             if (state.executionTimer) clearInterval(state.executionTimer);
-             state.executionTimer = setInterval(() => pollExecution(job.workspace_id, [], []), 1000);
-             pollExecution(job.workspace_id, [], []);
-           }
+        renderRunHistoryList(runs);
+
+        if (!state.activeRunId) {
+          const latest = runs[0];
+          state.activeRunId = latest.run_id;
+          document.getElementById('execution-area').style.display = 'block';
+          await pollRun(id);
+          if (!['completed','failed','partial','cancelled'].includes(latest.status)) {
+            if (state.executionTimer) clearInterval(state.executionTimer);
+            state.executionTimer = setInterval(() => pollRun(id), 1000);
+          }
         }
       }
 
@@ -665,46 +878,45 @@
     }
   }
 
-  function renderTaskHistoryList(tasks) {
+  function renderRunHistoryList(runs) {
     const list = document.getElementById('task-history-list');
-    list.innerHTML = tasks.slice(0, 10).map(t => `
-      <div class="nav-item ${state.executionTaskId === t.task_id ? 'active' : ''}" 
-           style="background:var(--panel2); margin:0; padding: 4px 10px; font-size: 11px;"
-           onclick="switchTask('${t.task_id}', '${t.session_id}')">
-        <span class="pill ${t.status}" style="font-size:8px; padding: 1px 6px;">${t.status}</span>
-        <span style="font-family:var(--mono);">${t.task_id.slice(0,8)}…</span>
-      </div>
-    `).join('');
+    if (!list) return;
+    list.innerHTML = runs.slice(0, 10).map(r => {
+      const stepDots = (r.steps || []).map(s => {
+        const cls = s.status || 'pending';
+        return `<span class="pill ${cls}" style="font-size:8px; padding:1px 6px;" title="${escapeHtml(s.agent_name || s.agent_id || '')}: ${cls}">${(s.name||s.agent_name||'?').slice(0,1).toUpperCase()}</span>`;
+      }).join(' ');
+      return `
+        <div class="nav-item ${state.activeRunId === r.run_id ? 'active' : ''}"
+             style="background:var(--panel2); margin:0; padding: 6px 10px; font-size: 11px; flex-direction: column; align-items: flex-start; gap: 4px;"
+             onclick="switchRun('${r.run_id}', '${r.job_id}')">
+          <div class="flex" style="gap:6px; width:100%;">
+            <span class="pill ${r.status}" style="font-size:8px; padding: 1px 6px;">${r.status}</span>
+            <span style="font-family:var(--mono);">${r.run_id.slice(0,8)}…</span>
+            <span class="muted" style="margin-left:auto;">${r.mode}</span>
+          </div>
+          <div class="flex" style="gap:4px;">${stepDots}</div>
+        </div>`;
+    }).join('') || '<div class="muted">No runs yet</div>';
   }
 
-  async function switchTask(tid, sid) {
+  async function switchRun(runId, jobId) {
     const area = document.getElementById('execution-area');
-    
-    // If clicking the same task that's already active, toggle visibility (minimize/expand)
-    if (state.executionTaskId === tid) {
+    if (state.activeRunId === runId) {
       area.style.display = area.style.display === 'none' ? 'block' : 'none';
       return;
     }
-
-    state.executionTaskId = tid;
+    state.activeRunId = runId;
     area.style.display = 'block';
     if (state.executionTimer) clearInterval(state.executionTimer);
-    
-    const t = await api(`/api/tasks/${encodeURIComponent(tid)}`);
-    renderExecutionMonitor(t);
-    
-    if (!['completed', 'failed', 'cancelled'].includes(t.status)) {
-      state.executionTimer = setInterval(() => pollExecution(sid, [], []), 1000);
+
+    await pollRun(jobId);
+    const r = await api(`/api/runs/${encodeURIComponent(runId)}`);
+    if (!['completed','failed','partial','cancelled'].includes(r.run.status)) {
+      state.executionTimer = setInterval(() => pollRun(jobId), 1000);
     }
-    
-    // re-render list to update active state
-    const tasksRes = await api('/api/tasks');
-    const allTasks = [].concat(
-        tasksRes.running || [], tasksRes.pending || [],
-        tasksRes.completed || [], tasksRes.failed || [], tasksRes.cancelled || []
-    ).filter(tk => tk.session_id === sid)
-     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-    renderTaskHistoryList(allTasks);
+    const runsRes = await api(`/api/jobs/${encodeURIComponent(jobId)}/runs`);
+    renderRunHistoryList(runsRes.runs || []);
   }
 
   // --- Actions ---
@@ -775,20 +987,20 @@
           <input id="new-agent-name" placeholder="e.g. Code Reviewer">
         </div>
         <div class="field-group">
-          <label>Initial Instructions (optional)</label>
-          <textarea id="new-agent-instr-modal" rows="6" placeholder="Enter what this agent should do..."></textarea>
+          <label>SOUL.md <span class="muted">(optional — core identity, purpose, values)</span></label>
+          <textarea id="new-agent-soul" class="internal-editor" rows="12" placeholder="Define the agent's core identity, purpose, and values..." spellcheck="false"></textarea>
         </div>
       </div>
     `;
     openModal('Create Agent', body, 'Create Agent', async () => {
       const name = document.getElementById('new-agent-name').value;
-      const instructions = document.getElementById('new-agent-instr-modal').value;
+      const soul = document.getElementById('new-agent-soul').value;
       if (!name) return showToast('Name is required', true);
       try {
         const res = await api('/api/agents', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, instructions })
+          body: JSON.stringify({ name, soul })
         });
         closeModal();
         await refreshAgents();
@@ -839,29 +1051,144 @@
     });
   }
 
+  function renderInternalTabs() {
+    const host = document.getElementById('agent-internal-tabs');
+    if (!host) return;
+    host.innerHTML = INTERNAL_FILES.map(name => {
+      const active = state.activeInternalFile === name ? 'active' : '';
+      const dirty = state.internalDirty[name] ? 'dirty' : '';
+      const badge = name === 'HEARTBEAT.md' ? '<span style="font-size:9px; padding:1px 5px; border:1px solid var(--border); border-radius:3px; color:var(--accent); margin-left:4px;">YAML</span>' : '';
+      return `<div class="tab ${active} ${dirty}" onclick="selectInternalTab('${name}')">${name}${badge}<span class="tab-dot"></span></div>`;
+    }).join('');
+    renderHeartbeatFooter();
+  }
+
+  function renderHeartbeatFooter() {
+    const footer = document.getElementById('agent-internal-footer');
+    if (!footer) return;
+    const isHb = state.activeInternalFile === 'HEARTBEAT.md';
+    footer.style.display = isHb ? 'flex' : 'none';
+  }
+
+  async function validateHeartbeat() {
+    const ta = document.getElementById('agent-internal-content');
+    if (!ta) return;
+    const text = ta.value;
+    state.internalContent['HEARTBEAT.md'] = text;
+    const agentId = state.activeId;
+    if (!agentId) return;
+    const status = document.getElementById('hb-validate-status');
+    if (status) status.textContent = 'validating…';
+    try {
+      const r = await fetch(`/api/agents/${agentId}/heartbeat/validate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text })
+      });
+      const data = await r.json();
+      renderHeartbeatValidationResult(data);
+    } catch (e) {
+      if (status) status.innerHTML = `<span style="color:var(--err)">${escapeHtml(e.message)}</span>`;
+    }
+  }
+
+  function renderHeartbeatValidationResult(data) {
+    const status = document.getElementById('hb-validate-status');
+    if (!status) return;
+    if (!data.ok) {
+      const errs = (data.errors || []).map(e => {
+        const where = e.name ? `[${escapeHtml(e.name)}]` : `[block ${e.block ?? '?'}]`;
+        return `<div style="color:var(--err); font-family:var(--mono); font-size:11px;">${where} ${escapeHtml(e.msg||'error')}</div>`;
+      }).join('');
+      const ent = (data.entries||[]).length;
+      status.innerHTML = `<div><strong style="color:var(--err)">${(data.errors||[]).length} error(s)</strong> · ${ent} valid entr${ent===1?'y':'ies'}</div>${errs}`;
+      state.heartbeatValid = false;
+    } else {
+      const lines = (data.entries || []).map(e => {
+        const next = (e.next_fires || []).slice(0, 2).map(s => new Date(s).toLocaleString()).join(', ') || '—';
+        return `<div style="font-family:var(--mono); font-size:11px;">✓ <strong>${escapeHtml(e.name)}</strong> <span class="muted">${escapeHtml(e.cron)}</span> → next: ${escapeHtml(next)}</div>`;
+      }).join('');
+      const total = (data.entries||[]).length;
+      status.innerHTML = `<div style="color:var(--ok); margin-bottom:4px;">✓ ${total} entr${total===1?'y':'ies'}</div>${lines}`;
+      state.heartbeatValid = true;
+    }
+  }
+
+  function selectInternalTab(name) {
+    if (!INTERNAL_FILES.includes(name)) return;
+    const ta = document.getElementById('agent-internal-content');
+    if (ta) state.internalContent[state.activeInternalFile] = ta.value;
+    state.activeInternalFile = name;
+    renderInternalTabs();
+    if (ta) {
+      ta.value = state.internalContent[name] || '';
+      ta.focus();
+    }
+  }
+
+  function markInternalDirty() {
+    const cur = state.activeInternalFile;
+    if (!state.internalDirty[cur]) {
+      state.internalDirty[cur] = true;
+      renderInternalTabs();
+    }
+  }
+
   async function saveAgent(id) {
     try {
       const name = document.getElementById('agent-name').value;
-      const instructions = document.getElementById('agent-instr').value;
+      const ta = document.getElementById('agent-internal-content');
+      if (ta) state.internalContent[state.activeInternalFile] = ta.value;
+
+      // Server-side guard: validate HEARTBEAT.md before saving so we
+      // never persist a broken schedule.
+      const hbText = state.internalContent['HEARTBEAT.md'] || '';
+      if (hbText.trim()) {
+        const r = await fetch(`/api/agents/${id}/heartbeat/validate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: hbText })
+        });
+        const data = await r.json();
+        if (!data.ok) {
+          renderHeartbeatValidationResult(data);
+          showToast('HEARTBEAT.md has errors — fix before saving', true);
+          // Switch tab so the user sees the footer status
+          if (state.activeInternalFile !== 'HEARTBEAT.md') selectInternalTab('HEARTBEAT.md');
+          return;
+        }
+      }
+
       await api(`/api/agents/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, instructions })
+        body: JSON.stringify({ name })
       });
+      await api(`/api/agents/${id}/internal`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files: state.internalContent })
+      });
+      state.internalDirty = {};
+      renderInternalTabs();
       await refreshAgents();
-      showToast('Agent updated');
+      await refreshJobs();  // HB Job sidebar reflects reconciliation
+      showToast('Agent saved');
     } catch (e) { showToast(e.message, true); }
   }
 
   async function updateJob(id) {
     const title = document.getElementById('job-title').value;
     const task_description = document.getElementById('job-prompt').value;
-    
+    const payload = { title, task_description };
+    if (state.pipelineDraft) {
+      payload.pipeline = state.pipelineDraft;
+    }
     try {
       await api(`/api/jobs/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, task_description })
+        body: JSON.stringify(payload)
       });
       await refreshJobs();
       showToast('Job updated');
@@ -1041,124 +1368,73 @@
   }
 
   async function runJob(jobId) {
-    const runType = document.getElementById('run-type').value;
     const isLocal = document.getElementById('run-local').checked;
     closeModal();
-    
-    // Auto-save if we are currently viewing this job
+
+    // Auto-save the job (title, prompt, pipeline) before running
     if (state.activeType === 'job' && state.activeId === jobId) {
-      const title = document.getElementById('job-title').value;
-      const task_description = document.getElementById('job-prompt').value;
-      await api(`/api/jobs/${jobId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, task_description })
-      });
-      await refreshJobs();
+      try { await updateJob(jobId); } catch (e) {}
     }
-    
+
     const execArea = document.getElementById('execution-area');
     execArea.style.display = 'block';
-    execArea.innerHTML = '<div class="muted">Initializing environment...</div>';
+    execArea.innerHTML = '<div class="muted">Starting run…</div>';
 
     try {
-      const jobRes = await api(`/api/jobs/${jobId}`);
-      const job = jobRes.job;
-      const wsId = job.workspace_id;
-      const agentId = job.agent_id;
-
-      // 1. Fetch Agent and Job files
-      const agentFilesRes = await api(`/api/agents/${agentId}/files`);
-      const jobFilesRes = await api(`/api/jobs/${jobId}/files`);
-      const agentFiles = agentFilesRes.files || [];
-      const jobFiles = jobFilesRes.files || [];
-
-      // 2. Inject into Workspace
-      for (const f of agentFiles) {
-        const resp = await fetch(`/api/agents/${agentId}/files/${encodeURIComponent(f.path)}`);
-        const blob = await resp.blob();
-        const fd = new FormData();
-        fd.append('files', blob, f.path);
-        await api(`/api/sessions/${encodeURIComponent(wsId)}/files`, { method: 'POST', body: fd });
-      }
-      for (const f of jobFiles) {
-        const resp = await fetch(`/api/jobs/${jobId}/files/${encodeURIComponent(f.path)}`);
-        const blob = await resp.blob();
-        const fd = new FormData();
-        fd.append('files', blob, f.path);
-        await api(`/api/sessions/${encodeURIComponent(wsId)}/files`, { method: 'POST', body: fd });
-      }
-
-      // 3. Combine prompt
-      const agentRes = await api(`/api/agents/${agentId}`);
-      const agent = agentRes.agent;
-      const prompt = buildAgentPromptXml(agent, job, agentFiles, jobFiles);
-
-      // 4. Submit Task
-      const taskRes = await api('/api/tasks', {
+      const runRes = await api(`/api/jobs/${jobId}/runs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          task_type: runType,
-          params: { prompt, is_local: isLocal },
-          session_id: wsId
-        })
+        body: JSON.stringify({ is_local: isLocal, source: 'user' })
       });
 
-      state.executionTaskId = taskRes.task_id;
-      showToast(`Job started: ${taskRes.task_id}`);
-      
-      // Update history list immediately
+      state.activeRunId = runRes.run.run_id;
+      showToast(`Run started: ${state.activeRunId.slice(0,8)}…`);
+
       await renderJobViewer(jobId);
-
       if (state.executionTimer) clearInterval(state.executionTimer);
-      state.executionTimer = setInterval(() => pollExecution(wsId, agentFiles, jobFiles), 1000);
-      pollExecution(wsId, agentFiles, jobFiles);
+      state.executionTimer = setInterval(() => pollRun(jobId), 1000);
+      pollRun(jobId);
 
-    } catch (e) { 
+    } catch (e) {
       execArea.innerHTML = `<div style="color:var(--err)">Execution Error: ${e.message}</div>`;
-      showToast(e.message, true); 
+      showToast(e.message, true);
     }
   }
 
-  async function pollExecution(wsId, agentFiles, jobFiles) {
-    if (!state.executionTaskId) return;
+  async function pollRun(jobId) {
+    if (!state.activeRunId) return;
     try {
-      const t = await api(`/api/tasks/${encodeURIComponent(state.executionTaskId)}`);
-      renderExecutionMonitor(t);
+      const r = await api(`/api/runs/${encodeURIComponent(state.activeRunId)}`);
+      const run = r.run;
+      // Pull live task state for each step so the monitor reflects events
+      const stepTasks = await Promise.all(run.steps.map(async s => {
+        if (!s.task_id) return null;
+        try {
+          return await api(`/api/tasks/${encodeURIComponent(s.task_id)}`);
+        } catch { return null; }
+      }));
+      renderRunMonitor(run, stepTasks);
 
-      if (['completed', 'failed', 'cancelled'].includes(t.status)) {
+      if (['completed', 'failed', 'partial', 'cancelled'].includes(run.status)) {
         clearInterval(state.executionTimer);
         state.executionTimer = null;
-        showToast('Job finished, cleaning up...');
-        // Cleanup injected files
-        for (const f of [...agentFiles, ...jobFiles]) {
-          await api(`/api/sessions/${encodeURIComponent(wsId)}/files/${encodeURIComponent(f.path)}`, { method: 'DELETE' }).catch(()=>{});
-        }
-        showToast('Execution cycle complete.');
-        // Final refresh to update status in history list
-        const res = await api(`/api/jobs/${state.activeId}`);
-        const tasksRes = await api('/api/tasks');
-        const allTasks = [].concat(
-            tasksRes.running || [], tasksRes.pending || [],
-            tasksRes.completed || [], tasksRes.failed || [], tasksRes.cancelled || []
-        ).filter(tk => tk.session_id === res.job.workspace_id)
-         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-        renderTaskHistoryList(allTasks);
+        showToast(`Run ${run.status}`);
+        const runsRes = await api(`/api/jobs/${encodeURIComponent(jobId)}/runs`);
+        renderRunHistoryList(runsRes.runs || []);
       }
     } catch (e) { clearInterval(state.executionTimer); }
   }
 
-  function renderExecutionMonitor(t) {
-    const area = document.getElementById('execution-area');
+  function renderStepBlock(step, task) {
+    const t = task || {};
     const pct = Math.round((t.progress || 0) * 100);
     const evList = (t.metadata && t.metadata.events) || [];
-    const events = evList.slice(-200).map(e => {
+    const events = evList.slice(-100).map(e => {
       const k = e.kind || 'info';
       const body = e.text || e.summary || JSON.stringify(e);
       return `<div class="ev ${k}"><span class="k">${k}</span>${escapeHtml(body)}</div>`;
     }).join('') || '<div class="muted">Waiting for events...</div>';
-    const progressMsg = (t.metadata && t.metadata.progress_message) || 'Processing...';
+    const progressMsg = (t.metadata && t.metadata.progress_message) || (step.status === 'pending' ? 'Pending…' : 'Processing...');
 
     let resultHtml = '';
     if (t.result) {
@@ -1168,8 +1444,7 @@
       if (typeof r === 'string') agentMessage = r;
       else if (r.result && typeof r.result === 'string') agentMessage = r.result;
       else if (r.result && r.result.result) agentMessage = r.result.result;
-      
-      if (!agentMessage && t.status === 'completed') agentMessage = "Task finished without a final text response.";
+      if (!agentMessage && step.status === 'completed') agentMessage = "Step finished without a final text response.";
 
       const stats = `
         <div class="stats-grid" style="margin-top:10px;">
@@ -1180,33 +1455,55 @@
           <div class="stat-card"><div class="stat-label">output tok</div><div class="stat-value">${fmtNum(tok.output)}</div></div>
         </div>`;
       const textBlock = agentMessage ? `<pre style="margin-top:12px; background:var(--panel); padding:10px; border-radius:6px; border:1px solid var(--border); font-size:12px;">${escapeHtml(agentMessage)}</pre>` : "";
-      resultHtml = `<h2 style="margin-top:20px; color:var(--text); text-transform:none; font-size:14px; letter-spacing:normal;">Result</h2>${stats}${textBlock}`;
+      resultHtml = `${stats}${textBlock}`;
     }
 
-    const errorHtml = t.error ? `<h2 style="margin-top:20px; color:var(--err); text-transform:none; font-size:14px; letter-spacing:normal;">Error</h2><pre style="color:var(--err); background:var(--panel2); padding:10px; border-radius:6px; border:1px solid var(--err);">${escapeHtml(t.error)}</pre>` : "";
+    const errorHtml = step.error ? `<pre style="color:var(--err); background:var(--panel2); padding:10px; border-radius:6px; border:1px solid var(--err); margin-top:8px;">${escapeHtml(step.error)}</pre>` : "";
+
+    return `
+      <div style="border:1px solid var(--border); border-radius:8px; padding:12px; margin-top:10px; background:var(--panel);">
+        <div class="flex" style="justify-content:space-between; margin-bottom:6px;">
+          <div class="flex">
+            <span class="pill ${step.status}">${step.status}</span>
+            <span style="font-family:var(--mono); font-size:11px;">${escapeHtml(step.name || step.agent_name || step.agent_id || '')}</span>
+          </div>
+        </div>
+        <div class="bar"><span style="width:${pct}%"></span></div>
+        <div class="muted" style="margin-bottom:8px; font-size:11px;">${escapeHtml(progressMsg)} · ${pct}%</div>
+        <div class="events">${events}</div>
+        ${resultHtml}
+        ${errorHtml}
+      </div>`;
+  }
+
+  function renderRunMonitor(run, stepTasks) {
+    const area = document.getElementById('execution-area');
+    if (!area) return;
+    const isActive = !['completed','failed','partial','cancelled'].includes(run.status);
+    const cancelBtn = isActive
+      ? `<button class="danger icon small" onclick="cancelActiveRun()" title="Cancel run">${SVGS.stop}</button>`
+      : '';
+    const stepBlocks = run.steps.map((s, i) => renderStepBlock(s, stepTasks[i])).join('');
 
     area.innerHTML = `
       <div class="flex" style="justify-content:space-between; margin-bottom: 8px;">
         <div class="flex">
-           <span class="pill ${t.status}">${t.status}</span>
-           <span class="muted" style="font-family:var(--mono); font-size:11px;">${t.task_id}</span>
+          <span class="pill ${run.status}">${run.status}</span>
+          <span class="muted" style="font-family:var(--mono); font-size:11px;">${run.run_id}</span>
+          <span class="muted" style="font-size:11px;">${run.mode}</span>
         </div>
-        <button class="danger icon small" onclick="cancelExecution()" title="Cancel Task" style="display: ${['completed','failed','cancelled'].includes(t.status) ? 'none' : 'inline-flex'};">${SVGS.stop}</button>
+        ${cancelBtn}
       </div>
-      <div class="bar"><span style="width:${pct}%"></span></div>
-      <div class="muted" style="margin-bottom:12px;">${escapeHtml(progressMsg)} · ${pct}%</div>
-      <div class="events" id="exec-events">${events}</div>
-      ${resultHtml}
-      ${errorHtml}
+      ${stepBlocks}
     `;
-    
-    const evDiv = document.getElementById('exec-events');
-    if (evDiv) evDiv.scrollTop = evDiv.scrollHeight;
   }
 
-  async function cancelExecution() {
-    if (!state.executionTaskId) return;
-    await api(`/api/tasks/${encodeURIComponent(state.executionTaskId)}/cancel`, { method: 'POST' });
+  async function cancelActiveRun() {
+    if (!state.activeRunId) return;
+    const jobId = state.activeId;
+    try {
+      await api(`/api/jobs/${encodeURIComponent(jobId)}/runs/${encodeURIComponent(state.activeRunId)}/cancel`, { method: 'POST' });
+    } catch (e) { showToast(e.message, true); }
   }
 
   async function downloadAllFiles(type, id) {
