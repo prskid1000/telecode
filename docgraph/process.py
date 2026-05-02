@@ -44,10 +44,17 @@ def _binary_or_raise() -> str:
 
 
 def _open_log(role: str, slug: str | None = None):
+    """Open a fresh log file for `role` (truncating any previous content).
+
+    Append mode used to make every reindex attempt accumulate into one
+    file across telecode sessions, which made debugging unreadable —
+    you'd see five layers of historical errors in the Logs viewer.
+    Truncating per spawn means the live log only shows the current run.
+    """
     path = dg_cfg.log_path(role, slug)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    fp = open(path, "ab", buffering=0)
-    fp.write(f"\n\n===== telecode: spawning docgraph {role}".encode()
+    fp = open(path, "wb", buffering=0)
+    fp.write(f"===== telecode: spawning docgraph {role}".encode()
              + (f" ({slug})".encode() if slug else b"")
              + b" =====\n")
     fp.flush()
@@ -237,7 +244,12 @@ class IndexRunner:
                              "--llm-port", str(dg_cfg.llm_port()),
                              "--llm-format", dg_cfg.llm_format(),
                              "--llm-max-tokens", str(dg_cfg.llm_max_tokens())]
-                env = {}
+                env = {
+                    # Force UTF-8 stdio so Rich progress glyphs don't crash
+                    # the log writer on Windows (cp1252 default).
+                    "PYTHONIOENCODING": "utf-8",
+                    "PYTHONUTF8": "1",
+                }
                 if dg_cfg.embeddings_model():
                     env["DOCGRAPH_EMBED_MODEL"] = dg_cfg.embeddings_model()
                 self._log_fp.write(
@@ -437,6 +449,12 @@ class HostSupervisor:
 
     def _spawn(self, argv: list[str], extra_env: dict[str, str] | None = None) -> subprocess.Popen:
         env = dict(os.environ)
+        # Force UTF-8 for the child's stdio. Otherwise on Windows the
+        # subprocess inherits cp1252, and Rich's braille spinners
+        # (⠋ etc.) crash any line that hits stdout/stderr → log
+        # file. Affects host AND index runs.
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        env.setdefault("PYTHONUTF8", "1")
         if extra_env:
             env.update(extra_env)
         binary = argv[0]
