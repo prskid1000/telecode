@@ -227,7 +227,7 @@ def _build_roots_card(window) -> tuple[QFrame, Callable[[], None]]:
     action_row = QHBoxLayout()
     action_row.setSpacing(8)
     from tray.qt_widgets import Toggle as _Toggle
-    all_force_lbl = QLabel("Force")
+    all_force_lbl = QLabel("Full")
     all_force_lbl.setStyleSheet(f"color: {FG_DIM};")
     all_force_lbl.setToolTip("Pass --full to every root when running 'Index all'")
     all_force = _Toggle()
@@ -273,7 +273,7 @@ def _index_status_text() -> tuple[bool, str]:
     except Exception as exc:
         return False, f"err: {exc}"
     if s["alive"]:
-        what = "force" if s.get("current_force") else "incremental"
+        what = "full" if s.get("current_force") else "incremental"
         return True, f"running · {s.get('current_path') or '?'} ({what})"
     return False, "idle"
 
