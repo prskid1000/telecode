@@ -58,17 +58,21 @@ def resolve_binary() -> str | None:
 def default_path() -> str:
     """Resolve the default repo path.
 
-    Setting non-empty → used verbatim.
-    Setting empty/blank → autodetect first directory that already has a
-    `.docgraph/graph.kuzu` (i.e. has been indexed at least once):
-      1. cwd
-      2. `~/.docgraph`
-      3. `<settings_dir>` (the dir holding settings.json)
+    Resolution order (first non-empty wins):
+      1. `docgraph.default_path` setting, if non-blank.
+      2. First entry of `docgraph.index.paths` — the index list is the
+         single source of truth, so adding a path there propagates to
+         serve / watch / mcp without further config.
+      3. Filesystem autodetect: first of cwd, `~/.docgraph`, settings dir
+         that already has a `.docgraph/graph.kuzu` file.
     Returns "" if nothing matches.
     """
     raw = str(_root().get("default_path", "") or "").strip()
     if raw:
         return raw
+    paths = index_paths()
+    if paths:
+        return paths[0]
     home = Path.home()
     settings_dir = Path(os.environ.get("TELECODE_SETTINGS", "settings.json")).resolve().parent
     for candidate in (
@@ -138,6 +142,10 @@ def mcp_paths() -> list[str]:
     raw = [str(p) for p in (mcp_cfg().get("paths") or []) if p]
     if raw:
         return raw
+    # Fall back to the full index.paths list — one MCP child per indexed repo.
+    idx = index_paths()
+    if idx:
+        return idx
     fallback = default_path()
     return [fallback] if fallback else []
 def mcp_base_port() -> int:        return int(mcp_cfg().get("base_port", 5600) or 5600)

@@ -51,6 +51,11 @@ def build_docgraph_tabs(window) -> QWidget:
     ))
     layout.addWidget(binary_card)
 
+    # Services card — bulk controls over watch + serve + daemon + mcp.
+    services_card, sb, services_refresh = _build_services_card(window)
+    layout.addWidget(services_card)
+    refresh_fns.append(services_refresh)
+
     # Stacked cards — each builder returns (card, refresh_fn).
     for build in (
         _build_index_card,
@@ -140,7 +145,11 @@ def _build_index_card(window) -> tuple[QFrame, Callable[[], None]]:
                               "Setting this enables --llm-model. Empty = off."))
     body.addWidget(_line_row("docgraph.index.llm_host", "LLM Host", "localhost"))
     body.addWidget(_number_row("docgraph.index.llm_port", "LLM Port", 1, 65535, 1, 0))
-    body.addWidget(_line_row("docgraph.index.llm_format", "LLM Format", "openai | anthropic"))
+    body.addWidget(_enum_row_strs(
+        "docgraph.index.llm_format", "LLM Format",
+        [("OpenAI-compatible", "openai"), ("Anthropic-compatible", "anthropic")],
+        "Wire format for the local LLM endpoint.",
+    ))
     body.addWidget(_number_row("docgraph.index.llm_max_tokens", "LLM Max Tokens",
                                 10, 4096, 50, 0))
 
@@ -183,6 +192,77 @@ def _build_index_card(window) -> tuple[QFrame, Callable[[], None]]:
         refresh_status()
         paths_widget.refresh()
     return card, refresh
+
+
+def _build_services_card(window) -> tuple[QFrame, QVBoxLayout, Callable[[], None]]:
+    """Bulk controls over watch + serve + daemon + mcp."""
+    card, body = _card(
+        "Services",
+        "Bulk start/stop. 'Start all' brings up every service whose Enabled toggle is on. "
+        "'Stop all' kills everything regardless of toggle.",
+    )
+
+    row = QHBoxLayout()
+    row.setSpacing(8)
+    start_all = QPushButton("▶ Start all"); start_all.setProperty("class", "primary")
+    stop_all = QPushButton("Stop all");      stop_all.setProperty("class", "danger")
+    restart_all = QPushButton("Restart all")
+    summary = QLabel("…")
+    summary.setStyleSheet(f"color: {FG_DIM};")
+    row.addWidget(start_all)
+    row.addWidget(stop_all)
+    row.addWidget(restart_all)
+    row.addWidget(summary, 1)
+    body.addLayout(row)
+
+    def _start_all():
+        async def _go():
+            from docgraph.process import start_all_enabled
+            await start_all_enabled()
+        _run(window, _go)
+
+    def _stop_all():
+        async def _go():
+            from docgraph.process import shutdown_all
+            await shutdown_all()
+        _run(window, _go)
+
+    def _restart_all():
+        async def _go():
+            from docgraph.process import shutdown_all, start_all_enabled
+            await shutdown_all()
+            await start_all_enabled()
+        _run(window, _go)
+
+    start_all.clicked.connect(_start_all)
+    stop_all.clicked.connect(_stop_all)
+    restart_all.clicked.connect(_restart_all)
+
+    def refresh():
+        try:
+            from docgraph.process import status_snapshot
+            s = status_snapshot()
+        except Exception as exc:
+            summary.setText(f"err: {exc}")
+            summary.setStyleSheet(f"color: {ERR};")
+            return
+        parts = []
+        for role in ("watch", "serve", "daemon"):
+            r = s.get(role, {}) or {}
+            mark = "✓" if r.get("alive") else ("·" if r.get("enabled") else "✗")
+            parts.append(f"{mark} {role}")
+        mcp = s.get("mcp", {}) or {}
+        kids = mcp.get("children") or []
+        alive_kids = sum(1 for c in kids if c.get("alive"))
+        if mcp.get("enabled") or kids:
+            parts.append(f"mcp {alive_kids}/{len(kids)}")
+        else:
+            parts.append("✗ mcp")
+        summary.setText("   ".join(parts))
+        summary.setStyleSheet(f"color: {FG_DIM};")
+
+    refresh()
+    return card, body, refresh
 
 
 def _index_status_text() -> tuple[bool, str]:
