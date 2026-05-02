@@ -3,23 +3,22 @@
 Tabs: Index / Watch / Serve / MCP. Daemon lives at the bottom of the MCP tab
 since it pairs naturally with the MCP children (shared embedding daemon).
 
-Each tab follows the existing card/row pattern from qt_sections, plus a live
-log tail at the bottom. Master toggles dispatch start/stop on the bot loop.
+Each tab is form rows + Start/Stop/Restart + status pill. Live log tailing
+is delegated to the global Logs section — it picks up `docgraph_<role>.log`
+plus per-MCP-child `docgraph_mcp_<slug>.log` files automatically.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTabWidget,
-    QPlainTextEdit, QFileDialog,
 )
 
-from tray.qt_widgets import Toggle, row_label
+from tray.qt_widgets import row_label
 from tray.qt_helpers import (
     read_settings, get_path, patch_settings, schedule, humanize,
 )
@@ -35,34 +34,21 @@ log = logging.getLogger("telecode.tray.docgraph")
 def build_docgraph_tabs(window) -> QWidget:
     scroll, _, layout = _page()
 
-    binary_card, bb = _card(
-        "Binary",
-        "docgraph CLI path. Empty = autodetect (which → venvs)."
-    )
-    bb.addWidget(_line_row("docgraph.binary", "Binary",
-                            "/absolute/path/to/docgraph or empty for auto",
-                            ""))
-    binary_status = QLabel("…")
-    binary_status.setProperty("class", "stat_pill")
-    bb.addWidget(_row(row_label("Resolved", "Live binary auto-detect result"),
-                       _wrap_align(binary_status, Qt.AlignmentFlag.AlignLeft)))
-    browse_btn = QPushButton("Browse for docgraph executable…")
-    bb.addWidget(browse_btn)
-
-    def _browse():
-        path, _ = QFileDialog.getOpenFileName(scroll, "Locate docgraph", "",
-                                                "All files (*)")
-        if path:
-            patch_settings("docgraph.binary", path)
-    browse_btn.clicked.connect(_browse)
-
+    binary_card, bb = _card("Binary")
+    bb.addWidget(_line_row(
+        "docgraph.binary",
+        "Binary Path",
+        "docgraph",
+        "Path to docgraph executable. Bare name = use PATH. Empty = autodetect "
+        "(which → settings-dir venv → ~/.local/bin → ~/.docgraph venv).",
+    ))
     layout.addWidget(binary_card)
 
     tabs = QTabWidget()
     tabs.addTab(_build_index_tab(window), "Index")
     tabs.addTab(_build_watch_tab(window), "Watch")
     tabs.addTab(_build_serve_tab(window), "Serve")
-    tabs.addTab(_build_mcp_tab(window), "MCP")
+    tabs.addTab(_build_mcp_tab(window),   "MCP")
 
     last = str(read_settings().get("tray", {}).get("docgraph", {}).get("last_tab", "") or "")
     if last:
@@ -78,27 +64,10 @@ def build_docgraph_tabs(window) -> QWidget:
             pass
     tabs.currentChanged.connect(_on_tab)
 
-    layout.addWidget(tabs, 1)
-    layout.addStretch(0)
-
-    def _refresh_binary():
-        try:
-            from docgraph import config as dg_cfg
-            resolved = dg_cfg.resolve_binary()
-            if resolved:
-                binary_status.setText(f"✓ {resolved}")
-                binary_status.setStyleSheet(f"color: {OK};")
-            else:
-                binary_status.setText("✗ not found")
-                binary_status.setStyleSheet(f"color: {ERR};")
-        except Exception as exc:
-            binary_status.setText(f"err: {exc}")
-            binary_status.setStyleSheet(f"color: {ERR};")
-
-    _refresh_binary()
+    layout.addWidget(tabs)
+    layout.addStretch(1)
 
     def refresh():
-        _refresh_binary()
         for i in range(tabs.count()):
             page = tabs.widget(i)
             r = getattr(page, "refresh", None)
@@ -127,92 +96,7 @@ def _run(window, coro_fn) -> None:
         log.warning("docgraph dispatch: %s", exc)
 
 
-def _make_log_tail(path_getter) -> QWidget:
-    """Live tail panel — polls file size, appends delta. Used in each tab."""
-    container = QWidget()
-    v = QVBoxLayout(container)
-    v.setContentsMargins(0, 8, 0, 0)
-    v.setSpacing(4)
-
-    header_row = QHBoxLayout()
-    header_row.setSpacing(8)
-    title = QLabel("Live log")
-    title.setStyleSheet(f"color: {FG_DIM}; font-weight: 600;")
-    path_lbl = QLabel("")
-    path_lbl.setStyleSheet(f"color: {FG_MUTE}; font-family: monospace;")
-    clear_btn = QPushButton("Clear view")
-    open_btn  = QPushButton("Open externally")
-    for btn in (clear_btn, open_btn):
-        btn.setProperty("class", "tb_btn")
-        btn.setFixedHeight(22)
-    header_row.addWidget(title)
-    header_row.addWidget(path_lbl, 1)
-    header_row.addWidget(clear_btn)
-    header_row.addWidget(open_btn)
-    v.addLayout(header_row)
-
-    edit = QPlainTextEdit()
-    edit.setReadOnly(True)
-    edit.setStyleSheet(f"background: {BG_CARD}; color: {FG}; font-family: monospace;")
-    edit.setMinimumHeight(160)
-    v.addWidget(edit, 1)
-
-    state = {"path": "", "offset": 0}
-
-    def _set_path(p: str) -> None:
-        if state["path"] != p:
-            state["path"] = p
-            state["offset"] = 0
-            edit.clear()
-            path_lbl.setText(p or "")
-
-    def _tick():
-        path = path_getter() or ""
-        _set_path(path)
-        if not path or not os.path.exists(path):
-            return
-        try:
-            size = os.path.getsize(path)
-            if size < state["offset"]:
-                state["offset"] = 0
-                edit.clear()
-            if size > state["offset"]:
-                with open(path, "rb") as f:
-                    f.seek(state["offset"])
-                    chunk = f.read(size - state["offset"])
-                state["offset"] = size
-                try:
-                    text = chunk.decode("utf-8", errors="replace")
-                except Exception:
-                    text = repr(chunk)
-                edit.appendPlainText(text.rstrip("\n"))
-        except OSError:
-            pass
-
-    def _clear():
-        edit.clear()
-        state["offset"] = os.path.getsize(state["path"]) if (state["path"] and os.path.exists(state["path"])) else 0
-    clear_btn.clicked.connect(_clear)
-
-    def _open():
-        try:
-            from PySide6.QtGui import QDesktopServices
-            from PySide6.QtCore import QUrl
-            if state["path"]:
-                QDesktopServices.openUrl(QUrl.fromLocalFile(state["path"]))
-        except Exception:
-            pass
-    open_btn.clicked.connect(_open)
-
-    timer = QTimer(container)
-    timer.setInterval(1000)
-    timer.timeout.connect(_tick)
-    timer.start()
-    container.refresh = _tick  # type: ignore[attr-defined]
-    return container
-
-
-def _status_pill(getter) -> tuple[QWidget, callable]:
+def _status_pill(getter):
     pill = QLabel("…")
     pill.setProperty("class", "stat_pill")
 
@@ -229,10 +113,26 @@ def _status_pill(getter) -> tuple[QWidget, callable]:
     return pill, _refresh
 
 
+def _tab_page() -> tuple[QWidget, QVBoxLayout]:
+    """Plain (non-scrolling) tab body. Outer page already scrolls."""
+    page = QWidget()
+    layout = QVBoxLayout(page)
+    layout.setContentsMargins(8, 8, 8, 8)
+    layout.setSpacing(10)
+    return page, layout
+
+
+def _log_hint(basename: str) -> QLabel:
+    lbl = QLabel(f"📜 Live log → Logs section · file: <code>{basename}</code>")
+    lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
+    lbl.setTextFormat(Qt.TextFormat.RichText)
+    return lbl
+
+
 # ── Index tab ────────────────────────────────────────────────────────────────
 
 def _build_index_tab(window) -> QWidget:
-    scroll, _, layout = _page()
+    page, layout = _tab_page()
 
     card, body = _card("Index", "docgraph index — one-shot reindex over each path in sequence")
 
@@ -262,7 +162,6 @@ def _build_index_tab(window) -> QWidget:
     body.addWidget(_number_row("docgraph.index.llm_max_tokens", "LLM Max Tokens",
                                 10, 4096, 50, 0))
 
-    # Action row
     action_row = QHBoxLayout()
     action_row.setSpacing(8)
     run_btn = QPushButton("▶ Run index")
@@ -274,6 +173,7 @@ def _build_index_tab(window) -> QWidget:
     action_row.addWidget(cancel_btn)
     action_row.addWidget(status_lbl, 1)
     body.addLayout(action_row)
+    body.addWidget(_log_hint("docgraph_index.log"))
 
     def _on_run():
         async def _go():
@@ -291,18 +191,10 @@ def _build_index_tab(window) -> QWidget:
     cancel_btn.clicked.connect(_on_cancel)
 
     layout.addWidget(card)
+    layout.addStretch(1)
 
-    tail = _make_log_tail(_index_log_path)
-    layout.addWidget(tail, 1)
-
-    def refresh():
-        refresh_status()
-        try:
-            tail.refresh()
-        except Exception:
-            pass
-    scroll.refresh = refresh  # type: ignore[attr-defined]
-    return scroll
+    page.refresh = refresh_status  # type: ignore[attr-defined]
+    return page
 
 
 def _index_status_text() -> tuple[bool, str]:
@@ -314,14 +206,6 @@ def _index_status_text() -> tuple[bool, str]:
     if s["alive"]:
         return True, f"running · {s.get('current_path') or '?'}"
     return False, f"last: {s.get('last_status', 'idle')}"
-
-
-def _index_log_path() -> str:
-    try:
-        from docgraph import config as dg_cfg
-        return dg_cfg.log_path("index")
-    except Exception:
-        return ""
 
 
 # ── Watch tab ────────────────────────────────────────────────────────────────
@@ -341,7 +225,7 @@ def _build_watch_tab(window) -> QWidget:
             ("port",   "docgraph.watch.port",         "Port",         "Bind port (only with --serve)."),
         ],
         status_fn=_role_status_text("watch"),
-        log_path_fn=lambda: _role_log_path("watch"),
+        log_basename="docgraph_watch.log",
         get_supervisor=lambda: __import__("docgraph.process", fromlist=["get_watch"]).get_watch(),
     )
 
@@ -363,11 +247,10 @@ def _build_serve_tab(window) -> QWidget:
             ("toggle", "docgraph.serve.gpu",          "GPU embeddings", "Forwarded via DOCGRAPH_GPU=1."),
         ],
         status_fn=_role_status_text("serve"),
-        log_path_fn=lambda: _role_log_path("serve"),
+        log_basename="docgraph_serve.log",
         get_supervisor=lambda: __import__("docgraph.process", fromlist=["get_serve"]).get_serve(),
     )
 
-    # Add "Open in Browser" button — only enabled when serve is alive.
     open_btn = QPushButton("🌐  Open DocGraph UI in Browser")
     open_btn.setProperty("class", "primary")
     open_btn.setEnabled(False)
@@ -379,12 +262,10 @@ def _build_serve_tab(window) -> QWidget:
         if host == "0.0.0.0":
             host = "127.0.0.1"
         webbrowser.open(f"http://{host}:{dg_cfg.serve_port()}")
-
     open_btn.clicked.connect(_do_open)
 
-    inner = tab.widget()
-    if inner is not None and inner.layout() is not None:
-        inner.layout().insertWidget(1, open_btn)
+    if tab.layout() is not None:
+        tab.layout().insertWidget(1, open_btn)
 
     prev_refresh = getattr(tab, "refresh", None)
 
@@ -407,7 +288,7 @@ def _build_serve_tab(window) -> QWidget:
 # ── MCP tab (+ Daemon at bottom) ─────────────────────────────────────────────
 
 def _build_mcp_tab(window) -> QWidget:
-    scroll, _, layout = _page()
+    page, layout = _tab_page()
 
     card, body = _card(
         "MCP",
@@ -446,6 +327,7 @@ def _build_mcp_tab(window) -> QWidget:
     children_lbl.setStyleSheet(f"color: {FG_MUTE}; font-family: monospace;")
     body.addWidget(_section_header("Children"))
     body.addWidget(children_lbl)
+    body.addWidget(_log_hint("docgraph_mcp_<slug>.log"))
 
     def _start():
         async def _go():
@@ -491,6 +373,7 @@ def _build_mcp_tab(window) -> QWidget:
     dstop  = QPushButton("Stop");    dstop.setProperty("class", "danger")
     drow.addWidget(dstart); drow.addWidget(dstop); drow.addStretch(1)
     dbody.addLayout(drow)
+    dbody.addWidget(_log_hint("docgraph_daemon.log"))
 
     def _dstart():
         async def _go():
@@ -508,9 +391,7 @@ def _build_mcp_tab(window) -> QWidget:
     dstop.clicked.connect(_dstop)
 
     layout.addWidget(dcard)
-
-    tail = _make_log_tail(lambda: _role_log_path("daemon"))
-    layout.addWidget(tail, 1)
+    layout.addStretch(1)
 
     def refresh():
         try:
@@ -527,20 +408,17 @@ def _build_mcp_tab(window) -> QWidget:
                 state = "✓ alive" if c.get("alive") else "✗ down"
                 lines.append(f"{state}  {c.get('slug','?')}  port={c.get('port')}  pid={pid}  bridged={c.get('bridged', 0)}")
             children_lbl.setText("\n".join(lines))
-        try:
-            tail.refresh()
-        except Exception:
-            pass
-    scroll.refresh = refresh  # type: ignore[attr-defined]
+    page.refresh = refresh  # type: ignore[attr-defined]
     refresh()
-    return scroll
+    return page
 
 
 # ── Generic role tab (Watch / Serve) ─────────────────────────────────────────
 
 def _build_role_tab(window, *, role: str, title: str, sub: str,
-                     rows: list[tuple], status_fn, log_path_fn, get_supervisor) -> QWidget:
-    scroll, _, layout = _page()
+                     rows: list[tuple], status_fn, log_basename: str,
+                     get_supervisor) -> QWidget:
+    page, layout = _tab_page()
 
     card, body = _card(title, sub)
     for kind, *args in rows:
@@ -565,6 +443,7 @@ def _build_role_tab(window, *, role: str, title: str, sub: str,
     action_row.addWidget(restart_btn)
     action_row.addWidget(pill, 1)
     body.addLayout(action_row)
+    body.addWidget(_log_hint(log_basename))
 
     def _on_start():
         async def _go():
@@ -590,19 +469,11 @@ def _build_role_tab(window, *, role: str, title: str, sub: str,
     restart_btn.clicked.connect(_on_restart)
 
     layout.addWidget(card)
+    layout.addStretch(1)
 
-    tail = _make_log_tail(log_path_fn)
-    layout.addWidget(tail, 1)
-
-    def refresh():
-        refresh_status()
-        try:
-            tail.refresh()
-        except Exception:
-            pass
-    scroll.refresh = refresh  # type: ignore[attr-defined]
-    refresh()
-    return scroll
+    page.refresh = refresh_status  # type: ignore[attr-defined]
+    refresh_status()
+    return page
 
 
 def _role_status_text(role: str):
@@ -619,11 +490,3 @@ def _role_status_text(role: str):
             return True, f"alive{extra}"
         return False, "stopped" + (" (enabled)" if s.get("enabled") else "")
     return _get
-
-
-def _role_log_path(role: str) -> str:
-    try:
-        from docgraph import config as dg_cfg
-        return dg_cfg.log_path(role)
-    except Exception:
-        return ""

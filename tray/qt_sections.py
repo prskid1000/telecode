@@ -1685,6 +1685,11 @@ def _logs(window) -> QWidget:
         "mcp.log",      "mcp.log.prev",
         "bot.log",      "bot.log.prev",
         "voice.log",    "voice.log.prev",
+        "docgraph.log",        "docgraph.log.prev",
+        "docgraph_index.log",  "docgraph_index.log.prev",
+        "docgraph_watch.log",  "docgraph_watch.log.prev",
+        "docgraph_serve.log",  "docgraph_serve.log.prev",
+        "docgraph_daemon.log", "docgraph_daemon.log.prev",
         "tray-bot.stderr.log",
     ]
     MAX_TAIL_BYTES = 512 * 1024  # last ~512 KB is plenty for UI
@@ -1712,6 +1717,17 @@ def _logs(window) -> QWidget:
                 )
                 for f in pty_dumps[:20]:  # cap at 20 most recent
                     out.append(f.name)
+        except Exception:
+            pass
+        # Per-repo docgraph mcp child logs: docgraph_mcp_<slug>.log
+        try:
+            logs_dir = _sp().parent / "data" / "logs"
+            if logs_dir.exists():
+                for f in sorted(logs_dir.iterdir(), key=lambda f: f.name):
+                    name = f.name
+                    if (f.is_file() and name.startswith("docgraph_mcp_")
+                            and (name.endswith(".log") or name.endswith(".log.prev"))):
+                        out.append(name)
         except Exception:
             pass
         return out
