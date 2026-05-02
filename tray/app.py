@@ -311,9 +311,6 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
             dg = _dg_status()
             host_alive = bool(dg.get("host", {}).get("alive"))
             open_docgraph_action.setVisible(host_alive)
-            if host_alive:
-                p = dg.get("host", {}).get("port") or get_path(settings, "docgraph.host.port", 5500)
-                open_docgraph_action.setText(f"Open Document Index (Browser) — :{p}")
         except Exception:
             open_docgraph_action.setVisible(False)
 
