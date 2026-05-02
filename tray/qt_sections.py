@@ -23,7 +23,9 @@ from tray.qt_helpers import (
     read_settings, get_path, patch_settings, remove_path, schedule,
     humanize, format_protocol, build_status,
 )
-from tray.qt_theme import FG, FG_DIM, FG_MUTE, BG, BG_CARD, BORDER, OK, ERR
+from tray.qt_theme import (
+    FG, FG_DIM, FG_MUTE, BG, BG_ELEV, BG_CARD, BORDER, OK, WARN, ERR, ACCENT,
+)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1623,17 +1625,50 @@ def _managed(window) -> QWidget:
             rows_wrap.addWidget(empty_label)
             return
         from proxy.runtime_state import set_tool
+        # Group rows by leading prefix so families (e.g. docgraph_*) render
+        # under a single header with └─ child indentation, like the Kokoro
+        # endpoint hangs off Speak. Prefix has to appear at least twice to
+        # qualify; lone tools render as flat top-level rows.
+        from collections import Counter
+        prefixes = Counter()
+        for t in tools:
+            n = t.get("name", "")
+            if "_" in n:
+                prefixes[n.split("_", 1)[0]] += 1
+        group_prefixes = {p for p, c in prefixes.items() if c >= 2}
+        seen_groups: set[str] = set()
+
         for t in tools:
             name = t.get("name", "?")
             nl = name.lower()
             enabled = t.get("enabled", True)
+
+            prefix = name.split("_", 1)[0] if "_" in name else ""
+            in_group = prefix in group_prefixes
+            if in_group and prefix not in seen_groups:
+                seen_groups.add(prefix)
+                hdr = QLabel(humanize(prefix))
+                hdr.setStyleSheet(
+                    f"color: {FG_MUTE}; font-size: 11px; "
+                    f"text-transform: uppercase; letter-spacing: 0.05em; "
+                    f"padding-top: 4px;"
+                )
+                rows_wrap.addWidget(hdr)
+
             t_widget = Toggle()
             t_widget.setChecked(enabled)
             def _toggle(_s: int, n=name, tw=t_widget) -> None:
                 set_tool("managed_tools", n, tw.isChecked())
             t_widget.stateChanged.connect(_toggle)
             toggles[name] = t_widget
-            rows_wrap.addWidget(_row(row_label(humanize(name), "", name),
+
+            if in_group:
+                # Tail of the name after the prefix, humanized.
+                tail = name[len(prefix) + 1:] if name.startswith(prefix + "_") else name
+                label_text = f"  └─ {humanize(tail)}"
+            else:
+                label_text = humanize(name)
+            rows_wrap.addWidget(_row(row_label(label_text, "", name),
                                       _wrap_align(t_widget, Qt.AlignmentFlag.AlignLeft)))
 
             if nl == "transcribe":
