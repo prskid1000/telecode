@@ -210,6 +210,7 @@ def _build_index_tab(window) -> QWidget:
     cancel_btn.clicked.connect(_on_cancel)
 
     layout.addWidget(card)
+    layout.addStretch(1)
 
     def refresh():
         refresh_status()
@@ -302,9 +303,12 @@ class _PathsTable(QWidget):
             pass
 
     def refresh(self) -> None:
+        # Compare against the *non-empty* displayed rows so a freshly-added
+        # blank row (not yet typed into) survives the next refresh tick —
+        # otherwise '+ Add path' would vanish before the user can fill it in.
         cur = [str(p) for p in (get_path(read_settings(), "docgraph.index.paths", []) or [])]
-        existing = [r.text() for r in self._row_widgets]
-        if cur != existing:
+        existing_nonempty = [r.text() for r in self._row_widgets if r.text().strip()]
+        if cur != existing_nonempty:
             self._rebuild()
         else:
             for r in self._row_widgets:
@@ -577,6 +581,7 @@ def _build_mcp_tab(window) -> QWidget:
     dstop.clicked.connect(_dstop)
 
     layout.addWidget(dcard)
+    layout.addStretch(1)
 
     def refresh():
         try:
@@ -654,6 +659,7 @@ def _build_role_tab(window, *, role: str, title: str, sub: str,
     restart_btn.clicked.connect(_on_restart)
 
     layout.addWidget(card)
+    layout.addStretch(1)
 
     page.refresh = refresh_status  # type: ignore[attr-defined]
     refresh_status()
