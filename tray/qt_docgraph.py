@@ -505,6 +505,9 @@ def _role_status_text(role: str):
             extra = f" pid={pid}" if pid else ""
             extra += f" port={port}" if port else ""
             return True, f"alive{extra}"
+        err = s.get("last_error")
+        if err:
+            return False, f"failed: {err}"
         return False, "stopped" + (" (enabled)" if s.get("enabled") else "")
     return _get
 
