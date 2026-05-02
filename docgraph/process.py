@@ -583,6 +583,31 @@ class McpSupervisor:
                 await child.stop()
                 self._children.pop(path, None)
 
+    async def start_path(self, path: str) -> None:
+        """Start (or restart) a single MCP child for `path`.
+
+        Used by the tray UI's per-row Start button. Allocates the port
+        from `mcp.base_port + i` based on the path's index in
+        `mcp_paths()`, falling back to base_port if the path isn't
+        listed yet.
+        """
+        async with self._lock:
+            paths = dg_cfg.mcp_paths()
+            try:
+                port = dg_cfg.mcp_base_port() + paths.index(path)
+            except ValueError:
+                port = dg_cfg.mcp_base_port()
+            existing = self._children.get(path)
+            if existing and existing.alive():
+                return
+            if existing is None:
+                existing = _McpChild(path, port)
+                self._children[path] = existing
+            try:
+                await existing.start()
+            except Exception as exc:
+                log.error("docgraph mcp %s: start failed: %s", path, exc)
+
 
 # ── Module singletons ────────────────────────────────────────────────────────
 
@@ -691,28 +716,6 @@ async def autostart_all() -> None:
             await get_mcp().start()
         except Exception as exc:
             log.error("docgraph mcp auto-start: %s", exc)
-
-
-async def start_all_enabled() -> None:
-    """Manual 'Start All' from the tray.
-
-    Starts every long-running supervisor whose `enabled` flag is set,
-    regardless of its `auto_start` flag. Same launch order as
-    `autostart_all()`. Errors are caught per-role so one failure doesn't
-    block the others — surfaced via `_BaseSupervisor._last_error`.
-    """
-    if dg_cfg.daemon_enabled():
-        try: await get_daemon().start()
-        except Exception as exc: log.error("docgraph daemon start-all: %s", exc)
-    if dg_cfg.serve_enabled():
-        try: await get_serve().start()
-        except Exception as exc: log.error("docgraph serve start-all: %s", exc)
-    if dg_cfg.watch_enabled():
-        try: await get_watch().start()
-        except Exception as exc: log.error("docgraph watch start-all: %s", exc)
-    if dg_cfg.mcp_enabled():
-        try: await get_mcp().start()
-        except Exception as exc: log.error("docgraph mcp start-all: %s", exc)
 
 
 async def shutdown_all() -> None:
