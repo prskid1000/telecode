@@ -134,16 +134,13 @@ def _log_hint(basename: str) -> QLabel:
 def _build_index_tab(window) -> QWidget:
     page, layout = _tab_page()
 
-    card, body = _card("Index", "docgraph index — one-shot reindex over each path in sequence")
+    card, body = _card("Index", "Per-path reindex. Incremental by default; Force = --full wipe + rebuild.")
 
     body.addWidget(_section_header("Paths"))
-    body.addWidget(_list_row("docgraph.index.paths", "Paths",
-                              "One repo path per line. Each runs in sequence.",
-                              "/path/to/repo"))
+    paths_widget = _PathsTable(window)
+    body.addWidget(paths_widget)
 
-    body.addWidget(_section_header("Flags"))
-    body.addWidget(_toggle_row("docgraph.index.full", "Full reindex (--full)",
-                                "Wipe + rebuild instead of incremental delta."))
+    body.addWidget(_section_header("Flags (apply to every Index/Force run)"))
     body.addWidget(_number_row("docgraph.index.workers", "Workers", 0, 64, 1, 0,
                                 "", "0 = docgraph default"))
     body.addWidget(_toggle_row("docgraph.index.gpu", "GPU embeddings (--gpu)",
@@ -164,21 +161,28 @@ def _build_index_tab(window) -> QWidget:
 
     action_row = QHBoxLayout()
     action_row.setSpacing(8)
-    run_btn = QPushButton("▶ Run index")
-    run_btn.setProperty("class", "primary")
+    from tray.qt_widgets import Toggle as _Toggle
+    all_force_lbl = QLabel("Force")
+    all_force_lbl.setStyleSheet(f"color: {FG_DIM};")
+    all_force_lbl.setToolTip("Pass --full to every path when running 'Index all'")
+    all_force = _Toggle()
+    all_force.setToolTip("Pass --full to every path when running 'Index all'")
+    run_all_btn = QPushButton("▶ Index all paths")
     cancel_btn = QPushButton("Cancel")
     cancel_btn.setProperty("class", "danger")
     status_lbl, refresh_status = _status_pill(_index_status_text)
-    action_row.addWidget(run_btn)
+    action_row.addWidget(all_force_lbl)
+    action_row.addWidget(all_force)
+    action_row.addWidget(run_all_btn)
     action_row.addWidget(cancel_btn)
     action_row.addWidget(status_lbl, 1)
     body.addLayout(action_row)
     body.addWidget(_log_hint("docgraph_index.log"))
 
-    def _on_run():
+    def _all():
         async def _go():
             from docgraph.process import get_index
-            await get_index().run()
+            await get_index().run_all(force=bool(all_force.isChecked()))
         _run(window, _go)
 
     def _on_cancel():
@@ -187,13 +191,15 @@ def _build_index_tab(window) -> QWidget:
             await get_index().cancel()
         _run(window, _go)
 
-    run_btn.clicked.connect(_on_run)
+    run_all_btn.clicked.connect(_all)
     cancel_btn.clicked.connect(_on_cancel)
 
     layout.addWidget(card)
-    layout.addStretch(1)
 
-    page.refresh = refresh_status  # type: ignore[attr-defined]
+    def refresh():
+        refresh_status()
+        paths_widget.refresh()
+    page.refresh = refresh  # type: ignore[attr-defined]
     return page
 
 
@@ -204,8 +210,206 @@ def _index_status_text() -> tuple[bool, str]:
     except Exception as exc:
         return False, f"err: {exc}"
     if s["alive"]:
-        return True, f"running · {s.get('current_path') or '?'}"
-    return False, f"last: {s.get('last_status', 'idle')}"
+        what = "force" if s.get("current_force") else "incremental"
+        return True, f"running · {s.get('current_path') or '?'} ({what})"
+    return False, "idle"
+
+
+# ── Per-path paths editor + per-row Index/Force buttons ──────────────────────
+
+class _PathsTable(QWidget):
+    """Custom paths editor for the Index tab.
+
+    Each row: editable path field, "▶ Index" button, "⟳ Force" button,
+    status pill ("never" / "2m ago · ok" / "running"), remove (✕).
+    Persists to `docgraph.index.paths` on every edit.
+    """
+
+    def __init__(self, window) -> None:
+        super().__init__()
+        self._window = window
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(6)
+
+        self._rows_host = QWidget()
+        self._rows_layout = QVBoxLayout(self._rows_host)
+        self._rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._rows_layout.setSpacing(6)
+        v.addWidget(self._rows_host)
+
+        add_w = QWidget()
+        add_l = QHBoxLayout(add_w)
+        add_l.setContentsMargins(0, 0, 0, 0)
+        add_btn = QPushButton("+ Add path")
+        add_btn.setProperty("class", "primary")
+        add_btn.setMaximumWidth(140)
+        add_btn.clicked.connect(self._on_add)
+        add_l.addWidget(add_btn)
+        add_l.addStretch(1)
+        v.addWidget(add_w)
+
+        self._row_widgets: list[_PathRow] = []
+        self._rebuild()
+
+    def _rebuild(self) -> None:
+        for w in self._row_widgets:
+            w.setParent(None)
+            w.deleteLater()
+        self._row_widgets.clear()
+        cur = list(get_path(read_settings(), "docgraph.index.paths", []) or [])
+        for s in cur:
+            self._append_row(str(s))
+
+    def _append_row(self, value: str) -> None:
+        row = _PathRow(value, self._window, on_change=self._commit, on_remove=self._on_remove)
+        self._rows_layout.addWidget(row)
+        self._row_widgets.append(row)
+
+    def _on_add(self) -> None:
+        self._append_row("")
+        self._commit()
+
+    def _on_remove(self, row: "_PathRow") -> None:
+        try:
+            self._row_widgets.remove(row)
+        except ValueError:
+            pass
+        row.setParent(None)
+        row.deleteLater()
+        self._commit()
+
+    def _commit(self) -> None:
+        out = [r.text() for r in self._row_widgets if r.text().strip() != ""]
+        try:
+            patch_settings("docgraph.index.paths", out)
+        except Exception:
+            pass
+
+    def refresh(self) -> None:
+        cur = [str(p) for p in (get_path(read_settings(), "docgraph.index.paths", []) or [])]
+        existing = [r.text() for r in self._row_widgets]
+        if cur != existing:
+            self._rebuild()
+        else:
+            for r in self._row_widgets:
+                r.refresh_state()
+
+
+class _PathRow(QWidget):
+    """One path row inside `_PathsTable`.
+
+    Layout: [path field] [Force toggle] [▶ Index] [status pill] [✕]
+    """
+
+    def __init__(self, value: str, window, *, on_change, on_remove) -> None:
+        super().__init__()
+        self._window = window
+        self._on_change = on_change
+        self._on_remove = on_remove
+
+        from PySide6.QtWidgets import QLineEdit
+        from tray.qt_theme import BG_ELEV, BORDER
+        from tray.qt_widgets import Toggle
+
+        self.setStyleSheet(
+            f"_PathRow {{ background: {BG_ELEV}; border: 1px solid {BORDER}; border-radius: 6px; }}"
+        )
+        h = QHBoxLayout(self)
+        h.setContentsMargins(8, 6, 8, 6)
+        h.setSpacing(8)
+
+        self._edit = QLineEdit(value)
+        self._edit.setPlaceholderText("/path/to/repo")
+        self._edit.editingFinished.connect(self._on_change)
+        h.addWidget(self._edit, 1)
+
+        force_lbl = QLabel("Force")
+        force_lbl.setStyleSheet(f"color: {FG_DIM};")
+        force_lbl.setToolTip("Pass --full to wipe + rebuild instead of incremental delta")
+        h.addWidget(force_lbl)
+        self._force = Toggle()
+        self._force.setToolTip("Pass --full to wipe + rebuild instead of incremental delta")
+        h.addWidget(self._force)
+
+        self._index_btn = QPushButton("▶ Index")
+        self._index_btn.setToolTip("Run docgraph index for this path")
+        self._index_btn.clicked.connect(self._trigger)
+        h.addWidget(self._index_btn)
+
+        self._pill = QLabel("never")
+        self._pill.setProperty("class", "stat_pill")
+        self._pill.setMinimumWidth(160)
+        h.addWidget(self._pill)
+
+        rm_btn = QPushButton("✕")
+        rm_btn.setFlat(True)
+        rm_btn.setFixedWidth(28)
+        rm_btn.setStyleSheet(
+            f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
+            f" QPushButton:hover {{ color: #ff6b6b; }}"
+        )
+        rm_btn.clicked.connect(lambda: self._on_remove(self))
+        h.addWidget(rm_btn)
+
+        self.refresh_state()
+
+    def text(self) -> str:
+        return self._edit.text()
+
+    def _trigger(self) -> None:
+        path = self.text().strip()
+        if not path:
+            return
+        force = bool(self._force.isChecked())
+        async def _go():
+            from docgraph.process import get_index
+            await get_index().run(path, force=force)
+        _run(self._window, _go)
+
+    def refresh_state(self) -> None:
+        path = self.text().strip()
+        try:
+            from docgraph import index_state
+            from docgraph.process import get_index
+            s = index_state.get(path) if path else None
+            running_path = get_index().current_path()
+        except Exception:
+            s, running_path = None, None
+        if path and running_path == path:
+            self._pill.setText("running…")
+            self._pill.setStyleSheet(f"color: {WARN};")
+            self._index_btn.setEnabled(False)
+            return
+        self._index_btn.setEnabled(True)
+        if not s:
+            self._pill.setText("never indexed")
+            self._pill.setStyleSheet(f"color: {FG_MUTE};")
+            return
+        ago = _format_ago(s.get("last_run", 0.0))
+        status = s.get("last_status", "?")
+        full = " · force" if s.get("last_was_full") else ""
+        text = f"{ago} · {status}{full}"
+        if status == "ok":
+            self._pill.setStyleSheet(f"color: {OK};")
+        elif status == "failed":
+            self._pill.setStyleSheet(f"color: {ERR};")
+        elif status == "running":
+            self._pill.setStyleSheet(f"color: {WARN};")
+        else:
+            self._pill.setStyleSheet(f"color: {FG_MUTE};")
+        self._pill.setText(text)
+
+
+def _format_ago(ts: float) -> str:
+    import time as _time
+    if not ts:
+        return "never"
+    delta = max(0, int(_time.time() - ts))
+    if delta < 60:    return f"{delta}s ago"
+    if delta < 3600:  return f"{delta // 60}m ago"
+    if delta < 86400: return f"{delta // 3600}h ago"
+    return f"{delta // 86400}d ago"
 
 
 # ── Watch tab ────────────────────────────────────────────────────────────────
@@ -391,7 +595,6 @@ def _build_mcp_tab(window) -> QWidget:
     dstop.clicked.connect(_dstop)
 
     layout.addWidget(dcard)
-    layout.addStretch(1)
 
     def refresh():
         try:
@@ -469,7 +672,6 @@ def _build_role_tab(window, *, role: str, title: str, sub: str,
     restart_btn.clicked.connect(_on_restart)
 
     layout.addWidget(card)
-    layout.addStretch(1)
 
     page.refresh = refresh_status  # type: ignore[attr-defined]
     refresh_status()

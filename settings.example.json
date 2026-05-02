@@ -46,7 +46,6 @@
 
     "index": {
       "paths": [],
-      "full": false,
       "workers": 0,
       "gpu": false,
       "llm_model": "",

@@ -28,6 +28,7 @@ from process import bind_to_lifetime_job, kill_process_tree, sweep_port
 
 from . import config as dg_cfg
 from . import bridge as dg_bridge
+from . import index_state
 
 log = logging.getLogger("telecode.docgraph")
 
@@ -192,7 +193,13 @@ class _BaseSupervisor:
 # ── Index (one-shot) ─────────────────────────────────────────────────────────
 
 class IndexRunner:
-    """Sequential index runs over `docgraph.index.paths`. Cancellable."""
+    """Per-path index runs. One at a time (lock). Cancellable.
+
+    `run(path, force)` triggers a single repo's reindex. `run_all(force)`
+    is a convenience that walks `docgraph.index.paths` in sequence.
+    Per-path outcomes are persisted via `index_state.update()` so the UI
+    can show "last: <when> · ok|failed" pills.
+    """
 
     def __init__(self) -> None:
         self._task: Optional[asyncio.Task] = None
@@ -200,26 +207,45 @@ class IndexRunner:
         self._log_fp = None
         self._lock = asyncio.Lock()
         self._current_path: str | None = None
+        self._current_force: bool = False
         self._last_status: str = "idle"  # idle | running | done | failed | cancelled
         self._last_finished_at: float = 0.0
 
     def alive(self) -> bool:
         return bool(self._task and not self._task.done())
 
+    def current_path(self) -> str | None:
+        return self._current_path
+
     def status(self) -> dict:
         return {
             "alive":             self.alive(),
             "current_path":      self._current_path,
+            "current_force":     self._current_force,
             "last_status":       self._last_status,
             "last_finished_at":  self._last_finished_at,
             "log_path":          dg_cfg.log_path("index"),
+            "per_path":          index_state.load(),
         }
 
-    async def run(self) -> None:
+    async def run(self, path: str, force: bool = False) -> None:
+        if not path:
+            raise RuntimeError("path is required")
+        async with self._lock:
+            if self.alive():
+                log.warning("docgraph index: already running %s — ignoring %s",
+                            self._current_path, path)
+                return
+            self._task = asyncio.create_task(self._run_one(path, force))
+
+    async def run_all(self, force: bool = False) -> None:
         async with self._lock:
             if self.alive():
                 return
-            self._task = asyncio.create_task(self._run_all())
+            paths = [p for p in (dg_cfg.index_paths() or []) if p]
+            if not paths:
+                return
+            self._task = asyncio.create_task(self._run_sequence(paths, force))
 
     async def cancel(self) -> None:
         async with self._lock:
@@ -232,62 +258,72 @@ class IndexRunner:
                 except Exception:
                     pass
 
-    async def _run_all(self) -> None:
-        self._last_status = "running"
-        self._log_fp = _open_log("index")
-        try:
-            paths = dg_cfg.index_paths() or [dg_cfg.default_path()]
-            paths = [p for p in paths if p]
-            if not paths:
-                log.warning("docgraph index: no paths configured")
-                self._last_status = "failed"
+    async def _run_sequence(self, paths: list[str], force: bool) -> None:
+        for path in paths:
+            await self._run_one_inline(path, force)
+            if self._last_status in ("failed", "cancelled"):
                 return
+
+    async def _run_one(self, path: str, force: bool) -> None:
+        await self._run_one_inline(path, force)
+
+    async def _run_one_inline(self, path: str, force: bool) -> None:
+        self._last_status = "running"
+        self._current_path = path
+        self._current_force = force
+        index_state.mark_running(path, was_full=force)
+        self._log_fp = _open_log("index")
+        rc_or_status = "failed"
+        try:
             binary = _binary_or_raise()
-            for path in paths:
-                self._current_path = path
-                argv = [binary, "index", path]
-                if dg_cfg.index_full():
-                    argv.append("--full")
-                if dg_cfg.index_workers() > 0:
-                    argv += ["--workers", str(dg_cfg.index_workers())]
-                if dg_cfg.index_gpu():
-                    argv.append("--gpu")
-                if dg_cfg.index_llm_model():
-                    argv += ["--llm-model", dg_cfg.index_llm_model(),
-                             "--llm-host", dg_cfg.index_llm_host(),
-                             "--llm-port", str(dg_cfg.index_llm_port()),
-                             "--llm-format", dg_cfg.index_llm_format(),
-                             "--llm-max-tokens", str(dg_cfg.index_llm_max_tokens())]
-                env = {}
-                if dg_cfg.index_embedding_model():
-                    env["DOCGRAPH_EMBED_MODEL"] = dg_cfg.index_embedding_model()
-                # Coordinate: stop readers for this path while index runs.
-                await _stop_readers_for_path(path)
-                self._log_fp.write(f"\n--- index {path} ---\n".encode())
-                self._log_fp.flush()
-                self._proc = subprocess.Popen(
-                    argv,
-                    stdout=self._log_fp,
-                    stderr=subprocess.STDOUT,
-                    stdin=subprocess.DEVNULL,
-                    creationflags=_creation_flags(),
-                    env={**os.environ, **env},
-                )
-                bind_to_lifetime_job(self._proc.pid, proc=self._proc)
-                rc = await asyncio.to_thread(self._proc.wait)
-                if rc != 0:
-                    log.warning("docgraph index %s: rc=%s", path, rc)
-                    self._last_status = "failed"
-                    return
-            self._last_status = "done"
+            argv = [binary, "index", path]
+            if force:
+                argv.append("--full")
+            if dg_cfg.index_workers() > 0:
+                argv += ["--workers", str(dg_cfg.index_workers())]
+            if dg_cfg.index_gpu():
+                argv.append("--gpu")
+            if dg_cfg.index_llm_model():
+                argv += ["--llm-model", dg_cfg.index_llm_model(),
+                         "--llm-host", dg_cfg.index_llm_host(),
+                         "--llm-port", str(dg_cfg.index_llm_port()),
+                         "--llm-format", dg_cfg.index_llm_format(),
+                         "--llm-max-tokens", str(dg_cfg.index_llm_max_tokens())]
+            env = {}
+            if dg_cfg.index_embedding_model():
+                env["DOCGRAPH_EMBED_MODEL"] = dg_cfg.index_embedding_model()
+            # Coordinate: stop readers for this path while index runs.
+            await _stop_readers_for_path(path)
+            self._log_fp.write(
+                f"\n--- index {path} {'(--full)' if force else '(incremental)'} ---\n".encode()
+            )
+            self._log_fp.flush()
+            self._proc = subprocess.Popen(
+                argv,
+                stdout=self._log_fp,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                creationflags=_creation_flags(),
+                env={**os.environ, **env},
+            )
+            bind_to_lifetime_job(self._proc.pid, proc=self._proc)
+            rc = await asyncio.to_thread(self._proc.wait)
+            rc_or_status = "ok" if rc == 0 else "failed"
+            self._last_status = "done" if rc == 0 else "failed"
+            if rc != 0:
+                log.warning("docgraph index %s: rc=%s", path, rc)
         except asyncio.CancelledError:
             self._last_status = "cancelled"
+            rc_or_status = "cancelled"
             raise
         except Exception as exc:
-            log.error("docgraph index: %s", exc)
+            log.error("docgraph index %s: %s", path, exc)
             self._last_status = "failed"
+            rc_or_status = "failed"
         finally:
+            index_state.update(path, status=rc_or_status, was_full=force)
             self._current_path = None
+            self._current_force = False
             self._proc = None
             self._last_finished_at = time.time()
             if self._log_fp:
@@ -296,7 +332,6 @@ class IndexRunner:
                 except Exception:
                     pass
                 self._log_fp = None
-            # Restart readers if they were toggled off by config.
             await _autostart_readers()
 
 
