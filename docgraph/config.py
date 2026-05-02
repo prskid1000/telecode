@@ -56,7 +56,32 @@ def resolve_binary() -> str | None:
 
 
 def default_path() -> str:
-    return str(_root().get("default_path", "") or "")
+    """Resolve the default repo path.
+
+    Setting non-empty → used verbatim.
+    Setting empty/blank → autodetect first directory that already has a
+    `.docgraph/graph.kuzu` (i.e. has been indexed at least once):
+      1. cwd
+      2. `~/.docgraph`
+      3. `<settings_dir>` (the dir holding settings.json)
+    Returns "" if nothing matches.
+    """
+    raw = str(_root().get("default_path", "") or "").strip()
+    if raw:
+        return raw
+    home = Path.home()
+    settings_dir = Path(os.environ.get("TELECODE_SETTINGS", "settings.json")).resolve().parent
+    for candidate in (
+        Path.cwd(),
+        home / ".docgraph",
+        settings_dir,
+    ):
+        try:
+            if (candidate / ".docgraph" / "graph.kuzu").exists():
+                return str(candidate)
+        except OSError:
+            pass
+    return ""
 
 
 # ── Index ────────────────────────────────────────────────────────────────────
@@ -109,7 +134,12 @@ def mcp_cfg() -> dict:             return _section("mcp")
 def mcp_enabled() -> bool:         return bool(mcp_cfg().get("enabled", False))
 def mcp_auto_start() -> bool:      return bool(mcp_cfg().get("auto_start", False))
 def mcp_auto_restart() -> bool:    return bool(mcp_cfg().get("auto_restart", True))
-def mcp_paths() -> list[str]:      return [str(p) for p in (mcp_cfg().get("paths") or []) if p]
+def mcp_paths() -> list[str]:
+    raw = [str(p) for p in (mcp_cfg().get("paths") or []) if p]
+    if raw:
+        return raw
+    fallback = default_path()
+    return [fallback] if fallback else []
 def mcp_base_port() -> int:        return int(mcp_cfg().get("base_port", 5600) or 5600)
 def mcp_host() -> str:             return str(mcp_cfg().get("host", "127.0.0.1") or "127.0.0.1")
 def mcp_gpu() -> bool:             return bool(mcp_cfg().get("gpu", False))

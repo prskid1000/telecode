@@ -727,6 +727,7 @@ def status_snapshot() -> dict:
     return {
         "binary":   dg_cfg.resolve_binary(),
         "binary_ok": dg_cfg.resolve_binary() is not None,
+        "default_path": dg_cfg.default_path(),
         "index":    (_INDEX.status() if _INDEX else {"alive": False, "last_status": "idle"}),
         "watch":    {
             "enabled": dg_cfg.watch_enabled(),
