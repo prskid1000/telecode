@@ -62,6 +62,51 @@ def _alive(proc: subprocess.Popen | None) -> bool:
     return bool(proc and proc.poll() is None)
 
 
+async def _index_via_host(path: str, full: bool, port: int) -> tuple[bool, str]:
+    """POST /api/admin/index?root=<slug>&full=<bool> on the running host.
+
+    Returns (ok, detail_text). Resolves `path` to a slug by hitting
+    /api/roots first — if the host doesn't know about `path`, returns
+    a clear failure (don't silently fall back to the subprocess: that
+    would create the writer-lock conflict we're trying to avoid).
+    """
+    base = f"http://{dg_cfg.host_host()}:{port}"
+    norm = os.path.normpath(path)
+    target = norm.casefold() if sys.platform == "win32" else norm
+    timeout = aiohttp.ClientTimeout(total=600)  # full reindex can be slow
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        # 1) Resolve path -> slug via the host's roots listing.
+        try:
+            async with session.get(f"{base}/api/roots") as resp:
+                if resp.status != 200:
+                    return False, f"GET /api/roots returned HTTP {resp.status}"
+                roots = await resp.json()
+        except Exception as exc:
+            return False, f"could not reach host at {base}: {exc}"
+        slug: str | None = None
+        for r in roots:
+            r_norm = os.path.normpath(str(r.get("path") or ""))
+            r_target = r_norm.casefold() if sys.platform == "win32" else r_norm
+            if r_target == target:
+                slug = r.get("slug")
+                break
+        if slug is None:
+            return False, (
+                f"path {path} is not a registered root on the host "
+                f"(roots: {[r.get('slug') for r in roots]})"
+            )
+        # 2) Trigger the index pass.
+        url = f"{base}/api/admin/index?root={slug}"
+        try:
+            async with session.post(url, json={"full": full}) as resp:
+                body = await resp.text()
+                if resp.status != 200:
+                    return False, f"POST /api/admin/index → HTTP {resp.status}: {body[:200]}"
+                return True, body[:2000]
+        except Exception as exc:
+            return False, f"POST /api/admin/index failed: {exc}"
+
+
 # ── Index runner (one-shot subprocess per root) ────────────────────────────
 
 class IndexRunner:
@@ -143,62 +188,97 @@ class IndexRunner:
         index_state.mark_running(path, was_full=force)
         self._log_fp = _open_log("index")
         rc_or_status = "failed"
+
+        # Two routes:
+        # 1. If the host is alive, POST `/api/admin/index` and let it run
+        #    in-process (it owns the workspace + writer-lock dance).
+        # 2. Otherwise spawn a `docgraph index` subprocess.
+        # Spawning the subprocess in route 2 only when the host isn't
+        # alive avoids the "Could not set lock on file" crash you'd get
+        # if both held connections to the same Kuzu file at once.
+        host_route = False
         try:
-            binary = _binary_or_raise()
-            argv = [binary, "index", path]
-            if force:
-                argv.append("--full")
-            if dg_cfg.index_workers() > 0:
-                argv += ["--workers", str(dg_cfg.index_workers())]
-            if dg_cfg.embeddings_gpu():
-                argv.append("--gpu")
-            if dg_cfg.llm_model():
-                argv += ["--llm-model", dg_cfg.llm_model(),
-                         "--llm-host", dg_cfg.llm_host(),
-                         "--llm-port", str(dg_cfg.llm_port()),
-                         "--llm-format", dg_cfg.llm_format(),
-                         "--llm-max-tokens", str(dg_cfg.llm_max_tokens())]
-            env = {}
-            if dg_cfg.embeddings_model():
-                env["DOCGRAPH_EMBED_MODEL"] = dg_cfg.embeddings_model()
-            self._log_fp.write(
-                f"\n--- index {path} {'(--full)' if force else '(incremental)'} ---\n".encode()
-            )
-            self._log_fp.flush()
-            self._proc = subprocess.Popen(
-                argv,
-                stdout=self._log_fp,
-                stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,
-                creationflags=_creation_flags(),
-                env={**os.environ, **env},
-            )
-            bind_to_lifetime_job(self._proc.pid, proc=self._proc)
-            rc = await asyncio.to_thread(self._proc.wait)
-            rc_or_status = "ok" if rc == 0 else "failed"
-            self._last_status = "done" if rc == 0 else "failed"
-            if rc != 0:
-                log.warning("docgraph index %s: rc=%s", path, rc)
+            if _HOST is not None and _HOST.alive() and _HOST.port():
+                host_route = True
+                self._log_fp.write(
+                    f"\n--- index {path} via host /api/admin/index "
+                    f"({'--full' if force else 'incremental'}) ---\n".encode()
+                )
+                self._log_fp.flush()
+                ok, detail = await _index_via_host(path, force, _HOST.port())
+                self._log_fp.write(detail.encode("utf-8", errors="replace") + b"\n")
+                self._log_fp.flush()
+                rc_or_status = "ok" if ok else "failed"
+                self._last_status = "done" if ok else "failed"
         except asyncio.CancelledError:
             self._last_status = "cancelled"
             rc_or_status = "cancelled"
+            host_route = True  # don't fall through to subprocess
             raise
         except Exception as exc:
-            log.error("docgraph index %s: %s", path, exc)
-            self._last_status = "failed"
-            rc_or_status = "failed"
-        finally:
-            index_state.update(path, status=rc_or_status, was_full=force)
-            self._current_path = None
-            self._current_force = False
-            self._proc = None
-            self._last_finished_at = time.time()
-            if self._log_fp:
-                try:
-                    self._log_fp.close()
-                except Exception:
-                    pass
-                self._log_fp = None
+            log.warning("docgraph index %s: host route failed: %s — falling back to subprocess", path, exc)
+            self._log_fp.write(f"\n--- host route failed: {exc} — falling back to subprocess ---\n".encode())
+            self._log_fp.flush()
+            host_route = False
+
+        if not host_route:
+            try:
+                binary = _binary_or_raise()
+                argv = [binary, "index", path]
+                if force:
+                    argv.append("--full")
+                if dg_cfg.index_workers() > 0:
+                    argv += ["--workers", str(dg_cfg.index_workers())]
+                if dg_cfg.embeddings_gpu():
+                    argv.append("--gpu")
+                if dg_cfg.llm_model():
+                    argv += ["--llm-model", dg_cfg.llm_model(),
+                             "--llm-host", dg_cfg.llm_host(),
+                             "--llm-port", str(dg_cfg.llm_port()),
+                             "--llm-format", dg_cfg.llm_format(),
+                             "--llm-max-tokens", str(dg_cfg.llm_max_tokens())]
+                env = {}
+                if dg_cfg.embeddings_model():
+                    env["DOCGRAPH_EMBED_MODEL"] = dg_cfg.embeddings_model()
+                self._log_fp.write(
+                    f"\n--- index {path} {'(--full)' if force else '(incremental)'} ---\n".encode()
+                )
+                self._log_fp.flush()
+                self._proc = subprocess.Popen(
+                    argv,
+                    stdout=self._log_fp,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                    creationflags=_creation_flags(),
+                    env={**os.environ, **env},
+                )
+                bind_to_lifetime_job(self._proc.pid, proc=self._proc)
+                rc = await asyncio.to_thread(self._proc.wait)
+                rc_or_status = "ok" if rc == 0 else "failed"
+                self._last_status = "done" if rc == 0 else "failed"
+                if rc != 0:
+                    log.warning("docgraph index %s: rc=%s", path, rc)
+            except asyncio.CancelledError:
+                self._last_status = "cancelled"
+                rc_or_status = "cancelled"
+                raise
+            except Exception as exc:
+                log.error("docgraph index %s: %s", path, exc)
+                self._last_status = "failed"
+                rc_or_status = "failed"
+
+        # Always finalize: persist per-path state, clear current, close log.
+        index_state.update(path, status=rc_or_status, was_full=force)
+        self._current_path = None
+        self._current_force = False
+        self._proc = None
+        self._last_finished_at = time.time()
+        if self._log_fp:
+            try:
+                self._log_fp.close()
+            except Exception:
+                pass
+            self._log_fp = None
 
 
 # ── Host (the unified docgraph server) ─────────────────────────────────────
