@@ -51,11 +51,6 @@ def build_docgraph_tabs(window) -> QWidget:
     ))
     layout.addWidget(binary_card)
 
-    # Services card — bulk controls over watch + serve + daemon + mcp.
-    services_card, sb, services_refresh = _build_services_card(window)
-    layout.addWidget(services_card)
-    refresh_fns.append(services_refresh)
-
     # Stacked cards — each builder returns (card, refresh_fn).
     for build in (
         _build_index_card,
@@ -192,77 +187,6 @@ def _build_index_card(window) -> tuple[QFrame, Callable[[], None]]:
         refresh_status()
         paths_widget.refresh()
     return card, refresh
-
-
-def _build_services_card(window) -> tuple[QFrame, QVBoxLayout, Callable[[], None]]:
-    """Bulk controls over watch + serve + daemon + mcp."""
-    card, body = _card(
-        "Services",
-        "Bulk start/stop. 'Start all' brings up every service whose Enabled toggle is on. "
-        "'Stop all' kills everything regardless of toggle.",
-    )
-
-    row = QHBoxLayout()
-    row.setSpacing(8)
-    start_all = QPushButton("▶ Start all"); start_all.setProperty("class", "primary")
-    stop_all = QPushButton("Stop all");      stop_all.setProperty("class", "danger")
-    restart_all = QPushButton("Restart all")
-    summary = QLabel("…")
-    summary.setStyleSheet(f"color: {FG_DIM};")
-    row.addWidget(start_all)
-    row.addWidget(stop_all)
-    row.addWidget(restart_all)
-    row.addWidget(summary, 1)
-    body.addLayout(row)
-
-    def _start_all():
-        async def _go():
-            from docgraph.process import start_all_enabled
-            await start_all_enabled()
-        _run(window, _go)
-
-    def _stop_all():
-        async def _go():
-            from docgraph.process import shutdown_all
-            await shutdown_all()
-        _run(window, _go)
-
-    def _restart_all():
-        async def _go():
-            from docgraph.process import shutdown_all, start_all_enabled
-            await shutdown_all()
-            await start_all_enabled()
-        _run(window, _go)
-
-    start_all.clicked.connect(_start_all)
-    stop_all.clicked.connect(_stop_all)
-    restart_all.clicked.connect(_restart_all)
-
-    def refresh():
-        try:
-            from docgraph.process import status_snapshot
-            s = status_snapshot()
-        except Exception as exc:
-            summary.setText(f"err: {exc}")
-            summary.setStyleSheet(f"color: {ERR};")
-            return
-        parts = []
-        for role in ("watch", "serve", "daemon"):
-            r = s.get(role, {}) or {}
-            mark = "✓" if r.get("alive") else ("·" if r.get("enabled") else "✗")
-            parts.append(f"{mark} {role}")
-        mcp = s.get("mcp", {}) or {}
-        kids = mcp.get("children") or []
-        alive_kids = sum(1 for c in kids if c.get("alive"))
-        if mcp.get("enabled") or kids:
-            parts.append(f"mcp {alive_kids}/{len(kids)}")
-        else:
-            parts.append("✗ mcp")
-        summary.setText("   ".join(parts))
-        summary.setStyleSheet(f"color: {FG_DIM};")
-
-    refresh()
-    return card, body, refresh
 
 
 def _index_status_text() -> tuple[bool, str]:
@@ -605,9 +529,6 @@ def _build_mcp_card(window) -> tuple[QFrame, Callable[[], None]]:
                                 "Spawn at boot if Enabled."))
     body.addWidget(_toggle_row("docgraph.mcp.auto_restart", "Auto-restart",
                                 "Re-spawn on unexpected exit."))
-    body.addWidget(_list_row("docgraph.mcp.paths", "Paths",
-                              "One repo per line. Each gets its own docgraph mcp child + its own MCP port.",
-                              "/path/to/repo"))
     body.addWidget(_number_row("docgraph.mcp.base_port", "Base Port", 1024, 65535, 1, 0,
                                 "", "First port; subsequent children use base_port + i."))
     body.addWidget(_line_row("docgraph.mcp.host", "Host", "127.0.0.1"))
@@ -617,64 +538,189 @@ def _build_mcp_card(window) -> tuple[QFrame, Callable[[], None]]:
                                 5, 600, 5, 0, "s",
                                 "How long to wait for /mcp to become reachable."))
 
-    action_row = QHBoxLayout()
-    action_row.setSpacing(8)
-    start_btn = QPushButton("▶ Start"); start_btn.setProperty("class", "primary")
-    stop_btn  = QPushButton("Stop");    stop_btn.setProperty("class", "danger")
-    restart_btn = QPushButton("Restart")
-    action_row.addWidget(start_btn)
-    action_row.addWidget(stop_btn)
-    action_row.addWidget(restart_btn)
-    action_row.addStretch(1)
-    body.addLayout(action_row)
-
-    children_lbl = QLabel("(no children)")
-    children_lbl.setStyleSheet(f"color: {FG_MUTE}; font-family: monospace;")
-    body.addWidget(_section_header("Children"))
-    body.addWidget(children_lbl)
+    body.addWidget(_section_header("Paths (one MCP child per repo)"))
+    paths_widget = _McpPathsTable(window)
+    body.addWidget(paths_widget)
     body.addWidget(_log_hint("docgraph_mcp_<slug>.log"))
 
-    def _start():
-        async def _go():
-            from docgraph.process import get_mcp
-            await get_mcp().start()
-        _run(window, _go)
-
-    def _stop():
-        async def _go():
-            from docgraph.process import get_mcp
-            await get_mcp().stop()
-        _run(window, _go)
-
-    def _restart():
-        async def _go():
-            from docgraph.process import get_mcp
-            sup = get_mcp()
-            await sup.stop()
-            await sup.start()
-        _run(window, _go)
-
-    start_btn.clicked.connect(_start)
-    stop_btn.clicked.connect(_stop)
-    restart_btn.clicked.connect(_restart)
-
     def refresh():
+        paths_widget.refresh()
+    return card, refresh
+
+
+class _McpPathsTable(QWidget):
+    """Per-path editor for `docgraph.mcp.paths` with per-row Start/Stop."""
+
+    def __init__(self, window) -> None:
+        super().__init__()
+        self._window = window
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(6)
+
+        self._rows_host = QWidget()
+        self._rows_layout = QVBoxLayout(self._rows_host)
+        self._rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._rows_layout.setSpacing(6)
+        v.addWidget(self._rows_host)
+
+        add_w = QWidget()
+        add_l = QHBoxLayout(add_w)
+        add_l.setContentsMargins(0, 0, 0, 0)
+        add_btn = QPushButton("+ Add path")
+        add_btn.setProperty("class", "primary")
+        add_btn.setMaximumWidth(140)
+        add_btn.clicked.connect(self._on_add)
+        add_l.addWidget(add_btn)
+        add_l.addStretch(1)
+        v.addWidget(add_w)
+
+        self._row_widgets: list[_McpPathRow] = []
+        self._rebuild()
+
+    def _rebuild(self) -> None:
+        for w in self._row_widgets:
+            w.setParent(None)
+            w.deleteLater()
+        self._row_widgets.clear()
+        cur = list(get_path(read_settings(), "docgraph.mcp.paths", []) or [])
+        for s in cur:
+            self._append_row(str(s))
+
+    def _append_row(self, value: str) -> None:
+        row = _McpPathRow(value, self._window, on_change=self._commit, on_remove=self._on_remove)
+        self._rows_layout.addWidget(row)
+        self._row_widgets.append(row)
+
+    def _on_add(self) -> None:
+        self._append_row("")
+        self._commit()
+
+    def _on_remove(self, row: "_McpPathRow") -> None:
+        # Stop the child first so the port is released before we rewrite the list.
+        path = row.text().strip()
+        if path:
+            async def _go():
+                from docgraph.process import get_mcp
+                await get_mcp().stop_path(path)
+            _run(self._window, _go)
+        try:
+            self._row_widgets.remove(row)
+        except ValueError:
+            pass
+        row.setParent(None)
+        row.deleteLater()
+        self._commit()
+
+    def _commit(self) -> None:
+        paths = [r.text().strip() for r in self._row_widgets if r.text().strip()]
+        patch_settings("docgraph.mcp.paths", paths)
+
+    def refresh(self) -> None:
+        cur = [str(p) for p in (get_path(read_settings(), "docgraph.mcp.paths", []) or [])]
+        existing_nonempty = [r.text() for r in self._row_widgets if r.text().strip()]
+        if cur != existing_nonempty:
+            self._rebuild()
+        for r in self._row_widgets:
+            r.refresh_state()
+
+
+class _McpPathRow(QFrame):
+    def __init__(self, value: str, window, *, on_change, on_remove) -> None:
+        super().__init__()
+        self._window = window
+        self._on_change = on_change
+        self._on_remove = on_remove
+
+        from PySide6.QtWidgets import QLineEdit
+        from tray.qt_theme import BG_ELEV, BORDER
+
+        self.setStyleSheet(
+            f"_McpPathRow {{ background: {BG_ELEV}; border: 1px solid {BORDER}; border-radius: 6px; }}"
+        )
+        h = QHBoxLayout(self)
+        h.setContentsMargins(8, 6, 8, 6)
+        h.setSpacing(8)
+
+        self._edit = QLineEdit(value)
+        self._edit.setPlaceholderText("/path/to/repo")
+        self._edit.editingFinished.connect(self._on_edit_done)
+        h.addWidget(self._edit, 1)
+
+        self._start_btn = QPushButton("▶ Start"); self._start_btn.setProperty("class", "primary")
+        self._start_btn.clicked.connect(self._do_start)
+        h.addWidget(self._start_btn)
+
+        self._stop_btn = QPushButton("Stop"); self._stop_btn.setProperty("class", "danger")
+        self._stop_btn.clicked.connect(self._do_stop)
+        h.addWidget(self._stop_btn)
+
+        self._pill = QLabel("…")
+        self._pill.setProperty("class", "stat_pill")
+        self._pill.setMinimumWidth(220)
+        h.addWidget(self._pill)
+
+        rm_btn = QPushButton("✕")
+        rm_btn.setFlat(True)
+        rm_btn.setFixedWidth(28)
+        rm_btn.setStyleSheet(
+            f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
+            f" QPushButton:hover {{ color: #ff6b6b; }}"
+        )
+        rm_btn.clicked.connect(lambda: self._on_remove(self))
+        h.addWidget(rm_btn)
+
+        self.refresh_state()
+
+    def text(self) -> str:
+        return self._edit.text()
+
+    def _on_edit_done(self) -> None:
+        self._on_change()
+        self.refresh_state()
+
+    def _do_start(self) -> None:
+        path = self.text().strip()
+        if not path:
+            return
+        async def _go():
+            from docgraph.process import get_mcp
+            await get_mcp().start_path(path)
+        _run(self._window, _go)
+
+    def _do_stop(self) -> None:
+        path = self.text().strip()
+        if not path:
+            return
+        async def _go():
+            from docgraph.process import get_mcp
+            await get_mcp().stop_path(path)
+        _run(self._window, _go)
+
+    def refresh_state(self) -> None:
+        path = self.text().strip()
+        if not path:
+            self._pill.setText("(empty)")
+            self._pill.setStyleSheet(f"color: {FG_MUTE};")
+            return
         try:
             from docgraph.process import get_mcp
             kids = get_mcp().status()
-        except Exception:
-            kids = []
-        if not kids:
-            children_lbl.setText("(no children)")
+        except Exception as exc:
+            self._pill.setText(f"err: {exc}")
+            self._pill.setStyleSheet(f"color: {ERR};")
+            return
+        match = next((c for c in kids if c.get("path") == path), None)
+        if match and match.get("alive"):
+            extras = []
+            if match.get("port"):    extras.append(f"port={match['port']}")
+            if match.get("pid"):     extras.append(f"pid={match['pid']}")
+            if match.get("bridged"): extras.append(f"bridged={match['bridged']}")
+            self._pill.setText("✓ alive  " + "  ".join(extras))
+            self._pill.setStyleSheet(f"color: {OK};")
         else:
-            lines = []
-            for c in kids:
-                pid = c.get("pid") or "?"
-                state = "✓ alive" if c.get("alive") else "✗ down"
-                lines.append(f"{state}  {c.get('slug','?')}  port={c.get('port')}  pid={pid}  bridged={c.get('bridged', 0)}")
-            children_lbl.setText("\n".join(lines))
-    refresh()
-    return card, refresh
+            self._pill.setText("✗ stopped")
+            self._pill.setStyleSheet(f"color: {FG_MUTE};")
 
 
 # ── Daemon card ──────────────────────────────────────────────────────────────
