@@ -524,8 +524,16 @@ def get_host() -> HostSupervisor:
 # ── Boot / shutdown hooks ──────────────────────────────────────────────────
 
 async def autostart_all() -> None:
-    """Called from main.py:_post_init."""
-    if dg_cfg.host_enabled() and dg_cfg.host_auto_start():
+    """Called from main.py:_post_init.
+
+    Auto-start fires on `host.auto_start` alone — the older two-flag gate
+    (`enabled AND auto_start`) made the UI confusing because users would
+    flip Auto-start on, expect it to start, and find Enabled silently
+    blocking it. Now Auto-start is the single switch for boot behavior.
+    `enabled` remains the live-state flag (Stop / Start / Restart in the
+    tray), independent of boot persistence.
+    """
+    if dg_cfg.host_auto_start():
         try:
             await get_host().start()
         except Exception as exc:
