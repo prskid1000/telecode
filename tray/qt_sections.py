@@ -1607,6 +1607,8 @@ def _managed(window) -> QWidget:
 
     # name -> Toggle widget, so refresh can sync state without rebuilding.
     toggles: dict[str, Toggle] = {}
+    # prefix -> (master Toggle, [child names]) for grouped sections.
+    group_toggles: dict[str, tuple[Toggle, list[str]]] = {}
     # Tracks last tool ordering so we only tear down on actual changes.
     last_names: list[str] = []
     empty_label: QLabel | None = None
@@ -1618,6 +1620,7 @@ def _managed(window) -> QWidget:
             if w:
                 w.deleteLater()
         toggles.clear()
+        group_toggles.clear()
         empty_label = None
         if not tools:
             empty_label = QLabel("No managed tools registered.")
@@ -1647,13 +1650,35 @@ def _managed(window) -> QWidget:
             in_group = prefix in group_prefixes
             if in_group and prefix not in seen_groups:
                 seen_groups.add(prefix)
-                hdr = QLabel(humanize(prefix))
-                hdr.setStyleSheet(
-                    f"color: {FG_MUTE}; font-size: 11px; "
-                    f"text-transform: uppercase; letter-spacing: 0.05em; "
+                hdr_label = QLabel(humanize(prefix))
+                hdr_label.setStyleSheet(
+                    f"color: {FG}; font-size: 13px; font-weight: 500; "
+                    f"text-transform: uppercase; letter-spacing: 0.06em; "
                     f"padding-top: 4px;"
                 )
-                rows_wrap.addWidget(hdr)
+                # Master toggle for the whole group: ON if any child is on,
+                # toggling sets every child to that state.
+                children = [x.get("name", "") for x in tools
+                            if x.get("name", "").startswith(prefix + "_")]
+                any_on = any(
+                    bool(x.get("enabled", True)) for x in tools
+                    if x.get("name", "") in children
+                )
+                grp_toggle = Toggle()
+                grp_toggle.setChecked(any_on)
+
+                def _grp_toggle(_s: int, names=tuple(children), gw=grp_toggle) -> None:
+                    on = gw.isChecked()
+                    for cn in names:
+                        cw = toggles.get(cn)
+                        if cw is None:
+                            continue
+                        if cw.isChecked() != on:
+                            cw.setChecked(on)  # cascades through child stateChanged
+                grp_toggle.stateChanged.connect(_grp_toggle)
+                group_toggles[prefix] = (grp_toggle, list(children))
+                rows_wrap.addWidget(_row(hdr_label,
+                                          _wrap_align(grp_toggle, Qt.AlignmentFlag.AlignLeft)))
 
             t_widget = Toggle()
             t_widget.setChecked(enabled)
@@ -1696,6 +1721,16 @@ def _managed(window) -> QWidget:
             tw.blockSignals(True)
             tw.setChecked(enabled)
             tw.blockSignals(False)
+        # Reflect mixed/all-on/all-off state on the group master toggles.
+        for prefix, (gw, children) in group_toggles.items():
+            on_states = [bool(toggles[c].isChecked()) for c in children if c in toggles]
+            if not on_states:
+                continue
+            any_on = any(on_states)
+            if gw.isChecked() != any_on:
+                gw.blockSignals(True)
+                gw.setChecked(any_on)
+                gw.blockSignals(False)
     scroll.refresh = refresh  # type: ignore[attr-defined]
     refresh()
     return scroll
