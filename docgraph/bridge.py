@@ -1,9 +1,10 @@
-"""MCP-client bridge — registers each docgraph MCP child's tools as managed.
+"""MCP-client bridge — registers the host's tools as managed.
 
-For each running `docgraph mcp` child the supervisor calls `bridge_child()`,
-which opens a streamable-HTTP MCP session, lists tools, and registers each in
-`proxy.managed_tools._REGISTRY` as `docgraph_<slug>_<tool>` (multi-repo) or
-`docgraph_<tool>` (single-repo).
+Single host model: telecode supervises one `docgraph host` process; we
+discover its tool surface once on `bridge_host()` and register every
+tool as `docgraph_<tool>`. Each tool's `root` argument (a closed enum
+emitted by the host) lets agents pick which registered repo per call —
+no per-root namespacing needed in the bridged tool name.
 
 Handlers re-open a transient session per call. Cold start is bounded
 (loopback HTTP + cached process) so this stays simple — no long-lived
@@ -21,11 +22,10 @@ log = logging.getLogger("telecode.docgraph.bridge")
 
 
 # Track names we registered so we can pop them on stop.
-_BRIDGED: dict[str, list[str]] = {}  # slug -> [tool_name, ...]
+_BRIDGED: list[str] = []
 
 
 def _import_mcp_client():
-    """Lazy import — `mcp` is already a telecode dep but we keep startup cheap."""
     try:
         from mcp import ClientSession  # type: ignore
         from mcp.client.streamable_http import streamablehttp_client  # type: ignore
@@ -45,8 +45,8 @@ async def _open_session(host: str, port: int):
     return session, stack
 
 
-async def bridge_child(*, slug: str, port: int, host: str, multi: bool) -> int:
-    """Discover tools on the child and register them. Returns count bridged."""
+async def bridge_host(*, host: str, port: int) -> int:
+    """Discover tools on the host and register them. Returns count bridged."""
     session, stack = await _open_session(host, port)
     try:
         listed = await session.list_tools()
@@ -60,7 +60,7 @@ async def bridge_child(*, slug: str, port: int, host: str, multi: bool) -> int:
                 or t.get("inputSchema")
                 or {"type": "object", "properties": {}}
             )
-            full_name = f"docgraph_{slug}_{tool_name}" if multi else f"docgraph_{tool_name}"
+            full_name = f"docgraph_{tool_name}"
             mt_schema = {
                 "name": full_name,
                 "description": (description or "").strip(),
@@ -73,22 +73,24 @@ async def bridge_child(*, slug: str, port: int, host: str, multi: bool) -> int:
                 strip=[full_name], primary_arg=primary,
             )
             registered.append(full_name)
-        _BRIDGED.setdefault(slug, []).extend(registered)
-        log.info("docgraph bridge %s: registered %d tools (port %d)",
-                 slug, len(registered), port)
+        _BRIDGED.clear()
+        _BRIDGED.extend(registered)
+        log.info("docgraph bridge: registered %d tools (port %d)",
+                 len(registered), port)
         return len(registered)
     finally:
         await stack.aclose()
 
 
-def unbridge_child(*, slug: str) -> None:
-    """Pop all tools we registered for `slug` from the managed_tools registry."""
-    names = _BRIDGED.pop(slug, [])
+def unbridge_host() -> None:
+    """Pop all tools we registered from the managed_tools registry."""
+    names = list(_BRIDGED)
+    _BRIDGED.clear()
     reg = managed_tools._REGISTRY
     for name in names:
         reg.pop(name, None)
     if names:
-        log.info("docgraph bridge %s: unregistered %d tools", slug, len(names))
+        log.info("docgraph bridge: unregistered %d tools", len(names))
 
 
 def _make_handler(*, host: str, port: int, tool_name: str):

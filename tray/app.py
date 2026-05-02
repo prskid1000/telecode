@@ -190,10 +190,10 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
     def _open_docgraph_ui():
         import webbrowser
         settings = read_settings()
-        host = get_path(settings, "docgraph.serve.host", "127.0.0.1") or "127.0.0.1"
+        host = get_path(settings, "docgraph.host.host", "127.0.0.1") or "127.0.0.1"
         if host == "0.0.0.0":
             host = "127.0.0.1"
-        port = get_path(settings, "docgraph.serve.port", 5500) or 5500
+        port = get_path(settings, "docgraph.host.port", 5500) or 5500
         webbrowser.open(f"http://{host}:{port}")
 
     open_docgraph_action = QAction("Open Document Index (Browser)", menu)
@@ -305,14 +305,14 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
         allowed = get_path(settings, "telegram.allowed_user_ids", []) or []
         bot_users.setText(f"Allowed Users: {len(allowed)}")
 
-        # ── DocGraph: surface the "Open UI" link only when serve is alive ──
+        # ── DocGraph: surface the "Open UI" link only when host is alive ──
         try:
             from docgraph.process import status_snapshot as _dg_status
             dg = _dg_status()
-            serve_alive = bool(dg.get("serve", {}).get("alive"))
-            open_docgraph_action.setVisible(serve_alive)
-            if serve_alive:
-                p = dg.get("serve", {}).get("port") or get_path(settings, "docgraph.serve.port", 5500)
+            host_alive = bool(dg.get("host", {}).get("alive"))
+            open_docgraph_action.setVisible(host_alive)
+            if host_alive:
+                p = dg.get("host", {}).get("port") or get_path(settings, "docgraph.host.port", 5500)
                 open_docgraph_action.setText(f"Open Document Index (Browser) — :{p}")
         except Exception:
             open_docgraph_action.setVisible(False)
