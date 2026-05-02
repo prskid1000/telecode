@@ -220,22 +220,32 @@ def _host_status_text() -> tuple[bool, str]:
 def _build_roots_card(window) -> tuple[QFrame, Callable[[], None]]:
     card, body = _card(
         "Roots",
-        "Each row is a repo registered with the host. Per-row Index runs "
-        "`docgraph index <path>` as a one-shot subprocess. Watch toggle is "
-        "persistent — flip and restart the host to take effect.",
+        "Each row is a repo registered with the host. Per-row Index "
+        "POSTs /api/admin/index when the host is alive (else falls back "
+        "to a `docgraph index <path>` subprocess). The Full toggle below "
+        "governs both per-row Index and Index-all-roots — on = `--full` "
+        "(wipe + rebuild), off = incremental. Watch toggle is persistent "
+        "— flip and restart the host to take effect.",
     )
 
-    paths_widget = _RootsTable(window)
+    # Build the master Full toggle FIRST so its state can be threaded
+    # into per-row Index buttons via a getter.
+    from tray.qt_widgets import Toggle as _Toggle
+    all_force = _Toggle()
+    all_force.setToolTip(
+        "Governs every Index button in this card.\n"
+        "On  = docgraph index --full   (wipe + rebuild)\n"
+        "Off = incremental"
+    )
+
+    paths_widget = _RootsTable(window, force_getter=all_force.isChecked)
     body.addWidget(paths_widget)
 
     action_row = QHBoxLayout()
     action_row.setSpacing(8)
-    from tray.qt_widgets import Toggle as _Toggle
     all_force_lbl = QLabel("Full")
     all_force_lbl.setStyleSheet(f"color: {FG_DIM};")
-    all_force_lbl.setToolTip("docgraph index --full   (wipe + rebuild). Off = incremental.")
-    all_force = _Toggle()
-    all_force.setToolTip("docgraph index --full   (wipe + rebuild). Off = incremental.")
+    all_force_lbl.setToolTip(all_force.toolTip())
     run_all_btn = QPushButton("▶ Index all roots")
     cancel_btn = QPushButton("Cancel")
     cancel_btn.setProperty("class", "danger")
@@ -287,11 +297,16 @@ class _RootsTable(QWidget):
 
     Each row: editable path · ▶ Index · Watch toggle · status pill · ✕ remove.
     Persists to `docgraph.roots` on every edit.
+
+    `force_getter` is a callable returning a bool — read at click time so
+    flipping the master Full toggle takes effect immediately on the next
+    per-row Index, without rebuilding the table.
     """
 
-    def __init__(self, window) -> None:
+    def __init__(self, window, *, force_getter: Callable[[], bool] | None = None) -> None:
         super().__init__()
         self._window = window
+        self._force_getter = force_getter or (lambda: False)
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(6)
@@ -334,6 +349,7 @@ class _RootsTable(QWidget):
         row = _RootRow(
             path, watch, self._window,
             on_change=self._commit, on_remove=self._on_remove,
+            force_getter=self._force_getter,
         )
         self._rows_layout.addWidget(row)
         self._row_widgets.append(row)
@@ -377,11 +393,13 @@ class _RootsTable(QWidget):
 
 
 class _RootRow(QFrame):
-    def __init__(self, path: str, watch: bool, window, *, on_change, on_remove) -> None:
+    def __init__(self, path: str, watch: bool, window, *, on_change, on_remove,
+                 force_getter: Callable[[], bool] | None = None) -> None:
         super().__init__()
         self._window = window
         self._on_change = on_change
         self._on_remove = on_remove
+        self._force_getter = force_getter or (lambda: False)
 
         self.setStyleSheet(
             f"_RootRow {{ background: {BG_ELEV}; border: 1px solid {BORDER}; border-radius: 6px; }}"
@@ -453,9 +471,10 @@ class _RootRow(QFrame):
         path = self.text().strip()
         if not path:
             return
+        force = bool(self._force_getter())
         async def _go():
             from docgraph.process import get_index
-            await get_index().run(path, force=False)
+            await get_index().run(path, force=force)
         _run(self._window, _go)
 
     def refresh_state(self) -> None:
