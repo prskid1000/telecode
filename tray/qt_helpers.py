@@ -252,7 +252,14 @@ def build_status() -> dict[str, Any]:
     except Exception:
         sessions = []
 
+    try:
+        from docgraph.process import status_snapshot as _dg_status
+        docgraph = _dg_status()
+    except Exception:
+        docgraph = {}
+
     return {
         "llama": llama, "proxy": proxy, "mcp": mcp,
         "managed": managed, "sessions": sessions,
+        "docgraph": docgraph,
     }

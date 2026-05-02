@@ -40,6 +40,64 @@
     "stt_url": "http://127.0.0.1:6600"
   },
 
+  "docgraph": {
+    "binary": "",
+    "default_path": "",
+
+    "index": {
+      "paths": [],
+      "full": false,
+      "workers": 0,
+      "gpu": false,
+      "llm_model": "",
+      "llm_host": "localhost",
+      "llm_port": 1235,
+      "llm_format": "openai",
+      "llm_max_tokens": 150,
+      "embedding_model": ""
+    },
+
+    "watch": {
+      "enabled": false,
+      "auto_start": false,
+      "auto_restart": true,
+      "path": "",
+      "serve_too": false,
+      "host": "127.0.0.1",
+      "port": 5500
+    },
+
+    "serve": {
+      "enabled": false,
+      "auto_start": false,
+      "auto_restart": true,
+      "path": "",
+      "host": "127.0.0.1",
+      "port": 5500,
+      "gpu": false
+    },
+
+    "daemon": {
+      "enabled": false,
+      "auto_start": false,
+      "auto_restart": true,
+      "port": 5577,
+      "model": "BAAI/bge-small-en-v1.5",
+      "gpu": false
+    },
+
+    "mcp": {
+      "enabled": false,
+      "auto_start": false,
+      "auto_restart": true,
+      "paths": [],
+      "base_port": 5600,
+      "host": "127.0.0.1",
+      "gpu": false,
+      "ready_timeout_sec": 30
+    }
+  },
+
   "llamacpp": {
     "enabled": false,
     "binary": "llama-server",
@@ -192,7 +250,6 @@
     "host": "127.0.0.1",
     "port": 1235,
     "protocols": ["anthropic", "openai"],
-    "enable_session_tools": false,
     "debug": false,
 
     "tool_search": false,
@@ -242,17 +299,7 @@
         "auto_load_tools": true,
         "core_tools": ["Bash", "Edit", "Read", "Write", "Glob", "Grep", "Agent", "Skill"],
         "inject_managed": [
-          "web_search",
-          "session_create",
-          "session_get",
-          "session_list",
-          "session_delete",
-          "session_upload_file",
-          "session_read_file",
-          "session_files_list",
-          "task_submit",
-          "task_status",
-          "task_list_types"
+          "web_search"
         ],
         "strip_tool_names": []
       }

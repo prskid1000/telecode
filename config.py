@@ -248,7 +248,6 @@ def heartbeat_min_fire_gap_seconds()     -> int:  return int(get_nested("heartbe
 def proxy_enabled()      -> bool: return bool(get_nested("proxy.enabled", False))
 def proxy_port()         -> int:  return int(get_nested("proxy.port", 1235))
 def proxy_upstream_url() -> str:  return get_nested("proxy.upstream_url", "http://localhost:1234")
-def enable_session_tools() -> bool: return bool(get_nested("proxy.enable_session_tools", False))
 
 
 # ── Validation ────────────────────────────────────────────────────────────────

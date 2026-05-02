@@ -102,7 +102,6 @@ Telecode includes a fully-featured stateful **Session and Task Management** syst
   - **Team Mode** (`/ui`): Workspaces / Agents (with the 5-tab internal-file editor + YAML-validated HEARTBEAT.md) / Jobs (USER and HEARTBEAT sidebar tabs, pipeline builder, run history).
   - **Task Mode** (`/ui/legacy`): Simplified session-based task submission and monitoring.
   - Browser titles ("Telecode-Team" / "Telecode-Task") and icons match the active mode for easy navigation.
-- **Configurable**: Enable via `proxy.enable_session_tools: true` in `settings.json`. Once enabled, tools like `session_create`, `task_submit`, and `session_upload_file` are automatically injected into supported client profiles (like `claude-code`).
 
 ### System tray UI + settings window
 
@@ -617,6 +616,62 @@ A heartbeat task runs for the entire request (both buffer + passthrough, **acros
 
 Adding a new managed tool needs zero status-rendering code — `format_visibility()` derives the line from the tool's `primary_arg` and the handler's returned summary.
 
+### `docgraph` — local code graph supervisor (optional)
+
+Telecode can run [DocGraph](https://github.com/prithwirajs/docgraph) subprocesses (`index` / `watch` / `serve` / `daemon` / `mcp`) and bridge their MCP tools into the proxy as managed tools, auto-injected for the local model. Off by default — flip individual `enabled` / `auto_start` flags to opt in.
+
+| Key | Description |
+|---|---|
+| `binary` | Path to the `docgraph` CLI. Empty = autodetect via `shutil.which("docgraph")`, then `<settings_dir>/.venv/Scripts/docgraph.exe`, `~/.local/bin/docgraph.bat`, `~/.docgraph/.venv/Scripts/docgraph.exe`. Same shape as `llamacpp.binary`. |
+| `default_path` | Used by Index / Watch / Serve when their own `path` is empty. |
+
+#### `docgraph.index`
+
+| Key | Description |
+|---|---|
+| `paths` | List of repos to index in sequence (each gets its own subprocess invocation). |
+| `full` | Pass `--full` (wipe + rebuild). Default `false` (incremental). |
+| `workers`, `gpu`, `embedding_model` | Forwarded as flags / env vars. `0` workers = docgraph default. |
+| `llm_model`, `llm_host`, `llm_port`, `llm_format`, `llm_max_tokens` | Optional LLM-augmented docstrings. Setting `llm_model` is enough to enable. |
+
+#### `docgraph.watch` / `docgraph.serve`
+
+| Key | Description |
+|---|---|
+| `enabled` | Master toggle. Off → kill subprocess + free its port. |
+| `auto_start` | Spawn at `main.py:_post_init`. |
+| `auto_restart` | Re-spawn on unexpected exit. |
+| `path` | Repo to watch / serve. Falls back to `docgraph.default_path`. |
+| `host`, `port` | Bind address (Serve / Watch+`serve_too`). |
+| `serve_too` (Watch) | Pass `--serve` to run the web UI in the watcher process. |
+| `gpu` (Serve) | Forwarded via `DOCGRAPH_GPU=1`. |
+
+#### `docgraph.daemon`
+
+| Key | Description |
+|---|---|
+| `enabled` / `auto_start` / `auto_restart` | Lifecycle. |
+| `port` | Loopback embedding daemon port (default `5577`). |
+| `model` | Embedding model the daemon loads. Must match what your repos were indexed with. |
+| `gpu` | Loads on GPU via ONNX Runtime. |
+
+#### `docgraph.mcp`
+
+Spawns one `docgraph mcp <path> --transport http` per `paths` entry on consecutive ports starting at `base_port` (each child gets `DOCGRAPH_PORT=base_port + i`). When a child reaches ready, telecode opens an MCP streamable-HTTP session, lists tools, and registers each in the proxy's managed-tools registry as `docgraph_<repo_basename>_<tool>` (or `docgraph_<tool>` for the single-repo case). Each bridged tool then appears in the **Managed** section with its own toggle (free, automatic).
+
+| Key | Description |
+|---|---|
+| `enabled` / `auto_start` / `auto_restart` | Lifecycle. |
+| `paths` | One repo per MCP child. |
+| `base_port` | First port (default `5600`). Each subsequent child uses `+1`. |
+| `host` | Bind address (default `127.0.0.1`). |
+| `gpu` | Forwarded via `DOCGRAPH_GPU=1`. |
+| `ready_timeout_sec` | How long to wait for `/mcp` to become reachable (default `30`). |
+
+**Lock coordination.** Watch and Index hold DocGraph's writer lock; Serve / MCP / Daemon are read-only. Starting Watch or Index for a path automatically stops Serve/MCP/Daemon for that path first; starting Serve / MCP for a path while Watch holds it is rejected with a clear error in the UI.
+
+**Logs.** `data/logs/docgraph_<role>[_<slug>].log`. Live tail in each DocGraph sub-tab; also picked up by the global Logs section.
+
 ### `tools.<key>` — CLI backends
 
 Each key under `tools` becomes a backend available via `/new <key>`. No code changes needed.
@@ -856,3 +911,7 @@ voice/                 STT availability + transcription
 **Voice not working** -- Start your STT service and send a voice message; the first one hits the endpoint directly and updates health state. No background probe, so there's no "wait 60s after starting STT" anymore.
 
 **Video encoding fails** -- Ensure ffmpeg is installed and on PATH.
+
+**DocGraph subprocess won't start** -- Check the per-role status pill in the DocGraph section, then `data/logs/docgraph_<role>.log`. If `docgraph.binary` is empty, telecode tries `shutil.which("docgraph")` then a few venv fallbacks; set the absolute path explicitly if those miss.
+
+**DocGraph bridge tools missing from the model's tool list** -- `docgraph.mcp.enabled` must be on AND each child must reach ready. The MCP tab status row shows pid/port/bridged-tool-count per child. Check `docgraph_mcp_<slug>.log` for spawn errors (most common: `.docgraph/` doesn't exist for the repo — run `docgraph index <path>` first).

@@ -187,6 +187,20 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
     open_ui_action.triggered.connect(_open_ui)
     menu.addAction(open_ui_action)
 
+    def _open_docgraph_ui():
+        import webbrowser
+        settings = read_settings()
+        host = get_path(settings, "docgraph.serve.host", "127.0.0.1") or "127.0.0.1"
+        if host == "0.0.0.0":
+            host = "127.0.0.1"
+        port = get_path(settings, "docgraph.serve.port", 5500) or 5500
+        webbrowser.open(f"http://{host}:{port}")
+
+    open_docgraph_action = QAction("Open DocGraph UI (Browser)", menu)
+    open_docgraph_action.triggered.connect(_open_docgraph_ui)
+    open_docgraph_action.setVisible(False)
+    menu.addAction(open_docgraph_action)
+
     menu.addSeparator()
 
     quit_action = QAction("Quit Telecode", menu)
@@ -290,6 +304,18 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
         bot_group.setText(f"Group: {group_id}")
         allowed = get_path(settings, "telegram.allowed_user_ids", []) or []
         bot_users.setText(f"Allowed Users: {len(allowed)}")
+
+        # ── DocGraph: surface the "Open UI" link only when serve is alive ──
+        try:
+            from docgraph.process import status_snapshot as _dg_status
+            dg = _dg_status()
+            serve_alive = bool(dg.get("serve", {}).get("alive"))
+            open_docgraph_action.setVisible(serve_alive)
+            if serve_alive:
+                p = dg.get("serve", {}).get("port") or get_path(settings, "docgraph.serve.port", 5500)
+                open_docgraph_action.setText(f"Open DocGraph UI (Browser) — :{p}")
+        except Exception:
+            open_docgraph_action.setVisible(False)
 
         # Tray hover tooltip — newline-separated so every piece of info
         # is visible at once on hover instead of one collapsed line.

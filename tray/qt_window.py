@@ -42,6 +42,7 @@ SECTIONS: list[tuple[str, str, str]] = [
     ("proxy",    "Proxy",      "🔀"),
     ("mcp",      "MCP",        "🧩"),
     ("managed",  "Managed",    "🛠"),
+    ("docgraph", "DocGraph",   "🧠"),
     ("tools",    "Tools",      "🧰"),
     ("telegram", "Telegram",   "💬"),
     ("voice",    "Voice",      "🎙"),
