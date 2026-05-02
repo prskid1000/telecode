@@ -229,77 +229,305 @@ def _status(window) -> QWidget:
     grid.setVerticalSpacing(14)
     grid_body.addLayout(grid)
 
-    tiles: dict[str, tuple[QLabel, QLabel]] = {}
+    # 5 tiles in a responsive 3-col grid: llama | proxy | docgraph / mcp | sessions | (empty)
     specs = [
-        ("llama", "llama.cpp"),
-        ("proxy", "Proxy"),
-        ("mcp", "MCP"),
+        ("llama",    "llama.cpp"),
+        ("proxy",    "Proxy"),
+        ("docgraph", "DocGraph"),
+        ("mcp",      "MCP"),
         ("sessions", "Sessions"),
     ]
+    tiles: dict[str, _StatusTile] = {}
     for i, (key, label) in enumerate(specs):
-        tile = QFrame()
-        tile.setStyleSheet(f"QFrame {{ background: {BG_CARD}; border: 1px solid {BORDER}; border-radius: 8px; padding: 14px; }}")
-        tl = QVBoxLayout(tile)
-        tl.setSpacing(4)
-        name = QLabel(label)
-        name.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;")
-        val = QLabel("—")
-        val.setStyleSheet(f"color: {FG}; font-size: 18px; font-weight: 500;")
-        sub = QLabel("")
-        sub.setStyleSheet(f"color: {FG_DIM}; font-size: 12px;")
-        tl.addWidget(name)
-        tl.addWidget(val)
-        tl.addWidget(sub)
-        tiles[key] = (val, sub)
-        grid.addWidget(tile, i // 2, i % 2)
+        tile = _StatusTile(label)
+        tiles[key] = tile
+        grid.addWidget(tile, i // 3, i % 3)
+
+    # Stretch the empty trailing column to keep tiles equal width.
+    for c in range(3):
+        grid.setColumnStretch(c, 1)
 
     layout.addWidget(grid_card)
     layout.addStretch(1)
 
     def refresh() -> None:
         st = build_status()
-        llama = st.get("llama", {})
-        proxy = st.get("proxy", {})
-        mcp = st.get("mcp", {})
-        sessions = st.get("sessions", [])
-
-        if llama.get("enabled"):
-            if llama.get("alive"):
-                tiles["llama"][0].setText(f"● {llama.get('active_model', '—')}")
-                bits = []
-                if llama.get("inflight", 0):
-                    bits.append(f"{llama['inflight']} In-Flight")
-                elif llama.get("idle_remaining_sec", 0) > 0:
-                    bits.append(f"Auto-Unload In {int(llama['idle_remaining_sec'])}s")
-                tiles["llama"][1].setText(" · ".join(bits) or "Ready")
-            else:
-                tiles["llama"][0].setText("○ Idle")
-                tiles["llama"][1].setText("Loads On First Request")
-        else:
-            tiles["llama"][0].setText("○ Disabled")
-            tiles["llama"][1].setText("")
-
-        if proxy.get("enabled"):
-            tiles["proxy"][0].setText(f"● :{proxy.get('port', '?')}")
-            tiles["proxy"][1].setText(", ".join(format_protocol(p) for p in proxy.get("protocols", [])))
-        else:
-            tiles["proxy"][0].setText("○ Disabled")
-            tiles["proxy"][1].setText("")
-
-        if mcp.get("enabled"):
-            tiles["mcp"][0].setText(f"● :{mcp.get('port', '?')}")
-            tiles["mcp"][1].setText(f"{len(mcp.get('registered_tools', []))} Tools Registered")
-        else:
-            tiles["mcp"][0].setText("○ Disabled")
-            tiles["mcp"][1].setText("")
-
-        alive = sum(1 for s in sessions if s.get("alive"))
-        tiles["sessions"][0].setText(f"{alive} / {len(sessions)}")
-        tiles["sessions"][1].setText("Active / Total")
+        _refresh_llama(tiles["llama"], st.get("llama", {}))
+        _refresh_proxy(tiles["proxy"], st.get("proxy", {}))
+        _refresh_docgraph(tiles["docgraph"], st.get("docgraph", {}))
+        _refresh_mcp(tiles["mcp"], st.get("mcp", {}))
+        _refresh_sessions(tiles["sessions"], st.get("sessions", []))
 
     scroll.refresh = refresh  # type: ignore[attr-defined]
     refresh()
     return scroll
+
+
+# ── Status tile widget ────────────────────────────────────────────────────
+
+class _StatusTile(QFrame):
+    """One status card. Top color stripe + title + big value + sub text +
+    a slot for an optional visualization (progress bar / chip strip / dots)."""
+
+    def __init__(self, title: str) -> None:
+        super().__init__()
+        self.setStyleSheet(
+            f"_StatusTile {{ background: {BG_CARD}; border: 1px solid {BORDER}; "
+            f"border-radius: 8px; }}"
+        )
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # Top accent stripe (4px)
+        self._stripe = QFrame()
+        self._stripe.setFixedHeight(3)
+        self._stripe.setStyleSheet(f"background: {FG_MUTE}; border-top-left-radius: 8px; border-top-right-radius: 8px;")
+        outer.addWidget(self._stripe)
+
+        # Body padding
+        body_w = QWidget()
+        body = QVBoxLayout(body_w)
+        body.setContentsMargins(14, 12, 14, 12)
+        body.setSpacing(4)
+        outer.addWidget(body_w)
+
+        self._title = QLabel(title)
+        self._title.setStyleSheet(
+            f"color: {FG_MUTE}; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;"
+        )
+        body.addWidget(self._title)
+
+        self._value = QLabel("—")
+        self._value.setStyleSheet(f"color: {FG}; font-size: 18px; font-weight: 500;")
+        body.addWidget(self._value)
+
+        self._sub = QLabel("")
+        self._sub.setStyleSheet(f"color: {FG_DIM}; font-size: 12px;")
+        self._sub.setWordWrap(True)
+        body.addWidget(self._sub)
+
+        # Visualization slot — populated by per-section refreshers.
+        self._viz_host = QWidget()
+        viz_layout = QVBoxLayout(self._viz_host)
+        viz_layout.setContentsMargins(0, 6, 0, 0)
+        viz_layout.setSpacing(4)
+        body.addWidget(self._viz_host)
+
+        body.addStretch(1)
+
+    def set_state(self, state: str) -> None:
+        """state ∈ {'ok','warn','err','mute'} — drives the top stripe color."""
+        color = {"ok": OK, "warn": WARN, "err": ERR, "mute": FG_MUTE}.get(state, FG_MUTE)
+        self._stripe.setStyleSheet(
+            f"background: {color}; border-top-left-radius: 8px; border-top-right-radius: 8px;"
+        )
+
+    def set_value(self, text: str) -> None:
+        self._value.setText(text)
+
+    def set_sub(self, text: str) -> None:
+        self._sub.setText(text)
+
+    def set_viz(self, widget: QWidget | None) -> None:
+        layout = self._viz_host.layout()
+        # Clear existing children.
+        while layout.count():
+            item = layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+        if widget is not None:
+            layout.addWidget(widget)
+
+
+def _make_dots(total: int, on: int, *, on_color: str, off_color: str | None = None,
+               max_dots: int = 24) -> QWidget:
+    """Tiny dot strip — renders up to `max_dots` dots; collapses with "+ N"
+    suffix when total exceeds the cap."""
+    off_color = off_color or FG_MUTE
+    w = QWidget()
+    h = QHBoxLayout(w)
+    h.setContentsMargins(0, 0, 0, 0)
+    h.setSpacing(3)
+    show = min(total, max_dots)
+    for i in range(show):
+        dot = QLabel("●")
+        color = on_color if i < on else off_color
+        dot.setStyleSheet(f"color: {color}; font-size: 9px;")
+        h.addWidget(dot)
+    if total > max_dots:
+        more = QLabel(f"+{total - max_dots}")
+        more.setStyleSheet(f"color: {FG_MUTE}; font-size: 10px;")
+        h.addWidget(more)
+    h.addStretch(1)
+    return w
+
+
+def _make_progress(ratio: float, label: str = "") -> QWidget:
+    """Thin progress bar. ratio in [0, 1]."""
+    w = QWidget()
+    v = QVBoxLayout(w)
+    v.setContentsMargins(0, 0, 0, 0)
+    v.setSpacing(2)
+    if label:
+        cap = QLabel(label)
+        cap.setStyleSheet(f"color: {FG_MUTE}; font-size: 10px;")
+        v.addWidget(cap)
+    track = QFrame()
+    track.setFixedHeight(4)
+    track.setStyleSheet(f"background: {BG_ELEV}; border-radius: 2px;")
+    fill_h = QHBoxLayout(track)
+    fill_h.setContentsMargins(0, 0, 0, 0)
+    fill_h.setSpacing(0)
+    fill = QFrame()
+    fill.setStyleSheet(f"background: {WARN}; border-radius: 2px;")
+    fill_h.addWidget(fill, max(1, int(round(max(0.0, min(1.0, ratio)) * 100))))
+    fill_h.addStretch(max(1, 100 - int(round(max(0.0, min(1.0, ratio)) * 100))))
+    v.addWidget(track)
+    return w
+
+
+def _make_chips(items: list[str]) -> QWidget:
+    """Small label chips (e.g. proxy protocols)."""
+    w = QWidget()
+    h = QHBoxLayout(w)
+    h.setContentsMargins(0, 0, 0, 0)
+    h.setSpacing(4)
+    for item in items[:6]:
+        chip = QLabel(item)
+        chip.setStyleSheet(
+            f"background: {BG_ELEV}; color: {FG_DIM}; "
+            f"border: 1px solid {BORDER}; border-radius: 3px; "
+            f"padding: 1px 6px; font-size: 10px;"
+        )
+        h.addWidget(chip)
+    h.addStretch(1)
+    return w
+
+
+# ── Per-section refreshers ────────────────────────────────────────────────
+
+def _refresh_llama(tile: _StatusTile, llama: dict) -> None:
+    if not llama.get("enabled"):
+        tile.set_state("mute")
+        tile.set_value("○ Disabled")
+        tile.set_sub("")
+        tile.set_viz(None)
+        return
+    if llama.get("alive"):
+        tile.set_state("ok")
+        tile.set_value(f"● {llama.get('active_model', '—')}")
+        bits = []
+        inflight = int(llama.get("inflight", 0) or 0)
+        if inflight:
+            bits.append(f"{inflight} in-flight")
+        else:
+            bits.append("Ready")
+        tile.set_sub(" · ".join(bits))
+        idle_limit = float(llama.get("idle_unload_sec", 0) or 0)
+        idle_rem = float(llama.get("idle_remaining_sec", 0) or 0)
+        if idle_limit > 0 and idle_rem > 0 and not inflight:
+            ratio = max(0.0, min(1.0, idle_rem / idle_limit))
+            tile.set_viz(_make_progress(ratio, f"Auto-unload in {int(idle_rem)}s"))
+        else:
+            tile.set_viz(None)
+    else:
+        tile.set_state("mute")
+        tile.set_value("○ Idle")
+        tile.set_sub("Loads on first request")
+        tile.set_viz(None)
+
+
+def _refresh_proxy(tile: _StatusTile, proxy: dict) -> None:
+    if not proxy.get("enabled"):
+        tile.set_state("mute")
+        tile.set_value("○ Disabled")
+        tile.set_sub("")
+        tile.set_viz(None)
+        return
+    tile.set_state("ok")
+    tile.set_value(f"● :{proxy.get('port', '?')}")
+    tile.set_sub("")
+    protocols = [format_protocol(p) for p in proxy.get("protocols", [])]
+    tile.set_viz(_make_chips(protocols) if protocols else None)
+
+
+def _refresh_mcp(tile: _StatusTile, mcp: dict) -> None:
+    if not mcp.get("enabled"):
+        tile.set_state("mute")
+        tile.set_value("○ Disabled")
+        tile.set_sub("")
+        tile.set_viz(None)
+        return
+    tile.set_state("ok")
+    tile.set_value(f"● :{mcp.get('port', '?')}")
+    tools = mcp.get("registered_tools", []) or []
+    tile.set_sub(f"{len(tools)} tools registered")
+    tile.set_viz(_make_dots(len(tools), len(tools), on_color=ACCENT))
+
+
+def _refresh_sessions(tile: _StatusTile, sessions: list[dict]) -> None:
+    alive = sum(1 for s in sessions if s.get("alive"))
+    total = len(sessions)
+    if total == 0:
+        tile.set_state("mute")
+    else:
+        tile.set_state("ok" if alive else "warn")
+    tile.set_value(f"{alive} / {total}")
+    tile.set_sub("Active / Total")
+    if total > 0:
+        tile.set_viz(_make_dots(total, alive, on_color=OK, off_color=FG_MUTE))
+    else:
+        tile.set_viz(None)
+
+
+def _refresh_docgraph(tile: _StatusTile, dg: dict) -> None:
+    host = (dg.get("host") or {}) if isinstance(dg, dict) else {}
+    if not host.get("enabled") and not host.get("alive"):
+        tile.set_state("mute")
+        tile.set_value("○ Disabled")
+        tile.set_sub("")
+        tile.set_viz(None)
+        return
+    err = host.get("last_error")
+    alive = bool(host.get("alive"))
+    if alive:
+        tile.set_state("ok")
+        tile.set_value(f"● :{host.get('port', '?')}")
+    elif err:
+        tile.set_state("err")
+        tile.set_value("✗ Failed")
+    else:
+        tile.set_state("warn")
+        tile.set_value("○ Stopped")
+
+    # Roots total comes from the configured settings (since the live host
+    # status doesn't carry the slug list — keeps this widget independent
+    # of an HTTP probe).
+    roots = list(get_path(read_settings(), "docgraph.roots", []) or [])
+    roots = [r for r in roots if isinstance(r, dict) and (r.get("path") or "").strip()]
+    n_roots = len(roots)
+    n_watch = sum(1 for r in roots if r.get("watch"))
+    bridged = int(host.get("bridged", 0) or 0)
+    bits = []
+    if n_roots:
+        bits.append(f"{n_roots} root{'s' if n_roots != 1 else ''}")
+    if n_watch:
+        bits.append(f"{n_watch} watching")
+    if bridged:
+        bits.append(f"{bridged} tools bridged")
+    if err and not alive:
+        bits = [err]
+    tile.set_sub(" · ".join(bits) if bits else ("alive" if alive else ""))
+
+    if n_roots:
+        tile.set_viz(_make_dots(n_roots, n_watch if alive else 0, on_color=OK, off_color=ACCENT))
+    elif err and not alive:
+        tile.set_viz(None)
+    else:
+        tile.set_viz(None)
 
 
 # ══════════════════════════════════════════════════════════════════════
