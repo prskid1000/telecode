@@ -3471,7 +3471,6 @@ def _raw(window) -> QWidget:
 
 
 def _docgraph(window) -> QWidget:
-    from PySide6.QtWidgets import QTabWidget
     from tray.qt_docgraph import build_docgraph_tabs
     return build_docgraph_tabs(window)
 
