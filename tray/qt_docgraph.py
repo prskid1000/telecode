@@ -119,6 +119,25 @@ def _log_hint(basename: str) -> QLabel:
     return lbl
 
 
+def _path_already_indexed(path: str) -> bool:
+    """Detect whether `path` already has a docgraph index on disk.
+
+    `<path>/.docgraph/graph.kuzu` is the marker — the indexer always
+    creates it, and a directory rather than a single file means we
+    can be lenient about what's inside (Kuzu writes several artefacts
+    under it). Used by `_RootRow` to distinguish 'CLI-indexed already'
+    from 'fresh repo, never indexed' when telecode itself has no run
+    record for the path."""
+    if not path:
+        return False
+    try:
+        from pathlib import Path as _Path
+        marker = _Path(path).expanduser() / ".docgraph" / "graph.kuzu"
+        return marker.exists()
+    except (OSError, ValueError):
+        return False
+
+
 def _format_ago(ts: float | None) -> str:
     import time as _time
     if not ts:
@@ -493,8 +512,16 @@ class _RootRow(QFrame):
             return
         self._index_btn.setEnabled(True)
         if not s:
-            self._pill.setText("never indexed")
-            self._pill.setStyleSheet(f"color: {FG_MUTE};")
+            # No telecode-tracked run for this path — check the filesystem
+            # so we don't show 'never indexed' for a repo someone already
+            # indexed via the CLI directly.
+            already = _path_already_indexed(path)
+            if already:
+                self._pill.setText("indexed (on disk)")
+                self._pill.setStyleSheet(f"color: {OK};")
+            else:
+                self._pill.setText("not indexed")
+                self._pill.setStyleSheet(f"color: {FG_MUTE};")
             return
         ago = _format_ago(s.get("last_run", 0.0))
         status = s.get("last_status", "?")
