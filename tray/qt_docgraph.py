@@ -1,21 +1,24 @@
-"""DocGraph section builder — single sidebar entry, internal QTabWidget.
+"""DocGraph section builder — single sidebar entry, single scrollable page.
 
-Tabs: Index / Watch / Serve / MCP. Daemon lives at the bottom of the MCP tab
-since it pairs naturally with the MCP children (shared embedding daemon).
+Cards stack vertically: Binary → Index → Watch → Serve → MCP → Daemon. Each
+card carries its own form rows + Start/Stop/Restart + status pill. Live log
+tailing is delegated to the global Logs section — it picks up
+`docgraph_<role>.log` plus per-MCP-child `docgraph_mcp_<slug>.log` files
+automatically.
 
-Each tab is form rows + Start/Stop/Restart + status pill. Live log tailing
-is delegated to the global Logs section — it picks up `docgraph_<role>.log`
-plus per-MCP-child `docgraph_mcp_<slug>.log` files automatically.
+The previous tabbed layout caused QTabWidget pane-sizing headaches (cards
+stretching to fill the tallest tab's height). A flat stacked page matches the
+llama.cpp section's pattern and avoids them entirely.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Callable
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTabWidget,
+    QFrame, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
 )
 
 from tray.qt_widgets import row_label
@@ -32,8 +35,12 @@ log = logging.getLogger("telecode.tray.docgraph")
 
 
 def build_docgraph_tabs(window) -> QWidget:
+    """Build the DocGraph section. Name kept for qt_sections._docgraph caller."""
     scroll, _, layout = _page()
 
+    refresh_fns: list[Callable[[], None]] = []
+
+    # Binary card — single row, autodetect chain documented in the help text.
     binary_card, bb = _card("Binary")
     bb.addWidget(_line_row(
         "docgraph.binary",
@@ -44,48 +51,27 @@ def build_docgraph_tabs(window) -> QWidget:
     ))
     layout.addWidget(binary_card)
 
-    tabs = QTabWidget()
-    tabs.setStyleSheet(
-        f"QTabWidget::pane {{ background: {BG}; border: 1px solid {BORDER};"
-        f" border-top-left-radius: 0; border-top-right-radius: 8px;"
-        f" border-bottom-left-radius: 8px; border-bottom-right-radius: 8px; }}"
-        f" QTabBar::tab {{ background: transparent; color: {FG_DIM};"
-        f" padding: 6px 14px; border: 1px solid transparent; border-bottom: none; }}"
-        f" QTabBar::tab:selected {{ background: {BG}; color: {FG};"
-        f" border: 1px solid {BORDER}; border-bottom: 1px solid {BG}; }}"
-        f" QTabBar::tab:hover:!selected {{ color: {FG}; }}"
-    )
-    tabs.addTab(_build_index_tab(window), "Index")
-    tabs.addTab(_build_watch_tab(window), "Watch")
-    tabs.addTab(_build_serve_tab(window), "Serve")
-    tabs.addTab(_build_mcp_tab(window),   "MCP")
+    # Stacked cards — each builder returns (card, refresh_fn).
+    for build in (
+        _build_index_card,
+        _build_watch_card,
+        _build_serve_card,
+        _build_mcp_card,
+        _build_daemon_card,
+    ):
+        card, refresh = build(window)
+        layout.addWidget(card)
+        if refresh is not None:
+            refresh_fns.append(refresh)
 
-    last = str(read_settings().get("tray", {}).get("docgraph", {}).get("last_tab", "") or "")
-    if last:
-        for i in range(tabs.count()):
-            if tabs.tabText(i).lower() == last.lower():
-                tabs.setCurrentIndex(i)
-                break
-
-    def _on_tab(i: int):
-        try:
-            patch_settings("tray.docgraph.last_tab", tabs.tabText(i))
-        except Exception:
-            pass
-    tabs.currentChanged.connect(_on_tab)
-
-    layout.addWidget(tabs)
     layout.addStretch(1)
 
     def refresh():
-        for i in range(tabs.count()):
-            page = tabs.widget(i)
-            r = getattr(page, "refresh", None)
-            if callable(r):
-                try:
-                    r()
-                except Exception:
-                    pass
+        for fn in refresh_fns:
+            try:
+                fn()
+            except Exception:
+                pass
     scroll.refresh = refresh  # type: ignore[attr-defined]
     return scroll
 
@@ -123,20 +109,6 @@ def _status_pill(getter):
     return pill, _refresh
 
 
-def _tab_page() -> tuple[QWidget, QVBoxLayout]:
-    """Plain (non-scrolling) tab body. Outer page already scrolls.
-
-    Pins content to the top so QTabWidget's tallest-tab sizing doesn't
-    stretch shorter tabs' cards into a tall grey rectangle.
-    """
-    page = QWidget()
-    layout = QVBoxLayout(page)
-    layout.setContentsMargins(8, 8, 8, 8)
-    layout.setSpacing(10)
-    layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-    return page, layout
-
-
 def _log_hint(basename: str) -> QLabel:
     lbl = QLabel(f"📜 Live log → Logs section · file: <code>{basename}</code>")
     lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
@@ -144,11 +116,9 @@ def _log_hint(basename: str) -> QLabel:
     return lbl
 
 
-# ── Index tab ────────────────────────────────────────────────────────────────
+# ── Index card ───────────────────────────────────────────────────────────────
 
-def _build_index_tab(window) -> QWidget:
-    page, layout = _tab_page()
-
+def _build_index_card(window) -> tuple[QFrame, Callable[[], None]]:
     card, body = _card("Index", "Per-path reindex. Incremental by default; Force = --full wipe + rebuild.")
 
     body.addWidget(_section_header("Paths"))
@@ -209,14 +179,10 @@ def _build_index_tab(window) -> QWidget:
     run_all_btn.clicked.connect(_all)
     cancel_btn.clicked.connect(_on_cancel)
 
-    layout.addWidget(card)
-    layout.addStretch(1)
-
     def refresh():
         refresh_status()
         paths_widget.refresh()
-    page.refresh = refresh  # type: ignore[attr-defined]
-    return page
+    return card, refresh
 
 
 def _index_status_text() -> tuple[bool, str]:
@@ -234,9 +200,9 @@ def _index_status_text() -> tuple[bool, str]:
 # ── Per-path paths editor + per-row Index/Force buttons ──────────────────────
 
 class _PathsTable(QWidget):
-    """Custom paths editor for the Index tab.
+    """Custom paths editor for the Index card.
 
-    Each row: editable path field, "▶ Index" button, "⟳ Force" button,
+    Each row: editable path field, Force toggle, ▶ Index button,
     status pill ("never" / "2m ago · ok" / "running"), remove (✕).
     Persists to `docgraph.index.paths` on every edit.
     """
@@ -431,10 +397,10 @@ def _format_ago(ts: float) -> str:
     return f"{delta // 86400}d ago"
 
 
-# ── Watch tab ────────────────────────────────────────────────────────────────
+# ── Watch / Serve cards (generic) ────────────────────────────────────────────
 
-def _build_watch_tab(window) -> QWidget:
-    return _build_role_tab(
+def _build_watch_card(window) -> tuple[QFrame, Callable[[], None]]:
+    return _build_role_card(
         window, role="watch",
         title="Watch",
         sub="docgraph watch — auto-reindex on changes. Holds writer lock; stop Serve/MCP for the same path first.",
@@ -453,10 +419,8 @@ def _build_watch_tab(window) -> QWidget:
     )
 
 
-# ── Serve tab ────────────────────────────────────────────────────────────────
-
-def _build_serve_tab(window) -> QWidget:
-    return _build_role_tab(
+def _build_serve_card(window) -> tuple[QFrame, Callable[[], None]]:
+    return _build_role_card(
         window, role="serve",
         title="Serve",
         sub="docgraph serve — web UI + JSON API. Read-only DB. Use the tray menu's 'Open Document Index' entry to open it in a browser.",
@@ -475,11 +439,79 @@ def _build_serve_tab(window) -> QWidget:
     )
 
 
-# ── MCP tab (+ Daemon at bottom) ─────────────────────────────────────────────
+def _build_role_card(window, *, role: str, title: str, sub: str,
+                      rows: list[tuple], status_fn, log_basename: str,
+                      get_supervisor) -> tuple[QFrame, Callable[[], None]]:
+    card, body = _card(title, sub)
+    for kind, *args in rows:
+        if kind == "toggle":
+            path, label, help_text = args
+            body.addWidget(_toggle_row(path, label, help_text))
+        elif kind == "line":
+            path, label, help_text = args
+            body.addWidget(_line_row(path, label, "", help_text))
+        elif kind == "port":
+            path, label, help_text = args
+            body.addWidget(_number_row(path, label, 1, 65535, 1, 0, "", help_text))
 
-def _build_mcp_tab(window) -> QWidget:
-    page, layout = _tab_page()
+    action_row = QHBoxLayout()
+    action_row.setSpacing(8)
+    start_btn = QPushButton("▶ Start"); start_btn.setProperty("class", "primary")
+    stop_btn  = QPushButton("Stop");    stop_btn.setProperty("class", "danger")
+    restart_btn = QPushButton("Restart")
+    pill, refresh_status = _status_pill(status_fn)
+    action_row.addWidget(start_btn)
+    action_row.addWidget(stop_btn)
+    action_row.addWidget(restart_btn)
+    action_row.addWidget(pill, 1)
+    body.addLayout(action_row)
+    body.addWidget(_log_hint(log_basename))
 
+    def _on_start():
+        async def _go():
+            sup = get_supervisor()
+            await sup.start()
+        _run(window, _go)
+
+    def _on_stop():
+        async def _go():
+            sup = get_supervisor()
+            await sup.stop()
+        _run(window, _go)
+
+    def _on_restart():
+        async def _go():
+            sup = get_supervisor()
+            await sup.stop()
+            await sup.start()
+        _run(window, _go)
+
+    start_btn.clicked.connect(_on_start)
+    stop_btn.clicked.connect(_on_stop)
+    restart_btn.clicked.connect(_on_restart)
+
+    return card, refresh_status
+
+
+def _role_status_text(role: str):
+    def _get():
+        try:
+            from docgraph.process import status_snapshot
+            s = status_snapshot().get(role, {})
+        except Exception as exc:
+            return False, f"err: {exc}"
+        if s.get("alive"):
+            pid = s.get("pid"); port = s.get("port")
+            extra = f" pid={pid}" if pid else ""
+            extra += f" port={port}" if port else ""
+            return True, f"alive{extra}"
+        return False, "stopped" + (" (enabled)" if s.get("enabled") else "")
+    return _get
+
+
+# ── MCP card ─────────────────────────────────────────────────────────────────
+
+def _build_mcp_card(window) -> tuple[QFrame, Callable[[], None]]:
     card, body = _card(
         "MCP",
         "One docgraph mcp child per repo path. Each child's tools are bridged into the proxy as managed tools."
@@ -543,27 +575,46 @@ def _build_mcp_tab(window) -> QWidget:
     stop_btn.clicked.connect(_stop)
     restart_btn.clicked.connect(_restart)
 
-    layout.addWidget(card)
+    def refresh():
+        try:
+            from docgraph.process import get_mcp
+            kids = get_mcp().status()
+        except Exception:
+            kids = []
+        if not kids:
+            children_lbl.setText("(no children)")
+        else:
+            lines = []
+            for c in kids:
+                pid = c.get("pid") or "?"
+                state = "✓ alive" if c.get("alive") else "✗ down"
+                lines.append(f"{state}  {c.get('slug','?')}  port={c.get('port')}  pid={pid}  bridged={c.get('bridged', 0)}")
+            children_lbl.setText("\n".join(lines))
+    refresh()
+    return card, refresh
 
-    # ── Daemon block ────────────────────────────────────────────────────
-    dcard, dbody = _card("Daemon",
-                         "docgraph daemon start — shared loopback embedding daemon. Optional.")
-    dbody.addWidget(_toggle_row("docgraph.daemon.enabled",      "Enabled",      "Master toggle."))
-    dbody.addWidget(_toggle_row("docgraph.daemon.auto_start",   "Auto-start",   "Spawn at boot if Enabled."))
-    dbody.addWidget(_toggle_row("docgraph.daemon.auto_restart", "Auto-restart", "Re-spawn on unexpected exit."))
-    dbody.addWidget(_number_row("docgraph.daemon.port", "Port", 1024, 65535, 1, 0,
-                                  "", "Loopback only. Default 5577."))
-    dbody.addWidget(_line_row("docgraph.daemon.model", "Model",
-                                "BAAI/bge-small-en-v1.5",
-                                "Must match what your repos were indexed with."))
-    dbody.addWidget(_toggle_row("docgraph.daemon.gpu", "GPU", "Loads on GPU via ONNX Runtime."))
+
+# ── Daemon card ──────────────────────────────────────────────────────────────
+
+def _build_daemon_card(window) -> tuple[QFrame, Callable[[], None] | None]:
+    card, body = _card("Daemon",
+                       "docgraph daemon start — shared loopback embedding daemon. Optional.")
+    body.addWidget(_toggle_row("docgraph.daemon.enabled",      "Enabled",      "Master toggle."))
+    body.addWidget(_toggle_row("docgraph.daemon.auto_start",   "Auto-start",   "Spawn at boot if Enabled."))
+    body.addWidget(_toggle_row("docgraph.daemon.auto_restart", "Auto-restart", "Re-spawn on unexpected exit."))
+    body.addWidget(_number_row("docgraph.daemon.port", "Port", 1024, 65535, 1, 0,
+                                "", "Loopback only. Default 5577."))
+    body.addWidget(_line_row("docgraph.daemon.model", "Model",
+                              "BAAI/bge-small-en-v1.5",
+                              "Must match what your repos were indexed with."))
+    body.addWidget(_toggle_row("docgraph.daemon.gpu", "GPU", "Loads on GPU via ONNX Runtime."))
 
     drow = QHBoxLayout()
     dstart = QPushButton("▶ Start"); dstart.setProperty("class", "primary")
     dstop  = QPushButton("Stop");    dstop.setProperty("class", "danger")
     drow.addWidget(dstart); drow.addWidget(dstop); drow.addStretch(1)
-    dbody.addLayout(drow)
-    dbody.addWidget(_log_hint("docgraph_daemon.log"))
+    body.addLayout(drow)
+    body.addWidget(_log_hint("docgraph_daemon.log"))
 
     def _dstart():
         async def _go():
@@ -580,103 +631,4 @@ def _build_mcp_tab(window) -> QWidget:
     dstart.clicked.connect(_dstart)
     dstop.clicked.connect(_dstop)
 
-    layout.addWidget(dcard)
-    layout.addStretch(1)
-
-    def refresh():
-        try:
-            from docgraph.process import get_mcp
-            kids = get_mcp().status()
-        except Exception:
-            kids = []
-        if not kids:
-            children_lbl.setText("(no children)")
-        else:
-            lines = []
-            for c in kids:
-                pid = c.get("pid") or "?"
-                state = "✓ alive" if c.get("alive") else "✗ down"
-                lines.append(f"{state}  {c.get('slug','?')}  port={c.get('port')}  pid={pid}  bridged={c.get('bridged', 0)}")
-            children_lbl.setText("\n".join(lines))
-    page.refresh = refresh  # type: ignore[attr-defined]
-    refresh()
-    return page
-
-
-# ── Generic role tab (Watch / Serve) ─────────────────────────────────────────
-
-def _build_role_tab(window, *, role: str, title: str, sub: str,
-                     rows: list[tuple], status_fn, log_basename: str,
-                     get_supervisor) -> QWidget:
-    page, layout = _tab_page()
-
-    card, body = _card(title, sub)
-    for kind, *args in rows:
-        if kind == "toggle":
-            path, label, help_text = args
-            body.addWidget(_toggle_row(path, label, help_text))
-        elif kind == "line":
-            path, label, help_text = args
-            body.addWidget(_line_row(path, label, "", help_text))
-        elif kind == "port":
-            path, label, help_text = args
-            body.addWidget(_number_row(path, label, 1, 65535, 1, 0, "", help_text))
-
-    action_row = QHBoxLayout()
-    action_row.setSpacing(8)
-    start_btn = QPushButton("▶ Start"); start_btn.setProperty("class", "primary")
-    stop_btn  = QPushButton("Stop");    stop_btn.setProperty("class", "danger")
-    restart_btn = QPushButton("Restart")
-    pill, refresh_status = _status_pill(status_fn)
-    action_row.addWidget(start_btn)
-    action_row.addWidget(stop_btn)
-    action_row.addWidget(restart_btn)
-    action_row.addWidget(pill, 1)
-    body.addLayout(action_row)
-    body.addWidget(_log_hint(log_basename))
-
-    def _on_start():
-        async def _go():
-            sup = get_supervisor()
-            await sup.start()
-        _run(window, _go)
-
-    def _on_stop():
-        async def _go():
-            sup = get_supervisor()
-            await sup.stop()
-        _run(window, _go)
-
-    def _on_restart():
-        async def _go():
-            sup = get_supervisor()
-            await sup.stop()
-            await sup.start()
-        _run(window, _go)
-
-    start_btn.clicked.connect(_on_start)
-    stop_btn.clicked.connect(_on_stop)
-    restart_btn.clicked.connect(_on_restart)
-
-    layout.addWidget(card)
-    layout.addStretch(1)
-
-    page.refresh = refresh_status  # type: ignore[attr-defined]
-    refresh_status()
-    return page
-
-
-def _role_status_text(role: str):
-    def _get():
-        try:
-            from docgraph.process import status_snapshot
-            s = status_snapshot().get(role, {})
-        except Exception as exc:
-            return False, f"err: {exc}"
-        if s.get("alive"):
-            pid = s.get("pid"); port = s.get("port")
-            extra = f" pid={pid}" if pid else ""
-            extra += f" port={port}" if port else ""
-            return True, f"alive{extra}"
-        return False, "stopped" + (" (enabled)" if s.get("enabled") else "")
-    return _get
+    return card, None
