@@ -51,6 +51,7 @@ def build_docgraph_tabs(window) -> QWidget:
         "docgraph",
         "Path to docgraph executable. Bare name = use PATH. Empty = autodetect "
         "(which → settings-dir venv → ~/.local/bin → ~/.docgraph venv).",
+        cli="resolves the `docgraph` CLI invoked everywhere below",
     ))
     layout.addWidget(binary_card)
 
@@ -146,10 +147,13 @@ def _build_host_card(window) -> tuple[QFrame, Callable[[], None]]:
                                 "Start the host when telecode boots. Independent of Enabled."))
     body.addWidget(_toggle_row("docgraph.host.auto_restart", "Auto-restart",
                                 "Re-spawn on unexpected exit."))
-    body.addWidget(_line_row("docgraph.host.host", "Bind Host", "127.0.0.1"))
-    body.addWidget(_number_row("docgraph.host.port", "Bind Port", 1024, 65535, 1, 0))
+    body.addWidget(_line_row("docgraph.host.host", "Bind Host", "127.0.0.1",
+                              cli="docgraph host --host"))
+    body.addWidget(_number_row("docgraph.host.port", "Bind Port", 1024, 65535, 1, 0,
+                                cli="docgraph host --port"))
     body.addWidget(_toggle_row("docgraph.host.gpu", "GPU embeddings",
-                                "Forwards DOCGRAPH_GPU=1 to the host process."))
+                                "Forwards DOCGRAPH_GPU=1 to the host process.",
+                                cli="DOCGRAPH_GPU=1 / docgraph host --gpu"))
 
     action_row = QHBoxLayout()
     action_row.setSpacing(8)
@@ -229,9 +233,9 @@ def _build_roots_card(window) -> tuple[QFrame, Callable[[], None]]:
     from tray.qt_widgets import Toggle as _Toggle
     all_force_lbl = QLabel("Full")
     all_force_lbl.setStyleSheet(f"color: {FG_DIM};")
-    all_force_lbl.setToolTip("Pass --full to every root when running 'Index all'")
+    all_force_lbl.setToolTip("docgraph index --full   (wipe + rebuild). Off = incremental.")
     all_force = _Toggle()
-    all_force.setToolTip("Pass --full to every root when running 'Index all'")
+    all_force.setToolTip("docgraph index --full   (wipe + rebuild). Off = incremental.")
     run_all_btn = QPushButton("▶ Index all roots")
     cancel_btn = QPushButton("Cancel")
     cancel_btn.setProperty("class", "danger")
@@ -392,18 +396,27 @@ class _RootRow(QFrame):
         h.addWidget(self._edit, 1)
 
         self._index_btn = QPushButton("▶ Index")
-        self._index_btn.setToolTip("Run docgraph index for this root")
+        self._index_btn.setToolTip(
+            "POST /api/admin/index?root=<slug>  if host is alive,\n"
+            "else falls back to:  docgraph index <path>"
+        )
         self._index_btn.clicked.connect(self._trigger_index)
         h.addWidget(self._index_btn)
 
         watch_lbl = QLabel("Watch")
         watch_lbl.setStyleSheet(f"color: {FG_DIM};")
-        watch_lbl.setToolTip("Live reindex on change. Restart host to apply.")
+        watch_lbl.setToolTip(
+            "Forwards as `docgraph host --watch <path>`. "
+            "Restart the host to apply a flipped flag."
+        )
         h.addWidget(watch_lbl)
         self._watch = Toggle()
         self._watch.setChecked(bool(watch))
         self._watch.toggled.connect(self._on_watch_toggled)
-        self._watch.setToolTip("Live reindex on change. Restart host to apply.")
+        self._watch.setToolTip(
+            "Forwards as `docgraph host --watch <path>`. "
+            "Restart the host to apply a flipped flag."
+        )
         h.addWidget(self._watch)
 
         self._pill = QLabel("…")
@@ -489,16 +502,20 @@ def _build_llm_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     )
     body.addWidget(_line_row("docgraph.llm.model", "Model",
                               "qwen3.6-35b",
-                              "Empty = off. Setting any value enables --llm-model."))
-    body.addWidget(_line_row("docgraph.llm.host", "Host", "localhost"))
-    body.addWidget(_number_row("docgraph.llm.port", "Port", 1, 65535, 1, 0))
+                              "Empty = off. Setting any value enables --llm-model.",
+                              cli="docgraph index --llm-model"))
+    body.addWidget(_line_row("docgraph.llm.host", "Host", "localhost",
+                              cli="docgraph index --llm-host"))
+    body.addWidget(_number_row("docgraph.llm.port", "Port", 1, 65535, 1, 0,
+                                cli="docgraph index --llm-port"))
     body.addWidget(_enum_row_strs(
         "docgraph.llm.format", "Format",
         [("OpenAI-compatible", "openai"), ("Anthropic-compatible", "anthropic")],
         "Wire format for the local LLM endpoint.",
     ))
     body.addWidget(_number_row("docgraph.llm.max_tokens", "Max Tokens",
-                                10, 4096, 50, 0))
+                                10, 4096, 50, 0,
+                                cli="docgraph index --llm-max-tokens"))
     return card, None
 
 
@@ -511,9 +528,12 @@ def _build_embeddings_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     )
     body.addWidget(_line_row("docgraph.embeddings.model", "Model",
                               "BAAI/bge-small-en-v1.5",
-                              "Empty = docgraph default. Sets DOCGRAPH_EMBED_MODEL."))
+                              "Empty = docgraph default. Sets DOCGRAPH_EMBED_MODEL.",
+                              cli="DOCGRAPH_EMBED_MODEL=…"))
     body.addWidget(_toggle_row("docgraph.embeddings.gpu", "GPU embeddings",
-                                "Requires onnxruntime-gpu / -directml / -silicon installed."))
+                                "Requires onnxruntime-gpu / -directml / -silicon installed.",
+                                cli="docgraph index --gpu"))
     body.addWidget(_number_row("docgraph.index.workers", "Index workers",
-                                0, 64, 1, 0, "", "0 = docgraph default"))
+                                0, 64, 1, 0, "", "0 = docgraph default",
+                                cli="docgraph index --workers"))
     return card, None

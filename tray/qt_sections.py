@@ -108,7 +108,8 @@ def _row(left: QWidget, right: QWidget) -> QWidget:
 
 
 def _toggle_row(path: str, label: str, help_text: str = "",
-                enabled_fn: Callable[[], bool] | None = None) -> QWidget:
+                enabled_fn: Callable[[], bool] | None = None,
+                cli: str = "") -> QWidget:
     """Boolean toggle row. Writes settings.json + config.reload on change."""
     t = Toggle()
     t.setChecked(bool(get_path(read_settings(), path, False)))
@@ -119,7 +120,8 @@ def _toggle_row(path: str, label: str, help_text: str = "",
         patch_settings(path, t.isChecked())
     t.stateChanged.connect(_on)
 
-    return _row(row_label(label, help_text, path), _wrap_align(t, Qt.AlignmentFlag.AlignLeft))
+    return _row(row_label(label, help_text, path, cli),
+                _wrap_align(t, Qt.AlignmentFlag.AlignLeft))
 
 
 def _wrap_align(widget: QWidget, alignment) -> QWidget:
@@ -134,7 +136,7 @@ def _wrap_align(widget: QWidget, alignment) -> QWidget:
 def _number_row(path: str, label: str,
                 minimum: float, maximum: float,
                 step: float = 0.01, decimals: int = 2, unit: str = "",
-                help_text: str = "") -> QWidget:
+                help_text: str = "", cli: str = "") -> QWidget:
     """Numeric row (text input + slider, linked)."""
     ne = NumberEditor(minimum, maximum, step, decimals, unit)
     cur = get_path(read_settings(), path, minimum)
@@ -143,7 +145,7 @@ def _number_row(path: str, label: str,
     except (TypeError, ValueError):
         ne.setValue(float(minimum))
     ne.valueChanged.connect(lambda v: patch_settings(path, v if decimals > 0 else int(round(v))))
-    return _row(row_label(label, help_text, path), ne)
+    return _row(row_label(label, help_text, path, cli), ne)
 
 
 def _enum_row(path: str, label: str, options: list[tuple[str, Any]],
@@ -2342,13 +2344,14 @@ _CACHE_TYPES = [
 ]
 
 
-def _line_row(path: str, label: str, placeholder: str = "", help_text: str = "") -> QWidget:
+def _line_row(path: str, label: str, placeholder: str = "",
+              help_text: str = "", cli: str = "") -> QWidget:
     """Free-text string row."""
     le = QLineEdit()
     le.setPlaceholderText(placeholder)
     le.setText(str(get_path(read_settings(), path, "") or ""))
     le.editingFinished.connect(lambda: patch_settings(path, le.text()))
-    return _row(row_label(label, help_text, path), le)
+    return _row(row_label(label, help_text, path, cli), le)
 
 
 def _code_row(path: str, label: str, placeholder: str = "",
