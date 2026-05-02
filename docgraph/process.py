@@ -78,6 +78,7 @@ class _BaseSupervisor:
         self._restart_task: Optional[asyncio.Task] = None
         self._slug: str | None = None
         self._port: int | None = None
+        self._last_error: str | None = None
 
     def alive(self) -> bool:
         return _alive(self._proc)
@@ -91,6 +92,9 @@ class _BaseSupervisor:
     def started_at(self) -> float:
         return self._started_at
 
+    def last_error(self) -> str | None:
+        return self._last_error
+
     def log_path(self) -> str:
         return dg_cfg.log_path(self.role, self._slug)
 
@@ -98,7 +102,15 @@ class _BaseSupervisor:
         async with self._lock:
             if self.alive():
                 return
-            await self._start_locked()
+            try:
+                await self._start_locked()
+                self._last_error = None
+            except Exception as exc:
+                # Surface to the UI via status_snapshot() instead of vanishing
+                # into the asyncio task void. The exception is also logged.
+                self._last_error = str(exc)
+                log.error("docgraph %s start failed: %s", self.role, exc)
+                raise
 
     async def stop(self) -> None:
         async with self._lock:
@@ -721,6 +733,7 @@ def status_snapshot() -> dict:
             "alive":   bool(_WATCH and _WATCH.alive()),
             "pid":     (_WATCH.pid() if _WATCH else None),
             "port":    (_WATCH.port() if _WATCH else None),
+            "last_error": (_WATCH.last_error() if _WATCH else None),
             "log_path": dg_cfg.log_path("watch"),
         },
         "serve":    {
@@ -728,6 +741,7 @@ def status_snapshot() -> dict:
             "alive":   bool(_SERVE and _SERVE.alive()),
             "pid":     (_SERVE.pid() if _SERVE else None),
             "port":    (_SERVE.port() if _SERVE else None),
+            "last_error": (_SERVE.last_error() if _SERVE else None),
             "log_path": dg_cfg.log_path("serve"),
         },
         "daemon":   {
@@ -735,6 +749,7 @@ def status_snapshot() -> dict:
             "alive":   bool(_DAEMON and _DAEMON.alive()),
             "pid":     (_DAEMON.pid() if _DAEMON else None),
             "port":    (_DAEMON.port() if _DAEMON else None),
+            "last_error": (_DAEMON.last_error() if _DAEMON else None),
             "log_path": dg_cfg.log_path("daemon"),
         },
         "mcp":      {
