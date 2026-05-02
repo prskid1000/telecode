@@ -618,59 +618,44 @@ Adding a new managed tool needs zero status-rendering code — `format_visibilit
 
 ### `docgraph` — local code graph supervisor (optional)
 
-Telecode can run [DocGraph](https://github.com/prithwirajs/docgraph) subprocesses (`index` / `watch` / `serve` / `daemon` / `mcp`) and bridge their MCP tools into the proxy as managed tools, auto-injected for the local model. Off by default — flip individual `enabled` / `auto_start` flags to opt in.
+Telecode supervises **one** [DocGraph](https://github.com/prithwirajs/docgraph) host process (`docgraph host --root … --root … --port <p>`) covering every configured root. The host serves the web UI, the JSON API, **and** the MCP HTTP transport on a single port (`/mcp` is mounted inside the FastAPI host). Telecode bridges those MCP tools into the proxy's managed-tools registry as `docgraph_<tool>` — agents pick which repo to query per call via the closed-enum `root` argument the host emits in the tool schema.
 
 | Key | Description |
 |---|---|
 | `binary` | Path to the `docgraph` CLI. Empty = autodetect via `shutil.which("docgraph")`, then `<settings_dir>/.venv/Scripts/docgraph.exe`, `~/.local/bin/docgraph.bat`, `~/.docgraph/.venv/Scripts/docgraph.exe`. Same shape as `llamacpp.binary`. |
-| `default_path` | Used by Index / Watch / Serve when their own `path` is empty. |
+
+#### `docgraph.host`
+
+| Key | Description |
+|---|---|
+| `enabled` | Live-state flag. Off here = host is currently stopped. Doesn't gate Auto-start. |
+| `auto_start` | Spawn the host at `main.py:_post_init`. **Independent of `enabled`** — Auto-start fires even when Enabled is off, so the host comes up at boot regardless of the live-state flag. |
+| `auto_restart` | Re-spawn on unexpected exit. |
+| `host`, `port` | Bind address. Defaults: `127.0.0.1`, `5500`. |
+| `gpu` | Forwarded via `DOCGRAPH_GPU=1`. The embedder transparently falls back to CPU if a GPU session is poisoned mid-inference (e.g. another process saturating the GPU), so this is safe to leave on. |
+
+#### `docgraph.roots`
+
+Array of `{path, watch}` entries. Each `path` is registered with the host as `--root <path>`; entries with `watch: true` get `--watch <path>` so the host's per-root awatch task incrementally reindexes on file changes. **The workspace is immutable for a host's lifetime** — adding/removing a root or flipping a `watch` flag requires a host restart (telecode does this automatically when settings are patched and the user clicks Restart).
+
+#### `docgraph.llm` and `docgraph.embeddings`
+
+| Key | Description |
+|---|---|
+| `llm.{model, host, port, format, max_tokens}` | Optional LLM-augmented docstrings. Setting `llm.model` is enough to enable. Passed to `docgraph index` as `--llm-*` flags. |
+| `embeddings.{model, gpu}` | Embedding model + GPU opt-in, shared by both the index runner and the host. |
 
 #### `docgraph.index`
 
 | Key | Description |
 |---|---|
-| `paths` | List of repos to index in sequence (each gets its own subprocess invocation). |
-| `full` | Pass `--full` (wipe + rebuild). Default `false` (incremental). |
-| `workers`, `gpu`, `embedding_model` | Forwarded as flags / env vars. `0` workers = docgraph default. |
-| `llm_model`, `llm_host`, `llm_port`, `llm_format`, `llm_max_tokens` | Optional LLM-augmented docstrings. Setting `llm_model` is enough to enable. |
+| `workers` | Optional override for the indexer's process pool. `0` = docgraph default. |
 
-#### `docgraph.watch` / `docgraph.serve`
+**Index runner.** A one-shot per root, triggered manually from the tray (Index button). Two routes: **(a)** if the host is alive, telecode POSTs `http://host:port/api/admin/index?root=<slug>` and the host runs the index pass in-process via its workspace's writer-lock dance — captured Rich progress is streamed back in the response and written to `docgraph_index.log`. **(b)** if the host is down, telecode falls back to spawning `docgraph index <path>` as a subprocess. The host route is preferred because Kuzu's writer lock is exclusive vs. any other connection on the same DB file; running both at once would error out with "Could not set lock on file".
 
-| Key | Description |
-|---|---|
-| `enabled` | Master toggle. Off → kill subprocess + free its port. |
-| `auto_start` | Spawn at `main.py:_post_init`. |
-| `auto_restart` | Re-spawn on unexpected exit. |
-| `path` | Repo to watch / serve. Falls back to `docgraph.default_path`. |
-| `host`, `port` | Bind address (Serve / Watch+`serve_too`). |
-| `serve_too` (Watch) | Pass `--serve` to run the web UI in the watcher process. |
-| `gpu` (Serve) | Forwarded via `DOCGRAPH_GPU=1`. |
+**MCP bridge.** When the host is reachable, telecode opens an MCP streamable-HTTP session against `http://host:port/mcp`, lists tools, and registers each in the proxy's managed-tools registry as `docgraph_<tool>` — appears in the **Managed** section grouped under a `DOCGRAPH` header with a master toggle that flips every child on/off in one click.
 
-#### `docgraph.daemon`
-
-| Key | Description |
-|---|---|
-| `enabled` / `auto_start` / `auto_restart` | Lifecycle. |
-| `port` | Loopback embedding daemon port (default `5577`). |
-| `model` | Embedding model the daemon loads. Must match what your repos were indexed with. |
-| `gpu` | Loads on GPU via ONNX Runtime. |
-
-#### `docgraph.mcp`
-
-Spawns one `docgraph mcp <path> --transport http` per `paths` entry on consecutive ports starting at `base_port` (each child gets `DOCGRAPH_PORT=base_port + i`). When a child reaches ready, telecode opens an MCP streamable-HTTP session, lists tools, and registers each in the proxy's managed-tools registry as `docgraph_<repo_basename>_<tool>` (or `docgraph_<tool>` for the single-repo case). Each bridged tool then appears in the **Managed** section with its own toggle (free, automatic).
-
-| Key | Description |
-|---|---|
-| `enabled` / `auto_start` / `auto_restart` | Lifecycle. |
-| `paths` | One repo per MCP child. |
-| `base_port` | First port (default `5600`). Each subsequent child uses `+1`. |
-| `host` | Bind address (default `127.0.0.1`). |
-| `gpu` | Forwarded via `DOCGRAPH_GPU=1`. |
-| `ready_timeout_sec` | How long to wait for `/mcp` to become reachable (default `30`). |
-
-**Lock coordination.** Watch and Index hold DocGraph's writer lock; Serve / MCP / Daemon are read-only. Starting Watch or Index for a path automatically stops Serve/MCP/Daemon for that path first; starting Serve / MCP for a path while Watch holds it is rejected with a clear error in the UI.
-
-**Logs.** `data/logs/docgraph_<role>[_<slug>].log`. Live tail in each DocGraph sub-tab; also picked up by the global Logs section.
+**Logs.** `data/logs/docgraph_host.log` (the long-running host child) + `data/logs/docgraph_index.log` (one-shot index runs, truncated per spawn). Live tail in the global Logs section.
 
 ### `tools.<key>` — CLI backends
 
@@ -912,6 +897,8 @@ voice/                 STT availability + transcription
 
 **Video encoding fails** -- Ensure ffmpeg is installed and on PATH.
 
-**DocGraph subprocess won't start** -- Check the per-role status pill in the DocGraph section, then `data/logs/docgraph_<role>.log`. If `docgraph.binary` is empty, telecode tries `shutil.which("docgraph")` then a few venv fallbacks; set the absolute path explicitly if those miss.
+**DocGraph host won't start** -- Check the Host card status pill in the DocGraph section, then `data/logs/docgraph_host.log`. If `docgraph.binary` is empty, telecode tries `shutil.which("docgraph")` then a few venv fallbacks; set the absolute path explicitly if those miss.
 
-**DocGraph bridge tools missing from the model's tool list** -- `docgraph.mcp.enabled` must be on AND each child must reach ready. The MCP tab status row shows pid/port/bridged-tool-count per child. Check `docgraph_mcp_<slug>.log` for spawn errors (most common: `.docgraph/` doesn't exist for the repo — run `docgraph index <path>` first).
+**DocGraph bridge tools missing from the model's tool list** -- The host must be alive AND `/mcp` must be reachable on its port. Look for `mcp.server.streamable_http_manager: ... session manager started` in `docgraph_host.log` — if it's missing, the FastMCP mount didn't initialize (this means the docgraph version is too old or its uvicorn `lifespan` is off). Most common spawn issue: a registered root has no `.docgraph/` yet — run an Index pass for it first.
+
+**DocGraph index fails with "Could not set lock on file"** -- A `docgraph index` subprocess and the running host both opened the same Kuzu DB. The index runner is supposed to route through `/api/admin/index` when the host is alive — check `docgraph_index.log` for "host route failed: ... falling back to subprocess" and resolve the underlying host-route error rather than disabling the host.
