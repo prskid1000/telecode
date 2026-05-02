@@ -693,6 +693,28 @@ async def autostart_all() -> None:
             log.error("docgraph mcp auto-start: %s", exc)
 
 
+async def start_all_enabled() -> None:
+    """Manual 'Start All' from the tray.
+
+    Starts every long-running supervisor whose `enabled` flag is set,
+    regardless of its `auto_start` flag. Same launch order as
+    `autostart_all()`. Errors are caught per-role so one failure doesn't
+    block the others — surfaced via `_BaseSupervisor._last_error`.
+    """
+    if dg_cfg.daemon_enabled():
+        try: await get_daemon().start()
+        except Exception as exc: log.error("docgraph daemon start-all: %s", exc)
+    if dg_cfg.serve_enabled():
+        try: await get_serve().start()
+        except Exception as exc: log.error("docgraph serve start-all: %s", exc)
+    if dg_cfg.watch_enabled():
+        try: await get_watch().start()
+        except Exception as exc: log.error("docgraph watch start-all: %s", exc)
+    if dg_cfg.mcp_enabled():
+        try: await get_mcp().start()
+        except Exception as exc: log.error("docgraph mcp start-all: %s", exc)
+
+
 async def shutdown_all() -> None:
     """Called from main.py:_post_shutdown. Reverse order: bridge -> mcp -> daemon -> serve -> watch."""
     if _MCP is not None:
