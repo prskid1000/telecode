@@ -187,8 +187,12 @@ class NumberEditor(QWidget):
 # Small helpers
 # ══════════════════════════════════════════════════════════════════════
 
-def row_label(text: str, help_text: str = "", path: str = "") -> QWidget:
-    """Two-line row label: human name + (optional) help text + key path."""
+def row_label(text: str, help_text: str = "", path: str = "",
+              cli: str = "") -> QWidget:
+    """Multi-line row label: human name + (optional) help text + key path
+    + optional `cli` hint (the underlying CLI flag this row maps to —
+    useful for sections like docgraph where the UI is a thin wrapper
+    over a CLI flag set)."""
     w = QWidget()
     v = QVBoxLayout(w)
     v.setContentsMargins(0, 0, 0, 0)
@@ -201,8 +205,11 @@ def row_label(text: str, help_text: str = "", path: str = "") -> QWidget:
         hl.setProperty("class", "row_help")
         hl.setWordWrap(True)
         v.addWidget(hl)
-    if path:
-        p = QLabel(path)
+    # Pack settings-key-path and CLI flag onto the same mono line so the
+    # row's vertical footprint doesn't grow when both are present.
+    pieces = [s for s in (path, cli) if s]
+    if pieces:
+        p = QLabel("  ·  ".join(pieces))
         p.setProperty("class", "key_path")
         v.addWidget(p)
     w.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
