@@ -140,9 +140,10 @@ def _build_host_card(window) -> tuple[QFrame, Callable[[], None]]:
     )
 
     body.addWidget(_toggle_row("docgraph.host.enabled", "Enabled",
-                                "Master toggle. Off = kill subprocess + free port."))
+                                "Live-state flag. Off here = host is stopped right now. "
+                                "Doesn't affect Auto-start at boot."))
     body.addWidget(_toggle_row("docgraph.host.auto_start", "Auto-start",
-                                "Start at boot if Enabled."))
+                                "Start the host when telecode boots. Independent of Enabled."))
     body.addWidget(_toggle_row("docgraph.host.auto_restart", "Auto-restart",
                                 "Re-spawn on unexpected exit."))
     body.addWidget(_line_row("docgraph.host.host", "Bind Host", "127.0.0.1"))
