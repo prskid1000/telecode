@@ -1,15 +1,13 @@
-"""DocGraph subprocess supervisors.
+"""DocGraph subprocess supervision — single host model.
 
-Five roles, one supervisor class each, modeled on `process.LlamaSupervisor`:
-    IndexRunner, WatchSupervisor, ServeSupervisor, DaemonSupervisor, McpSupervisor
+After the docgraph 2.2.0 rewrite, telecode supervises **one** docgraph
+host process. The host registers every configured root, exposes the web
+UI + JSON API + MCP HTTP on one port, and accepts a `root=<slug>` enum
+argument on every tool call to scope queries.
 
-Public surface used by main.py + the tray UI:
-    autostart_all(), shutdown_all()
-    get_watch() / get_serve() / get_daemon() / get_mcp() / get_index()
-
-Lock coordination (DocGraph's writer lock blocks readers — see its CLAUDE.md):
-    Watch / Index for path P  ->  stop Serve/MCP/Daemon for P first
-    Serve / MCP for path P     ->  reject if Watch holds P
+Public surface (used by main.py + the tray UI):
+    autostart_all() / shutdown_all()
+    get_index() / get_host()
 """
 from __future__ import annotations
 
@@ -20,7 +18,7 @@ import shutil
 import subprocess
 import sys
 import time
-from typing import Any, Optional
+from typing import Optional
 
 import aiohttp
 
@@ -33,7 +31,7 @@ from . import index_state
 log = logging.getLogger("telecode.docgraph")
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# ── Helpers ────────────────────────────────────────────────────────────────
 
 def _binary_or_raise() -> str:
     binary = dg_cfg.resolve_binary()
@@ -64,153 +62,12 @@ def _alive(proc: subprocess.Popen | None) -> bool:
     return bool(proc and proc.poll() is None)
 
 
-# ── Base supervisor (long-running) ───────────────────────────────────────────
-
-class _BaseSupervisor:
-    """Shared lifecycle for Watch / Serve / Daemon / one MCP child."""
-    role: str = "base"
-
-    def __init__(self) -> None:
-        self._proc: Optional[subprocess.Popen] = None
-        self._log_fp = None
-        self._lock = asyncio.Lock()
-        self._started_at: float = 0.0
-        self._restart_task: Optional[asyncio.Task] = None
-        self._slug: str | None = None
-        self._port: int | None = None
-        self._last_error: str | None = None
-
-    def alive(self) -> bool:
-        return _alive(self._proc)
-
-    def pid(self) -> int | None:
-        return self._proc.pid if self._proc else None
-
-    def port(self) -> int | None:
-        return self._port
-
-    def started_at(self) -> float:
-        return self._started_at
-
-    def last_error(self) -> str | None:
-        return self._last_error
-
-    def log_path(self) -> str:
-        return dg_cfg.log_path(self.role, self._slug)
-
-    async def start(self) -> None:
-        async with self._lock:
-            if self.alive():
-                return
-            try:
-                await self._start_locked()
-                self._last_error = None
-            except Exception as exc:
-                # Surface to the UI via status_snapshot() instead of vanishing
-                # into the asyncio task void. The exception is also logged.
-                self._last_error = str(exc)
-                log.error("docgraph %s start failed: %s", self.role, exc)
-                raise
-
-    async def stop(self) -> None:
-        async with self._lock:
-            await self._stop_locked()
-
-    async def restart(self) -> None:
-        await self.stop()
-        await self.start()
-
-    async def _start_locked(self) -> None:
-        raise NotImplementedError
-
-    async def _stop_locked(self) -> None:
-        proc = self._proc
-        self._proc = None
-        if self._restart_task and not self._restart_task.done():
-            self._restart_task.cancel()
-        self._restart_task = None
-        if proc and proc.poll() is None:
-            try:
-                kill_process_tree(proc.pid)
-            except Exception as exc:
-                log.warning("docgraph %s: graceful kill failed: %s", self.role, exc)
-            try:
-                proc.wait(timeout=4)
-            except subprocess.TimeoutExpired:
-                try:
-                    proc.kill()
-                    proc.wait(timeout=2)
-                except Exception:
-                    pass
-        if self._log_fp:
-            try:
-                self._log_fp.close()
-            except Exception:
-                pass
-            self._log_fp = None
-        if self._port:
-            try:
-                sweep_port(self._port, ("docgraph",))
-            except Exception:
-                pass
-
-    def _spawn(self, argv: list[str], extra_env: dict[str, str] | None = None) -> subprocess.Popen:
-        env = dict(os.environ)
-        if extra_env:
-            env.update(extra_env)
-        binary = argv[0]
-        argv[0] = shutil.which(binary) or binary
-        proc = subprocess.Popen(
-            argv,
-            stdout=self._log_fp,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            creationflags=_creation_flags(),
-            env=env,
-        )
-        if bind_to_lifetime_job(proc.pid, proc=proc):
-            log.info("docgraph %s: pid %d bound to lifetime job", self.role, proc.pid)
-        return proc
-
-    def _arm_auto_restart(self, enabled: bool) -> None:
-        if not enabled:
-            return
-        if self._restart_task and not self._restart_task.done():
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-        self._restart_task = loop.create_task(self._auto_restart_loop())
-
-    async def _auto_restart_loop(self) -> None:
-        while True:
-            await asyncio.sleep(2.0)
-            proc = self._proc
-            if proc is None:
-                return
-            if proc.poll() is None:
-                continue
-            log.warning("docgraph %s: subprocess exited (code %s) — restarting",
-                        self.role, proc.returncode)
-            try:
-                async with self._lock:
-                    await self._stop_locked()
-                    await self._start_locked()
-            except Exception as exc:
-                log.error("docgraph %s: auto-restart failed: %s", self.role, exc)
-                return
-
-
-# ── Index (one-shot) ─────────────────────────────────────────────────────────
+# ── Index runner (one-shot subprocess per root) ────────────────────────────
 
 class IndexRunner:
-    """Per-path index runs. One at a time (lock). Cancellable.
-
-    `run(path, force)` triggers a single repo's reindex. `run_all(force)`
-    is a convenience that walks `docgraph.index.paths` in sequence.
-    Per-path outcomes are persisted via `index_state.update()` so the UI
-    can show "last: <when> · ok|failed" pills.
+    """Runs `docgraph index <path>` as a one-shot subprocess. The host
+    process can stay running during the index — both tolerate concurrent
+    access through Kuzu's per-file lock model.
     """
 
     def __init__(self) -> None:
@@ -220,7 +77,7 @@ class IndexRunner:
         self._lock = asyncio.Lock()
         self._current_path: str | None = None
         self._current_force: bool = False
-        self._last_status: str = "idle"  # idle | running | done | failed | cancelled
+        self._last_status: str = "idle"
         self._last_finished_at: float = 0.0
 
     def alive(self) -> bool:
@@ -254,7 +111,7 @@ class IndexRunner:
         async with self._lock:
             if self.alive():
                 return
-            paths = [p for p in (dg_cfg.index_paths() or []) if p]
+            paths = dg_cfg.root_paths()
             if not paths:
                 return
             self._task = asyncio.create_task(self._run_sequence(paths, force))
@@ -293,19 +150,17 @@ class IndexRunner:
                 argv.append("--full")
             if dg_cfg.index_workers() > 0:
                 argv += ["--workers", str(dg_cfg.index_workers())]
-            if dg_cfg.index_gpu():
+            if dg_cfg.embeddings_gpu():
                 argv.append("--gpu")
-            if dg_cfg.index_llm_model():
-                argv += ["--llm-model", dg_cfg.index_llm_model(),
-                         "--llm-host", dg_cfg.index_llm_host(),
-                         "--llm-port", str(dg_cfg.index_llm_port()),
-                         "--llm-format", dg_cfg.index_llm_format(),
-                         "--llm-max-tokens", str(dg_cfg.index_llm_max_tokens())]
+            if dg_cfg.llm_model():
+                argv += ["--llm-model", dg_cfg.llm_model(),
+                         "--llm-host", dg_cfg.llm_host(),
+                         "--llm-port", str(dg_cfg.llm_port()),
+                         "--llm-format", dg_cfg.llm_format(),
+                         "--llm-max-tokens", str(dg_cfg.llm_max_tokens())]
             env = {}
-            if dg_cfg.index_embedding_model():
-                env["DOCGRAPH_EMBED_MODEL"] = dg_cfg.index_embedding_model()
-            # Coordinate: stop readers for this path while index runs.
-            await _stop_readers_for_path(path)
+            if dg_cfg.embeddings_model():
+                env["DOCGRAPH_EMBED_MODEL"] = dg_cfg.embeddings_model()
             self._log_fp.write(
                 f"\n--- index {path} {'(--full)' if force else '(incremental)'} ---\n".encode()
             )
@@ -344,278 +199,214 @@ class IndexRunner:
                 except Exception:
                     pass
                 self._log_fp = None
-            await _autostart_readers()
 
 
-# ── Watch ────────────────────────────────────────────────────────────────────
+# ── Host (the unified docgraph server) ─────────────────────────────────────
 
-class WatchSupervisor(_BaseSupervisor):
-    role = "watch"
+class HostSupervisor:
+    """Owns one `docgraph host --root … --root …` subprocess."""
+    role = "host"
+
+    def __init__(self) -> None:
+        self._proc: Optional[subprocess.Popen] = None
+        self._log_fp = None
+        self._lock = asyncio.Lock()
+        self._started_at: float = 0.0
+        self._port: int | None = None
+        self._restart_task: Optional[asyncio.Task] = None
+        self._last_error: str | None = None
+        self._bridged_count = 0
+
+    def alive(self) -> bool:
+        return _alive(self._proc)
+
+    def pid(self) -> int | None:
+        return self._proc.pid if self._proc else None
+
+    def port(self) -> int | None:
+        return self._port
+
+    def started_at(self) -> float:
+        return self._started_at
+
+    def last_error(self) -> str | None:
+        return self._last_error
+
+    def bridged_count(self) -> int:
+        return self._bridged_count
+
+    def log_path(self) -> str:
+        return dg_cfg.log_path(self.role)
+
+    async def start(self) -> None:
+        async with self._lock:
+            if self.alive():
+                return
+            try:
+                await self._start_locked()
+                self._last_error = None
+            except Exception as exc:
+                self._last_error = str(exc)
+                log.error("docgraph host start failed: %s", exc)
+                raise
+
+    async def stop(self) -> None:
+        async with self._lock:
+            await self._stop_locked()
+
+    async def restart(self) -> None:
+        await self.stop()
+        await self.start()
 
     async def _start_locked(self) -> None:
-        path = dg_cfg.watch_path()
-        if not path:
-            raise RuntimeError("docgraph.watch.path is empty")
+        roots = dg_cfg.root_paths()
+        if not roots:
+            raise RuntimeError(
+                "docgraph.roots is empty — add at least one root in settings."
+            )
         binary = _binary_or_raise()
-        argv = [binary, "watch", path]
-        if dg_cfg.watch_serve_too():
-            argv += ["--serve",
-                     "--host", dg_cfg.watch_host(),
-                     "--port", str(dg_cfg.watch_port())]
-            self._port = dg_cfg.watch_port()
-        # Watch holds writer lock — stop readers (Serve / MCP / Daemon) for this path.
-        await _stop_readers_for_path(path)
-        self._slug = dg_cfg.slug_for_path(path)
+        port = dg_cfg.host_port()
+        host_addr = dg_cfg.host_host()
+        argv = [binary, "host", "--host", host_addr, "--port", str(port)]
+        for r in roots:
+            argv += ["--root", r]
+        for w in dg_cfg.root_paths_to_watch():
+            if w in roots:
+                argv += ["--watch", w]
+        env = {}
+        if dg_cfg.host_gpu():
+            env["DOCGRAPH_GPU"] = "1"
+        if dg_cfg.embeddings_model():
+            env["DOCGRAPH_EMBED_MODEL"] = dg_cfg.embeddings_model()
+
+        self._port = port
         self._log_fp = _open_log(self.role)
+        try:
+            sweep_port(self._port, ("docgraph",))
+        except Exception:
+            pass
+        self._proc = self._spawn(argv, extra_env=env)
+        self._started_at = time.time()
+        try:
+            await self._wait_ready()
+        except Exception:
+            await self._stop_locked()
+            raise
+        try:
+            self._bridged_count = await dg_bridge.bridge_host(
+                host=host_addr, port=port,
+            )
+        except Exception as exc:
+            log.error("docgraph host: bridge failed: %s", exc)
+            self._bridged_count = 0
+        self._arm_auto_restart(dg_cfg.host_auto_restart())
+
+    async def _stop_locked(self) -> None:
+        try:
+            dg_bridge.unbridge_host()
+        except Exception:
+            pass
+        self._bridged_count = 0
+        proc = self._proc
+        self._proc = None
+        if self._restart_task and not self._restart_task.done():
+            self._restart_task.cancel()
+        self._restart_task = None
+        if proc and proc.poll() is None:
+            try:
+                kill_process_tree(proc.pid)
+            except Exception as exc:
+                log.warning("docgraph host: graceful kill failed: %s", exc)
+            try:
+                proc.wait(timeout=4)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=2)
+                except Exception:
+                    pass
+        if self._log_fp:
+            try:
+                self._log_fp.close()
+            except Exception:
+                pass
+            self._log_fp = None
         if self._port:
             try:
                 sweep_port(self._port, ("docgraph",))
             except Exception:
                 pass
-        self._proc = self._spawn(argv)
-        self._started_at = time.time()
-        self._arm_auto_restart(dg_cfg.watch_auto_restart())
-
-
-# ── Serve ────────────────────────────────────────────────────────────────────
-
-class ServeSupervisor(_BaseSupervisor):
-    role = "serve"
-
-    async def _start_locked(self) -> None:
-        path = dg_cfg.serve_path()
-        if not path:
-            raise RuntimeError("docgraph.serve.path is empty")
-        if _watch_holds(path):
-            raise RuntimeError(
-                f"docgraph watch is running for {path} — stop it before starting serve"
-            )
-        binary = _binary_or_raise()
-        argv = [binary, "serve", path,
-                "--host", dg_cfg.serve_host(),
-                "--port", str(dg_cfg.serve_port())]
-        env = {}
-        if dg_cfg.serve_gpu():
-            env["DOCGRAPH_GPU"] = "1"
-        self._port = dg_cfg.serve_port()
-        self._slug = dg_cfg.slug_for_path(path)
-        self._log_fp = _open_log(self.role)
-        try:
-            sweep_port(self._port, ("docgraph",))
-        except Exception:
-            pass
-        self._proc = self._spawn(argv, extra_env=env)
-        self._started_at = time.time()
-        self._arm_auto_restart(dg_cfg.serve_auto_restart())
-
-
-# ── Daemon ───────────────────────────────────────────────────────────────────
-
-class DaemonSupervisor(_BaseSupervisor):
-    role = "daemon"
-
-    async def _start_locked(self) -> None:
-        binary = _binary_or_raise()
-        argv = [binary, "daemon", "start",
-                "--port", str(dg_cfg.daemon_port()),
-                "--model", dg_cfg.daemon_model()]
-        if dg_cfg.daemon_gpu():
-            argv.append("--gpu")
-        self._port = dg_cfg.daemon_port()
-        self._log_fp = _open_log(self.role)
-        try:
-            sweep_port(self._port, ("docgraph",))
-        except Exception:
-            pass
-        self._proc = self._spawn(argv)
-        self._started_at = time.time()
-        self._arm_auto_restart(dg_cfg.daemon_auto_restart())
-
-
-# ── MCP (multiple children, one per repo) ────────────────────────────────────
-
-class _McpChild(_BaseSupervisor):
-    role = "mcp"
-
-    def __init__(self, path: str, port: int) -> None:
-        super().__init__()
-        self._path = path
-        self._port = port
-        self._slug = dg_cfg.slug_for_path(path)
-        self._bridged_count = 0
-
-    @property
-    def path(self) -> str:
-        return self._path
-
-    @property
-    def slug(self) -> str:
-        return self._slug or ""
-
-    def bridged_count(self) -> int:
-        return self._bridged_count
-
-    async def _start_locked(self) -> None:
-        if _watch_holds(self._path):
-            raise RuntimeError(
-                f"docgraph watch is running for {self._path} — stop it before starting mcp"
-            )
-        binary = _binary_or_raise()
-        argv = [binary, "mcp", self._path, "--transport", "http"]
-        env = {"DOCGRAPH_PORT": str(self._port), "DOCGRAPH_HOST": dg_cfg.mcp_host()}
-        if dg_cfg.mcp_gpu():
-            env["DOCGRAPH_GPU"] = "1"
-        self._log_fp = _open_log(self.role, self._slug)
-        try:
-            sweep_port(self._port, ("docgraph",))
-        except Exception:
-            pass
-        self._proc = self._spawn(argv, extra_env=env)
-        self._started_at = time.time()
-        await self._wait_ready()
-        # Bridge MCP tools into proxy.managed_tools._REGISTRY.
-        try:
-            self._bridged_count = await dg_bridge.bridge_child(
-                slug=self._slug, port=self._port, host=dg_cfg.mcp_host(),
-                multi=len(dg_cfg.mcp_paths()) > 1,
-            )
-        except Exception as exc:
-            log.error("docgraph mcp %s: bridge failed: %s", self._slug, exc)
-        self._arm_auto_restart(dg_cfg.mcp_auto_restart())
-
-    async def _stop_locked(self) -> None:
-        # Unregister bridged tools first, then kill the process.
-        try:
-            dg_bridge.unbridge_child(slug=self._slug or "")
-        except Exception:
-            pass
-        self._bridged_count = 0
-        await super()._stop_locked()
 
     async def _wait_ready(self) -> None:
-        deadline = asyncio.get_event_loop().time() + dg_cfg.mcp_ready_timeout_sec()
-        url = f"http://{dg_cfg.mcp_host()}:{self._port}/mcp"
+        deadline = asyncio.get_event_loop().time() + 30
+        url = f"http://{dg_cfg.host_host()}:{self._port}/api/roots"
         async with aiohttp.ClientSession() as session:
             while asyncio.get_event_loop().time() < deadline:
                 if not _alive(self._proc):
                     raise RuntimeError(
-                        f"docgraph mcp {self._slug} exited during startup; see {self.log_path()}"
+                        f"docgraph host exited during startup; see {self.log_path()}"
                     )
                 try:
                     async with session.get(url, timeout=aiohttp.ClientTimeout(total=2)) as resp:
-                        # The MCP streamable-HTTP endpoint responds to GET with
-                        # 405/406 once the server is up — any HTTP response is
-                        # a "ready" signal.
-                        if resp.status < 500:
+                        if resp.status == 200:
                             return
                 except (aiohttp.ClientError, asyncio.TimeoutError):
                     pass
                 await asyncio.sleep(0.5)
-        raise RuntimeError(
-            f"docgraph mcp {self._slug} not ready within {dg_cfg.mcp_ready_timeout_sec()}s"
+        raise RuntimeError(f"docgraph host not ready within 30s")
+
+    def _spawn(self, argv: list[str], extra_env: dict[str, str] | None = None) -> subprocess.Popen:
+        env = dict(os.environ)
+        if extra_env:
+            env.update(extra_env)
+        binary = argv[0]
+        argv[0] = shutil.which(binary) or binary
+        proc = subprocess.Popen(
+            argv,
+            stdout=self._log_fp,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            creationflags=_creation_flags(),
+            env=env,
         )
+        if bind_to_lifetime_job(proc.pid, proc=proc):
+            log.info("docgraph host: pid %d bound to lifetime job", proc.pid)
+        return proc
 
+    def _arm_auto_restart(self, enabled: bool) -> None:
+        if not enabled:
+            return
+        if self._restart_task and not self._restart_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._restart_task = loop.create_task(self._auto_restart_loop())
 
-class McpSupervisor:
-    """Owns N `_McpChild` instances, one per `docgraph.mcp.paths` entry."""
-
-    def __init__(self) -> None:
-        self._children: dict[str, _McpChild] = {}  # path -> child
-        self._lock = asyncio.Lock()
-
-    def children(self) -> list[_McpChild]:
-        return list(self._children.values())
-
-    def alive(self) -> bool:
-        return any(c.alive() for c in self._children.values())
-
-    def status(self) -> list[dict]:
-        return [
-            {
-                "path":     c.path,
-                "slug":     c.slug,
-                "port":     c.port(),
-                "pid":      c.pid(),
-                "alive":    c.alive(),
-                "bridged":  c.bridged_count(),
-                "log_path": c.log_path(),
-            }
-            for c in self._children.values()
-        ]
-
-    async def start(self) -> None:
-        async with self._lock:
-            paths = dg_cfg.mcp_paths()
-            base = dg_cfg.mcp_base_port()
-            # Drop children whose path is no longer configured.
-            for stale in list(self._children.keys()):
-                if stale not in paths:
-                    await self._children[stale].stop()
-                    self._children.pop(stale, None)
-            for i, path in enumerate(paths):
-                if path in self._children:
-                    if not self._children[path].alive():
-                        try:
-                            await self._children[path].start()
-                        except Exception as exc:
-                            log.error("docgraph mcp %s: %s", path, exc)
-                    continue
-                child = _McpChild(path, base + i)
-                self._children[path] = child
-                try:
-                    await child.start()
-                except Exception as exc:
-                    log.error("docgraph mcp %s: start failed: %s", path, exc)
-
-    async def stop(self) -> None:
-        async with self._lock:
-            for child in list(self._children.values()):
-                try:
-                    await child.stop()
-                except Exception:
-                    pass
-            self._children.clear()
-
-    async def stop_path(self, path: str) -> None:
-        async with self._lock:
-            child = self._children.get(path)
-            if child:
-                await child.stop()
-                self._children.pop(path, None)
-
-    async def start_path(self, path: str) -> None:
-        """Start (or restart) a single MCP child for `path`.
-
-        Used by the tray UI's per-row Start button. Allocates the port
-        from `mcp.base_port + i` based on the path's index in
-        `mcp_paths()`, falling back to base_port if the path isn't
-        listed yet.
-        """
-        async with self._lock:
-            paths = dg_cfg.mcp_paths()
-            try:
-                port = dg_cfg.mcp_base_port() + paths.index(path)
-            except ValueError:
-                port = dg_cfg.mcp_base_port()
-            existing = self._children.get(path)
-            if existing and existing.alive():
+    async def _auto_restart_loop(self) -> None:
+        while True:
+            await asyncio.sleep(2.0)
+            proc = self._proc
+            if proc is None:
                 return
-            if existing is None:
-                existing = _McpChild(path, port)
-                self._children[path] = existing
+            if proc.poll() is None:
+                continue
+            log.warning("docgraph host: subprocess exited (code %s) — restarting",
+                        proc.returncode)
             try:
-                await existing.start()
+                async with self._lock:
+                    await self._stop_locked()
+                    await self._start_locked()
             except Exception as exc:
-                log.error("docgraph mcp %s: start failed: %s", path, exc)
+                log.error("docgraph host: auto-restart failed: %s", exc)
+                return
 
 
-# ── Module singletons ────────────────────────────────────────────────────────
+# ── Module singletons ──────────────────────────────────────────────────────
 
 _INDEX: IndexRunner | None = None
-_WATCH: WatchSupervisor | None = None
-_SERVE: ServeSupervisor | None = None
-_DAEMON: DaemonSupervisor | None = None
-_MCP: McpSupervisor | None = None
+_HOST: HostSupervisor | None = None
 
 
 def get_index() -> IndexRunner:
@@ -625,119 +416,29 @@ def get_index() -> IndexRunner:
     return _INDEX
 
 
-def get_watch() -> WatchSupervisor:
-    global _WATCH
-    if _WATCH is None:
-        _WATCH = WatchSupervisor()
-    return _WATCH
+def get_host() -> HostSupervisor:
+    global _HOST
+    if _HOST is None:
+        _HOST = HostSupervisor()
+    return _HOST
 
 
-def get_serve() -> ServeSupervisor:
-    global _SERVE
-    if _SERVE is None:
-        _SERVE = ServeSupervisor()
-    return _SERVE
-
-
-def get_daemon() -> DaemonSupervisor:
-    global _DAEMON
-    if _DAEMON is None:
-        _DAEMON = DaemonSupervisor()
-    return _DAEMON
-
-
-def get_mcp() -> McpSupervisor:
-    global _MCP
-    if _MCP is None:
-        _MCP = McpSupervisor()
-    return _MCP
-
-
-# ── Lock-coordination helpers ────────────────────────────────────────────────
-
-def _watch_holds(path: str) -> bool:
-    if _WATCH is None or not _WATCH.alive():
-        return False
-    try:
-        return os.path.normpath(dg_cfg.watch_path()) == os.path.normpath(path)
-    except Exception:
-        return False
-
-
-async def _stop_readers_for_path(path: str) -> None:
-    """Stop Serve / MCP children for `path` so writer-lock holders can run."""
-    norm = os.path.normpath(path)
-    if _SERVE is not None and _SERVE.alive():
-        try:
-            if os.path.normpath(dg_cfg.serve_path()) == norm:
-                await _SERVE.stop()
-        except Exception:
-            pass
-    if _MCP is not None:
-        for child in list(_MCP.children()):
-            if os.path.normpath(child.path) == norm:
-                await _MCP.stop_path(child.path)
-
-
-async def _autostart_readers() -> None:
-    if dg_cfg.serve_enabled() and dg_cfg.serve_auto_start():
-        try:
-            await get_serve().start()
-        except Exception as exc:
-            log.warning("docgraph serve auto-restart: %s", exc)
-    if dg_cfg.mcp_enabled() and dg_cfg.mcp_auto_start():
-        try:
-            await get_mcp().start()
-        except Exception as exc:
-            log.warning("docgraph mcp auto-restart: %s", exc)
-
-
-# ── Boot / shutdown hooks ────────────────────────────────────────────────────
+# ── Boot / shutdown hooks ──────────────────────────────────────────────────
 
 async def autostart_all() -> None:
     """Called from main.py:_post_init."""
-    if dg_cfg.daemon_enabled() and dg_cfg.daemon_auto_start():
+    if dg_cfg.host_enabled() and dg_cfg.host_auto_start():
         try:
-            await get_daemon().start()
+            await get_host().start()
         except Exception as exc:
-            log.error("docgraph daemon auto-start: %s", exc)
-    if dg_cfg.serve_enabled() and dg_cfg.serve_auto_start():
-        try:
-            await get_serve().start()
-        except Exception as exc:
-            log.error("docgraph serve auto-start: %s", exc)
-    if dg_cfg.watch_enabled() and dg_cfg.watch_auto_start():
-        try:
-            await get_watch().start()
-        except Exception as exc:
-            log.error("docgraph watch auto-start: %s", exc)
-    if dg_cfg.mcp_enabled() and dg_cfg.mcp_auto_start():
-        try:
-            await get_mcp().start()
-        except Exception as exc:
-            log.error("docgraph mcp auto-start: %s", exc)
+            log.error("docgraph host auto-start: %s", exc)
 
 
 async def shutdown_all() -> None:
-    """Called from main.py:_post_shutdown. Reverse order: bridge -> mcp -> daemon -> serve -> watch."""
-    if _MCP is not None:
+    """Called from main.py:_post_shutdown."""
+    if _HOST is not None:
         try:
-            await _MCP.stop()
-        except Exception:
-            pass
-    if _DAEMON is not None:
-        try:
-            await _DAEMON.stop()
-        except Exception:
-            pass
-    if _SERVE is not None:
-        try:
-            await _SERVE.stop()
-        except Exception:
-            pass
-    if _WATCH is not None:
-        try:
-            await _WATCH.stop()
+            await _HOST.stop()
         except Exception:
             pass
     if _INDEX is not None:
@@ -749,37 +450,20 @@ async def shutdown_all() -> None:
 
 def status_snapshot() -> dict:
     """Used by tray/qt_helpers.build_status()."""
+    binary = dg_cfg.resolve_binary()
     return {
-        "binary":   dg_cfg.resolve_binary(),
-        "binary_ok": dg_cfg.resolve_binary() is not None,
+        "binary":       binary,
+        "binary_ok":    binary is not None,
         "default_path": dg_cfg.default_path(),
-        "index":    (_INDEX.status() if _INDEX else {"alive": False, "last_status": "idle"}),
-        "watch":    {
-            "enabled": dg_cfg.watch_enabled(),
-            "alive":   bool(_WATCH and _WATCH.alive()),
-            "pid":     (_WATCH.pid() if _WATCH else None),
-            "port":    (_WATCH.port() if _WATCH else None),
-            "last_error": (_WATCH.last_error() if _WATCH else None),
-            "log_path": dg_cfg.log_path("watch"),
-        },
-        "serve":    {
-            "enabled": dg_cfg.serve_enabled(),
-            "alive":   bool(_SERVE and _SERVE.alive()),
-            "pid":     (_SERVE.pid() if _SERVE else None),
-            "port":    (_SERVE.port() if _SERVE else None),
-            "last_error": (_SERVE.last_error() if _SERVE else None),
-            "log_path": dg_cfg.log_path("serve"),
-        },
-        "daemon":   {
-            "enabled": dg_cfg.daemon_enabled(),
-            "alive":   bool(_DAEMON and _DAEMON.alive()),
-            "pid":     (_DAEMON.pid() if _DAEMON else None),
-            "port":    (_DAEMON.port() if _DAEMON else None),
-            "last_error": (_DAEMON.last_error() if _DAEMON else None),
-            "log_path": dg_cfg.log_path("daemon"),
-        },
-        "mcp":      {
-            "enabled":  dg_cfg.mcp_enabled(),
-            "children": (_MCP.status() if _MCP else []),
+        "index":        (_INDEX.status() if _INDEX else {"alive": False, "last_status": "idle"}),
+        "host": {
+            "enabled":    dg_cfg.host_enabled(),
+            "alive":      bool(_HOST and _HOST.alive()),
+            "pid":        (_HOST.pid() if _HOST else None),
+            "port":       (_HOST.port() if _HOST else None),
+            "started_at": (_HOST.started_at() if _HOST else 0.0),
+            "bridged":    (_HOST.bridged_count() if _HOST else 0),
+            "last_error": (_HOST.last_error() if _HOST else None),
+            "log_path":   dg_cfg.log_path("host"),
         },
     }

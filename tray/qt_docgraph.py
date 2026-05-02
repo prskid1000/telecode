@@ -1,14 +1,17 @@
-"""DocGraph section builder — single sidebar entry, single scrollable page.
+"""DocGraph section — single host model.
 
-Cards stack vertically: Binary → Index → Watch → Serve → MCP → Daemon. Each
-card carries its own form rows + Start/Stop/Restart + status pill. Live log
-tailing is delegated to the global Logs section — it picks up
-`docgraph_<role>.log` plus per-MCP-child `docgraph_mcp_<slug>.log` files
-automatically.
+After docgraph 2.2.0, telecode supervises one `docgraph host` process
+covering every configured root. The UI mirrors that mental model:
 
-The previous tabbed layout caused QTabWidget pane-sizing headaches (cards
-stretching to fill the tallest tab's height). A flat stacked page matches the
-llama.cpp section's pattern and avoids them entirely.
+  Host          — start/stop/restart of the single child + bind config.
+  Roots         — table of registered repos. Per-row Index button + Watch
+                  toggle. Add / remove. Watch toggle persists to settings;
+                  the host needs a restart to pick up watch flips.
+  LLM           — augmentation knobs that apply at index time.
+  Embeddings    — embedding model + GPU.
+
+Live log tailing is delegated to the global Logs section — the host's
+log lands at `data/logs/docgraph_host.log`.
 """
 from __future__ import annotations
 
@@ -19,13 +22,14 @@ from typing import Callable
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QLineEdit,
 )
 
-from tray.qt_widgets import row_label
+from tray.qt_widgets import row_label, Toggle
 from tray.qt_helpers import (
     read_settings, get_path, patch_settings, schedule, humanize,
 )
-from tray.qt_theme import FG, FG_DIM, FG_MUTE, BG, BG_CARD, BORDER, OK, ERR, WARN
+from tray.qt_theme import FG, FG_DIM, FG_MUTE, BG, BG_CARD, BG_ELEV, BORDER, OK, ERR, WARN
 from tray.qt_sections import (
     _page, _card, _section_header, _row, _toggle_row, _line_row,
     _list_row, _number_row, _enum_row_strs, _wrap_align,
@@ -35,12 +39,11 @@ log = logging.getLogger("telecode.tray.docgraph")
 
 
 def build_docgraph_tabs(window) -> QWidget:
-    """Build the DocGraph section. Name kept for qt_sections._docgraph caller."""
+    """Single scrollable page; 4 stacked cards."""
     scroll, _, layout = _page()
-
     refresh_fns: list[Callable[[], None]] = []
 
-    # Binary card — single row, autodetect chain documented in the help text.
+    # Binary
     binary_card, bb = _card("Binary")
     bb.addWidget(_line_row(
         "docgraph.binary",
@@ -51,13 +54,11 @@ def build_docgraph_tabs(window) -> QWidget:
     ))
     layout.addWidget(binary_card)
 
-    # Stacked cards — each builder returns (card, refresh_fn).
     for build in (
-        _build_index_card,
-        _build_watch_card,
-        _build_serve_card,
-        _build_mcp_card,
-        _build_daemon_card,
+        _build_host_card,
+        _build_roots_card,
+        _build_llm_card,
+        _build_embeddings_card,
     ):
         card, refresh = build(window)
         layout.addWidget(card)
@@ -72,11 +73,12 @@ def build_docgraph_tabs(window) -> QWidget:
                 fn()
             except Exception:
                 pass
+
     scroll.refresh = refresh  # type: ignore[attr-defined]
     return scroll
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# ── Helpers ──────────────────────────────────────────────────────────────
 
 def _bot_loop(window) -> asyncio.AbstractEventLoop | None:
     return getattr(window, "bot_loop", None)
@@ -116,47 +118,120 @@ def _log_hint(basename: str) -> QLabel:
     return lbl
 
 
-# ── Index card ───────────────────────────────────────────────────────────────
+def _format_ago(ts: float | None) -> str:
+    import time as _time
+    if not ts:
+        return "never"
+    delta = max(0, int(_time.time() - ts))
+    if delta < 60:    return f"{delta}s ago"
+    if delta < 3600:  return f"{delta // 60}m ago"
+    if delta < 86400: return f"{delta // 3600}h ago"
+    return f"{delta // 86400}d ago"
 
-def _build_index_card(window) -> tuple[QFrame, Callable[[], None]]:
-    card, body = _card("Index", "Per-path reindex. Incremental by default; Force = --full wipe + rebuild.")
 
-    body.addWidget(_section_header("Paths"))
-    paths_widget = _PathsTable(window)
+# ── Host card ────────────────────────────────────────────────────────────
+
+def _build_host_card(window) -> tuple[QFrame, Callable[[], None]]:
+    card, body = _card(
+        "Host",
+        "One docgraph host process serves every configured root. "
+        "Web UI + JSON API + MCP HTTP all on the same port. Restart to pick up "
+        "settings changes (root list, watch flags, etc.).",
+    )
+
+    body.addWidget(_toggle_row("docgraph.host.enabled", "Enabled",
+                                "Master toggle. Off = kill subprocess + free port."))
+    body.addWidget(_toggle_row("docgraph.host.auto_start", "Auto-start",
+                                "Start at boot if Enabled."))
+    body.addWidget(_toggle_row("docgraph.host.auto_restart", "Auto-restart",
+                                "Re-spawn on unexpected exit."))
+    body.addWidget(_line_row("docgraph.host.host", "Bind Host", "127.0.0.1"))
+    body.addWidget(_number_row("docgraph.host.port", "Bind Port", 1024, 65535, 1, 0))
+    body.addWidget(_toggle_row("docgraph.host.gpu", "GPU embeddings",
+                                "Forwards DOCGRAPH_GPU=1 to the host process."))
+
+    action_row = QHBoxLayout()
+    action_row.setSpacing(8)
+    start_btn = QPushButton("▶ Start"); start_btn.setProperty("class", "primary")
+    stop_btn  = QPushButton("Stop");    stop_btn.setProperty("class", "danger")
+    restart_btn = QPushButton("Restart")
+    pill, refresh_status = _status_pill(_host_status_text)
+    action_row.addWidget(start_btn)
+    action_row.addWidget(stop_btn)
+    action_row.addWidget(restart_btn)
+    action_row.addWidget(pill, 1)
+    body.addLayout(action_row)
+    body.addWidget(_log_hint("docgraph_host.log"))
+
+    def _on_start():
+        async def _go():
+            from docgraph.process import get_host
+            await get_host().start()
+        _run(window, _go)
+
+    def _on_stop():
+        async def _go():
+            from docgraph.process import get_host
+            await get_host().stop()
+        _run(window, _go)
+
+    def _on_restart():
+        async def _go():
+            from docgraph.process import get_host
+            sup = get_host()
+            await sup.stop()
+            await sup.start()
+        _run(window, _go)
+
+    start_btn.clicked.connect(_on_start)
+    stop_btn.clicked.connect(_on_stop)
+    restart_btn.clicked.connect(_on_restart)
+
+    return card, refresh_status
+
+
+def _host_status_text() -> tuple[bool, str]:
+    try:
+        from docgraph.process import status_snapshot
+        s = status_snapshot().get("host", {}) or {}
+    except Exception as exc:
+        return False, f"err: {exc}"
+    if s.get("alive"):
+        pid = s.get("pid"); port = s.get("port")
+        bridged = s.get("bridged") or 0
+        bits = []
+        if pid:     bits.append(f"pid={pid}")
+        if port:    bits.append(f"port={port}")
+        if bridged: bits.append(f"bridged={bridged}")
+        return True, "alive  " + "  ".join(bits)
+    err = s.get("last_error")
+    if err:
+        return False, f"failed: {err}"
+    return False, "stopped" + (" (enabled)" if s.get("enabled") else "")
+
+
+# ── Roots card (multi-row table) ────────────────────────────────────────
+
+def _build_roots_card(window) -> tuple[QFrame, Callable[[], None]]:
+    card, body = _card(
+        "Roots",
+        "Each row is a repo registered with the host. Per-row Index runs "
+        "`docgraph index <path>` as a one-shot subprocess. Watch toggle is "
+        "persistent — flip and restart the host to take effect.",
+    )
+
+    paths_widget = _RootsTable(window)
     body.addWidget(paths_widget)
-
-    body.addWidget(_section_header("Flags (apply to every Index/Force run)"))
-    body.addWidget(_number_row("docgraph.index.workers", "Workers", 0, 64, 1, 0,
-                                "", "0 = docgraph default"))
-    body.addWidget(_toggle_row("docgraph.index.gpu", "GPU embeddings (--gpu)",
-                                "Requires onnxruntime-gpu/-directml/-silicon installed."))
-    body.addWidget(_line_row("docgraph.index.embedding_model", "Embedding Model",
-                              "BAAI/bge-small-en-v1.5",
-                              "Empty = docgraph default. Sets DOCGRAPH_EMBED_MODEL."))
-
-    body.addWidget(_section_header("LLM-augmented docstrings (optional)"))
-    body.addWidget(_line_row("docgraph.index.llm_model", "LLM Model",
-                              "qwen3.6-35b",
-                              "Setting this enables --llm-model. Empty = off."))
-    body.addWidget(_line_row("docgraph.index.llm_host", "LLM Host", "localhost"))
-    body.addWidget(_number_row("docgraph.index.llm_port", "LLM Port", 1, 65535, 1, 0))
-    body.addWidget(_enum_row_strs(
-        "docgraph.index.llm_format", "LLM Format",
-        [("OpenAI-compatible", "openai"), ("Anthropic-compatible", "anthropic")],
-        "Wire format for the local LLM endpoint.",
-    ))
-    body.addWidget(_number_row("docgraph.index.llm_max_tokens", "LLM Max Tokens",
-                                10, 4096, 50, 0))
 
     action_row = QHBoxLayout()
     action_row.setSpacing(8)
     from tray.qt_widgets import Toggle as _Toggle
     all_force_lbl = QLabel("Force")
     all_force_lbl.setStyleSheet(f"color: {FG_DIM};")
-    all_force_lbl.setToolTip("Pass --full to every path when running 'Index all'")
+    all_force_lbl.setToolTip("Pass --full to every root when running 'Index all'")
     all_force = _Toggle()
-    all_force.setToolTip("Pass --full to every path when running 'Index all'")
-    run_all_btn = QPushButton("▶ Index all paths")
+    all_force.setToolTip("Pass --full to every root when running 'Index all'")
+    run_all_btn = QPushButton("▶ Index all roots")
     cancel_btn = QPushButton("Cancel")
     cancel_btn.setProperty("class", "danger")
     status_lbl, refresh_status = _status_pill(_index_status_text)
@@ -186,6 +261,7 @@ def _build_index_card(window) -> tuple[QFrame, Callable[[], None]]:
     def refresh():
         refresh_status()
         paths_widget.refresh()
+
     return card, refresh
 
 
@@ -201,14 +277,11 @@ def _index_status_text() -> tuple[bool, str]:
     return False, "idle"
 
 
-# ── Per-path paths editor + per-row Index/Force buttons ──────────────────────
+class _RootsTable(QWidget):
+    """Editor for `docgraph.roots[]` (`{path, watch}` entries).
 
-class _PathsTable(QWidget):
-    """Custom paths editor for the Index card.
-
-    Each row: editable path field, Force toggle, ▶ Index button,
-    status pill ("never" / "2m ago · ok" / "running"), remove (✕).
-    Persists to `docgraph.index.paths` on every edit.
+    Each row: editable path · ▶ Index · Watch toggle · status pill · ✕ remove.
+    Persists to `docgraph.roots` on every edit.
     """
 
     def __init__(self, window) -> None:
@@ -227,7 +300,7 @@ class _PathsTable(QWidget):
         add_w = QWidget()
         add_l = QHBoxLayout(add_w)
         add_l.setContentsMargins(0, 0, 0, 0)
-        add_btn = QPushButton("+ Add path")
+        add_btn = QPushButton("+ Add root")
         add_btn.setProperty("class", "primary")
         add_btn.setMaximumWidth(140)
         add_btn.clicked.connect(self._on_add)
@@ -235,7 +308,7 @@ class _PathsTable(QWidget):
         add_l.addStretch(1)
         v.addWidget(add_w)
 
-        self._row_widgets: list[_PathRow] = []
+        self._row_widgets: list[_RootRow] = []
         self._rebuild()
 
     def _rebuild(self) -> None:
@@ -243,20 +316,28 @@ class _PathsTable(QWidget):
             w.setParent(None)
             w.deleteLater()
         self._row_widgets.clear()
-        cur = list(get_path(read_settings(), "docgraph.index.paths", []) or [])
-        for s in cur:
-            self._append_row(str(s))
+        cur = list(get_path(read_settings(), "docgraph.roots", []) or [])
+        for entry in cur:
+            if isinstance(entry, dict):
+                path = str(entry.get("path", "") or "")
+                watch = bool(entry.get("watch", False))
+            else:
+                path, watch = str(entry), False
+            self._append_row(path, watch)
 
-    def _append_row(self, value: str) -> None:
-        row = _PathRow(value, self._window, on_change=self._commit, on_remove=self._on_remove)
+    def _append_row(self, path: str, watch: bool) -> None:
+        row = _RootRow(
+            path, watch, self._window,
+            on_change=self._commit, on_remove=self._on_remove,
+        )
         self._rows_layout.addWidget(row)
         self._row_widgets.append(row)
 
     def _on_add(self) -> None:
-        self._append_row("")
+        self._append_row("", False)
         self._commit()
 
-    def _on_remove(self, row: "_PathRow") -> None:
+    def _on_remove(self, row: "_RootRow") -> None:
         try:
             self._row_widgets.remove(row)
         except ValueError:
@@ -266,69 +347,67 @@ class _PathsTable(QWidget):
         self._commit()
 
     def _commit(self) -> None:
-        out = [r.text() for r in self._row_widgets if r.text().strip() != ""]
-        try:
-            patch_settings("docgraph.index.paths", out)
-        except Exception:
-            pass
+        out = []
+        for r in self._row_widgets:
+            path = r.text().strip()
+            if not path:
+                continue
+            out.append({"path": path, "watch": r.watch_state()})
+        patch_settings("docgraph.roots", out)
 
     def refresh(self) -> None:
-        # Compare against the *non-empty* displayed rows so a freshly-added
-        # blank row (not yet typed into) survives the next refresh tick —
-        # otherwise '+ Add path' would vanish before the user can fill it in.
-        cur = [str(p) for p in (get_path(read_settings(), "docgraph.index.paths", []) or [])]
-        existing_nonempty = [r.text() for r in self._row_widgets if r.text().strip()]
-        if cur != existing_nonempty:
+        cur = list(get_path(read_settings(), "docgraph.roots", []) or [])
+        cur_norm = [
+            {"path": str(e.get("path", "") if isinstance(e, dict) else e),
+             "watch": bool(e.get("watch", False) if isinstance(e, dict) else False)}
+            for e in cur
+        ]
+        cur_norm = [e for e in cur_norm if e["path"]]
+        cur_view = [{"path": r.text().strip(), "watch": r.watch_state()}
+                    for r in self._row_widgets if r.text().strip()]
+        if cur_norm != cur_view:
             self._rebuild()
-        else:
-            for r in self._row_widgets:
-                r.refresh_state()
+        for r in self._row_widgets:
+            r.refresh_state()
 
 
-class _PathRow(QWidget):
-    """One path row inside `_PathsTable`.
-
-    Layout: [path field] [Force toggle] [▶ Index] [status pill] [✕]
-    """
-
-    def __init__(self, value: str, window, *, on_change, on_remove) -> None:
+class _RootRow(QFrame):
+    def __init__(self, path: str, watch: bool, window, *, on_change, on_remove) -> None:
         super().__init__()
         self._window = window
         self._on_change = on_change
         self._on_remove = on_remove
 
-        from PySide6.QtWidgets import QLineEdit
-        from tray.qt_theme import BG_ELEV, BORDER
-        from tray.qt_widgets import Toggle
-
         self.setStyleSheet(
-            f"_PathRow {{ background: {BG_ELEV}; border: 1px solid {BORDER}; border-radius: 6px; }}"
+            f"_RootRow {{ background: {BG_ELEV}; border: 1px solid {BORDER}; border-radius: 6px; }}"
         )
         h = QHBoxLayout(self)
         h.setContentsMargins(8, 6, 8, 6)
         h.setSpacing(8)
 
-        self._edit = QLineEdit(value)
+        self._edit = QLineEdit(path)
         self._edit.setPlaceholderText("/path/to/repo")
-        self._edit.editingFinished.connect(self._on_change)
+        self._edit.editingFinished.connect(self._on_edit_done)
         h.addWidget(self._edit, 1)
 
-        force_lbl = QLabel("Force")
-        force_lbl.setStyleSheet(f"color: {FG_DIM};")
-        force_lbl.setToolTip("Pass --full to wipe + rebuild instead of incremental delta")
-        h.addWidget(force_lbl)
-        self._force = Toggle()
-        self._force.setToolTip("Pass --full to wipe + rebuild instead of incremental delta")
-        h.addWidget(self._force)
-
         self._index_btn = QPushButton("▶ Index")
-        self._index_btn.setToolTip("Run docgraph index for this path")
-        self._index_btn.clicked.connect(self._trigger)
+        self._index_btn.setToolTip("Run docgraph index for this root")
+        self._index_btn.clicked.connect(self._trigger_index)
         h.addWidget(self._index_btn)
 
-        self._pill = QLabel("never")
+        watch_lbl = QLabel("Watch")
+        watch_lbl.setStyleSheet(f"color: {FG_DIM};")
+        watch_lbl.setToolTip("Live reindex on change. Restart host to apply.")
+        h.addWidget(watch_lbl)
+        self._watch = Toggle()
+        self._watch.setChecked(bool(watch))
+        self._watch.toggled.connect(self._on_watch_toggled)
+        self._watch.setToolTip("Live reindex on change. Restart host to apply.")
+        h.addWidget(self._watch)
+
+        self._pill = QLabel("…")
         self._pill.setProperty("class", "stat_pill")
-        self._pill.setMinimumWidth(160)
+        self._pill.setMinimumWidth(180)
         h.addWidget(self._pill)
 
         rm_btn = QPushButton("✕")
@@ -346,14 +425,23 @@ class _PathRow(QWidget):
     def text(self) -> str:
         return self._edit.text()
 
-    def _trigger(self) -> None:
+    def watch_state(self) -> bool:
+        return bool(self._watch.isChecked())
+
+    def _on_edit_done(self) -> None:
+        self._on_change()
+        self.refresh_state()
+
+    def _on_watch_toggled(self, _checked: bool) -> None:
+        self._on_change()
+
+    def _trigger_index(self) -> None:
         path = self.text().strip()
         if not path:
             return
-        force = bool(self._force.isChecked())
         async def _go():
             from docgraph.process import get_index
-            await get_index().run(path, force=force)
+            await get_index().run(path, force=False)
         _run(self._window, _go)
 
     def refresh_state(self) -> None:
@@ -390,374 +478,41 @@ class _PathRow(QWidget):
         self._pill.setText(text)
 
 
-def _format_ago(ts: float) -> str:
-    import time as _time
-    if not ts:
-        return "never"
-    delta = max(0, int(_time.time() - ts))
-    if delta < 60:    return f"{delta}s ago"
-    if delta < 3600:  return f"{delta // 60}m ago"
-    if delta < 86400: return f"{delta // 3600}h ago"
-    return f"{delta // 86400}d ago"
+# ── LLM card ─────────────────────────────────────────────────────────────
 
-
-# ── Watch / Serve cards (generic) ────────────────────────────────────────────
-
-def _build_watch_card(window) -> tuple[QFrame, Callable[[], None]]:
-    return _build_role_card(
-        window, role="watch",
-        title="Watch",
-        sub="docgraph watch — auto-reindex on changes. Holds writer lock; stop Serve/MCP for the same path first.",
-        rows=[
-            ("toggle", "docgraph.watch.enabled",      "Enabled",      "Master toggle. Off = kill subprocess + free its port."),
-            ("toggle", "docgraph.watch.auto_start",   "Auto-start",   "Start at boot if Enabled."),
-            ("toggle", "docgraph.watch.auto_restart", "Auto-restart", "Re-spawn on unexpected exit."),
-            ("line",   "docgraph.watch.path",         "Path",         "Repo to watch (falls back to docgraph.default_path)."),
-            ("toggle", "docgraph.watch.serve_too",    "Run web UI too (--serve)", "Watcher + serve in one process."),
-            ("line",   "docgraph.watch.host",         "Host",         "Bind address (only with --serve)."),
-            ("port",   "docgraph.watch.port",         "Port",         "Bind port (only with --serve)."),
-        ],
-        status_fn=_role_status_text("watch"),
-        log_basename="docgraph_watch.log",
-        get_supervisor=lambda: __import__("docgraph.process", fromlist=["get_watch"]).get_watch(),
-    )
-
-
-def _build_serve_card(window) -> tuple[QFrame, Callable[[], None]]:
-    return _build_role_card(
-        window, role="serve",
-        title="Serve",
-        sub="docgraph serve — web UI + JSON API. Read-only DB. Use the tray menu's 'Open Document Index' entry to open it in a browser.",
-        rows=[
-            ("toggle", "docgraph.serve.enabled",      "Enabled",      "Master toggle."),
-            ("toggle", "docgraph.serve.auto_start",   "Auto-start",   "Start at boot if Enabled."),
-            ("toggle", "docgraph.serve.auto_restart", "Auto-restart", "Re-spawn on unexpected exit."),
-            ("line",   "docgraph.serve.path",         "Path",         "Repo to serve (falls back to docgraph.default_path)."),
-            ("line",   "docgraph.serve.host",         "Host",         "Bind address."),
-            ("port",   "docgraph.serve.port",         "Port",         "Bind port."),
-            ("toggle", "docgraph.serve.gpu",          "GPU embeddings", "Forwarded via DOCGRAPH_GPU=1."),
-        ],
-        status_fn=_role_status_text("serve"),
-        log_basename="docgraph_serve.log",
-        get_supervisor=lambda: __import__("docgraph.process", fromlist=["get_serve"]).get_serve(),
-    )
-
-
-def _build_role_card(window, *, role: str, title: str, sub: str,
-                      rows: list[tuple], status_fn, log_basename: str,
-                      get_supervisor) -> tuple[QFrame, Callable[[], None]]:
-    card, body = _card(title, sub)
-    for kind, *args in rows:
-        if kind == "toggle":
-            path, label, help_text = args
-            body.addWidget(_toggle_row(path, label, help_text))
-        elif kind == "line":
-            path, label, help_text = args
-            body.addWidget(_line_row(path, label, "", help_text))
-        elif kind == "port":
-            path, label, help_text = args
-            body.addWidget(_number_row(path, label, 1, 65535, 1, 0, "", help_text))
-
-    action_row = QHBoxLayout()
-    action_row.setSpacing(8)
-    start_btn = QPushButton("▶ Start"); start_btn.setProperty("class", "primary")
-    stop_btn  = QPushButton("Stop");    stop_btn.setProperty("class", "danger")
-    restart_btn = QPushButton("Restart")
-    pill, refresh_status = _status_pill(status_fn)
-    action_row.addWidget(start_btn)
-    action_row.addWidget(stop_btn)
-    action_row.addWidget(restart_btn)
-    action_row.addWidget(pill, 1)
-    body.addLayout(action_row)
-    body.addWidget(_log_hint(log_basename))
-
-    def _on_start():
-        async def _go():
-            sup = get_supervisor()
-            await sup.start()
-        _run(window, _go)
-
-    def _on_stop():
-        async def _go():
-            sup = get_supervisor()
-            await sup.stop()
-        _run(window, _go)
-
-    def _on_restart():
-        async def _go():
-            sup = get_supervisor()
-            await sup.stop()
-            await sup.start()
-        _run(window, _go)
-
-    start_btn.clicked.connect(_on_start)
-    stop_btn.clicked.connect(_on_stop)
-    restart_btn.clicked.connect(_on_restart)
-
-    return card, refresh_status
-
-
-def _role_status_text(role: str):
-    def _get():
-        try:
-            from docgraph.process import status_snapshot
-            s = status_snapshot().get(role, {})
-        except Exception as exc:
-            return False, f"err: {exc}"
-        if s.get("alive"):
-            pid = s.get("pid"); port = s.get("port")
-            extra = f" pid={pid}" if pid else ""
-            extra += f" port={port}" if port else ""
-            return True, f"alive{extra}"
-        err = s.get("last_error")
-        if err:
-            return False, f"failed: {err}"
-        return False, "stopped" + (" (enabled)" if s.get("enabled") else "")
-    return _get
-
-
-# ── MCP card ─────────────────────────────────────────────────────────────────
-
-def _build_mcp_card(window) -> tuple[QFrame, Callable[[], None]]:
+def _build_llm_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     card, body = _card(
-        "MCP",
-        "One docgraph mcp child per repo path. Each child's tools are bridged into the proxy as managed tools."
+        "LLM augmentation",
+        "Optional. Generates one-line docstrings for entities lacking native "
+        "docs. Applies at index time across every root.",
     )
-    body.addWidget(_toggle_row("docgraph.mcp.enabled", "Enabled",
-                                "Master toggle. Off = kill all children + unregister bridge."))
-    body.addWidget(_toggle_row("docgraph.mcp.auto_start", "Auto-start",
-                                "Spawn at boot if Enabled."))
-    body.addWidget(_toggle_row("docgraph.mcp.auto_restart", "Auto-restart",
-                                "Re-spawn on unexpected exit."))
-    body.addWidget(_number_row("docgraph.mcp.base_port", "Base Port", 1024, 65535, 1, 0,
-                                "", "First port; subsequent children use base_port + i."))
-    body.addWidget(_line_row("docgraph.mcp.host", "Host", "127.0.0.1"))
-    body.addWidget(_toggle_row("docgraph.mcp.gpu", "GPU embeddings",
-                                "Forwarded to each child via DOCGRAPH_GPU=1."))
-    body.addWidget(_number_row("docgraph.mcp.ready_timeout_sec", "Ready Timeout",
-                                5, 600, 5, 0, "s",
-                                "How long to wait for /mcp to become reachable."))
-
-    body.addWidget(_section_header("Paths (one MCP child per repo)"))
-    paths_widget = _McpPathsTable(window)
-    body.addWidget(paths_widget)
-    body.addWidget(_log_hint("docgraph_mcp_<slug>.log"))
-
-    def refresh():
-        paths_widget.refresh()
-    return card, refresh
+    body.addWidget(_line_row("docgraph.llm.model", "Model",
+                              "qwen3.6-35b",
+                              "Empty = off. Setting any value enables --llm-model."))
+    body.addWidget(_line_row("docgraph.llm.host", "Host", "localhost"))
+    body.addWidget(_number_row("docgraph.llm.port", "Port", 1, 65535, 1, 0))
+    body.addWidget(_enum_row_strs(
+        "docgraph.llm.format", "Format",
+        [("OpenAI-compatible", "openai"), ("Anthropic-compatible", "anthropic")],
+        "Wire format for the local LLM endpoint.",
+    ))
+    body.addWidget(_number_row("docgraph.llm.max_tokens", "Max Tokens",
+                                10, 4096, 50, 0))
+    return card, None
 
 
-class _McpPathsTable(QWidget):
-    """Per-path editor for `docgraph.mcp.paths` with per-row Start/Stop."""
+# ── Embeddings card ─────────────────────────────────────────────────────
 
-    def __init__(self, window) -> None:
-        super().__init__()
-        self._window = window
-        v = QVBoxLayout(self)
-        v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(6)
-
-        self._rows_host = QWidget()
-        self._rows_layout = QVBoxLayout(self._rows_host)
-        self._rows_layout.setContentsMargins(0, 0, 0, 0)
-        self._rows_layout.setSpacing(6)
-        v.addWidget(self._rows_host)
-
-        add_w = QWidget()
-        add_l = QHBoxLayout(add_w)
-        add_l.setContentsMargins(0, 0, 0, 0)
-        add_btn = QPushButton("+ Add path")
-        add_btn.setProperty("class", "primary")
-        add_btn.setMaximumWidth(140)
-        add_btn.clicked.connect(self._on_add)
-        add_l.addWidget(add_btn)
-        add_l.addStretch(1)
-        v.addWidget(add_w)
-
-        self._row_widgets: list[_McpPathRow] = []
-        self._rebuild()
-
-    def _rebuild(self) -> None:
-        for w in self._row_widgets:
-            w.setParent(None)
-            w.deleteLater()
-        self._row_widgets.clear()
-        cur = list(get_path(read_settings(), "docgraph.mcp.paths", []) or [])
-        for s in cur:
-            self._append_row(str(s))
-
-    def _append_row(self, value: str) -> None:
-        row = _McpPathRow(value, self._window, on_change=self._commit, on_remove=self._on_remove)
-        self._rows_layout.addWidget(row)
-        self._row_widgets.append(row)
-
-    def _on_add(self) -> None:
-        self._append_row("")
-        self._commit()
-
-    def _on_remove(self, row: "_McpPathRow") -> None:
-        # Stop the child first so the port is released before we rewrite the list.
-        path = row.text().strip()
-        if path:
-            async def _go():
-                from docgraph.process import get_mcp
-                await get_mcp().stop_path(path)
-            _run(self._window, _go)
-        try:
-            self._row_widgets.remove(row)
-        except ValueError:
-            pass
-        row.setParent(None)
-        row.deleteLater()
-        self._commit()
-
-    def _commit(self) -> None:
-        paths = [r.text().strip() for r in self._row_widgets if r.text().strip()]
-        patch_settings("docgraph.mcp.paths", paths)
-
-    def refresh(self) -> None:
-        cur = [str(p) for p in (get_path(read_settings(), "docgraph.mcp.paths", []) or [])]
-        existing_nonempty = [r.text() for r in self._row_widgets if r.text().strip()]
-        if cur != existing_nonempty:
-            self._rebuild()
-        for r in self._row_widgets:
-            r.refresh_state()
-
-
-class _McpPathRow(QFrame):
-    def __init__(self, value: str, window, *, on_change, on_remove) -> None:
-        super().__init__()
-        self._window = window
-        self._on_change = on_change
-        self._on_remove = on_remove
-
-        from PySide6.QtWidgets import QLineEdit
-        from tray.qt_theme import BG_ELEV, BORDER
-
-        self.setStyleSheet(
-            f"_McpPathRow {{ background: {BG_ELEV}; border: 1px solid {BORDER}; border-radius: 6px; }}"
-        )
-        h = QHBoxLayout(self)
-        h.setContentsMargins(8, 6, 8, 6)
-        h.setSpacing(8)
-
-        self._edit = QLineEdit(value)
-        self._edit.setPlaceholderText("/path/to/repo")
-        self._edit.editingFinished.connect(self._on_edit_done)
-        h.addWidget(self._edit, 1)
-
-        self._start_btn = QPushButton("▶ Start"); self._start_btn.setProperty("class", "primary")
-        self._start_btn.clicked.connect(self._do_start)
-        h.addWidget(self._start_btn)
-
-        self._stop_btn = QPushButton("Stop"); self._stop_btn.setProperty("class", "danger")
-        self._stop_btn.clicked.connect(self._do_stop)
-        h.addWidget(self._stop_btn)
-
-        self._pill = QLabel("…")
-        self._pill.setProperty("class", "stat_pill")
-        self._pill.setMinimumWidth(220)
-        h.addWidget(self._pill)
-
-        rm_btn = QPushButton("✕")
-        rm_btn.setFlat(True)
-        rm_btn.setFixedWidth(28)
-        rm_btn.setStyleSheet(
-            f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
-            f" QPushButton:hover {{ color: #ff6b6b; }}"
-        )
-        rm_btn.clicked.connect(lambda: self._on_remove(self))
-        h.addWidget(rm_btn)
-
-        self.refresh_state()
-
-    def text(self) -> str:
-        return self._edit.text()
-
-    def _on_edit_done(self) -> None:
-        self._on_change()
-        self.refresh_state()
-
-    def _do_start(self) -> None:
-        path = self.text().strip()
-        if not path:
-            return
-        async def _go():
-            from docgraph.process import get_mcp
-            await get_mcp().start_path(path)
-        _run(self._window, _go)
-
-    def _do_stop(self) -> None:
-        path = self.text().strip()
-        if not path:
-            return
-        async def _go():
-            from docgraph.process import get_mcp
-            await get_mcp().stop_path(path)
-        _run(self._window, _go)
-
-    def refresh_state(self) -> None:
-        path = self.text().strip()
-        if not path:
-            self._pill.setText("(empty)")
-            self._pill.setStyleSheet(f"color: {FG_MUTE};")
-            return
-        try:
-            from docgraph.process import get_mcp
-            kids = get_mcp().status()
-        except Exception as exc:
-            self._pill.setText(f"err: {exc}")
-            self._pill.setStyleSheet(f"color: {ERR};")
-            return
-        match = next((c for c in kids if c.get("path") == path), None)
-        if match and match.get("alive"):
-            extras = []
-            if match.get("port"):    extras.append(f"port={match['port']}")
-            if match.get("pid"):     extras.append(f"pid={match['pid']}")
-            if match.get("bridged"): extras.append(f"bridged={match['bridged']}")
-            self._pill.setText("✓ alive  " + "  ".join(extras))
-            self._pill.setStyleSheet(f"color: {OK};")
-        else:
-            self._pill.setText("✗ stopped")
-            self._pill.setStyleSheet(f"color: {FG_MUTE};")
-
-
-# ── Daemon card ──────────────────────────────────────────────────────────────
-
-def _build_daemon_card(window) -> tuple[QFrame, Callable[[], None] | None]:
-    card, body = _card("Daemon",
-                       "docgraph daemon start — shared loopback embedding daemon. Optional.")
-    body.addWidget(_toggle_row("docgraph.daemon.enabled",      "Enabled",      "Master toggle."))
-    body.addWidget(_toggle_row("docgraph.daemon.auto_start",   "Auto-start",   "Spawn at boot if Enabled."))
-    body.addWidget(_toggle_row("docgraph.daemon.auto_restart", "Auto-restart", "Re-spawn on unexpected exit."))
-    body.addWidget(_number_row("docgraph.daemon.port", "Port", 1024, 65535, 1, 0,
-                                "", "Loopback only. Default 5577."))
-    body.addWidget(_line_row("docgraph.daemon.model", "Model",
+def _build_embeddings_card(window) -> tuple[QFrame, Callable[[], None] | None]:
+    card, body = _card(
+        "Embeddings",
+        "Settings shared by index runs and the host process.",
+    )
+    body.addWidget(_line_row("docgraph.embeddings.model", "Model",
                               "BAAI/bge-small-en-v1.5",
-                              "Must match what your repos were indexed with."))
-    body.addWidget(_toggle_row("docgraph.daemon.gpu", "GPU", "Loads on GPU via ONNX Runtime."))
-
-    drow = QHBoxLayout()
-    dstart = QPushButton("▶ Start"); dstart.setProperty("class", "primary")
-    dstop  = QPushButton("Stop");    dstop.setProperty("class", "danger")
-    drow.addWidget(dstart); drow.addWidget(dstop); drow.addStretch(1)
-    body.addLayout(drow)
-    body.addWidget(_log_hint("docgraph_daemon.log"))
-
-    def _dstart():
-        async def _go():
-            from docgraph.process import get_daemon
-            await get_daemon().start()
-        _run(window, _go)
-
-    def _dstop():
-        async def _go():
-            from docgraph.process import get_daemon
-            await get_daemon().stop()
-        _run(window, _go)
-
-    dstart.clicked.connect(_dstart)
-    dstop.clicked.connect(_dstop)
-
+                              "Empty = docgraph default. Sets DOCGRAPH_EMBED_MODEL."))
+    body.addWidget(_toggle_row("docgraph.embeddings.gpu", "GPU embeddings",
+                                "Requires onnxruntime-gpu / -directml / -silicon installed."))
+    body.addWidget(_number_row("docgraph.index.workers", "Index workers",
+                                0, 64, 1, 0, "", "0 = docgraph default"))
     return card, None

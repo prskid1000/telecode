@@ -1,4 +1,23 @@
-"""Accessors over `settings.docgraph.*` plus binary auto-detection."""
+"""Accessors over `settings.docgraph.*` for the unified-host era.
+
+New shape (settings.example.json):
+
+    "docgraph": {
+      "binary": "",
+      "host": {
+        "enabled": false, "auto_start": false, "auto_restart": true,
+        "host": "127.0.0.1", "port": 5500,
+        "gpu": false
+      },
+      "roots": [
+        { "path": "/path/to/repo", "watch": false }
+      ],
+      "llm":        { "model": "", "host": "localhost", "port": 1235,
+                      "format": "openai", "max_tokens": 150 },
+      "embeddings": { "model": "", "gpu": false },
+      "index":      { "workers": 0 }
+    }
+"""
 from __future__ import annotations
 
 import os
@@ -16,21 +35,13 @@ def _section(name: str) -> dict:
     return _root().get(name, {}) or {}
 
 
+# ── Binary autodetect (unchanged) ──────────────────────────────────────────
+
 def binary_setting() -> str:
     return str(_root().get("binary", "") or "")
 
 
 def resolve_binary() -> str | None:
-    """Return absolute path to the `docgraph` binary, or None if not found.
-
-    Setting empty/blank → autodetect:
-      1. `shutil.which("docgraph")` (handles Windows `.cmd`/`.bat`/`.exe` shims)
-      2. `<settings_dir>/.venv/Scripts/docgraph.exe`
-      3. `~/.local/bin/docgraph.bat`
-      4. `~/.docgraph/.venv/Scripts/docgraph.exe`
-    Setting non-empty → resolved via `shutil.which` first (so `docgraph` works
-    if it's on PATH), then used verbatim if absolute.
-    """
     raw = binary_setting()
     if raw:
         hit = shutil.which(raw)
@@ -55,22 +66,33 @@ def resolve_binary() -> str | None:
     return None
 
 
-def default_path() -> str:
-    """Resolve the default repo path.
+# ── Roots ──────────────────────────────────────────────────────────────────
 
-    Resolution order (first non-empty wins):
-      1. `docgraph.default_path` setting, if non-blank.
-      2. First entry of `docgraph.index.paths` — the index list is the
-         single source of truth, so adding a path there propagates to
-         serve / watch / mcp without further config.
-      3. Filesystem autodetect: first of cwd, `~/.docgraph`, settings dir
-         that already has a `.docgraph/graph.kuzu` file.
-    Returns "" if nothing matches.
-    """
-    raw = str(_root().get("default_path", "") or "").strip()
-    if raw:
-        return raw
-    paths = index_paths()
+def roots() -> list[dict]:
+    """Return the configured roots verbatim. Each entry is
+    `{"path": str, "watch": bool}`. Filters empty paths."""
+    out: list[dict] = []
+    for entry in _root().get("roots") or []:
+        if not isinstance(entry, dict):
+            continue
+        path = str(entry.get("path", "") or "").strip()
+        if not path:
+            continue
+        out.append({"path": path, "watch": bool(entry.get("watch", False))})
+    return out
+
+
+def root_paths() -> list[str]:
+    return [r["path"] for r in roots()]
+
+
+def root_paths_to_watch() -> list[str]:
+    return [r["path"] for r in roots() if r.get("watch")]
+
+
+def default_path() -> str:
+    """First configured root, or filesystem autodetect."""
+    paths = root_paths()
     if paths:
         return paths[0]
     home = Path.home()
@@ -88,75 +110,43 @@ def default_path() -> str:
     return ""
 
 
-# ── Index ────────────────────────────────────────────────────────────────────
-def index_cfg() -> dict:           return _section("index")
-def index_paths() -> list[str]:    return [str(p) for p in (index_cfg().get("paths") or []) if p]
-def index_workers() -> int:        return int(index_cfg().get("workers", 0) or 0)
-def index_gpu() -> bool:           return bool(index_cfg().get("gpu", False))
-def index_llm_model() -> str:      return str(index_cfg().get("llm_model", "") or "")
-def index_llm_host() -> str:       return str(index_cfg().get("llm_host", "localhost") or "localhost")
-def index_llm_port() -> int:       return int(index_cfg().get("llm_port", 1235) or 1235)
-def index_llm_format() -> str:     return str(index_cfg().get("llm_format", "openai") or "openai")
-def index_llm_max_tokens() -> int: return int(index_cfg().get("llm_max_tokens", 150) or 150)
-def index_embedding_model() -> str: return str(index_cfg().get("embedding_model", "") or "")
+# ── Host ───────────────────────────────────────────────────────────────────
+
+def host_cfg() -> dict:           return _section("host")
+def host_enabled() -> bool:       return bool(host_cfg().get("enabled", False))
+def host_auto_start() -> bool:    return bool(host_cfg().get("auto_start", False))
+def host_auto_restart() -> bool:  return bool(host_cfg().get("auto_restart", True))
+def host_host() -> str:           return str(host_cfg().get("host", "127.0.0.1") or "127.0.0.1")
+def host_port() -> int:           return int(host_cfg().get("port", 5500) or 5500)
+def host_gpu() -> bool:           return bool(host_cfg().get("gpu", False))
 
 
-# ── Watch ────────────────────────────────────────────────────────────────────
-def watch_cfg() -> dict:           return _section("watch")
-def watch_enabled() -> bool:       return bool(watch_cfg().get("enabled", False))
-def watch_auto_start() -> bool:    return bool(watch_cfg().get("auto_start", False))
-def watch_auto_restart() -> bool:  return bool(watch_cfg().get("auto_restart", True))
-def watch_path() -> str:           return str(watch_cfg().get("path", "") or default_path())
-def watch_serve_too() -> bool:     return bool(watch_cfg().get("serve_too", False))
-def watch_host() -> str:           return str(watch_cfg().get("host", "127.0.0.1") or "127.0.0.1")
-def watch_port() -> int:           return int(watch_cfg().get("port", 5500) or 5500)
+# ── LLM augmentation ────────────────────────────────────────────────────────
+
+def llm_cfg() -> dict:           return _section("llm")
+def llm_model() -> str:          return str(llm_cfg().get("model", "") or "")
+def llm_host() -> str:           return str(llm_cfg().get("host", "localhost") or "localhost")
+def llm_port() -> int:           return int(llm_cfg().get("port", 1235) or 1235)
+def llm_format() -> str:         return str(llm_cfg().get("format", "openai") or "openai")
+def llm_max_tokens() -> int:     return int(llm_cfg().get("max_tokens", 150) or 150)
 
 
-# ── Serve ────────────────────────────────────────────────────────────────────
-def serve_cfg() -> dict:           return _section("serve")
-def serve_enabled() -> bool:       return bool(serve_cfg().get("enabled", False))
-def serve_auto_start() -> bool:    return bool(serve_cfg().get("auto_start", False))
-def serve_auto_restart() -> bool:  return bool(serve_cfg().get("auto_restart", True))
-def serve_path() -> str:           return str(serve_cfg().get("path", "") or default_path())
-def serve_host() -> str:           return str(serve_cfg().get("host", "127.0.0.1") or "127.0.0.1")
-def serve_port() -> int:           return int(serve_cfg().get("port", 5500) or 5500)
-def serve_gpu() -> bool:           return bool(serve_cfg().get("gpu", False))
+# ── Embeddings ──────────────────────────────────────────────────────────────
+
+def embeddings_cfg() -> dict:    return _section("embeddings")
+def embeddings_model() -> str:   return str(embeddings_cfg().get("model", "") or "")
+def embeddings_gpu() -> bool:    return bool(embeddings_cfg().get("gpu", False))
 
 
-# ── Daemon ───────────────────────────────────────────────────────────────────
-def daemon_cfg() -> dict:          return _section("daemon")
-def daemon_enabled() -> bool:      return bool(daemon_cfg().get("enabled", False))
-def daemon_auto_start() -> bool:   return bool(daemon_cfg().get("auto_start", False))
-def daemon_auto_restart() -> bool: return bool(daemon_cfg().get("auto_restart", True))
-def daemon_port() -> int:          return int(daemon_cfg().get("port", 5577) or 5577)
-def daemon_model() -> str:         return str(daemon_cfg().get("model", "BAAI/bge-small-en-v1.5") or "BAAI/bge-small-en-v1.5")
-def daemon_gpu() -> bool:          return bool(daemon_cfg().get("gpu", False))
+# ── Index (CLI subprocess flags) ───────────────────────────────────────────
 
-
-# ── MCP ──────────────────────────────────────────────────────────────────────
-def mcp_cfg() -> dict:             return _section("mcp")
-def mcp_enabled() -> bool:         return bool(mcp_cfg().get("enabled", False))
-def mcp_auto_start() -> bool:      return bool(mcp_cfg().get("auto_start", False))
-def mcp_auto_restart() -> bool:    return bool(mcp_cfg().get("auto_restart", True))
-def mcp_paths() -> list[str]:
-    raw = [str(p) for p in (mcp_cfg().get("paths") or []) if p]
-    if raw:
-        return raw
-    # Fall back to the full index.paths list — one MCP child per indexed repo.
-    idx = index_paths()
-    if idx:
-        return idx
-    fallback = default_path()
-    return [fallback] if fallback else []
-def mcp_base_port() -> int:        return int(mcp_cfg().get("base_port", 5600) or 5600)
-def mcp_host() -> str:             return str(mcp_cfg().get("host", "127.0.0.1") or "127.0.0.1")
-def mcp_gpu() -> bool:             return bool(mcp_cfg().get("gpu", False))
-def mcp_ready_timeout_sec() -> int: return int(mcp_cfg().get("ready_timeout_sec", 30) or 30)
+def index_cfg() -> dict:         return _section("index")
+def index_workers() -> int:      return int(index_cfg().get("workers", 0) or 0)
 
 
 # ── Logs ─────────────────────────────────────────────────────────────────────
-def log_path(role: str, slug: str | None = None) -> str:
-    """Centralised log path so supervisors and UI tail the same file."""
+
+def log_path(role: str = "host", slug: str | None = None) -> str:
     base = f"docgraph_{role}"
     if slug:
         base = f"{base}_{slug}"
@@ -164,7 +154,7 @@ def log_path(role: str, slug: str | None = None) -> str:
 
 
 def slug_for_path(path: str) -> str:
-    """Stable short slug from a repo path — used for log names + tool prefixes."""
-    name = os.path.basename(os.path.normpath(path)) or "repo"
+    """Mirror docgraph.workspace.slug_for_root."""
+    name = os.path.basename(os.path.normpath(path)) or "root"
     safe = "".join(c if (c.isalnum() or c in "_-") else "_" for c in name)
-    return safe.lower() or "repo"
+    return safe.lower() or "root"

@@ -303,29 +303,31 @@ Right-click submenus (Llama / Proxy / MCP / Bot) refreshed every 2s; all toggles
 
 ## DocGraph integration (`docgraph/`)
 
-Optional supervisor + MCP-bridge wrapper around the [DocGraph](../.docgraph) CLI. Five subprocess types, all modeled on `LlamaSupervisor`:
+Single-host model. Telecode supervises **one** [DocGraph](../.docgraph) subprocess (`docgraph host --root … --root … --port 5500`) covering every configured root. The host exposes web UI + JSON API + MCP HTTP on one port; the bridge registers each tool once as `docgraph_<tool>` (no per-root prefix — agents pick the repo per call via the closed-enum `root` argument the host emits in the tool schema).
 
-| Role | Subprocess | Lock semantics |
-|---|---|---|
-| Index | `docgraph index <path> [--full --gpu --llm-model …]` | One-shot. Holds writer lock for its run. |
-| Watch | `docgraph watch <path> [--serve --host --port]` | Long-running. Holds writer lock for its lifetime. |
-| Serve | `docgraph serve <path> --host <h> --port <p>` | Long-running. Read-only DB. |
-| Daemon | `docgraph daemon start --port <p> [--gpu --model …]` | Long-running. Loopback embedding daemon (default 5577). |
-| MCP | `docgraph mcp <path> --transport http` (one per `mcp.paths` entry, port = `base_port + i` via `DOCGRAPH_PORT` env) | Long-running. Read-only DB. |
+| Concept | Shape |
+|---|---|
+| Long-running supervisor | `HostSupervisor` (only one). Spawns `docgraph host --host <h> --port <p> --root <p1> --root <p2> [--watch <pX>] …`. |
+| One-shot index | `IndexRunner`. Spawns `docgraph index <path> [--full]` per row. Concurrent with the host process — the host reads via Kuzu RO connections; the indexer writes through its own writer connection (per-file lock per root). |
+| Stdio MCP for editors | Not telecode-managed. Editors launch `docgraph mcp <path> --transport stdio`, which probes the running host and proxies through it (strict mode — refuses if the path isn't a registered root, see docgraph CLAUDE.md for the rationale). |
 
-**Binary detection.** `docgraph.binary` empty → `shutil.which("docgraph")` → fall through to `<settings_dir>/.venv/Scripts/docgraph.exe`, `~/.local/bin/docgraph.bat`, `~/.docgraph/.venv/Scripts/docgraph.exe`. Non-empty = use verbatim. Same shape as `llamacpp.binary`.
+**Binary detection.** `docgraph.binary` empty → `shutil.which("docgraph")` → fall through to `<settings_dir>/.venv/Scripts/docgraph.exe`, `~/.local/bin/docgraph.bat`, `~/.docgraph/.venv/Scripts/docgraph.exe`. Non-empty = use verbatim.
 
-**Lock coordination** (DocGraph's writer lock blocks readers — see its CLAUDE.md):
-- Starting Watch or Index for path P → first stops Serve/MCP/Daemon for P + tears down the bridge for P. Restarts them after Index completes.
-- Starting Serve / MCP for P while Watch is up → rejected with a clear error in the UI.
+**Settings shape** (`settings.docgraph.*`):
+- `binary`: optional override for the docgraph executable.
+- `host.{enabled, auto_start, auto_restart, host, port, gpu}`: host process toggles + bind config.
+- `roots: [{path, watch}, ...]`: registered roots. Each entry's `watch` flag is wired to the host as a `--watch <path>` flag at spawn time. Flipping `watch` requires a host restart to take effect (workspace immutability is by design — see docgraph CLAUDE.md).
+- `llm.{model, host, port, format, max_tokens}`: applies at index time.
+- `embeddings.{model, gpu}`: shared by index + host.
+- `index.workers`: optional override for the indexer's process pool.
 
-**MCP bridge** (`docgraph/bridge.py`). On `McpSupervisor` child ready: open `streamablehttp_client(f"http://127.0.0.1:{port}/mcp")`, `await session.list_tools()`, register each in `proxy.managed_tools._REGISTRY` as `docgraph_<slug>_<tool>` (or `docgraph_<tool>` when only one repo is configured). Handler closure opens a transient session per invocation, calls `await session.call_tool(name, args)`, returns `(preview, text_out)`. On stop: pop registry entries + close clients + kill subprocesses + `sweep_port`.
+**MCP bridge** (`docgraph/bridge.py`). On `HostSupervisor` start, after `/api/roots` is reachable: open `streamablehttp_client("http://<h>:<port>/mcp")`, `await session.list_tools()`, register each tool in `proxy.managed_tools._REGISTRY` as `docgraph_<tool>`. Handler closure opens a transient session per invocation. The closed-enum `root` argument in each tool's schema is what scopes calls to a specific repo.
 
-**Master toggles** (DocGraph section in tray) = full lifecycle. Off → kill processes, free ports, unregister bridge. **Per-tool toggles** in the existing Managed list = injection-only; subprocesses stay up.
+**Auto-start.** `docgraph.host.auto_start: true` → spawned in `main.py:_post_init` after the proxy. `_post_shutdown` tears down: bridge → host process.
 
-**Auto-start.** `docgraph.{watch,serve,daemon,mcp}.auto_start: true` → spawned in `main.py:_post_init` after the proxy. `_post_shutdown` tears down in reverse order: bridge → MCP procs → Daemon → Serve → Watch.
+**Logs.** `data/logs/docgraph_host.log` (single host child) + `data/logs/docgraph_index.log` (index runner). Live tail in the global Logs section.
 
-**Logs.** `data/logs/docgraph_<role>[_<slug>].log`, rotated to `.prev` on startup like the other subsystem logs. Live tail in the per-tab section + appears in the global Logs picker.
+**Tray UI.** 4 cards: Host (start/stop/restart + bind config), Roots (table with per-row Index button + Watch toggle + ✕ remove + `+ Add root`), LLM (augmentation knobs), Embeddings (model + GPU). Per-row Watch toggle persists to `docgraph.roots[i].watch` — the host needs a restart to pick up flipped watch flags. Per-row Index runs a one-shot subprocess and updates `data/docgraph-index-state.json`.
 
 ## llama.cpp supervisor (`llamacpp/`)
 

@@ -345,8 +345,9 @@ async def _post_init(app) -> None:
     except Exception as exc:
         log.error("Heartbeat scheduler startup failed: %s", exc, exc_info=True)
 
-    # DocGraph supervisors — bring up any role with auto_start=true. Bridge
-    # registration happens inside McpSupervisor.start() once each child is ready.
+    # DocGraph host — bring up the single host child if Enabled + Auto-start.
+    # Bridge registration happens inside HostSupervisor.start() once /api/roots
+    # is reachable.
     try:
         from docgraph.process import autostart_all as docgraph_autostart
         await docgraph_autostart()
