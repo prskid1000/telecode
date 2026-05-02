@@ -179,13 +179,15 @@ def _build_host_card(window) -> tuple[QFrame, Callable[[], None]]:
     start_btn = QPushButton("▶ Start"); start_btn.setProperty("class", "primary")
     stop_btn  = QPushButton("Stop");    stop_btn.setProperty("class", "danger")
     restart_btn = QPushButton("Restart")
-    pill, refresh_status = _status_pill(_host_status_text)
     action_row.addWidget(start_btn)
     action_row.addWidget(stop_btn)
     action_row.addWidget(restart_btn)
-    action_row.addWidget(pill, 1)
+    action_row.addStretch(1)
     body.addLayout(action_row)
-    body.addWidget(_log_hint("docgraph_host.log"))
+    # Status pill + log hint omitted — the global Status tile and Logs
+    # section already cover both. No-op refresher kept so the card's
+    # public shape (refresh callable) is unchanged.
+    refresh_status = lambda: None  # noqa: E731
 
     def _on_start():
         async def _go():
