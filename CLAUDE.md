@@ -140,7 +140,10 @@ Heartbeat scheduler (off by default):
 | `tray/qt_widgets.py` | Custom `Toggle` (animated pill checkbox) and `NumberEditor` (linked text + slider). |
 | `tray/qt_helpers.py` | `read_settings` / `patch_settings` (atomic + reload), `schedule(loop, coro)`, `humanize(id)`, `build_status()`. |
 | `tray/qt_window.py` | `SettingsWindow` — frameless `QMainWindow` with sidebar + `QStackedWidget`. Per-section `refresh()` on a 1s `QTimer`. Persists last-viewed section. |
-| `tray/qt_sections.py` | One builder per sidebar entry (Status, llama, Models, Proxy, MCP, Managed, Tools, Telegram, Voice, Computer, Sessions, Requests, Logs, Raw). Raw is a JSON editor over the whole settings.json. |
+| `tray/qt_sections.py` | One builder per sidebar entry (Status, llama, Models, Proxy, MCP, Managed, **DocGraph**, Tools, Telegram, Voice, Computer, Sessions, Requests, Logs, Raw). The DocGraph builder returns a `QTabWidget` with internal Index / Watch / Serve / MCP tabs. Raw is a JSON editor over the whole settings.json. |
+| `docgraph/config.py` | Accessors over `settings.docgraph.*` (binary, autodetect fallbacks, per-role paths/ports/flags). |
+| `docgraph/process.py` | Four supervisors modeled on `LlamaSupervisor` — `IndexRunner` (one-shot), `WatchSupervisor`, `ServeSupervisor`, `DaemonSupervisor`, `McpSupervisor` (N children, one per repo path on `base_port + i`). Module singletons + `autostart_all()` / `shutdown_all()`. Lock-coordination guards (Watch/Index for path P stops Serve/MCP/Daemon for P first; Serve/MCP refuse to start while Watch holds P). |
+| `docgraph/bridge.py` | MCP-client → managed_tools registration. Per `McpSupervisor` child: opens an MCP streamable-HTTP session, calls `list_tools()`, registers each as `docgraph_<slug>_<tool>` in `proxy.managed_tools._REGISTRY` (or `docgraph_<tool>` for single-repo). Handlers re-open a transient session per call. Stop = pop registry entries + close clients. |
 | `proxy/request_log.py` | Thread-safe ring buffer (`MAX_ENTRIES=200`) of recent requests — `new_request`/`set_request_preview`/`set_response_preview`/`append_intercept`/`finish`. `proxy.debug=true` dumps finished entries to `data/logs/requests/`. |
 | `proxy/runtime_state.py` | Persists managed/MCP-tool toggles to `data/runtime-overrides.json`. |
 | `llamacpp/state.py` | Persists last-active model to `data/llama-state.json`. Not auto-loaded unless `llamacpp.auto_start: true`. |
@@ -181,6 +184,8 @@ Heartbeat scheduler (off by default):
 | `mcp_server/tools/__init__.py` | Auto-discovers tool modules (drop-in) |
 | `mcp_server/tools/tts.py` | `speak` tool — Kokoro TTS → audio file |
 | `mcp_server/tools/stt.py` | `transcribe` tool — Whisper STT → text |
+| `mcp_server/tools/web_search.py` | `web_search` — Brave scraper (shared with proxy managed). |
+| `mcp_server/tools/code_execution.py` | `code_execution` — sandboxed Python subprocess. |
 | `mcp_server/resources/__init__.py` | Auto-discovers resource modules (drop-in) |
 | `mcp_server/prompts/__init__.py` | Auto-discovers prompt modules (drop-in) |
 
@@ -295,6 +300,32 @@ Qt tray menu + settings window running in a daemon thread inside the bot process
 Right-click submenus (Llama / Proxy / MCP / Bot) refreshed every 2s; all toggles persist via `patch_settings` (atomic write + `config.reload()`). Managed/MCP-tool toggles persist to `data/runtime-overrides.json`; last-active llama model to `data/llama-state.json`.
 
 ---
+
+## DocGraph integration (`docgraph/`)
+
+Optional supervisor + MCP-bridge wrapper around the [DocGraph](../.docgraph) CLI. Five subprocess types, all modeled on `LlamaSupervisor`:
+
+| Role | Subprocess | Lock semantics |
+|---|---|---|
+| Index | `docgraph index <path> [--full --gpu --llm-model …]` | One-shot. Holds writer lock for its run. |
+| Watch | `docgraph watch <path> [--serve --host --port]` | Long-running. Holds writer lock for its lifetime. |
+| Serve | `docgraph serve <path> --host <h> --port <p>` | Long-running. Read-only DB. |
+| Daemon | `docgraph daemon start --port <p> [--gpu --model …]` | Long-running. Loopback embedding daemon (default 5577). |
+| MCP | `docgraph mcp <path> --transport http` (one per `mcp.paths` entry, port = `base_port + i` via `DOCGRAPH_PORT` env) | Long-running. Read-only DB. |
+
+**Binary detection.** `docgraph.binary` empty → `shutil.which("docgraph")` → fall through to `<settings_dir>/.venv/Scripts/docgraph.exe`, `~/.local/bin/docgraph.bat`, `~/.docgraph/.venv/Scripts/docgraph.exe`. Non-empty = use verbatim. Same shape as `llamacpp.binary`.
+
+**Lock coordination** (DocGraph's writer lock blocks readers — see its CLAUDE.md):
+- Starting Watch or Index for path P → first stops Serve/MCP/Daemon for P + tears down the bridge for P. Restarts them after Index completes.
+- Starting Serve / MCP for P while Watch is up → rejected with a clear error in the UI.
+
+**MCP bridge** (`docgraph/bridge.py`). On `McpSupervisor` child ready: open `streamablehttp_client(f"http://127.0.0.1:{port}/mcp")`, `await session.list_tools()`, register each in `proxy.managed_tools._REGISTRY` as `docgraph_<slug>_<tool>` (or `docgraph_<tool>` when only one repo is configured). Handler closure opens a transient session per invocation, calls `await session.call_tool(name, args)`, returns `(preview, text_out)`. On stop: pop registry entries + close clients + kill subprocesses + `sweep_port`.
+
+**Master toggles** (DocGraph section in tray) = full lifecycle. Off → kill processes, free ports, unregister bridge. **Per-tool toggles** in the existing Managed list = injection-only; subprocesses stay up.
+
+**Auto-start.** `docgraph.{watch,serve,daemon,mcp}.auto_start: true` → spawned in `main.py:_post_init` after the proxy. `_post_shutdown` tears down in reverse order: bridge → MCP procs → Daemon → Serve → Watch.
+
+**Logs.** `data/logs/docgraph_<role>[_<slug>].log`, rotated to `.prev` on startup like the other subsystem logs. Live tail in the per-tab section + appears in the global Logs picker.
 
 ## llama.cpp supervisor (`llamacpp/`)
 
@@ -467,6 +498,10 @@ Streamable HTTP MCP server (FastMCP, port 1236). Drop-in tools/resources/prompts
 | MCP server not starting | Check `mcp_server.enabled` is `true`; check port 1236 not in use |
 | MCP speak fails | Kokoro TTS must be running on `mcp_server.tts_url` (default :6500) |
 | MCP transcribe fails | Whisper STT must be running on `mcp_server.stt_url` (default :6600) |
+| DocGraph subprocess won't start | Check `data/logs/docgraph_<role>.log`. Verify `docgraph.binary` points at a real CLI; empty = `shutil.which("docgraph")` then venv fallbacks. |
+| DocGraph MCP child can't bind port | Stale child from a previous run holding `base_port + i`. Supervisor sweeps before bind; if it persists, raise `docgraph.mcp.base_port`. |
+| DocGraph Watch / Serve won't start | Another docgraph process holds the writer/reader lock. Stop the offending role from the tray, or kill the standalone CLI invocation. |
+| DocGraph bridge tools missing in proxy | `docgraph.mcp.enabled` must be on AND children must reach ready (`/mcp` reachable). Check `docgraph_mcp_<slug>.log` for spawn errors. |
 
 ---
 

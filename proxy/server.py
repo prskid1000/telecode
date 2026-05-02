@@ -559,12 +559,6 @@ async def _prepare_internal_body(
     ) or []
     # Honor live runtime toggles set via the control panel
     managed_inject: list[str] = [n for n in managed_inject_raw if _is_enabled(n)]
-    
-    # Filter session tools if disabled in config
-    if not config.enable_session_tools():
-        session_tools = {"session_create", "session_get", "session_list", "session_delete",
-                         "task_submit", "task_status", "task_list_types"}
-        managed_inject = [n for n in managed_inject if n not in session_tools]
 
     internal, deferred = _apply_tool_transforms(
         internal, profile, use_tool_search, managed_inject,

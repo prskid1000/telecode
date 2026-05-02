@@ -33,11 +33,12 @@ from tray.app import start_tray_in_thread
 # start with to land in the file. A single Filter dispatches by name so we
 # don't have to attach handlers to every individual logger.
 _SUB_LOGS = {
-    "proxy.log": ("telecode.proxy", "telecode.runtime_state", "telecode.web_search"),
-    "mcp.log":   ("telecode.mcp_server",),
-    "bot.log":   ("telecode.handlers", "telecode.live", "telecode.rate",
-                  "telecode.topic_manager"),
-    "voice.log": ("telecode.voice",),
+    "proxy.log":     ("telecode.proxy", "telecode.runtime_state", "telecode.web_search"),
+    "mcp.log":       ("telecode.mcp_server",),
+    "bot.log":       ("telecode.handlers", "telecode.live", "telecode.rate",
+                      "telecode.topic_manager"),
+    "voice.log":     ("telecode.voice",),
+    "docgraph.log":  ("telecode.docgraph",),
 }
 
 
@@ -344,8 +345,24 @@ async def _post_init(app) -> None:
     except Exception as exc:
         log.error("Heartbeat scheduler startup failed: %s", exc, exc_info=True)
 
+    # DocGraph supervisors — bring up any role with auto_start=true. Bridge
+    # registration happens inside McpSupervisor.start() once each child is ready.
+    try:
+        from docgraph.process import autostart_all as docgraph_autostart
+        await docgraph_autostart()
+    except Exception as exc:
+        log.error("DocGraph auto-start failed: %s", exc, exc_info=True)
+
 
 async def _post_shutdown(app) -> None:
+    # DocGraph supervisors — close MCP bridges + kill subprocesses + free ports
+    # before the proxy tears down (managed_tools._REGISTRY entries removed first).
+    try:
+        from docgraph.process import shutdown_all as docgraph_shutdown
+        await docgraph_shutdown()
+    except Exception:
+        pass
+
     # Heartbeat scheduler — stop before the task queue's executors die so
     # in-flight tracking can settle.
     try:
