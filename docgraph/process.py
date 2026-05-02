@@ -12,6 +12,7 @@ Public surface (used by main.py + the tray UI):
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import shutil
@@ -108,8 +109,31 @@ async def _index_via_host(path: str, full: bool, port: int) -> tuple[bool, str]:
             async with session.post(url, json={"full": full}) as resp:
                 body = await resp.text()
                 if resp.status != 200:
-                    return False, f"POST /api/admin/index → HTTP {resp.status}: {body[:200]}"
-                return True, body[:2000]
+                    return False, f"POST /api/admin/index → HTTP {resp.status}: {body[:500]}"
+                # The host returns {slug, full, stats, log}. The `log`
+                # field is the captured Rich transcript (progress bar
+                # finals + per-stage timings); surface that into our log
+                # file instead of dumping raw JSON.
+                try:
+                    payload = json.loads(body)
+                except Exception:
+                    return True, body[:2000]
+                lines: list[str] = []
+                cap = payload.get("log") or ""
+                if cap:
+                    lines.append(cap.rstrip())
+                stats = payload.get("stats") or {}
+                if stats:
+                    summary = (
+                        f"\n--- done: {stats.get('files', '?')} files, "
+                        f"{stats.get('changed', '?')} changed, "
+                        f"{stats.get('deleted', '?')} deleted, "
+                        f"{stats.get('entities', '?')} entities, "
+                        f"{stats.get('errors', 0)} errors, "
+                        f"{stats.get('elapsed', 0):.2f}s ---"
+                    )
+                    lines.append(summary)
+                return True, "\n".join(lines) if lines else body[:2000]
         except Exception as exc:
             return False, f"POST /api/admin/index failed: {exc}"
 
