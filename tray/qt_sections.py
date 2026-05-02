@@ -524,12 +524,9 @@ def _refresh_docgraph(tile: _StatusTile, dg: dict) -> None:
         bits = [err]
     tile.set_sub(" · ".join(bits) if bits else ("alive" if alive else ""))
 
-    if n_roots:
-        tile.set_viz(_make_dots(n_roots, n_watch if alive else 0, on_color=OK, off_color=ACCENT))
-    elif err and not alive:
-        tile.set_viz(None)
-    else:
-        tile.set_viz(None)
+    # Sub line already says "<N> roots · <M> watching · <K> tools bridged"
+    # — a 1-dot strip on top is just visual noise.
+    tile.set_viz(None)
 
 
 # ══════════════════════════════════════════════════════════════════════
