@@ -62,7 +62,6 @@ def default_path() -> str:
 # ── Index ────────────────────────────────────────────────────────────────────
 def index_cfg() -> dict:           return _section("index")
 def index_paths() -> list[str]:    return [str(p) for p in (index_cfg().get("paths") or []) if p]
-def index_full() -> bool:          return bool(index_cfg().get("full", False))
 def index_workers() -> int:        return int(index_cfg().get("workers", 0) or 0)
 def index_gpu() -> bool:           return bool(index_cfg().get("gpu", False))
 def index_llm_model() -> str:      return str(index_cfg().get("llm_model", "") or "")
