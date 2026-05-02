@@ -183,7 +183,7 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
         port = get_path(settings, "proxy.port", 1235)
         webbrowser.open(f"http://{host}:{port}/ui")
 
-    open_ui_action = QAction("Open Session UI (Browser)", menu)
+    open_ui_action = QAction("Open Agent Manager (Browser)", menu)
     open_ui_action.triggered.connect(_open_ui)
     menu.addAction(open_ui_action)
 
@@ -196,7 +196,7 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
         port = get_path(settings, "docgraph.serve.port", 5500) or 5500
         webbrowser.open(f"http://{host}:{port}")
 
-    open_docgraph_action = QAction("Open DocGraph UI (Browser)", menu)
+    open_docgraph_action = QAction("Open Document Index (Browser)", menu)
     open_docgraph_action.triggered.connect(_open_docgraph_ui)
     open_docgraph_action.setVisible(False)
     menu.addAction(open_docgraph_action)
@@ -313,7 +313,7 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
             open_docgraph_action.setVisible(serve_alive)
             if serve_alive:
                 p = dg.get("serve", {}).get("port") or get_path(settings, "docgraph.serve.port", 5500)
-                open_docgraph_action.setText(f"Open DocGraph UI (Browser) — :{p}")
+                open_docgraph_action.setText(f"Open Document Index (Browser) — :{p}")
         except Exception:
             open_docgraph_action.setVisible(False)
 

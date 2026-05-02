@@ -22,7 +22,7 @@ from tray.qt_widgets import row_label
 from tray.qt_helpers import (
     read_settings, get_path, patch_settings, schedule, humanize,
 )
-from tray.qt_theme import FG, FG_DIM, FG_MUTE, BG_CARD, OK, ERR, WARN
+from tray.qt_theme import FG, FG_DIM, FG_MUTE, BG, BG_CARD, BORDER, OK, ERR, WARN
 from tray.qt_sections import (
     _page, _card, _section_header, _row, _toggle_row, _line_row,
     _list_row, _number_row, _enum_row_strs, _wrap_align,
@@ -45,6 +45,16 @@ def build_docgraph_tabs(window) -> QWidget:
     layout.addWidget(binary_card)
 
     tabs = QTabWidget()
+    tabs.setStyleSheet(
+        f"QTabWidget::pane {{ background: {BG}; border: 1px solid {BORDER};"
+        f" border-top-left-radius: 0; border-top-right-radius: 8px;"
+        f" border-bottom-left-radius: 8px; border-bottom-right-radius: 8px; }}"
+        f" QTabBar::tab {{ background: transparent; color: {FG_DIM};"
+        f" padding: 6px 14px; border: 1px solid transparent; border-bottom: none; }}"
+        f" QTabBar::tab:selected {{ background: {BG}; color: {FG};"
+        f" border: 1px solid {BORDER}; border-bottom: 1px solid {BG}; }}"
+        f" QTabBar::tab:hover:!selected {{ color: {FG}; }}"
+    )
     tabs.addTab(_build_index_tab(window), "Index")
     tabs.addTab(_build_watch_tab(window), "Watch")
     tabs.addTab(_build_serve_tab(window), "Serve")
@@ -114,11 +124,16 @@ def _status_pill(getter):
 
 
 def _tab_page() -> tuple[QWidget, QVBoxLayout]:
-    """Plain (non-scrolling) tab body. Outer page already scrolls."""
+    """Plain (non-scrolling) tab body. Outer page already scrolls.
+
+    Pins content to the top so QTabWidget's tallest-tab sizing doesn't
+    stretch shorter tabs' cards into a tall grey rectangle.
+    """
     page = QWidget()
     layout = QVBoxLayout(page)
     layout.setContentsMargins(8, 8, 8, 8)
     layout.setSpacing(10)
+    layout.setAlignment(Qt.AlignmentFlag.AlignTop)
     return page, layout
 
 
@@ -437,10 +452,10 @@ def _build_watch_tab(window) -> QWidget:
 # ── Serve tab ────────────────────────────────────────────────────────────────
 
 def _build_serve_tab(window) -> QWidget:
-    tab = _build_role_tab(
+    return _build_role_tab(
         window, role="serve",
         title="Serve",
-        sub="docgraph serve — web UI + JSON API. Read-only DB.",
+        sub="docgraph serve — web UI + JSON API. Read-only DB. Use the tray menu's 'Open Document Index' entry to open it in a browser.",
         rows=[
             ("toggle", "docgraph.serve.enabled",      "Enabled",      "Master toggle."),
             ("toggle", "docgraph.serve.auto_start",   "Auto-start",   "Start at boot if Enabled."),
@@ -454,39 +469,6 @@ def _build_serve_tab(window) -> QWidget:
         log_basename="docgraph_serve.log",
         get_supervisor=lambda: __import__("docgraph.process", fromlist=["get_serve"]).get_serve(),
     )
-
-    open_btn = QPushButton("🌐  Open DocGraph UI in Browser")
-    open_btn.setProperty("class", "primary")
-    open_btn.setEnabled(False)
-
-    def _do_open():
-        import webbrowser
-        from docgraph import config as dg_cfg
-        host = dg_cfg.serve_host()
-        if host == "0.0.0.0":
-            host = "127.0.0.1"
-        webbrowser.open(f"http://{host}:{dg_cfg.serve_port()}")
-    open_btn.clicked.connect(_do_open)
-
-    if tab.layout() is not None:
-        tab.layout().insertWidget(1, open_btn)
-
-    prev_refresh = getattr(tab, "refresh", None)
-
-    def refresh_with_open():
-        if prev_refresh is not None:
-            try:
-                prev_refresh()
-            except Exception:
-                pass
-        try:
-            from docgraph.process import status_snapshot
-            alive = bool(status_snapshot().get("serve", {}).get("alive"))
-        except Exception:
-            alive = False
-        open_btn.setEnabled(alive)
-    tab.refresh = refresh_with_open  # type: ignore[attr-defined]
-    return tab
 
 
 # ── MCP tab (+ Daemon at bottom) ─────────────────────────────────────────────
