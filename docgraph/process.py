@@ -1322,23 +1322,23 @@ class HostSupervisor:
             return
         self._restart_task = loop.create_task(self._auto_restart_loop())
 
-#     async def _auto_restart_loop(self) -> None:
-#         while True:
-#             await asyncio.sleep(2.0)
-#             proc = self._proc
-#             if proc is None:
-#                 return
-#             if proc.poll() is None:
-#                 continue
-#             log.warning("docgraph host: subprocess exited (code %s) — restarting",
-#                         proc.returncode)
-#             try:
-#                 async with self._lock:
-#                     await self._stop_locked()
-#                     await self._start_locked()
-#             except Exception as exc:
-#                 log.error("docgraph host: auto-restart failed: %s", exc)
-#                 return
+    async def _auto_restart_loop(self) -> None:
+        while True:
+            await asyncio.sleep(2.0)
+            proc = self._proc
+            if proc is None:
+                return
+            if proc.poll() is None:
+                continue
+            log.warning("docgraph host: subprocess exited (code %s) — restarting",
+                        proc.returncode)
+            try:
+                async with self._lock:
+                    await self._stop_locked()
+                    await self._start_locked()
+            except Exception as exc:
+                log.error("docgraph host: auto-restart failed: %s", exc)
+                return
 
 
 # ── Module singletons ──────────────────────────────────────────────────────
