@@ -233,6 +233,10 @@ def _build_groups_card(window) -> tuple[QFrame, Callable[[], None]]:
         "Multiple code paths sharing one Kuzu database per group.",
     )
 
+    # Full rebuild toggle
+    body.addWidget(_toggle_row("docgraph.host.full_rebuild", "Full rebuild",
+                                "On = --full / --force. Off = incremental."))
+
     groups_widget = _GroupsTable(window)
     body.addWidget(groups_widget)
 
