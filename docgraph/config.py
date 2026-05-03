@@ -66,11 +66,17 @@ def resolve_binary() -> str | None:
     return None
 
 
-# ── Roots ──────────────────────────────────────────────────────────────────
+# ── Roots & Groups ────────────────────────────────────────────────────────
 
 def roots() -> list[dict]:
     """Return the configured roots verbatim. Each entry is
-    `{"path": str, "watch": bool}`. Filters empty paths."""
+    `{"path": str, "watch": bool}`. Filters empty paths.
+
+    Note: roots are deprecated in favor of groups. If groups are configured,
+    this returns an empty list. If neither roots nor groups are configured,
+    roots are read from settings."""
+    if groups():  # groups take precedence
+        return []
     out: list[dict] = []
     for entry in _root().get("roots") or []:
         if not isinstance(entry, dict):
@@ -82,11 +88,56 @@ def roots() -> list[dict]:
     return out
 
 
+def groups() -> list[dict]:
+    """Return configured groups. Each entry is:
+    `{
+      "name": str,
+      "db_path": str,
+      "paths": [{"path": str, "watch": bool}, ...],
+    }`.
+    Returns empty list if no groups configured."""
+    out: list[dict] = []
+    for entry in _root().get("groups") or []:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name", "") or "").strip()
+        db_path = str(entry.get("db_path", "") or "").strip()
+        if not name or not db_path:
+            continue
+        paths: list[dict] = []
+        for path_entry in entry.get("paths") or []:
+            if not isinstance(path_entry, dict):
+                continue
+            path = str(path_entry.get("path", "") or "").strip()
+            if not path:
+                continue
+            paths.append({"path": path, "watch": bool(path_entry.get("watch", False))})
+        if paths:  # only add group if it has at least one path
+            out.append({"name": name, "db_path": db_path, "paths": paths})
+    return out
+
+
 def root_paths() -> list[str]:
+    """All member paths from groups, or root paths if groups not configured."""
+    if groups():
+        paths = []
+        for g in groups():
+            for p in g.get("paths", []):
+                if p["path"]:
+                    paths.append(p["path"])
+        return paths
     return [r["path"] for r in roots()]
 
 
 def root_paths_to_watch() -> list[str]:
+    """Watch-enabled paths from groups or roots."""
+    if groups():
+        paths = []
+        for g in groups():
+            for p in g.get("paths", []):
+                if p.get("watch") and p["path"]:
+                    paths.append(p["path"])
+        return paths
     return [r["path"] for r in roots() if r.get("watch")]
 
 
@@ -108,6 +159,14 @@ def default_path() -> str:
         except OSError:
             pass
     return ""
+
+
+# ── Locks & Timeouts ──────────────────────────────────────────────────────
+
+def locks() -> dict:
+    """Return lock timeouts from docgraph.locks section. Used to spawn
+    the host with --read-wait-timeout, --write-wait-timeout, etc."""
+    return _section("locks") or {}
 
 
 # ── Host ───────────────────────────────────────────────────────────────────

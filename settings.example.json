@@ -52,9 +52,26 @@
       "debounce": 500
     },
 
-    "roots": [
-      { "path": "", "watch": false }
+    "groups": [
+      {
+        "name": "myapp-backend",
+        "db_path": "C:\\projects\\myapp\\.docgraph\\backend.kuzu",
+        "paths": [
+          { "path": "C:\\projects\\myapp\\src\\api", "watch": true },
+          { "path": "C:\\projects\\myapp\\src\\db", "watch": false }
+        ]
+      }
     ],
+
+    "roots": [],
+
+    "locks": {
+      "read_wait_timeout": 5.0,
+      "write_wait_timeout": 60.0,
+      "wiki_write_timeout": 180.0,
+      "watcher_write_timeout": 0.0,
+      "force_free_after": 300.0
+    },
 
     "llm": {
       "model": "",

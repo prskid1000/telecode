@@ -1061,6 +1061,7 @@ class HostSupervisor:
         self._started_at: float = 0.0
         self._port: int | None = None
         self._restart_task: Optional[asyncio.Task] = None
+        self._listener_task: Optional[asyncio.Task] = None
         self._last_error: str | None = None
         self._bridged_count = 0
 
@@ -1106,21 +1107,56 @@ class HostSupervisor:
         await self.start()
 
     async def _start_locked(self) -> None:
+        groups = dg_cfg.groups()
         roots = dg_cfg.root_paths()
-        if not roots:
+        if not groups and not roots:
             raise RuntimeError(
-                "docgraph.roots is empty — add at least one root in settings."
+                "docgraph.groups and docgraph.roots are both empty — "
+                "add at least one group or root in settings."
             )
         binary = _binary_or_raise()
         port = dg_cfg.host_port()
         host_addr = dg_cfg.host_host()
         argv = [binary, "host", "--host", host_addr, "--port", str(port)]
-        for r in roots:
-            argv += ["--root", r]
-        watched = [w for w in dg_cfg.root_paths_to_watch() if w in roots]
-        for w in watched:
-            argv += ["--watch", w]
-        if watched and dg_cfg.host_debounce() and dg_cfg.host_debounce() != 500:
+
+        # Use groups if configured; fall back to roots for backward compatibility
+        if groups:
+            for g in groups:
+                name = g.get("name", "")
+                db_path = g.get("db_path", "")
+                paths = g.get("paths", [])
+                if not name or not db_path or not paths:
+                    continue
+                # Format: --group name <db_path> <path1> [<path2> ...]
+                argv += ["--group", name, db_path]
+                for p in paths:
+                    argv.append(p["path"])
+                # Add watch flags after the group
+                for p in paths:
+                    if p.get("watch"):
+                        argv += ["--watch-group", name, p["path"]]
+        else:
+            for r in roots:
+                argv += ["--root", r]
+            watched = [w for w in dg_cfg.root_paths_to_watch() if w in roots]
+            for w in watched:
+                argv += ["--watch", w]
+
+        # Lock timeouts (optional, only if set)
+        lock_cfg = dg_cfg.locks() if hasattr(dg_cfg, "locks") else {}
+        if lock_cfg:
+            if lock_cfg.get("read_wait_timeout", 0) > 0:
+                argv += ["--read-wait-timeout", str(lock_cfg["read_wait_timeout"])]
+            if lock_cfg.get("write_wait_timeout", 0) > 0:
+                argv += ["--write-wait-timeout", str(lock_cfg["write_wait_timeout"])]
+            if lock_cfg.get("wiki_write_timeout", 0) > 0:
+                argv += ["--wiki-write-timeout", str(lock_cfg["wiki_write_timeout"])]
+            if lock_cfg.get("watcher_write_timeout", 0) > 0:
+                argv += ["--watcher-write-timeout", str(lock_cfg["watcher_write_timeout"])]
+            if lock_cfg.get("force_free_after", 0) > 0:
+                argv += ["--force-free-after", str(lock_cfg["force_free_after"])]
+
+        if dg_cfg.host_debounce() and dg_cfg.host_debounce() != 500:
             argv += ["--debounce", str(dg_cfg.host_debounce())]
         # Configuration goes through `docgraph host` CLI flags rather than
         # env vars. Keeps the spawn introspectable from `ps` / Process Hacker
@@ -1225,6 +1261,16 @@ class HostSupervisor:
         except Exception as exc:
             log.error("docgraph host: bridge failed: %s", exc)
             self._bridged_count = 0
+        # Start the groups sync listener for roots_changed events
+        try:
+            from . import groups_sync
+            loop = asyncio.get_running_loop()
+            self._listener_task = loop.create_task(
+                groups_sync.listen_for_roots_changed(host_addr, port)
+            )
+            log.info("docgraph host: groups_sync listener started")
+        except Exception as exc:
+            log.warning("docgraph host: failed to start groups_sync listener: %s", exc)
         self._arm_auto_restart(dg_cfg.host_auto_restart())
 
     async def _stop_locked(self) -> None:
@@ -1233,6 +1279,13 @@ class HostSupervisor:
         except Exception:
             pass
         self._bridged_count = 0
+        if self._listener_task and not self._listener_task.done():
+            self._listener_task.cancel()
+            try:
+                await self._listener_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._listener_task = None
         proc = self._proc
         self._proc = None
         if self._restart_task and not self._restart_task.done():

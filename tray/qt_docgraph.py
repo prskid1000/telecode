@@ -57,6 +57,7 @@ def build_docgraph_tabs(window) -> QWidget:
 
     for build in (
         _build_host_card,
+        _build_groups_card,
         _build_roots_card,
         _build_docs_card,
         _build_documents_index_card,
@@ -220,6 +221,396 @@ def _fmt_phase_label(kind: str, phase: str, module: str = "") -> tuple[str, int,
 
 
 # ── Host card ────────────────────────────────────────────────────────────
+
+def _build_groups_card(window) -> tuple[QFrame, Callable[[], None]]:
+    """Groups management card — add/edit/remove groups and their member paths.
+
+    Groups are the newer multi-root feature; roots are legacy. When groups
+    are configured, roots are ignored. Each group has a name, db_path, and
+    a list of member paths with watch flags."""
+    card, body = _card(
+        "Groups",
+        "Multiple code paths sharing one Kuzu database per group.",
+    )
+
+    groups_widget = _GroupsTable(window)
+    body.addWidget(groups_widget)
+
+    def refresh():
+        groups_widget.refresh()
+
+    return card, refresh
+
+
+class _GroupsTable(QWidget):
+    """Editor for `docgraph.groups[]` — each group has name, db_path, and member paths."""
+
+    def __init__(self, window) -> None:
+        super().__init__()
+        self._window = window
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(6)
+
+        self._groups_host = QWidget()
+        self._groups_layout = QVBoxLayout(self._groups_host)
+        self._groups_layout.setContentsMargins(0, 0, 0, 0)
+        self._groups_layout.setSpacing(6)
+        v.addWidget(self._groups_host)
+
+        add_w = QWidget()
+        add_l = QHBoxLayout(add_w)
+        add_l.setContentsMargins(0, 0, 0, 0)
+        add_btn = QPushButton("+ Add group")
+        add_btn.setProperty("class", "primary")
+        add_btn.setMaximumWidth(140)
+        add_btn.clicked.connect(self._on_add)
+        add_l.addWidget(add_btn)
+        add_l.addStretch(1)
+        v.addWidget(add_w)
+
+        self._group_widgets: list[_GroupRow] = []
+        self._rebuild()
+
+    def _rebuild(self) -> None:
+        for w in self._group_widgets:
+            w.setParent(None)
+            w.deleteLater()
+        self._group_widgets.clear()
+        cur = list(get_path(read_settings(), "docgraph.groups", []) or [])
+        for entry in cur:
+            if isinstance(entry, dict):
+                name = str(entry.get("name", "") or "")
+                db_path = str(entry.get("db_path", "") or "")
+                paths = list(entry.get("paths", []) or [])
+                self._append_group(name, db_path, paths)
+
+    def _append_group(self, name: str, db_path: str, paths: list) -> None:
+        row = _GroupRow(
+            name, db_path, paths, self._window,
+            on_change=self._commit, on_remove=self._on_remove,
+        )
+        self._groups_layout.addWidget(row)
+        self._group_widgets.append(row)
+
+    def _on_add(self) -> None:
+        self._append_group("", "", [])
+        self._commit()
+
+    def _on_remove(self, row: "_GroupRow") -> None:
+        try:
+            self._group_widgets.remove(row)
+        except ValueError:
+            pass
+        row.setParent(None)
+        row.deleteLater()
+        self._commit()
+
+    def _commit(self) -> None:
+        out = []
+        for g in self._group_widgets:
+            name = g.name_text().strip()
+            db_path = g.db_path_text().strip()
+            paths = g.get_paths()
+            if not name or not db_path or not paths:
+                continue
+            out.append({"name": name, "db_path": db_path, "paths": paths})
+        patch_settings("docgraph.groups", out)
+
+    def refresh(self) -> None:
+        cur = list(get_path(read_settings(), "docgraph.groups", []) or [])
+        cur_norm = [
+            {
+                "name": str(e.get("name", "") if isinstance(e, dict) else ""),
+                "db_path": str(e.get("db_path", "") if isinstance(e, dict) else ""),
+                "paths": list(e.get("paths", []) if isinstance(e, dict) else []),
+            }
+            for e in cur
+        ]
+        cur_norm = [e for e in cur_norm if e["name"] and e["db_path"] and e["paths"]]
+        cur_view = [
+            {"name": g.name_text().strip(), "db_path": g.db_path_text().strip(), "paths": g.get_paths()}
+            for g in self._group_widgets
+            if g.name_text().strip() and g.db_path_text().strip() and g.get_paths()
+        ]
+        if cur_norm != cur_view:
+            self._rebuild()
+
+
+class _GroupRow(QFrame):
+    """Single group card — shows name, db_path, and member paths with watch toggles."""
+
+    def __init__(self, name: str, db_path: str, paths: list, window, *, on_change, on_remove) -> None:
+        super().__init__()
+        self._window = window
+        self._on_change = on_change
+        self._on_remove = on_remove
+
+        self.setStyleSheet(
+            f"_GroupRow {{ background: {BG_ELEV}; border: 1px solid {BORDER}; border-radius: 6px; }}"
+        )
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 6, 8, 6)
+        outer.setSpacing(6)
+
+        # ── Group header: name + db_path + remove ──
+        header = QWidget()
+        hh = QHBoxLayout(header)
+        hh.setContentsMargins(0, 0, 0, 0)
+        hh.setSpacing(6)
+
+        self._name_edit = QLineEdit(name)
+        self._name_edit.setPlaceholderText("Group name")
+        self._name_edit.editingFinished.connect(self._on_change)
+        self._name_edit.setMinimumWidth(100)
+        self._name_edit.setMaximumWidth(180)
+        hh.addWidget(self._name_edit)
+
+        self._db_edit = QLineEdit(db_path)
+        self._db_edit.setPlaceholderText("/path/.docgraph/db.kuzu")
+        self._db_edit.editingFinished.connect(self._on_change)
+        self._db_edit.setMinimumWidth(180)
+        hh.addWidget(self._db_edit, 1)
+
+        rm_btn = QPushButton("✕")
+        rm_btn.setFlat(True)
+        rm_btn.setFixedWidth(28)
+        rm_btn.setStyleSheet(
+            f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
+            f" QPushButton:hover {{ color: #ff6b6b; }}"
+        )
+        rm_btn.clicked.connect(lambda: self._on_remove(self))
+        hh.addWidget(rm_btn)
+
+        outer.addWidget(header)
+
+        # ── Member paths list ──
+        members_label = QLabel("Member paths:")
+        members_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+        outer.addWidget(members_label)
+
+        self._members_host = QWidget()
+        self._members_layout = QVBoxLayout(self._members_host)
+        self._members_layout.setContentsMargins(6, 0, 0, 0)
+        self._members_layout.setSpacing(4)
+        outer.addWidget(self._members_host)
+
+        # ── Add member button ──
+        add_member_btn = QPushButton("+ Add member")
+        add_member_btn.setProperty("class", "secondary")
+        add_member_btn.setMaximumWidth(120)
+        add_member_btn.clicked.connect(self._on_add_member)
+        outer.addWidget(add_member_btn)
+
+        # ── Action buttons (Index, Wiki, Clear) ──
+        actions_w = QWidget()
+        actions_h = QHBoxLayout(actions_w)
+        actions_h.setContentsMargins(0, 0, 0, 0)
+        actions_h.setSpacing(6)
+
+        self._index_btn = QPushButton("▶ Index")
+        self._index_btn.clicked.connect(self._on_index)
+        actions_h.addWidget(self._index_btn)
+
+        self._wiki_btn = QPushButton("📋 Wiki")
+        self._wiki_btn.clicked.connect(self._on_wiki)
+        actions_h.addWidget(self._wiki_btn)
+
+        self._clear_btn = QPushButton("🗑 Clear")
+        self._clear_btn.setProperty("class", "danger")
+        self._clear_btn.clicked.connect(self._on_clear)
+        actions_h.addWidget(self._clear_btn)
+
+        actions_h.addStretch(1)
+
+        # Status indicator
+        self._status_label = QLabel("")
+        self._status_label.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
+        actions_h.addWidget(self._status_label)
+
+        outer.addWidget(actions_w)
+
+        # ── Watch toggle ──
+        watch_w = QWidget()
+        watch_h = QHBoxLayout(watch_w)
+        watch_h.setContentsMargins(0, 0, 0, 0)
+        watch_h.setSpacing(4)
+        watch_label = QLabel("Watch")
+        watch_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+        self._watch_toggle = Toggle()
+        watch_h.addWidget(watch_label)
+        watch_h.addWidget(self._watch_toggle)
+        watch_h.addStretch(1)
+        outer.addWidget(watch_w)
+
+        self._member_rows: list[_MemberRow] = []
+        self._rebuild_members(paths)
+
+    def _rebuild_members(self, paths: list) -> None:
+        for w in self._member_rows:
+            w.setParent(None)
+            w.deleteLater()
+        self._member_rows.clear()
+        for path_entry in paths:
+            if isinstance(path_entry, dict):
+                path = str(path_entry.get("path", "") or "")
+                watch = bool(path_entry.get("watch", False))
+            else:
+                path, watch = str(path_entry), False
+            self._add_member_row(path, watch)
+
+    def _add_member_row(self, path: str, watch: bool) -> None:
+        row = _MemberRow(
+            path, watch,
+            on_change=self._on_change, on_remove=self._on_remove_member,
+        )
+        self._members_layout.addWidget(row)
+        self._member_rows.append(row)
+
+    def _on_add_member(self) -> None:
+        self._add_member_row("", False)
+        self._on_change()
+
+    def _on_remove_member(self, row: "_MemberRow") -> None:
+        try:
+            self._member_rows.remove(row)
+        except ValueError:
+            pass
+        row.setParent(None)
+        row.deleteLater()
+        self._on_change()
+
+    def _on_index(self) -> None:
+        name = self.name_text().strip()
+        if not name:
+            return
+        async def _go():
+            from docgraph.process import get_host
+            host = get_host()
+            if not host._conn:
+                return
+            try:
+                self._status_label.setText("indexing…")
+                await host._conn.api(f"/api/admin/index?root={name}")
+                self._status_label.setText("indexed")
+                self._status_label.setStyleSheet(f"color: {OK}; font-size: 10px;")
+            except Exception as e:
+                self._status_label.setText("index failed")
+                self._status_label.setStyleSheet(f"color: {ERR}; font-size: 10px;")
+        _run(self._window, _go)
+
+    def _on_wiki(self) -> None:
+        name = self.name_text().strip()
+        if not name:
+            return
+        async def _go():
+            from docgraph.process import get_host
+            host = get_host()
+            if not host._conn:
+                return
+            try:
+                self._status_label.setText("building wiki…")
+                await host._conn.api(f"/api/wiki/build?root={name}")
+                self._status_label.setText("wiki built")
+                self._status_label.setStyleSheet(f"color: {OK}; font-size: 10px;")
+            except Exception as e:
+                self._status_label.setText("wiki failed")
+                self._status_label.setStyleSheet(f"color: {ERR}; font-size: 10px;")
+        _run(self._window, _go)
+
+    def _on_clear(self) -> None:
+        name = self.name_text().strip()
+        if not name:
+            return
+        from PySide6.QtWidgets import QMessageBox
+        reply = QMessageBox.warning(
+            self, "Confirm Clear",
+            f"Clear all data for group '{name}'? This cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+        async def _go():
+            from docgraph.process import get_host
+            host = get_host()
+            if not host._conn:
+                return
+            try:
+                self._status_label.setText("clearing…")
+                await host._conn.api(f"/api/admin/clear?root={name}")
+                self._status_label.setText("cleared")
+                self._status_label.setStyleSheet(f"color: {OK}; font-size: 10px;")
+            except Exception as e:
+                self._status_label.setText("clear failed")
+                self._status_label.setStyleSheet(f"color: {ERR}; font-size: 10px;")
+        _run(self._window, _go)
+
+    def name_text(self) -> str:
+        return self._name_edit.text()
+
+    def db_path_text(self) -> str:
+        return self._db_edit.text()
+
+    def get_paths(self) -> list:
+        out = []
+        for r in self._member_rows:
+            path = r.path_text().strip()
+            if path:
+                out.append({"path": path, "watch": r.watch_state()})
+        return out
+
+
+class _MemberRow(QFrame):
+    """Single member path row — path field + watch toggle + remove button."""
+
+    def __init__(self, path: str, watch: bool, *, on_change, on_remove) -> None:
+        super().__init__()
+        self._on_change = on_change
+        self._on_remove = on_remove
+
+        self.setStyleSheet(
+            f"_MemberRow {{ background: rgba(255,255,255,0.03); border: 1px solid {BORDER}; border-radius: 4px; }}"
+        )
+        h = QHBoxLayout(self)
+        h.setContentsMargins(6, 4, 6, 4)
+        h.setSpacing(6)
+
+        self._path_edit = QLineEdit(path)
+        self._path_edit.setPlaceholderText("/path/to/src")
+        self._path_edit.editingFinished.connect(self._on_change)
+        self._path_edit.setMinimumWidth(140)
+        h.addWidget(self._path_edit, 1)
+
+        self._watch_toggle = Toggle()
+        self._watch_toggle.setChecked(watch)
+        self._watch_toggle.stateChanged.connect(self._on_change)
+        self._watch_toggle.setFixedWidth(36)
+        watch_label = QLabel("Watch")
+        watch_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+        watch_w = QWidget()
+        wl = QHBoxLayout(watch_w)
+        wl.setContentsMargins(0, 0, 0, 0)
+        wl.setSpacing(4)
+        wl.addWidget(watch_label)
+        wl.addWidget(self._watch_toggle)
+        h.addWidget(watch_w)
+
+        rm_btn = QPushButton("✕")
+        rm_btn.setFlat(True)
+        rm_btn.setFixedWidth(24)
+        rm_btn.setStyleSheet(
+            f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; font-size: 11px; }}"
+            f" QPushButton:hover {{ color: #ff6b6b; }}"
+        )
+        rm_btn.clicked.connect(lambda: self._on_remove(self))
+        h.addWidget(rm_btn)
+
+    def path_text(self) -> str:
+        return self._path_edit.text()
+
+    def watch_state(self) -> bool:
+        return self._watch_toggle.isChecked()
+
 
 def _build_host_card(window) -> tuple[QFrame, Callable[[], None]]:
     card, body = _card(
