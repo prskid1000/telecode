@@ -1144,21 +1144,36 @@ def _build_documents_index_card(window) -> tuple[QFrame, Callable[[], None] | No
     return card, None
 
 
-# 384-dim fastembed text models (verified against TextEmbedding.list_supported_models()).
-# DocGraph's Kuzu schema is fixed at 384 — picking a different-dim model would
-# silently break indexing, so the dropdown is restricted to this set.
-# Empty value = "use docgraph default" (which is BAAI/bge-small-en-v1.5).
+# Curated embedding model dropdown.
+#
+# All entries are fastembed-native (`TextEmbedding.list_supported_models()`).
+# Ordered: multilingual first (user preference), then code-specialized, then
+# the 384-dim defaults that survive without a reindex. DocGraph auto-derives
+# the Kuzu schema dim from the chosen model — switching dim requires
+# `Clear` + full reindex (existing vectors are wrong-shape under a new dim).
+#
+# Choice rationale (research summary):
+#   - intfloat/multilingual-e5-large — best multilingual NL, ~100 langs, MTEB-top tier
+#   - paraphrase-multilingual-mpnet-base-v2 — Sourcegraph Cody-style mid-tier, ~50 langs
+#   - jina-embeddings-v2-base-code — only code-specialized fastembed model; 30+ programming langs, 8K context
+#   - paraphrase-multilingual-MiniLM-L12-v2 — current 384-dim multilingual default, no reindex
+#   - all-MiniLM-L6-v2 — Continue.dev's default; English fallback
 _DOCGRAPH_EMBED_MODELS: list[tuple[str, str]] = [
-    ("BAAI/bge-small-en-v1.5  ·  default · 67 MB · 512 tok", ""),
-    ("sentence-transformers/all-MiniLM-L6-v2  ·  90 MB · 256 tok",
-     "sentence-transformers/all-MiniLM-L6-v2"),
-    ("snowflake/snowflake-arctic-embed-xs  ·  90 MB · 512 tok",
-     "snowflake/snowflake-arctic-embed-xs"),
-    ("snowflake/snowflake-arctic-embed-s  ·  130 MB · 512 tok",
-     "snowflake/snowflake-arctic-embed-s"),
-    ("BAAI/bge-small-en  ·  130 MB · 512 tok (older than v1.5)", "BAAI/bge-small-en"),
-    ("paraphrase-multilingual-MiniLM-L12-v2  ·  220 MB · ~50 langs · 128 tok",
+    ("Default (BAAI/bge-small-en-v1.5)  ·  384 · English · 67 MB", ""),
+    ("multilingual-e5-large  ·  1024 · ~100 langs · 2.2 GB · best multilingual",
+     "intfloat/multilingual-e5-large"),
+    ("paraphrase-multilingual-mpnet-base-v2  ·  768 · ~50 langs · 1.0 GB",
+     "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"),
+    ("paraphrase-multilingual-MiniLM-L12-v2  ·  384 · ~50 langs · 220 MB · no-reindex",
      "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"),
+    ("jina-embeddings-v2-base-code  ·  768 · 30+ prog langs · 8K ctx · 640 MB",
+     "jinaai/jina-embeddings-v2-base-code"),
+    ("nomic-embed-text-v1.5  ·  768 · English · 8K ctx · 520 MB",
+     "nomic-ai/nomic-embed-text-v1.5"),
+    ("snowflake-arctic-embed-m  ·  768 · English · 430 MB",
+     "snowflake/snowflake-arctic-embed-m"),
+    ("all-MiniLM-L6-v2  ·  384 · English · 90 MB · Continue.dev default",
+     "sentence-transformers/all-MiniLM-L6-v2"),
 ]
 
 
