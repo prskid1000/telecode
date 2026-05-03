@@ -118,17 +118,16 @@ def _status_pill(getter):
 def _path_already_indexed(path: str) -> bool:
     """Detect whether `path` already has a docgraph index on disk.
 
-    `<path>/.docgraph/graph.kuzu` is the marker — the indexer always
-    creates it, and a directory rather than a single file means we
-    can be lenient about what's inside (Kuzu writes several artefacts
-    under it). Used by `_RootRow` to distinguish 'CLI-indexed already'
-    from 'fresh repo, never indexed' when telecode itself has no run
-    record for the path."""
+    `<path>/.docgraph/cache.json` is the marker — the indexer writes it
+    after every successful run and `/api/admin/clear` deletes it as part
+    of the wipe. `graph.kuzu/` would also work as a marker but Kuzu's
+    `wipe(keep_schema=False)` re-creates the directory with an empty
+    schema, so it persists across Clear and the pill would lie."""
     if not path:
         return False
     try:
         from pathlib import Path as _Path
-        marker = _Path(path).expanduser() / ".docgraph" / "graph.kuzu"
+        marker = _Path(path).expanduser() / ".docgraph" / "cache.json"
         return marker.exists()
     except (OSError, ValueError):
         return False
@@ -676,11 +675,24 @@ class _RootRow(QFrame):
         async def _go():
             from docgraph.process import clear_index
             ok, detail = await clear_index(path)
+            if ok:
+                # Drop telecode's recorded run history so the pills don't
+                # keep advertising the pre-clear state ("indexed", "wiki Ns ago").
+                try:
+                    from docgraph import index_state, wiki_state
+                    index_state.clear(path)
+                    wiki_state.clear(path)
+                except Exception:
+                    pass
             from PySide6.QtCore import QTimer
             from PySide6.QtWidgets import QMessageBox as _MB
             kind = _MB.information if ok else _MB.warning
             title = "Cleared" if ok else "Clear failed"
-            QTimer.singleShot(0, lambda: kind(self, title, detail))
+            def _show():
+                kind(self, title, detail)
+                if ok:
+                    self.refresh_state()
+            QTimer.singleShot(0, _show)
         _run(self._window, _go)
 
     def refresh_state(self) -> None:
