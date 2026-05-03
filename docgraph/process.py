@@ -71,9 +71,18 @@ def _alive(proc: subprocess.Popen | None) -> bool:
     return bool(proc and proc.poll() is None)
 
 
+def _ascii_bar(pct: float, width: int = 24) -> str:
+    """Tiny block-character bar — `[#####.....]`-style, but with the
+    Unicode block ramp so the bar reads cleanly in any monospace font."""
+    pct = max(0.0, min(1.0, pct))
+    filled = int(width * pct)
+    return "█" * filled + "░" * (width - filled)
+
+
 def _format_progress_line(event: str, payload: dict) -> str:
     """Format an SSE progress event payload into one human-readable log
-    line. Covers index_progress + wiki_progress shapes."""
+    line. Covers index_progress + wiki_progress shapes. Renders an ASCII
+    progress bar so the log reads like the CLI's Rich bar."""
     import datetime as _dt
     phase = str(payload.get("phase") or "?")
     cur = int(payload.get("current") or 0)
@@ -81,15 +90,19 @@ def _format_progress_line(event: str, payload: dict) -> str:
     mod = str(payload.get("module") or "")
     ts = float(payload.get("ts") or 0.0)
     ts_str = _dt.datetime.fromtimestamp(ts).strftime("%H:%M:%S") if ts else "--:--:--"
+    if tot > 0:
+        pct = cur / tot
+        bar = _ascii_bar(pct)
+        head = f"{phase}: {mod}" if (event == "wiki_progress" and mod) else phase
+        return f"[{ts_str}] {head:<28} {bar} {pct*100:5.1f}% ({cur:>7}/{tot:<7})"
     if event == "wiki_progress" and mod:
-        return f"[{ts_str}] {phase}: {mod} ({cur}/{tot})"
-    if tot:
-        return f"[{ts_str}] {phase} ({cur}/{tot})"
+        return f"[{ts_str}] {phase}: {mod}"
     return f"[{ts_str}] {phase}"
 
 
 async def _sse_progress_tee(slug: str, port: int, event_names: tuple[str, ...],
-                             log_fp, session: aiohttp.ClientSession) -> None:
+                             log_fp, session: aiohttp.ClientSession,
+                             path_for_slug: str = "") -> None:
     """Subscribe to /api/events on the host and write matching events to
     `log_fp`. Filters by `slug` (events from other roots are ignored) and
     by event name (`index_progress` / `wiki_progress`). Best-effort — any
@@ -124,6 +137,21 @@ async def _sse_progress_tee(slug: str, port: int, event_names: tuple[str, ...],
                     continue
                 if payload.get("repo_slug") != slug:
                     continue
+                # Push to the in-memory progress state so the tray UI
+                # can paint a live bar on the row.
+                try:
+                    from docgraph import progress_state
+                    kind = "wiki" if current_event == "wiki_progress" else "index"
+                    progress_state.set(
+                        path_for_slug or "",
+                        kind,
+                        phase=str(payload.get("phase") or "?"),
+                        current=int(payload.get("current") or 0),
+                        total=int(payload.get("total") or 0),
+                        module=str(payload.get("module") or ""),
+                    )
+                except Exception:
+                    pass
                 line_out = _format_progress_line(current_event, payload)
                 try:
                     log_fp.write((line_out + "\n").encode("utf-8", errors="replace"))
@@ -172,7 +200,8 @@ async def _index_via_host(path: str, full: bool, port: int, log_fp=None) -> tupl
         # the CLI prints (rather than just the spawning marker + the final
         # captured Rich transcript at the end).
         sse_task = asyncio.create_task(
-            _sse_progress_tee(slug, port, ("index_progress",), log_fp, session)
+            _sse_progress_tee(slug, port, ("index_progress",), log_fp, session,
+                               path_for_slug=path)
         )
         url = f"{base}/api/admin/index?root={slug}"
         try:
@@ -218,6 +247,11 @@ async def _index_via_host(path: str, full: bool, port: int, log_fp=None) -> tupl
             try:
                 await sse_task
             except (asyncio.CancelledError, Exception):
+                pass
+            try:
+                from docgraph import progress_state
+                progress_state.clear(path, "index")
+            except Exception:
                 pass
 
 
@@ -457,7 +491,8 @@ async def _wiki_via_host(path: str, force: bool, port: int, log_fp=None) -> tupl
             )
         # Tee per-module SSE progress so docgraph_wiki.log mirrors CLI status.
         sse_task = asyncio.create_task(
-            _sse_progress_tee(slug, port, ("wiki_progress",), log_fp, session)
+            _sse_progress_tee(slug, port, ("wiki_progress",), log_fp, session,
+                               path_for_slug=path)
         )
         url = f"{base}/api/wiki/build?root={slug}"
         try:
@@ -490,6 +525,11 @@ async def _wiki_via_host(path: str, force: bool, port: int, log_fp=None) -> tupl
             try:
                 await sse_task
             except (asyncio.CancelledError, Exception):
+                pass
+            try:
+                from docgraph import progress_state
+                progress_state.clear(path, "wiki")
+            except Exception:
                 pass
 
 

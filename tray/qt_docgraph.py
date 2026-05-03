@@ -22,7 +22,7 @@ from typing import Callable
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit,
+    QLineEdit, QProgressBar,
 )
 
 from tray.qt_widgets import row_label, Toggle, WrapLabel
@@ -606,6 +606,30 @@ class _RootRow(QFrame):
 
         outer.addWidget(line2)
 
+        # ── Line 3: live progress bars (index + wiki). Shown only while
+        # the corresponding op is in flight; hidden otherwise.
+        self._line3 = QWidget()
+        l3 = QHBoxLayout(self._line3)
+        l3.setContentsMargins(0, 0, 0, 0)
+        l3.setSpacing(8)
+
+        self._idx_bar = QProgressBar()
+        self._idx_bar.setRange(0, 100)
+        self._idx_bar.setTextVisible(True)
+        self._idx_bar.setFormat("idx idle")
+        self._idx_bar.setFixedHeight(16)
+        l3.addWidget(self._idx_bar, 1)
+
+        self._wiki_bar = QProgressBar()
+        self._wiki_bar.setRange(0, 100)
+        self._wiki_bar.setTextVisible(True)
+        self._wiki_bar.setFormat("wiki idle")
+        self._wiki_bar.setFixedHeight(16)
+        l3.addWidget(self._wiki_bar, 1)
+
+        outer.addWidget(self._line3)
+        self._line3.setVisible(False)
+
         self.refresh_state()
 
     def text(self) -> str:
@@ -699,6 +723,60 @@ class _RootRow(QFrame):
         path = self.text().strip()
         self._refresh_index_pill(path)
         self._refresh_wiki_pill(path)
+        self._refresh_progress_bars(path)
+
+    def _refresh_progress_bars(self, path: str) -> None:
+        """Paint the live SSE progress into the per-row QProgressBars.
+        Each bar is shown while its op is in flight and hidden otherwise."""
+        try:
+            from docgraph import progress_state
+            from docgraph.process import get_index, get_wiki
+            idx_running = get_index().current_path() == path if path else False
+            wiki_running = get_wiki().current_path() == path if path else False
+        except Exception:
+            idx_running, wiki_running = False, False
+            progress_state = None  # type: ignore
+
+        any_visible = False
+
+        # Index bar
+        if idx_running:
+            any_visible = True
+            self._idx_bar.setVisible(True)
+            ps = progress_state.get(path, "index") if progress_state else None
+            if ps and ps.get("total", 0) > 0:
+                cur, tot = int(ps["current"]), int(ps["total"])
+                pct = max(0, min(100, int(cur * 100 / tot)))
+                self._idx_bar.setRange(0, 100)
+                self._idx_bar.setValue(pct)
+                self._idx_bar.setFormat(f"idx · {ps.get('phase','?')} {pct}% ({cur}/{tot})")
+            else:
+                # Indeterminate — phase started but no count yet.
+                self._idx_bar.setRange(0, 0)
+                phase = (ps or {}).get("phase", "starting")
+                self._idx_bar.setFormat(f"idx · {phase}")
+        else:
+            self._idx_bar.setVisible(False)
+
+        # Wiki bar
+        if wiki_running:
+            any_visible = True
+            self._wiki_bar.setVisible(True)
+            ps = progress_state.get(path, "wiki") if progress_state else None
+            if ps and ps.get("total", 0) > 0:
+                cur, tot = int(ps["current"]), int(ps["total"])
+                pct = max(0, min(100, int(cur * 100 / tot)))
+                self._wiki_bar.setRange(0, 100)
+                self._wiki_bar.setValue(pct)
+                mod = ps.get("module") or ps.get("phase", "?")
+                self._wiki_bar.setFormat(f"wiki · {mod} {pct}% ({cur}/{tot})")
+            else:
+                self._wiki_bar.setRange(0, 0)
+                self._wiki_bar.setFormat("wiki · starting")
+        else:
+            self._wiki_bar.setVisible(False)
+
+        self._line3.setVisible(any_visible)
 
     def _refresh_index_pill(self, path: str) -> None:
         try:
