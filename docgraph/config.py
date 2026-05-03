@@ -249,6 +249,11 @@ def asset_extensions() -> tuple[str, ...]:
 # ── Logs ─────────────────────────────────────────────────────────────────────
 
 def log_path(role: str = "host", slug: str | None = None) -> str:
+    # Host stdout/stderr shares `docgraph.log` with the telecode-side wrapper
+    # logger so users see both streams interleaved in one viewer entry. Index
+    # and wiki are short-lived subprocesses with their own per-run files.
+    if role == "host":
+        return os.path.join(app_config.logs_dir(), "docgraph.log")
     base = f"docgraph_{role}"
     if slug:
         base = f"{base}_{slug}"

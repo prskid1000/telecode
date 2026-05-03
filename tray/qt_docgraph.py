@@ -11,7 +11,8 @@ covering every configured root. The UI mirrors that mental model:
   Embeddings    — embedding model + GPU.
 
 Live log tailing is delegated to the global Logs section — the host's
-log lands at `data/logs/docgraph_host.log`.
+stdout/stderr and the telecode-side wrapper logger both land in
+`data/logs/docgraph.log`.
 """
 from __future__ import annotations
 
