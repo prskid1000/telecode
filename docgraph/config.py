@@ -176,6 +176,7 @@ def embeddings_gpu() -> bool:    return bool(embeddings_cfg().get("gpu", False))
 def rerank_cfg() -> dict:        return _section("rerank")
 def rerank_model() -> str:       return str(rerank_cfg().get("model", "") or "")
 def rerank_default() -> bool:    return bool(rerank_cfg().get("default", False))
+def rerank_gpu() -> bool:        return bool(rerank_cfg().get("gpu", False))
 
 
 # ── Index (CLI subprocess flags) ───────────────────────────────────────────
