@@ -49,7 +49,9 @@
       "auto_restart": true,
       "host": "127.0.0.1",
       "port": 5500,
-      "gpu": false
+      "gpu": false,
+      "directml_device_id": -1,
+      "debounce": 500
     },
 
     "roots": [
@@ -61,7 +63,14 @@
       "host": "localhost",
       "port": 1235,
       "format": "openai",
-      "max_tokens": 150
+      "max_tokens": 150,
+      "max_tokens_wiki": 4096,
+      "docstrings": false,
+      "wiki": false,
+      "prompts": {
+        "docstring": "",
+        "wiki": ""
+      }
     },
 
     "embeddings": {
@@ -69,8 +78,24 @@
       "gpu": false
     },
 
+    "rerank": {
+      "model": "",
+      "default": false,
+      "gpu": false
+    },
+
     "index": {
-      "workers": 0
+      "workers": 0,
+      "embed_batch_size": 0,
+      "documents": {
+        "enabled": false,
+        "text_extensions": [],
+        "asset_extensions": []
+      }
+    },
+
+    "wiki": {
+      "depth": 12
     }
   },
 
