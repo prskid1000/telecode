@@ -233,6 +233,9 @@ def _build_groups_card(window) -> tuple[QFrame, Callable[[], None]]:
         "Multiple code paths sharing one Kuzu database per group.",
     )
 
+    groups_widget = _GroupsTable(window)
+    body.addWidget(groups_widget)
+
     # Global action: Index all groups
     index_all_w = QWidget()
     index_all_h = QHBoxLayout(index_all_w)
@@ -278,9 +281,6 @@ def _build_groups_card(window) -> tuple[QFrame, Callable[[], None]]:
     wiki_all_h.addWidget(wiki_all_status)
     wiki_all_h.addStretch(1)
     body.addWidget(wiki_all_w)
-
-    groups_widget = _GroupsTable(window)
-    body.addWidget(groups_widget)
 
     def refresh():
         groups_widget.refresh()
