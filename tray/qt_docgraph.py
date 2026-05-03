@@ -233,6 +233,23 @@ def _build_groups_card(window) -> tuple[QFrame, Callable[[], None]]:
         "Multiple code paths sharing one Kuzu database per group.",
     )
 
+    # Global actions
+    global_actions_w = QWidget()
+    ga_h = QHBoxLayout(global_actions_w)
+    ga_h.setContentsMargins(0, 0, 0, 0)
+    ga_h.setSpacing(6)
+
+    index_all_btn = QPushButton("▶ Index all")
+    index_all_btn.clicked.connect(lambda: _index_all_groups(window))
+    ga_h.addWidget(index_all_btn)
+
+    wiki_all_btn = QPushButton("📋 Build wikis")
+    wiki_all_btn.clicked.connect(lambda: _build_all_wikis(window))
+    ga_h.addWidget(wiki_all_btn)
+
+    ga_h.addStretch(1)
+    body.addWidget(global_actions_w)
+
     groups_widget = _GroupsTable(window)
     body.addWidget(groups_widget)
 
@@ -240,6 +257,44 @@ def _build_groups_card(window) -> tuple[QFrame, Callable[[], None]]:
         groups_widget.refresh()
 
     return card, refresh
+
+
+def _index_all_groups(window) -> None:
+    """Index all configured groups."""
+    async def _go():
+        from docgraph.process import get_host
+        host = get_host()
+        if not host._conn:
+            return
+        try:
+            groups = get_path(read_settings(), "docgraph.groups", []) or []
+            for group in groups:
+                if isinstance(group, dict):
+                    name = group.get("name", "")
+                    if name:
+                        await host._conn.api(f"/api/admin/index?root={name}")
+        except Exception as e:
+            log.warning("index all groups failed: %s", e)
+    _run(window, _go)
+
+
+def _build_all_wikis(window) -> None:
+    """Build wikis for all configured groups."""
+    async def _go():
+        from docgraph.process import get_host
+        host = get_host()
+        if not host._conn:
+            return
+        try:
+            groups = get_path(read_settings(), "docgraph.groups", []) or []
+            for group in groups:
+                if isinstance(group, dict):
+                    name = group.get("name", "")
+                    if name:
+                        await host._conn.api(f"/api/wiki/build?root={name}")
+        except Exception as e:
+            log.warning("build all wikis failed: %s", e)
+    _run(window, _go)
 
 
 class _GroupsTable(QWidget):
