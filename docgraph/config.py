@@ -120,6 +120,16 @@ def host_host() -> str:           return str(host_cfg().get("host", "127.0.0.1")
 def host_port() -> int:           return int(host_cfg().get("port", 5500) or 5500)
 def host_gpu() -> bool:           return bool(host_cfg().get("gpu", False))
 def host_debounce() -> int:       return int(host_cfg().get("debounce", 500) or 500)
+def host_directml_device_id() -> int:
+    """DirectML adapter index for both the embedder AND the reranker.
+    -1 = let DirectML pick. Set to the dGPU index (often 1) on hybrid
+    laptops where Windows otherwise routes the windowless host process
+    to the iGPU."""
+    raw = host_cfg().get("directml_device_id", -1)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return -1
 
 
 # ── LLM augmentation ────────────────────────────────────────────────────────
@@ -164,15 +174,6 @@ def llm_prompt_wiki() -> str:
 def embeddings_cfg() -> dict:    return _section("embeddings")
 def embeddings_model() -> str:   return str(embeddings_cfg().get("model", "") or "")
 def embeddings_gpu() -> bool:    return bool(embeddings_cfg().get("gpu", False))
-def embeddings_directml_device_id() -> int:
-    """DirectML adapter index for the embedder. -1 = let DirectML pick.
-    Set to the dGPU index (often 1) on hybrid-graphics laptops where
-    Windows otherwise routes the windowless host process to the iGPU."""
-    raw = embeddings_cfg().get("directml_device_id", -1)
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return -1
 
 
 # ── Reranker (cross-encoder over top-K search candidates) ──────────────────

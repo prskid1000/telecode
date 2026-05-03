@@ -245,6 +245,15 @@ def _build_host_card(window) -> tuple[QFrame, Callable[[], None]]:
                                 "Embeddings on GPU when ONNX Runtime "
                                 "providers are available.",
                                 cli="--gpu"))
+    body.addWidget(_number_row("docgraph.host.directml_device_id",
+                                "DirectML adapter id",
+                                -1, 7, 1, 0, "",
+                                "Applies to both embedder AND reranker. "
+                                "-1 = let DirectML pick (windowless host "
+                                "processes usually land on the iGPU). Set "
+                                "to your dGPU's index (often 1) to force "
+                                "ONNX Runtime onto NVIDIA.",
+                                cli="--directml-device-id"))
 
     actions = QWidget()
     ar = QHBoxLayout(actions)
@@ -1477,14 +1486,6 @@ def _build_embeddings_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     body.addWidget(_toggle_row("docgraph.embeddings.gpu", "GPU embeddings",
                                 "Needs onnxruntime-gpu/-directml/-silicon.",
                                 cli="--gpu"))
-    body.addWidget(_number_row("docgraph.embeddings.directml_device_id",
-                                "DirectML adapter id",
-                                -1, 7, 1, 0, "",
-                                "-1 = let DirectML pick (windowless host "
-                                "processes usually land on the iGPU). Set "
-                                "to your dGPU's index (often 1) to force "
-                                "embeddings onto NVIDIA.",
-                                cli="--directml-device-id"))
     body.addWidget(_number_row("docgraph.index.workers", "Index workers",
                                 0, 64, 1, 0, "", "0 = default.",
                                 cli="--workers"))
