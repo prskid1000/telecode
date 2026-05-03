@@ -1652,6 +1652,34 @@ def _managed(window) -> QWidget:
         group_prefixes = {p for p, c in prefixes.items() if c >= 2}
         seen_groups: set[str] = set()
 
+        # Buffer for the docgraph group — rendered as a 3-column grid below
+        # the group header instead of one tall column. Flushed when the
+        # iteration leaves the docgraph block, and again after the loop.
+        docgraph_cells: list[tuple[QWidget, QWidget]] = []
+
+        def _flush_docgraph_grid() -> None:
+            if not docgraph_cells:
+                return
+            for start in range(0, len(docgraph_cells), 3):
+                chunk = docgraph_cells[start:start + 3]
+                row_w = QWidget()
+                hl = QHBoxLayout(row_w)
+                hl.setContentsMargins(0, 0, 0, 0)
+                hl.setSpacing(14)
+                for (lw, tw) in chunk:
+                    cell = QWidget()
+                    cl = QHBoxLayout(cell)
+                    cl.setContentsMargins(0, 0, 0, 0)
+                    cl.setSpacing(6)
+                    cl.addWidget(lw, 1)
+                    cl.addWidget(_wrap_align(tw, Qt.AlignmentFlag.AlignLeft), 0)
+                    hl.addWidget(cell, 1)
+                # Pad short final row so cell widths stay consistent
+                for _ in range(3 - len(chunk)):
+                    hl.addWidget(QWidget(), 1)
+                rows_wrap.addWidget(row_w)
+            docgraph_cells.clear()
+
         for t in tools:
             name = t.get("name", "?")
             nl = name.lower()
@@ -1659,6 +1687,12 @@ def _managed(window) -> QWidget:
 
             prefix = name.split("_", 1)[0] if "_" in name else ""
             in_group = prefix in group_prefixes
+
+            # Leaving the docgraph block — flush whatever we collected
+            # before rendering the next (non-docgraph) row.
+            if prefix != "docgraph" and docgraph_cells:
+                _flush_docgraph_grid()
+
             if in_group and prefix not in seen_groups:
                 seen_groups.add(prefix)
                 hdr_label = QLabel(humanize(prefix))
@@ -1704,14 +1738,23 @@ def _managed(window) -> QWidget:
                 label_text = f"  └─ {humanize(tail)}"
             else:
                 label_text = humanize(name)
-            rows_wrap.addWidget(_row(row_label(label_text, "", name),
-                                      _wrap_align(t_widget, Qt.AlignmentFlag.AlignLeft)))
+
+            label_w = row_label(label_text, "", name)
+            if prefix == "docgraph" and in_group:
+                # Buffered — flushed as a 3-column grid below the header.
+                docgraph_cells.append((label_w, t_widget))
+            else:
+                rows_wrap.addWidget(_row(label_w,
+                                          _wrap_align(t_widget, Qt.AlignmentFlag.AlignLeft)))
 
             if nl == "transcribe":
                 rows_wrap.addWidget(_line_row("mcp_server.stt_url", "  └─ Whisper Endpoint", "http://127.0.0.1:6600"))
                 rows_wrap.addWidget(_enum_row_strs("voice.stt.model", "  └─ Whisper Model", _WHISPER_MODELS))
             elif nl == "speak":
                 rows_wrap.addWidget(_line_row("mcp_server.tts_url", "  └─ Kokoro Endpoint", "http://127.0.0.1:6500"))
+
+        # Flush any docgraph cells left after the last tool.
+        _flush_docgraph_grid()
 
     def refresh() -> None:
         nonlocal last_names

@@ -109,6 +109,10 @@ async def _index_via_host(path: str, full: bool, port: int) -> tuple[bool, str]:
         try:
             async with session.post(url, json={"full": full}) as resp:
                 body = await resp.text()
+                if resp.status == 499:
+                    # Server-side cancel landed (telecode hit /api/admin/cancel
+                    # or another caller did). Don't treat as failure.
+                    raise asyncio.CancelledError()
                 if resp.status != 200:
                     return False, f"POST /api/admin/index → HTTP {resp.status}: {body[:500]}"
                 # The host returns {slug, full, stats, log}. The `log`
@@ -137,6 +141,27 @@ async def _index_via_host(path: str, full: bool, port: int) -> tuple[bool, str]:
                 return True, "\n".join(lines) if lines else body[:2000]
         except Exception as exc:
             return False, f"POST /api/admin/index failed: {exc}"
+
+
+async def _request_host_cancel(path: str) -> None:
+    """Tell the host to flip its per-root cancel token. Best-effort —
+    the local asyncio cancel still happens regardless. Without this
+    step, the host keeps indexing/building-wikis in the background
+    even after the client aborts the HTTP request."""
+    if _HOST is None or not _HOST.alive() or not _HOST.port():
+        return
+    port = _HOST.port()
+    timeout = aiohttp.ClientTimeout(total=5)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            slug = await _resolve_slug_from_host(path, port, session)
+            if slug is None:
+                return
+            base = f"http://{dg_cfg.host_host()}:{port}"
+            async with session.post(f"{base}/api/admin/cancel?root={slug}") as resp:
+                await resp.read()
+    except Exception as exc:
+        log.warning("docgraph cancel request failed for %s: %s", path, exc)
 
 
 async def _resolve_slug_from_host(path: str, port: int,
@@ -356,6 +381,8 @@ async def _wiki_via_host(path: str, force: bool, port: int) -> tuple[bool, str]:
         try:
             async with session.post(url, json={"force": force}) as resp:
                 body = await resp.text()
+                if resp.status == 499:
+                    raise asyncio.CancelledError()
                 if resp.status != 200:
                     return False, f"POST /api/wiki/build → HTTP {resp.status}: {body[:500]}"
                 try:
@@ -430,13 +457,26 @@ class IndexRunner:
             self._task = asyncio.create_task(self._run_sequence(paths, force))
 
     async def cancel(self) -> None:
+        # Capture path/proc under the lock, then drop it before doing any
+        # network IO. Otherwise _request_host_cancel would deadlock if
+        # any other coroutine awaiting the lock is also fired by cancel.
         async with self._lock:
             t = self._task
+            current = self._current_path
+            proc = self._proc
+        # Tell the host to flip its cancel token *before* cancelling the
+        # local task, so the in-flight HTTP response sees the cancel and
+        # raises OperationCancelled cleanly. (Cancelling the asyncio task
+        # first would abort the connection and the server would never see
+        # the cancel signal.)
+        if current:
+            await _request_host_cancel(current)
+        async with self._lock:
             if t and not t.done():
                 t.cancel()
-            if self._proc and self._proc.poll() is None:
+            if proc and proc.poll() is None:
                 try:
-                    kill_process_tree(self._proc.pid)
+                    kill_process_tree(proc.pid)
                 except Exception:
                     pass
 
@@ -464,98 +504,105 @@ class IndexRunner:
         # Spawning the subprocess in route 2 only when the host isn't
         # alive avoids the "Could not set lock on file" crash you'd get
         # if both held connections to the same Kuzu file at once.
-        host_route = False
+        # Cancellation: cancel() POSTs /api/admin/cancel?root=<slug> first
+        # (so the host's cooperative-cancel token fires), then cancels
+        # the local task. The host returns HTTP 499 when the token trips
+        # at a checkpoint; _index_via_host re-raises CancelledError on
+        # 499 and the finally-block clears local state.
         try:
-            if _HOST is not None and _HOST.alive() and _HOST.port():
-                host_route = True
-                self._log_fp.write(
-                    f"\n--- index {path} via host /api/admin/index "
-                    f"({'--full' if force else 'incremental'}) ---\n".encode()
-                )
-                self._log_fp.flush()
-                ok, detail = await _index_via_host(path, force, _HOST.port())
-                self._log_fp.write(detail.encode("utf-8", errors="replace") + b"\n")
-                self._log_fp.flush()
-                rc_or_status = "ok" if ok else "failed"
-                self._last_status = "done" if ok else "failed"
-        except asyncio.CancelledError:
-            self._last_status = "cancelled"
-            rc_or_status = "cancelled"
-            host_route = True  # don't fall through to subprocess
-            raise
-        except Exception as exc:
-            log.warning("docgraph index %s: host route failed: %s — falling back to subprocess", path, exc)
-            self._log_fp.write(f"\n--- host route failed: {exc} — falling back to subprocess ---\n".encode())
-            self._log_fp.flush()
             host_route = False
-
-        if not host_route:
             try:
-                binary = _binary_or_raise()
-                argv = [binary, "index", path]
-                if force:
-                    argv.append("--full")
-                if dg_cfg.index_workers() > 0:
-                    argv += ["--workers", str(dg_cfg.index_workers())]
-                if dg_cfg.index_embed_batch_size() > 0:
-                    argv += ["--embed-batch-size", str(dg_cfg.index_embed_batch_size())]
-                if dg_cfg.embeddings_gpu():
-                    argv.append("--gpu")
-                if dg_cfg.llm_model():
-                    argv += ["--llm-model", dg_cfg.llm_model(),
-                             "--llm-host", dg_cfg.llm_host(),
-                             "--llm-port", str(dg_cfg.llm_port()),
-                             "--llm-format", dg_cfg.llm_format(),
-                             "--llm-max-tokens", str(dg_cfg.llm_max_tokens())]
-                env = {
-                    # Force UTF-8 stdio so Rich progress glyphs don't crash
-                    # the log writer on Windows (cp1252 default).
-                    "PYTHONIOENCODING": "utf-8",
-                    "PYTHONUTF8": "1",
-                }
-                if dg_cfg.embeddings_model():
-                    env["DOCGRAPH_EMBED_MODEL"] = dg_cfg.embeddings_model()
-                env.update(dg_cfg.prompt_env())
-                env.update(dg_cfg.documents_env())
-                self._log_fp.write(
-                    f"\n--- index {path} {'(--full)' if force else '(incremental)'} ---\n".encode()
-                )
-                self._log_fp.flush()
-                self._proc = subprocess.Popen(
-                    argv,
-                    stdout=self._log_fp,
-                    stderr=subprocess.STDOUT,
-                    stdin=subprocess.DEVNULL,
-                    creationflags=_creation_flags(),
-                    env={**os.environ, **env},
-                )
-                bind_to_lifetime_job(self._proc.pid, proc=self._proc)
-                rc = await asyncio.to_thread(self._proc.wait)
-                rc_or_status = "ok" if rc == 0 else "failed"
-                self._last_status = "done" if rc == 0 else "failed"
-                if rc != 0:
-                    log.warning("docgraph index %s: rc=%s", path, rc)
+                if _HOST is not None and _HOST.alive() and _HOST.port():
+                    host_route = True
+                    self._log_fp.write(
+                        f"\n--- index {path} via host /api/admin/index "
+                        f"({'--full' if force else 'incremental'}) ---\n".encode()
+                    )
+                    self._log_fp.flush()
+                    ok, detail = await _index_via_host(path, force, _HOST.port())
+                    self._log_fp.write(detail.encode("utf-8", errors="replace") + b"\n")
+                    self._log_fp.flush()
+                    rc_or_status = "ok" if ok else "failed"
+                    self._last_status = "done" if ok else "failed"
             except asyncio.CancelledError:
                 self._last_status = "cancelled"
                 rc_or_status = "cancelled"
+                host_route = True  # don't fall through to subprocess
                 raise
             except Exception as exc:
-                log.error("docgraph index %s: %s", path, exc)
-                self._last_status = "failed"
-                rc_or_status = "failed"
+                log.warning("docgraph index %s: host route failed: %s — falling back to subprocess", path, exc)
+                self._log_fp.write(f"\n--- host route failed: {exc} — falling back to subprocess ---\n".encode())
+                self._log_fp.flush()
+                host_route = False
 
-        # Always finalize: persist per-path state, clear current, close log.
-        index_state.update(path, status=rc_or_status, was_full=force)
-        self._current_path = None
-        self._current_force = False
-        self._proc = None
-        self._last_finished_at = time.time()
-        if self._log_fp:
-            try:
-                self._log_fp.close()
-            except Exception:
-                pass
-            self._log_fp = None
+            if not host_route:
+                try:
+                    binary = _binary_or_raise()
+                    argv = [binary, "index", path]
+                    if force:
+                        argv.append("--full")
+                    if dg_cfg.index_workers() > 0:
+                        argv += ["--workers", str(dg_cfg.index_workers())]
+                    if dg_cfg.index_embed_batch_size() > 0:
+                        argv += ["--embed-batch-size", str(dg_cfg.index_embed_batch_size())]
+                    if dg_cfg.embeddings_gpu():
+                        argv.append("--gpu")
+                    if dg_cfg.llm_model():
+                        argv += ["--llm-model", dg_cfg.llm_model(),
+                                 "--llm-host", dg_cfg.llm_host(),
+                                 "--llm-port", str(dg_cfg.llm_port()),
+                                 "--llm-format", dg_cfg.llm_format(),
+                                 "--llm-max-tokens", str(dg_cfg.llm_max_tokens())]
+                    env = {
+                        # Force UTF-8 stdio so Rich progress glyphs don't crash
+                        # the log writer on Windows (cp1252 default).
+                        "PYTHONIOENCODING": "utf-8",
+                        "PYTHONUTF8": "1",
+                    }
+                    if dg_cfg.embeddings_model():
+                        env["DOCGRAPH_EMBED_MODEL"] = dg_cfg.embeddings_model()
+                    env.update(dg_cfg.prompt_env())
+                    env.update(dg_cfg.documents_env())
+                    self._log_fp.write(
+                        f"\n--- index {path} {'(--full)' if force else '(incremental)'} ---\n".encode()
+                    )
+                    self._log_fp.flush()
+                    self._proc = subprocess.Popen(
+                        argv,
+                        stdout=self._log_fp,
+                        stderr=subprocess.STDOUT,
+                        stdin=subprocess.DEVNULL,
+                        creationflags=_creation_flags(),
+                        env={**os.environ, **env},
+                    )
+                    bind_to_lifetime_job(self._proc.pid, proc=self._proc)
+                    rc = await asyncio.to_thread(self._proc.wait)
+                    rc_or_status = "ok" if rc == 0 else "failed"
+                    self._last_status = "done" if rc == 0 else "failed"
+                    if rc != 0:
+                        log.warning("docgraph index %s: rc=%s", path, rc)
+                except asyncio.CancelledError:
+                    self._last_status = "cancelled"
+                    rc_or_status = "cancelled"
+                    raise
+                except Exception as exc:
+                    log.error("docgraph index %s: %s", path, exc)
+                    self._last_status = "failed"
+                    rc_or_status = "failed"
+        finally:
+            # Always finalize even on CancelledError, otherwise current_path
+            # never clears and the per-row pill stays stuck on "running…".
+            index_state.update(path, status=rc_or_status, was_full=force)
+            self._current_path = None
+            self._current_force = False
+            self._proc = None
+            self._last_finished_at = time.time()
+            if self._log_fp:
+                try:
+                    self._log_fp.close()
+                except Exception:
+                    pass
+                self._log_fp = None
 
 
 # ── Wiki runner (one-shot per root) ────────────────────────────────────────
@@ -615,11 +662,16 @@ class WikiRunner:
     async def cancel(self) -> None:
         async with self._lock:
             t = self._task
+            current = self._current_path
+            proc = self._proc
+        if current:
+            await _request_host_cancel(current)
+        async with self._lock:
             if t and not t.done():
                 t.cancel()
-            if self._proc and self._proc.poll() is None:
+            if proc and proc.poll() is None:
                 try:
-                    kill_process_tree(self._proc.pid)
+                    kill_process_tree(proc.pid)
                 except Exception:
                     pass
 
@@ -640,88 +692,92 @@ class WikiRunner:
         self._log_fp = _open_log("wiki")
         rc_or_status = "failed"
 
-        host_route = False
+        # Cancellation mirrors IndexRunner: cancel() POSTs /api/admin/cancel
+        # first so the host's wiki loop sees the token at the next module
+        # boundary; the HTTP 499 reply is mapped to CancelledError.
         try:
-            if _HOST is not None and _HOST.alive() and _HOST.port():
-                host_route = True
-                self._log_fp.write(
-                    f"\n--- wiki {path} via host /api/wiki/build "
-                    f"({'--force' if force else 'resumable'}) ---\n".encode()
-                )
-                self._log_fp.flush()
-                ok, detail = await _wiki_via_host(path, force, _HOST.port())
-                self._log_fp.write(detail.encode("utf-8", errors="replace") + b"\n")
-                self._log_fp.flush()
-                rc_or_status = "ok" if ok else "failed"
-                self._last_status = "done" if ok else "failed"
-        except asyncio.CancelledError:
-            self._last_status = "cancelled"
-            rc_or_status = "cancelled"
-            host_route = True
-            raise
-        except Exception as exc:
-            log.warning("docgraph wiki %s: host route failed: %s — falling back to subprocess", path, exc)
-            self._log_fp.write(f"\n--- host route failed: {exc} — falling back to subprocess ---\n".encode())
-            self._log_fp.flush()
             host_route = False
-
-        if not host_route:
             try:
-                binary = _binary_or_raise()
-                argv = [binary, "wiki", path]
-                if force:
-                    argv.append("--force")
-                if dg_cfg.wiki_depth() and dg_cfg.wiki_depth() != 12:
-                    argv += ["--depth", str(dg_cfg.wiki_depth())]
-                if dg_cfg.llm_model():
-                    argv += ["--llm-model", dg_cfg.llm_model(),
-                             "--llm-host", dg_cfg.llm_host(),
-                             "--llm-port", str(dg_cfg.llm_port()),
-                             "--llm-format", dg_cfg.llm_format(),
-                             "--llm-max-tokens", str(dg_cfg.llm_max_tokens_wiki())]
-                env = {
-                    "PYTHONIOENCODING": "utf-8",
-                    "PYTHONUTF8": "1",
-                }
-                env.update(dg_cfg.prompt_env())
-                self._log_fp.write(
-                    f"\n--- wiki {path} {'(--force)' if force else '(resumable)'} ---\n".encode()
-                )
-                self._log_fp.flush()
-                self._proc = subprocess.Popen(
-                    argv,
-                    stdout=self._log_fp,
-                    stderr=subprocess.STDOUT,
-                    stdin=subprocess.DEVNULL,
-                    creationflags=_creation_flags(),
-                    env={**os.environ, **env},
-                )
-                bind_to_lifetime_job(self._proc.pid, proc=self._proc)
-                rc = await asyncio.to_thread(self._proc.wait)
-                rc_or_status = "ok" if rc == 0 else "failed"
-                self._last_status = "done" if rc == 0 else "failed"
-                if rc != 0:
-                    log.warning("docgraph wiki %s: rc=%s", path, rc)
+                if _HOST is not None and _HOST.alive() and _HOST.port():
+                    host_route = True
+                    self._log_fp.write(
+                        f"\n--- wiki {path} via host /api/wiki/build "
+                        f"({'--force' if force else 'resumable'}) ---\n".encode()
+                    )
+                    self._log_fp.flush()
+                    ok, detail = await _wiki_via_host(path, force, _HOST.port())
+                    self._log_fp.write(detail.encode("utf-8", errors="replace") + b"\n")
+                    self._log_fp.flush()
+                    rc_or_status = "ok" if ok else "failed"
+                    self._last_status = "done" if ok else "failed"
             except asyncio.CancelledError:
                 self._last_status = "cancelled"
                 rc_or_status = "cancelled"
+                host_route = True
                 raise
             except Exception as exc:
-                log.error("docgraph wiki %s: %s", path, exc)
-                self._last_status = "failed"
-                rc_or_status = "failed"
+                log.warning("docgraph wiki %s: host route failed: %s — falling back to subprocess", path, exc)
+                self._log_fp.write(f"\n--- host route failed: {exc} — falling back to subprocess ---\n".encode())
+                self._log_fp.flush()
+                host_route = False
 
-        wiki_state.update(path, status=rc_or_status, was_full=force)
-        self._current_path = None
-        self._current_force = False
-        self._proc = None
-        self._last_finished_at = time.time()
-        if self._log_fp:
-            try:
-                self._log_fp.close()
-            except Exception:
-                pass
-            self._log_fp = None
+            if not host_route:
+                try:
+                    binary = _binary_or_raise()
+                    argv = [binary, "wiki", path]
+                    if force:
+                        argv.append("--force")
+                    if dg_cfg.wiki_depth() and dg_cfg.wiki_depth() != 12:
+                        argv += ["--depth", str(dg_cfg.wiki_depth())]
+                    if dg_cfg.llm_model():
+                        argv += ["--llm-model", dg_cfg.llm_model(),
+                                 "--llm-host", dg_cfg.llm_host(),
+                                 "--llm-port", str(dg_cfg.llm_port()),
+                                 "--llm-format", dg_cfg.llm_format(),
+                                 "--llm-max-tokens", str(dg_cfg.llm_max_tokens_wiki())]
+                    env = {
+                        "PYTHONIOENCODING": "utf-8",
+                        "PYTHONUTF8": "1",
+                    }
+                    env.update(dg_cfg.prompt_env())
+                    self._log_fp.write(
+                        f"\n--- wiki {path} {'(--force)' if force else '(resumable)'} ---\n".encode()
+                    )
+                    self._log_fp.flush()
+                    self._proc = subprocess.Popen(
+                        argv,
+                        stdout=self._log_fp,
+                        stderr=subprocess.STDOUT,
+                        stdin=subprocess.DEVNULL,
+                        creationflags=_creation_flags(),
+                        env={**os.environ, **env},
+                    )
+                    bind_to_lifetime_job(self._proc.pid, proc=self._proc)
+                    rc = await asyncio.to_thread(self._proc.wait)
+                    rc_or_status = "ok" if rc == 0 else "failed"
+                    self._last_status = "done" if rc == 0 else "failed"
+                    if rc != 0:
+                        log.warning("docgraph wiki %s: rc=%s", path, rc)
+                except asyncio.CancelledError:
+                    self._last_status = "cancelled"
+                    rc_or_status = "cancelled"
+                    raise
+                except Exception as exc:
+                    log.error("docgraph wiki %s: %s", path, exc)
+                    self._last_status = "failed"
+                    rc_or_status = "failed"
+        finally:
+            wiki_state.update(path, status=rc_or_status, was_full=force)
+            self._current_path = None
+            self._current_force = False
+            self._proc = None
+            self._last_finished_at = time.time()
+            if self._log_fp:
+                try:
+                    self._log_fp.close()
+                except Exception:
+                    pass
+                self._log_fp = None
 
 
 # ── Host (the unified docgraph server) ─────────────────────────────────────
