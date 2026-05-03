@@ -73,3 +73,11 @@ def mark_running(path: str, *, was_full: bool) -> None:
 
 def get(path: str) -> dict[str, Any] | None:
     return load().get(path)
+
+
+def clear(path: str) -> None:
+    with _LOCK:
+        data = load()
+        if path in data:
+            data.pop(path, None)
+            _save(data)
