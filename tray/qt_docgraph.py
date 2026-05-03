@@ -49,9 +49,8 @@ def build_docgraph_tabs(window) -> QWidget:
         "docgraph.binary",
         "Binary Path",
         "docgraph",
-        "Path to docgraph executable. Bare name = use PATH. Empty = autodetect "
-        "(which → settings-dir venv → ~/.local/bin → ~/.docgraph venv).",
-        cli="resolves the `docgraph` CLI invoked everywhere below",
+        "Bare name = use PATH. Empty = autodetect.",
+        cli="docgraph CLI",
     ))
     layout.addWidget(binary_card)
 
@@ -167,24 +166,22 @@ def _build_host_card(window) -> tuple[QFrame, Callable[[], None]]:
     card, body = _card(
         "Host",
         "One docgraph host process serves every configured root. "
-        "Web UI + JSON API + MCP HTTP all on the same port. Restart to pick up "
-        "settings changes (root list, watch flags, etc.).",
+        "Restart to apply settings changes.",
     )
 
     body.addWidget(_toggle_row("docgraph.host.enabled", "Enabled",
-                                "Live-state flag. Off here = host is stopped right now. "
-                                "Doesn't affect Auto-start at boot."))
+                                "Off = host is stopped right now."))
     body.addWidget(_toggle_row("docgraph.host.auto_start", "Auto-start",
-                                "Start the host when telecode boots. Independent of Enabled."))
+                                "Start the host when telecode boots."))
     body.addWidget(_toggle_row("docgraph.host.auto_restart", "Auto-restart",
                                 "Re-spawn on unexpected exit."))
     body.addWidget(_line_row("docgraph.host.host", "Bind Host", "127.0.0.1",
-                              cli="docgraph host --host"))
+                              cli="--host"))
     body.addWidget(_number_row("docgraph.host.port", "Bind Port", 1024, 65535, 1, 0,
-                                cli="docgraph host --port"))
+                                cli="--port"))
     body.addWidget(_toggle_row("docgraph.host.gpu", "GPU embeddings",
-                                "Forwards DOCGRAPH_GPU=1 to the host process.",
-                                cli="DOCGRAPH_GPU=1 / docgraph host --gpu"))
+                                "Forwards DOCGRAPH_GPU=1.",
+                                cli="--gpu"))
 
     actions = QWidget()
     ar = QHBoxLayout(actions)
@@ -194,10 +191,7 @@ def _build_host_card(window) -> tuple[QFrame, Callable[[], None]]:
     restart_btn = QPushButton("Restart")
     ar.addWidget(start_btn); ar.addWidget(stop_btn); ar.addWidget(restart_btn)
     ar.addStretch(1)
-    body.addWidget(_row(row_label("Actions",
-        "Start / stop / restart the host process. Bind config and the "
-        "GPU flag are read at startup, so a restart is required to apply."),
-        actions))
+    body.addWidget(_row(row_label("Actions"), actions))
     # Status pill + log hint omitted — the global Status tile and Logs
     # section already cover both. No-op refresher kept so the card's
     # public shape (refresh callable) is unchanged.
@@ -255,12 +249,7 @@ def _host_status_text() -> tuple[bool, str]:
 def _build_roots_card(window) -> tuple[QFrame, Callable[[], None]]:
     card, body = _card(
         "Roots",
-        "Each row is a repo registered with the host. Per-row Index POSTs "
-        "/api/admin/index (else falls back to `docgraph index <path>`); "
-        "per-row Wiki POSTs /api/wiki/build (else `docgraph wiki <path>`). "
-        "The Full toggle below governs both — on = `--full` for index / "
-        "`--force` for wiki (rebuild from scratch), off = incremental / "
-        "resumable. Watch toggle is persistent — flip and restart the host.",
+        "Repos registered with the host. Watch flips need a host restart.",
     )
 
     # Build the master Full toggle FIRST so its state can be threaded
@@ -268,7 +257,6 @@ def _build_roots_card(window) -> tuple[QFrame, Callable[[], None]]:
     from tray.qt_widgets import Toggle as _Toggle
     all_force = _Toggle()
     all_force.setToolTip(
-        "Governs every Index/Wiki button in this card.\n"
         "On  = docgraph index --full / docgraph wiki --force\n"
         "Off = incremental index / resumable wiki"
     )
@@ -278,12 +266,9 @@ def _build_roots_card(window) -> tuple[QFrame, Callable[[], None]]:
 
     body.addWidget(_section_header("Global actions"))
 
-    # Full toggle row.
     body.addWidget(_row(row_label(
-        "Full reindex / wiki rebuild",
-        "On  = `docgraph index --full` and `docgraph wiki --force` (rebuild).\n"
-        "Off = incremental index / resumable wiki.\n"
-        "Governs every Index/Wiki button in this card, including the per-row ones."),
+        "Full rebuild",
+        "On = --full / --force. Off = incremental."),
         _wrap_align(all_force, Qt.AlignmentFlag.AlignLeft)))
 
     # Index all row: ▶ + ✕ cancel + status pill.
@@ -298,12 +283,9 @@ def _build_roots_card(window) -> tuple[QFrame, Callable[[], None]]:
 
     idx_w = QWidget()
     il = QHBoxLayout(idx_w); il.setContentsMargins(0, 0, 0, 0); il.setSpacing(8)
-    il.addWidget(run_all_btn); il.addWidget(cancel_btn); il.addWidget(status_lbl, 1)
-    body.addWidget(_row(row_label(
-        "Index all roots",
-        "Walk every configured root in sequence and run the indexer.\n"
-        "Honours the Full toggle above."),
-        idx_w))
+    il.addWidget(run_all_btn); il.addWidget(cancel_btn)
+    il.addWidget(status_lbl, 0); il.addStretch(1)
+    body.addWidget(_row(row_label("Index all roots"), idx_w))
 
     # Build wikis row: 📖 + ✕ cancel + status pill.
     run_all_wiki_btn = QPushButton("📖 Build wikis")
@@ -317,12 +299,9 @@ def _build_roots_card(window) -> tuple[QFrame, Callable[[], None]]:
 
     wiki_w = QWidget()
     wl = QHBoxLayout(wiki_w); wl.setContentsMargins(0, 0, 0, 0); wl.setSpacing(8)
-    wl.addWidget(run_all_wiki_btn); wl.addWidget(cancel_wiki_btn); wl.addWidget(wiki_status_lbl, 1)
-    body.addWidget(_row(row_label(
-        "Build wikis for all roots",
-        "Run `docgraph wiki` against every configured root.\n"
-        "Honours the Full toggle above (`--force` rebuilds every page)."),
-        wiki_w))
+    wl.addWidget(run_all_wiki_btn); wl.addWidget(cancel_wiki_btn)
+    wl.addWidget(wiki_status_lbl, 0); wl.addStretch(1)
+    body.addWidget(_row(row_label("Build wikis for all roots"), wiki_w))
 
     def _all():
         async def _go():
@@ -755,38 +734,28 @@ class _RootRow(QFrame):
 def _build_llm_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     card, body = _card(
         "LLM augmentation",
-        "Optional local LLM. Drives both `docgraph index` (one-line "
-        "docstrings, ~150 tokens each) and `docgraph wiki` (module pages, "
-        "~4096 tokens each). Endpoint settings (Model / Host / Port / "
-        "Format) are shared; max-tokens is split because the two callers "
-        "want very different budgets.",
+        "Optional local LLM for index docstrings + wiki pages.",
     )
     body.addWidget(_line_row("docgraph.llm.model", "Model",
                               "qwen3.6-35b",
-                              "Empty = off. Setting any value enables --llm-model "
-                              "for both index and wiki.",
-                              cli="--llm-model  (index + wiki)"))
+                              "Empty = off.",
+                              cli="--llm-model"))
     body.addWidget(_line_row("docgraph.llm.host", "Host", "localhost",
-                              cli="--llm-host  (index + wiki)"))
+                              cli="--llm-host"))
     body.addWidget(_number_row("docgraph.llm.port", "Port", 1, 65535, 1, 0,
-                                cli="--llm-port  (index + wiki)"))
+                                cli="--llm-port"))
     body.addWidget(_enum_row_strs(
         "docgraph.llm.format", "Format",
         [("OpenAI-compatible", "openai"), ("Anthropic-compatible", "anthropic")],
-        "Wire format for the local LLM endpoint. Shared by index + wiki.",
     ))
     body.addWidget(_number_row("docgraph.llm.max_tokens", "Index Max Tokens",
                                 10, 4096, 50, 0, "",
-                                "Per-call budget for `docgraph index`. Each "
-                                "call generates a one-line docstring — 150 is "
-                                "the docgraph default.",
-                                cli="docgraph index --llm-max-tokens"))
+                                "Default 150.",
+                                cli="index --llm-max-tokens"))
     body.addWidget(_number_row("docgraph.llm.max_tokens_wiki", "Wiki Max Tokens",
                                 256, 32768, 256, 0, "",
-                                "Per-call budget for `docgraph wiki`. Module "
-                                "pages need much more headroom — 4096 is the "
-                                "docgraph default.",
-                                cli="docgraph wiki --llm-max-tokens"))
+                                "Default 4096.",
+                                cli="wiki --llm-max-tokens"))
     return card, None
 
 
@@ -804,10 +773,7 @@ def _build_docs_card(window) -> tuple[QFrame, Callable[[], None]]:
 
     card, body = _card(
         "External docs",
-        "Cursor @Docs parity. Fetches a URL, chunks + embeds it, and stores "
-        "Doc nodes alongside the code graph. The MCP `search_docs` tool / "
-        "GET `/api/search_docs` queries them. Per-root — pick which repo's "
-        ".docgraph/ to write into.",
+        "Cursor @Docs parity. Per-root Doc-node ingestion.",
     )
 
     picker = QComboBox()
@@ -818,10 +784,7 @@ def _build_docs_card(window) -> tuple[QFrame, Callable[[], None]]:
     picker_w = QWidget()
     pl = QHBoxLayout(picker_w); pl.setContentsMargins(0, 0, 0, 0); pl.setSpacing(8)
     pl.addWidget(picker, 1); pl.addWidget(refresh_btn, 0)
-    body.addWidget(_row(row_label(
-        "Root",
-        "Pick which repo's `.docgraph/` will receive the Doc nodes."),
-        picker_w))
+    body.addWidget(_row(row_label("Root"), picker_w))
 
     url_edit = QLineEdit()
     url_edit.setPlaceholderText("https://example.com/docs")
@@ -832,10 +795,7 @@ def _build_docs_card(window) -> tuple[QFrame, Callable[[], None]]:
     add_w = QWidget()
     al = QHBoxLayout(add_w); al.setContentsMargins(0, 0, 0, 0); al.setSpacing(8)
     al.addWidget(url_edit, 1); al.addWidget(add_btn, 0)
-    body.addWidget(_row(row_label(
-        "Add doc URL",
-        "Fetch the URL, chunk + embed it, and store as Doc nodes under the picked root."),
-        add_w))
+    body.addWidget(_row(row_label("Add doc URL"), add_w))
 
     status_lbl = QLabel("")
     status_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
@@ -1018,10 +978,8 @@ def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
 
     card, body = _card(
         "LLM prompts",
-        "Override the system prompts docgraph sends to your local LLM. "
-        "Empty = built-in default. The docstring template MUST keep the "
-        "{kind} / {name} / {language} / {body} placeholders. The wiki "
-        "tail has no required placeholders — facts are rendered above it.",
+        "Override docgraph's built-in prompts. Empty = built-in default. "
+        "Docstring template MUST keep {kind} / {name} / {language} / {body}.",
     )
 
     def _editor(setting_path: str, default: str, label: str, help_text: str,
@@ -1076,18 +1034,14 @@ def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
         clear_btn.clicked.connect(_clear)
 
         editor_row = _row(row_label(label, help_text, setting_path, env_var), te)
-        actions_row = _row(row_label("Actions",
-            "Save persists to settings.json; the env var is read at host "
-            "startup, so restart the host to apply changes."),
-            actions)
+        actions_row = _row(row_label("Actions"), actions)
         return editor_row, actions_row
 
     er, ar = _editor(
         "docgraph.llm.prompts.docstring",
         _DOCSTRING_PROMPT_DEFAULT,
         "Docstring template",
-        "Used by `docgraph index --llm-model …` to generate one-line "
-        "docstrings for entities lacking native docs.",
+        "Used by `docgraph index --llm-model`.",
         "DOCGRAPH_LLM_PROMPT_DOCSTRING",
         height=140,
     )
@@ -1098,9 +1052,7 @@ def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
         "docgraph.llm.prompts.wiki",
         _WIKI_PROMPT_DEFAULT,
         "Wiki output-format tail",
-        "Used by `docgraph wiki`. Replaces only the trailing 'Output "
-        "format' instruction block — the rendered facts (module name, "
-        "files, top classes/functions, importers, tests) sit above it.",
+        "Used by `docgraph wiki`. Replaces the trailing output-format block.",
         "DOCGRAPH_LLM_PROMPT_WIKI",
         height=140,
     )
@@ -1132,34 +1084,24 @@ def _build_documents_index_card(window) -> tuple[QFrame, Callable[[], None] | No
     """
     card, body = _card(
         "Document indexing",
-        "Tier-2 (text docs) + tier-3 (binary assets). Forwarded to "
-        "`docgraph index --documents` and to the host process as "
-        "DOCGRAPH_INDEX_DOCUMENTS=1. Settings take effect on the next "
-        "index run / host restart. Light-weight — extension-based "
-        "walker, no extra dependencies.",
+        "Tier-2 (text docs) + tier-3 (binary assets). Off by default.",
     )
 
     body.addWidget(_toggle_row(
         "docgraph.index.documents.enabled", "Enabled",
-        "Master switch for the document + asset pass.",
-        cli="docgraph index --documents  /  DOCGRAPH_INDEX_DOCUMENTS=1",
+        "Master switch.",
+        cli="--documents",
     ))
     body.addWidget(_list_row(
         "docgraph.index.documents.text_extensions",
         "Text extensions",
-        "Files with these extensions are extracted, chunked, embedded "
-        "as Doc nodes (tier 2). Empty = use docgraph defaults: " +
-        ", ".join(_DOC_DEFAULT_TEXT_EXTS),
+        "Empty = defaults: " + ", ".join(_DOC_DEFAULT_TEXT_EXTS),
         placeholder="md",
     ))
     body.addWidget(_list_row(
         "docgraph.index.documents.asset_extensions",
         "Asset extensions",
-        "Files with these extensions are registered as Asset nodes "
-        "(path / size / mime, no content). Code and docs that mention "
-        "them by path get REFERENCES_ edges. Empty = use docgraph "
-        "defaults (pdf, xlsx, docx, png, mp4, parquet, fonts, archives, "
-        "3D meshes, …).",
+        "Registered as Asset nodes. Empty = built-in defaults.",
         placeholder="pdf",
     ))
     return card, None
@@ -1168,16 +1110,16 @@ def _build_documents_index_card(window) -> tuple[QFrame, Callable[[], None] | No
 def _build_embeddings_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     card, body = _card(
         "Embeddings",
-        "Settings shared by index runs and the host process.",
+        "Shared by index runs + host process.",
     )
     body.addWidget(_line_row("docgraph.embeddings.model", "Model",
                               "BAAI/bge-small-en-v1.5",
-                              "Empty = docgraph default. Sets DOCGRAPH_EMBED_MODEL.",
-                              cli="DOCGRAPH_EMBED_MODEL=…"))
+                              "Empty = default.",
+                              cli="DOCGRAPH_EMBED_MODEL"))
     body.addWidget(_toggle_row("docgraph.embeddings.gpu", "GPU embeddings",
-                                "Requires onnxruntime-gpu / -directml / -silicon installed.",
-                                cli="docgraph index --gpu"))
+                                "Needs onnxruntime-gpu/-directml/-silicon.",
+                                cli="--gpu"))
     body.addWidget(_number_row("docgraph.index.workers", "Index workers",
-                                0, 64, 1, 0, "", "0 = docgraph default",
-                                cli="docgraph index --workers"))
+                                0, 64, 1, 0, "", "0 = default.",
+                                cli="--workers"))
     return card, None
