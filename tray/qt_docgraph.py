@@ -233,22 +233,51 @@ def _build_groups_card(window) -> tuple[QFrame, Callable[[], None]]:
         "Multiple code paths sharing one Kuzu database per group.",
     )
 
-    # Global actions
-    global_actions_w = QWidget()
-    ga_h = QHBoxLayout(global_actions_w)
-    ga_h.setContentsMargins(0, 0, 0, 0)
-    ga_h.setSpacing(6)
-
+    # Global action: Index all groups
+    index_all_w = QWidget()
+    index_all_h = QHBoxLayout(index_all_w)
+    index_all_h.setContentsMargins(0, 0, 0, 0)
+    index_all_h.setSpacing(6)
+    index_all_label = QLabel("Index all groups")
+    index_all_h.addWidget(index_all_label)
     index_all_btn = QPushButton("▶ Index all")
     index_all_btn.clicked.connect(lambda: _index_all_groups(window))
-    ga_h.addWidget(index_all_btn)
+    index_all_h.addWidget(index_all_btn)
+    index_all_cancel = QPushButton("✕")
+    index_all_cancel.setFlat(True)
+    index_all_cancel.setFixedWidth(24)
+    index_all_cancel.setStyleSheet(
+        f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
+    )
+    index_all_h.addWidget(index_all_cancel)
+    index_all_status = QLabel("idle")
+    index_all_status.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+    index_all_h.addWidget(index_all_status)
+    index_all_h.addStretch(1)
+    body.addWidget(index_all_w)
 
+    # Global action: Build wikis for all groups
+    wiki_all_w = QWidget()
+    wiki_all_h = QHBoxLayout(wiki_all_w)
+    wiki_all_h.setContentsMargins(0, 0, 0, 0)
+    wiki_all_h.setSpacing(6)
+    wiki_all_label = QLabel("Build wikis for all groups")
+    wiki_all_h.addWidget(wiki_all_label)
     wiki_all_btn = QPushButton("📋 Build wikis")
     wiki_all_btn.clicked.connect(lambda: _build_all_wikis(window))
-    ga_h.addWidget(wiki_all_btn)
-
-    ga_h.addStretch(1)
-    body.addWidget(global_actions_w)
+    wiki_all_h.addWidget(wiki_all_btn)
+    wiki_all_cancel = QPushButton("✕")
+    wiki_all_cancel.setFlat(True)
+    wiki_all_cancel.setFixedWidth(24)
+    wiki_all_cancel.setStyleSheet(
+        f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
+    )
+    wiki_all_h.addWidget(wiki_all_cancel)
+    wiki_all_status = QLabel("idle")
+    wiki_all_status.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+    wiki_all_h.addWidget(wiki_all_status)
+    wiki_all_h.addStretch(1)
+    body.addWidget(wiki_all_w)
 
     groups_widget = _GroupsTable(window)
     body.addWidget(groups_widget)
