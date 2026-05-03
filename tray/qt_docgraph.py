@@ -1029,6 +1029,12 @@ def _build_llm_card(window) -> tuple[QFrame, Callable[[], None] | None]:
                                 256, 32768, 256, 0, "",
                                 "Default 4096.",
                                 cli="--llm-max-tokens-wiki"))
+    body.addWidget(_number_row("docgraph.llm.max_tokens_chat", "Chat Max Tokens",
+                                0, 32768, 256, 0, "",
+                                "Right-panel Chat tab cap. 0 = unlimited "
+                                "(model writes until done on OpenAI-compatible "
+                                "servers).",
+                                cli="--llm-max-tokens-chat"))
     body.addWidget(_line_row("docgraph.llm.api_key", "API Key", "",
                               "Forwarded as Authorization / x-api-key per "
                               "format. Leave blank for unauthenticated local "

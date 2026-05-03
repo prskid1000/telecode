@@ -1162,6 +1162,10 @@ class HostSupervisor:
                 argv += ["--llm-max-tokens", str(dg_cfg.llm_max_tokens())]
             if dg_cfg.llm_max_tokens_wiki():
                 argv += ["--llm-max-tokens-wiki", str(dg_cfg.llm_max_tokens_wiki())]
+            # 0 means "unlimited" upstream — only forward when the user has
+            # explicitly pinned a positive cap.
+            if dg_cfg.llm_max_tokens_chat() > 0:
+                argv += ["--llm-max-tokens-chat", str(dg_cfg.llm_max_tokens_chat())]
             if dg_cfg.llm_api_key():
                 argv += ["--llm-api-key", dg_cfg.llm_api_key()]
             if dg_cfg.llm_timeout() > 0:

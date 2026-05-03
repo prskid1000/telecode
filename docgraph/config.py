@@ -143,6 +143,19 @@ def llm_max_tokens_wiki() -> int:
     return int(llm_cfg().get("max_tokens_wiki", 4096) or 4096)
 
 
+def llm_max_tokens_chat() -> int:
+    """Per-call cap for the right-panel Chat tab on the docgraph host.
+    Default 0 = unlimited (the OpenAI-compatible server decides; Anthropic
+    falls back to its 8192 default). Stored at
+    `docgraph.llm.max_tokens_chat` so chat doesn't share the docstring or
+    wiki budget."""
+    raw = llm_cfg().get("max_tokens_chat", 0)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 0
+
+
 def llm_api_key() -> str:
     """Optional API key forwarded to the LLM server (Bearer / x-api-key
     depending on `llm.format`). Empty string = no auth header."""
