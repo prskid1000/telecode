@@ -815,8 +815,10 @@ def _build_docs_card(window) -> tuple[QFrame, Callable[[], None]]:
     add_row.setSpacing(8)
     url_edit = QLineEdit()
     url_edit.setPlaceholderText("https://example.com/docs")
+    url_edit.setMinimumWidth(0)
     add_btn = QPushButton("+ Add")
     add_btn.setProperty("class", "primary")
+    add_btn.setMaximumWidth(100)
     add_row.addWidget(url_edit, 1)
     add_row.addWidget(add_btn)
     body.addLayout(add_row)
@@ -825,17 +827,23 @@ def _build_docs_card(window) -> tuple[QFrame, Callable[[], None]]:
     status_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
     body.addWidget(status_lbl)
 
+    from PySide6.QtWidgets import QSizePolicy as _QSP
+
     table = QTableWidget(0, 4)
     table.setHorizontalHeaderLabels(["Source", "Title", "Chunks", ""])
     table.verticalHeader().setVisible(False)
     table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
     table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
     hdr = table.horizontalHeader()
+    hdr.setMinimumSectionSize(50)
     hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
     hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
     hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
     hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+    table.setMinimumWidth(0)
     table.setMinimumHeight(180)
+    table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    table.setSizePolicy(_QSP.Policy.Expanding, _QSP.Policy.Preferred)
     body.addWidget(table)
 
     def _current_root_path() -> str:

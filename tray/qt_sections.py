@@ -99,12 +99,17 @@ def _section_header(text: str) -> QLabel:
 
 
 def _row(left: QWidget, right: QWidget) -> QWidget:
-    """Two-column row: label | control."""
+    """Two-column row: label | control.
+
+    Label column has a soft cap (max 280) and a small floor (160) so
+    the row can shrink along with the card on narrow windows instead
+    of forcing the page to a horizontal scrollbar."""
     w = QWidget()
     l = QHBoxLayout(w)
     l.setContentsMargins(0, 0, 0, 0)
     l.setSpacing(14)
-    left.setFixedWidth(280)
+    left.setMinimumWidth(160)
+    left.setMaximumWidth(280)
     l.addWidget(left, 0, Qt.AlignmentFlag.AlignTop)
     l.addWidget(right, 1)
     return w
