@@ -1146,33 +1146,32 @@ def _build_documents_index_card(window) -> tuple[QFrame, Callable[[], None] | No
 
 # Curated embedding model dropdown.
 #
-# All entries are fastembed-native (`TextEmbedding.list_supported_models()`).
-# Ordered: multilingual first (user preference), then code-specialized, then
-# the 384-dim defaults that survive without a reindex. DocGraph auto-derives
-# the Kuzu schema dim from the chosen model — switching dim requires
-# `Clear` + full reindex (existing vectors are wrong-shape under a new dim).
+# All entries are fastembed-native (verified against
+# `TextEmbedding.list_supported_models()`). Ordered by popularity + quality:
+# the BGE family covers most code/RAG installs; jina-v3 + e5-large are the
+# frontier multilingual picks; jina-v2-base-code is the only code-specialized
+# fastembed model; mxbai-large was MTEB top-of-list through 2024-2025;
+# all-MiniLM-L6-v2 is the historically most-downloaded sentence embedding
+# (Continue.dev's default, LangChain/ChromaDB common pick).
 #
-# Choice rationale (research summary):
-#   - intfloat/multilingual-e5-large — best multilingual NL, ~100 langs, MTEB-top tier
-#   - paraphrase-multilingual-mpnet-base-v2 — Sourcegraph Cody-style mid-tier, ~50 langs
-#   - jina-embeddings-v2-base-code — only code-specialized fastembed model; 30+ programming langs, 8K context
-#   - paraphrase-multilingual-MiniLM-L12-v2 — current 384-dim multilingual default, no reindex
-#   - all-MiniLM-L6-v2 — Continue.dev's default; English fallback
+# DocGraph auto-derives the Kuzu schema dim from the chosen model — switching
+# to a different-dim model requires `Clear` + full reindex (existing vectors
+# are wrong-shape under a new dim).
 _DOCGRAPH_EMBED_MODELS: list[tuple[str, str]] = [
-    ("Default (BAAI/bge-small-en-v1.5)  ·  384 · English · 67 MB", ""),
-    ("multilingual-e5-large  ·  1024 · ~100 langs · 2.2 GB · best multilingual",
+    ("Default (BAAI/bge-small-en-v1.5)  ·  384 · 67 MB · fastembed default", ""),
+    ("BAAI/bge-base-en-v1.5  ·  768 · 210 MB · BGE family base",
+     "BAAI/bge-base-en-v1.5"),
+    ("BAAI/bge-large-en-v1.5  ·  1024 · 1.2 GB · full-size BGE",
+     "BAAI/bge-large-en-v1.5"),
+    ("mxbai-embed-large-v1  ·  1024 · 640 MB · MTEB-top through 2024-25",
+     "mixedbread-ai/mxbai-embed-large-v1"),
+    ("jina-embeddings-v3  ·  1024 · 2.3 GB · ~100 langs · 2026 frontier",
+     "jinaai/jina-embeddings-v3"),
+    ("intfloat/multilingual-e5-large  ·  1024 · 2.2 GB · ~100 langs · best multilingual",
      "intfloat/multilingual-e5-large"),
-    ("paraphrase-multilingual-mpnet-base-v2  ·  768 · ~50 langs · 1.0 GB",
-     "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"),
-    ("paraphrase-multilingual-MiniLM-L12-v2  ·  384 · ~50 langs · 220 MB · no-reindex",
-     "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"),
-    ("jina-embeddings-v2-base-code  ·  768 · 30+ prog langs · 8K ctx · 640 MB",
+    ("jina-embeddings-v2-base-code  ·  768 · 640 MB · 30+ prog langs · 8K ctx",
      "jinaai/jina-embeddings-v2-base-code"),
-    ("nomic-embed-text-v1.5  ·  768 · English · 8K ctx · 520 MB",
-     "nomic-ai/nomic-embed-text-v1.5"),
-    ("snowflake-arctic-embed-m  ·  768 · English · 430 MB",
-     "snowflake/snowflake-arctic-embed-m"),
-    ("all-MiniLM-L6-v2  ·  384 · English · 90 MB · Continue.dev default",
+    ("all-MiniLM-L6-v2  ·  384 · 90 MB · most-downloaded sentence-transformer",
      "sentence-transformers/all-MiniLM-L6-v2"),
 ]
 
