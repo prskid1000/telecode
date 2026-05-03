@@ -139,6 +139,186 @@ async def _index_via_host(path: str, full: bool, port: int) -> tuple[bool, str]:
             return False, f"POST /api/admin/index failed: {exc}"
 
 
+async def _resolve_slug_from_host(path: str, port: int,
+                                   session: aiohttp.ClientSession) -> str | None:
+    """Look up the registered slug for `path` via /api/roots. Returns None
+    on miss. Used by every host-route helper (index, wiki, stats, clear,
+    docs)."""
+    base = f"http://{dg_cfg.host_host()}:{port}"
+    norm = os.path.normpath(path)
+    target = norm.casefold() if sys.platform == "win32" else norm
+    try:
+        async with session.get(f"{base}/api/roots") as resp:
+            if resp.status != 200:
+                return None
+            roots = await resp.json()
+    except Exception:
+        return None
+    for r in roots:
+        r_norm = os.path.normpath(str(r.get("path") or ""))
+        r_target = r_norm.casefold() if sys.platform == "win32" else r_norm
+        if r_target == target:
+            return r.get("slug")
+    return None
+
+
+async def fetch_stats(path: str) -> str:
+    """Return a human-readable stats blob for `path`. Tries the host's
+    /api/stats first; falls back to running `docgraph stats <path>` as
+    a one-shot subprocess if the host isn't available."""
+    if _HOST is not None and _HOST.alive() and _HOST.port():
+        port = _HOST.port()
+        timeout = aiohttp.ClientTimeout(total=15)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                slug = await _resolve_slug_from_host(path, port, session)
+                if slug is None:
+                    return f"path {path} is not a registered root on the host."
+                base = f"http://{dg_cfg.host_host()}:{port}"
+                async with session.get(f"{base}/api/stats?root={slug}") as resp:
+                    if resp.status != 200:
+                        return f"GET /api/stats → HTTP {resp.status}"
+                    data = await resp.json()
+        except Exception as exc:
+            return f"host route failed: {exc}"
+        lines = [f"Repo: {data.get('repo', path)}", ""]
+        for label in ("File", "Module", "Class", "Function", "Variable"):
+            lines.append(f"  {label:<10} {data.get(label, 0)}")
+        tables = data.get("tables") or []
+        if tables:
+            lines.append("")
+            lines.append(f"Kuzu tables: {len(tables)}")
+        return "\n".join(lines)
+    # Subprocess fallback
+    try:
+        binary = _binary_or_raise()
+    except Exception as exc:
+        return str(exc)
+    proc = await asyncio.to_thread(
+        subprocess.run,
+        [binary, "stats", path],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=30,
+        creationflags=_creation_flags(),
+        env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
+    )
+    return proc.stdout or "(no output)"
+
+
+async def clear_index(path: str) -> tuple[bool, str]:
+    """Wipe the index for `path`. Tries POST /api/admin/clear first; falls
+    back to `docgraph clear <path> --yes` only if the host isn't alive."""
+    if _HOST is not None and _HOST.alive() and _HOST.port():
+        port = _HOST.port()
+        timeout = aiohttp.ClientTimeout(total=120)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                slug = await _resolve_slug_from_host(path, port, session)
+                if slug is None:
+                    return False, f"path {path} is not a registered root on the host."
+                base = f"http://{dg_cfg.host_host()}:{port}"
+                async with session.post(f"{base}/api/admin/clear?root={slug}") as resp:
+                    body = await resp.text()
+                    if resp.status != 200:
+                        return False, f"POST /api/admin/clear → HTTP {resp.status}: {body[:500]}"
+                    return True, f"Index for {path} cleared."
+        except Exception as exc:
+            return False, f"host route failed: {exc}"
+    # Subprocess fallback
+    try:
+        binary = _binary_or_raise()
+    except Exception as exc:
+        return False, str(exc)
+    proc = await asyncio.to_thread(
+        subprocess.run,
+        [binary, "clear", path, "--yes"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=60,
+        creationflags=_creation_flags(),
+    )
+    if proc.returncode == 0:
+        return True, f"Index for {path} cleared (subprocess)."
+    return False, proc.stdout or f"docgraph clear exited with rc={proc.returncode}"
+
+
+async def list_docs_for(path: str) -> tuple[bool, list[dict] | str]:
+    """GET /api/docs/list?root=<slug>. Returns (True, [rows]) or (False, msg).
+    No subprocess fallback — listing requires the host to be alive (so we
+    don't pay a Kuzu-open cost for a read-only call)."""
+    if _HOST is None or not _HOST.alive() or not _HOST.port():
+        return False, "Host is not running. Start it from the Host card."
+    port = _HOST.port()
+    timeout = aiohttp.ClientTimeout(total=15)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            slug = await _resolve_slug_from_host(path, port, session)
+            if slug is None:
+                return False, f"path {path} is not a registered root on the host."
+            base = f"http://{dg_cfg.host_host()}:{port}"
+            async with session.get(f"{base}/api/docs/list?root={slug}") as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    return False, f"GET /api/docs/list → HTTP {resp.status}: {body[:200]}"
+                return True, await resp.json()
+    except Exception as exc:
+        return False, f"host route failed: {exc}"
+
+
+async def add_doc_for(path: str, url: str) -> tuple[bool, dict | str]:
+    """POST /api/docs/add?root=<slug>. Returns (True, payload) or (False, msg)."""
+    if _HOST is None or not _HOST.alive() or not _HOST.port():
+        return False, "Host is not running. Start it from the Host card."
+    port = _HOST.port()
+    # URL fetch + chunk + embed can take a while for large pages.
+    timeout = aiohttp.ClientTimeout(total=300)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            slug = await _resolve_slug_from_host(path, port, session)
+            if slug is None:
+                return False, f"path {path} is not a registered root on the host."
+            base = f"http://{dg_cfg.host_host()}:{port}"
+            async with session.post(f"{base}/api/docs/add?root={slug}",
+                                     json={"url": url}) as resp:
+                body = await resp.text()
+                if resp.status != 200:
+                    return False, f"POST /api/docs/add → HTTP {resp.status}: {body[:300]}"
+                try:
+                    return True, json.loads(body)
+                except Exception:
+                    return True, {"raw": body[:1000]}
+    except Exception as exc:
+        return False, f"host route failed: {exc}"
+
+
+async def remove_doc_for(path: str, url: str) -> tuple[bool, dict | str]:
+    """POST /api/docs/remove?root=<slug>."""
+    if _HOST is None or not _HOST.alive() or not _HOST.port():
+        return False, "Host is not running."
+    port = _HOST.port()
+    timeout = aiohttp.ClientTimeout(total=30)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            slug = await _resolve_slug_from_host(path, port, session)
+            if slug is None:
+                return False, f"path {path} is not a registered root."
+            base = f"http://{dg_cfg.host_host()}:{port}"
+            async with session.post(f"{base}/api/docs/remove?root={slug}",
+                                     json={"url": url}) as resp:
+                body = await resp.text()
+                if resp.status != 200:
+                    return False, f"POST /api/docs/remove → HTTP {resp.status}: {body[:300]}"
+                try:
+                    return True, json.loads(body)
+                except Exception:
+                    return True, {"raw": body[:1000]}
+    except Exception as exc:
+        return False, f"host route failed: {exc}"
+
+
 async def _wiki_via_host(path: str, force: bool, port: int) -> tuple[bool, str]:
     """POST /api/wiki/build?root=<slug> on the running host.
 
@@ -333,6 +513,7 @@ class IndexRunner:
                 }
                 if dg_cfg.embeddings_model():
                     env["DOCGRAPH_EMBED_MODEL"] = dg_cfg.embeddings_model()
+                env.update(dg_cfg.prompt_env())
                 self._log_fp.write(
                     f"\n--- index {path} {'(--full)' if force else '(incremental)'} ---\n".encode()
                 )
@@ -497,6 +678,7 @@ class WikiRunner:
                     "PYTHONIOENCODING": "utf-8",
                     "PYTHONUTF8": "1",
                 }
+                env.update(dg_cfg.prompt_env())
                 self._log_fp.write(
                     f"\n--- wiki {path} {'(--force)' if force else '(resumable)'} ---\n".encode()
                 )
@@ -614,6 +796,7 @@ class HostSupervisor:
             env["DOCGRAPH_GPU"] = "1"
         if dg_cfg.embeddings_model():
             env["DOCGRAPH_EMBED_MODEL"] = dg_cfg.embeddings_model()
+        env.update(dg_cfg.prompt_env())
 
         self._port = port
         self._log_fp = _open_log(self.role)

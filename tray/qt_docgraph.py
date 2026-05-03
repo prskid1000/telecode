@@ -58,7 +58,9 @@ def build_docgraph_tabs(window) -> QWidget:
     for build in (
         _build_host_card,
         _build_roots_card,
+        _build_docs_card,
         _build_llm_card,
+        _build_prompts_card,
         _build_embeddings_card,
     ):
         card, refresh = build(window)
@@ -518,6 +520,26 @@ class _RootRow(QFrame):
         self._wiki_btn.clicked.connect(self._trigger_wiki)
         h.addWidget(self._wiki_btn)
 
+        self._stats_btn = QPushButton("📊")
+        self._stats_btn.setToolTip(
+            "GET /api/stats?root=<slug> — entity + edge counts for this root.\n"
+            "Read-only; works while the host is alive (free) or via a brief\n"
+            "`docgraph stats <path>` subprocess if not."
+        )
+        self._stats_btn.setFixedWidth(36)
+        self._stats_btn.clicked.connect(self._trigger_stats)
+        h.addWidget(self._stats_btn)
+
+        self._clear_btn = QPushButton("🗑")
+        self._clear_btn.setToolTip(
+            "POST /api/admin/clear?root=<slug> — wipe the index, cache, and\n"
+            "wiki for this root. Confirmation required. Host stays alive;\n"
+            "the workspace re-opens its read-only handle once the wipe is done."
+        )
+        self._clear_btn.setFixedWidth(36)
+        self._clear_btn.clicked.connect(self._trigger_clear)
+        h.addWidget(self._clear_btn)
+
         watch_lbl = QLabel("Watch")
         watch_lbl.setStyleSheet(f"color: {FG_DIM};")
         watch_lbl.setToolTip(
@@ -590,6 +612,46 @@ class _RootRow(QFrame):
         async def _go():
             from docgraph.process import get_wiki
             await get_wiki().run(path, force=force)
+        _run(self._window, _go)
+
+    def _trigger_stats(self) -> None:
+        path = self.text().strip()
+        if not path:
+            return
+        async def _go():
+            from docgraph.process import fetch_stats
+            text = await fetch_stats(path)
+            from PySide6.QtWidgets import QMessageBox
+            from PySide6.QtCore import QMetaObject, Qt as _Qt, QTimer
+            # Hop to the GUI thread — _go() runs on the asyncio loop.
+            QTimer.singleShot(0, lambda: QMessageBox.information(
+                self, f"Stats — {path}", text
+            ))
+        _run(self._window, _go)
+
+    def _trigger_clear(self) -> None:
+        path = self.text().strip()
+        if not path:
+            return
+        from PySide6.QtWidgets import QMessageBox
+        confirm = QMessageBox.question(
+            self,
+            "Clear index?",
+            f"Wipe the index, cache, and wiki under\n  {path}/.docgraph/\n\n"
+            "Re-indexing will cost a full rebuild. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        async def _go():
+            from docgraph.process import clear_index
+            ok, detail = await clear_index(path)
+            from PySide6.QtCore import QTimer
+            from PySide6.QtWidgets import QMessageBox as _MB
+            kind = _MB.information if ok else _MB.warning
+            title = "Cleared" if ok else "Clear failed"
+            QTimer.singleShot(0, lambda: kind(self, title, detail))
         _run(self._window, _go)
 
     def refresh_state(self) -> None:
@@ -713,6 +775,318 @@ def _build_llm_card(window) -> tuple[QFrame, Callable[[], None] | None]:
 
 
 # ── Embeddings card ─────────────────────────────────────────────────────
+
+# ── External Docs (Cursor @Docs parity) ────────────────────────────────
+
+def _build_docs_card(window) -> tuple[QFrame, Callable[[], None]]:
+    """Per-root external doc ingestion. Adds, lists, and removes Doc nodes
+    via the host's /api/docs/* endpoints. Picks which root to operate on
+    using the same closed-enum resolver the rest of the host uses."""
+    from PySide6.QtWidgets import (
+        QComboBox, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+    )
+
+    card, body = _card(
+        "External docs",
+        "Cursor @Docs parity. Fetches a URL, chunks + embeds it, and stores "
+        "Doc nodes alongside the code graph. The MCP `search_docs` tool / "
+        "GET `/api/search_docs` queries them. Per-root — pick which repo's "
+        ".docgraph/ to write into.",
+    )
+
+    picker_row = QHBoxLayout()
+    picker_row.setSpacing(8)
+    picker_row.addWidget(QLabel("Root:"))
+    picker = QComboBox()
+    picker.setMinimumWidth(220)
+    picker_row.addWidget(picker)
+    picker_row.addStretch(1)
+    refresh_btn = QPushButton("Refresh")
+    refresh_btn.setProperty("class", "ghost")
+    picker_row.addWidget(refresh_btn)
+    body.addLayout(picker_row)
+
+    add_row = QHBoxLayout()
+    add_row.setSpacing(8)
+    url_edit = QLineEdit()
+    url_edit.setPlaceholderText("https://example.com/docs")
+    add_btn = QPushButton("+ Add")
+    add_btn.setProperty("class", "primary")
+    add_row.addWidget(url_edit, 1)
+    add_row.addWidget(add_btn)
+    body.addLayout(add_row)
+
+    status_lbl = QLabel("")
+    status_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
+    body.addWidget(status_lbl)
+
+    table = QTableWidget(0, 4)
+    table.setHorizontalHeaderLabels(["Source", "Title", "Chunks", ""])
+    table.verticalHeader().setVisible(False)
+    table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+    table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    hdr = table.horizontalHeader()
+    hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+    hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+    hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+    hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+    table.setMinimumHeight(180)
+    body.addWidget(table)
+
+    def _current_root_path() -> str:
+        idx = picker.currentIndex()
+        if idx < 0:
+            return ""
+        return str(picker.itemData(idx) or "")
+
+    def _set_status(text: str, kind: str = "info") -> None:
+        color = {"info": FG_MUTE, "ok": OK, "err": ERR}.get(kind, FG_MUTE)
+        status_lbl.setStyleSheet(f"color: {color}; font-size: 11px;")
+        status_lbl.setText(text)
+
+    def _reload_table() -> None:
+        path = _current_root_path()
+        table.setRowCount(0)
+        if not path:
+            _set_status("No root configured. Add one in the Roots card.")
+            return
+
+        async def _go():
+            from docgraph.process import list_docs_for
+            ok, payload = await list_docs_for(path)
+            from PySide6.QtCore import QTimer
+            def _fill():
+                if not ok:
+                    _set_status(str(payload), "err")
+                    return
+                rows = payload if isinstance(payload, list) else []
+                table.setRowCount(len(rows))
+                for i, r in enumerate(rows):
+                    src = r.get("source", "")
+                    title = r.get("title", "") or ""
+                    chunks = str(r.get("chunks", 0))
+                    table.setItem(i, 0, QTableWidgetItem(src))
+                    table.setItem(i, 1, QTableWidgetItem(title))
+                    item_n = QTableWidgetItem(chunks)
+                    item_n.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                    table.setItem(i, 2, item_n)
+                    rm = QPushButton("✕")
+                    rm.setFlat(True)
+                    rm.setFixedWidth(28)
+                    rm.setStyleSheet(
+                        f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
+                        f" QPushButton:hover {{ color: #ff6b6b; }}"
+                    )
+                    rm.clicked.connect(lambda _checked, u=src: _remove(u))
+                    table.setCellWidget(i, 3, rm)
+                _set_status(f"{len(rows)} doc source(s) for this root.")
+            QTimer.singleShot(0, _fill)
+
+        _run(window, _go)
+
+    def _add() -> None:
+        url = url_edit.text().strip()
+        path = _current_root_path()
+        if not url or not path:
+            return
+
+        async def _go():
+            from docgraph.process import add_doc_for
+            ok, payload = await add_doc_for(path, url)
+            from PySide6.QtCore import QTimer
+            def _after():
+                if ok:
+                    chunks = payload.get("chunks", "?") if isinstance(payload, dict) else "?"
+                    title = payload.get("title", "") if isinstance(payload, dict) else ""
+                    _set_status(f"Added: {title or url} ({chunks} chunks).", "ok")
+                    url_edit.clear()
+                    _reload_table()
+                else:
+                    _set_status(str(payload), "err")
+            QTimer.singleShot(0, _after)
+
+        _set_status(f"Fetching {url} …", "info")
+        _run(window, _go)
+
+    def _remove(url: str) -> None:
+        path = _current_root_path()
+        if not url or not path:
+            return
+        async def _go():
+            from docgraph.process import remove_doc_for
+            ok, payload = await remove_doc_for(path, url)
+            from PySide6.QtCore import QTimer
+            def _after():
+                if ok:
+                    n = payload.get("removed_chunks", 0) if isinstance(payload, dict) else 0
+                    _set_status(f"Removed {n} chunks for {url}.", "ok")
+                    _reload_table()
+                else:
+                    _set_status(str(payload), "err")
+            QTimer.singleShot(0, _after)
+        _run(window, _go)
+
+    add_btn.clicked.connect(_add)
+    url_edit.returnPressed.connect(_add)
+    refresh_btn.clicked.connect(_reload_table)
+    picker.currentIndexChanged.connect(lambda _i: _reload_table())
+
+    def refresh() -> None:
+        # Repopulate the picker from the current roots list. Preserve
+        # selection by path so the table doesn't blink to a different
+        # root every refresh tick.
+        prev = _current_root_path()
+        picker.blockSignals(True)
+        picker.clear()
+        for entry in (get_path(read_settings(), "docgraph.roots", []) or []):
+            if not isinstance(entry, dict):
+                continue
+            p = str(entry.get("path", "") or "").strip()
+            if not p:
+                continue
+            picker.addItem(p, p)
+        # Restore selection
+        if prev:
+            for i in range(picker.count()):
+                if picker.itemData(i) == prev:
+                    picker.setCurrentIndex(i)
+                    break
+        picker.blockSignals(False)
+        _reload_table()
+
+    refresh()
+    return card, refresh
+
+
+# ── LLM prompt overrides ───────────────────────────────────────────────
+
+_DOCSTRING_PROMPT_DEFAULT = (
+    "Write a single-sentence docstring (under 25 words) for this {kind} "
+    "named `{name}` in {language}. Describe its purpose, not its implementation. "
+    "Return only the sentence — no quotes, no markdown, no preamble.\n\n"
+    "```{language}\n{body}\n```"
+)
+
+_WIKI_PROMPT_DEFAULT = (
+    "Write a Markdown page with these sections:\n"
+    "1. **Summary** — 2-3 sentences on the module's purpose.\n"
+    "2. **Key entities** — bulleted list of the most important classes/functions and what each is for.\n"
+    "3. **How it's used** — who imports it, in plain language.\n"
+    "Total length: 200-300 words. No code blocks. Do not list every file. "
+    "Only state what the facts support."
+)
+
+
+def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
+    """Two text editors that override docgraph's built-in LLM prompts.
+
+    Stored at `docgraph.llm.prompts.docstring` / `.wiki` in settings.
+    Telecode forwards them to docgraph as
+    `DOCGRAPH_LLM_PROMPT_DOCSTRING` / `DOCGRAPH_LLM_PROMPT_WIKI` env vars
+    when launching the host or a wiki/index subprocess. Empty value =
+    use docgraph's built-in default."""
+    from PySide6.QtWidgets import QPlainTextEdit
+    from PySide6.QtGui import QFontDatabase
+
+    card, body = _card(
+        "LLM prompts",
+        "Override the system prompts docgraph sends to your local LLM. "
+        "Empty = built-in default. The docstring template MUST keep the "
+        "{kind} / {name} / {language} / {body} placeholders. The wiki "
+        "tail has no required placeholders — facts are rendered above it.",
+    )
+
+    def _editor(setting_path: str, default: str, label: str, help_text: str,
+                placeholder: str, height: int) -> QWidget:
+        wrap = QWidget()
+        v = QVBoxLayout(wrap)
+        v.setContentsMargins(0, 0, 0, 8)
+        v.setSpacing(4)
+        title = QLabel(label)
+        title.setProperty("class", "row_label")
+        v.addWidget(title)
+        if help_text:
+            hl = QLabel(help_text)
+            hl.setProperty("class", "row_help")
+            hl.setWordWrap(True)
+            v.addWidget(hl)
+        cli_lbl = QLabel(setting_path + "  ·  " + placeholder)
+        cli_lbl.setProperty("class", "key_path")
+        cli_lbl.setWordWrap(True)
+        v.addWidget(cli_lbl)
+
+        te = QPlainTextEdit()
+        te.setFixedHeight(height)
+        mono = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        mono.setPointSize(10)
+        te.setFont(mono)
+        cur = str(get_path(read_settings(), setting_path, "") or "")
+        te.setPlaceholderText("(empty — using built-in default)")
+        te.setPlainText(cur)
+        v.addWidget(te)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        save_btn = QPushButton("Save")
+        save_btn.setProperty("class", "primary")
+        reset_btn = QPushButton("Reset to default")
+        reset_btn.setProperty("class", "ghost")
+        clear_btn = QPushButton("Clear (use built-in)")
+        clear_btn.setProperty("class", "ghost")
+        info_lbl = QLabel("")
+        info_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
+        btn_row.addWidget(save_btn)
+        btn_row.addWidget(reset_btn)
+        btn_row.addWidget(clear_btn)
+        btn_row.addWidget(info_lbl, 1)
+        v.addLayout(btn_row)
+
+        def _save():
+            patch_settings(setting_path, te.toPlainText())
+            info_lbl.setStyleSheet(f"color: {OK}; font-size: 11px;")
+            info_lbl.setText(
+                "Saved. Restart the host to apply (the env var is read at "
+                "host startup)."
+            )
+
+        def _reset():
+            te.setPlainText(default)
+            patch_settings(setting_path, default)
+            info_lbl.setStyleSheet(f"color: {OK}; font-size: 11px;")
+            info_lbl.setText("Reset to docgraph's built-in default. Restart the host to apply.")
+
+        def _clear():
+            te.setPlainText("")
+            patch_settings(setting_path, "")
+            info_lbl.setStyleSheet(f"color: {OK}; font-size: 11px;")
+            info_lbl.setText("Cleared. docgraph will use its built-in default. Restart the host.")
+
+        save_btn.clicked.connect(_save)
+        reset_btn.clicked.connect(_reset)
+        clear_btn.clicked.connect(_clear)
+        return wrap
+
+    body.addWidget(_editor(
+        "docgraph.llm.prompts.docstring",
+        _DOCSTRING_PROMPT_DEFAULT,
+        "Docstring template",
+        "Used by `docgraph index --llm-model …` to generate one-line "
+        "docstrings for entities lacking native docs.",
+        "DOCGRAPH_LLM_PROMPT_DOCSTRING",
+        height=140,
+    ))
+    body.addWidget(_editor(
+        "docgraph.llm.prompts.wiki",
+        _WIKI_PROMPT_DEFAULT,
+        "Wiki output-format tail",
+        "Used by `docgraph wiki`. Replaces only the trailing 'Output "
+        "format' instruction block — the rendered facts (module name, "
+        "files, top classes/functions, importers, tests) sit above it.",
+        "DOCGRAPH_LLM_PROMPT_WIKI",
+        height=140,
+    ))
+    return card, None
+
 
 def _build_embeddings_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     card, body = _card(

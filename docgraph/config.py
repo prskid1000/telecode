@@ -136,6 +136,33 @@ def llm_max_tokens_wiki() -> int:
     return int(llm_cfg().get("max_tokens_wiki", 4096) or 4096)
 
 
+def llm_prompt_docstring() -> str:
+    """User-supplied override for the docstring template. Forwarded to
+    docgraph as DOCGRAPH_LLM_PROMPT_DOCSTRING. Empty = use built-in."""
+    prompts = llm_cfg().get("prompts") or {}
+    return str(prompts.get("docstring", "") or "")
+
+
+def llm_prompt_wiki() -> str:
+    """User-supplied override for the wiki output-format tail."""
+    prompts = llm_cfg().get("prompts") or {}
+    return str(prompts.get("wiki", "") or "")
+
+
+def prompt_env() -> dict[str, str]:
+    """Env-var dict to forward to docgraph child processes. Only emits
+    keys for non-empty overrides so docgraph's built-in defaults stay
+    in effect when the user clears the textboxes."""
+    out: dict[str, str] = {}
+    d = llm_prompt_docstring()
+    if d:
+        out["DOCGRAPH_LLM_PROMPT_DOCSTRING"] = d
+    w = llm_prompt_wiki()
+    if w:
+        out["DOCGRAPH_LLM_PROMPT_WIKI"] = w
+    return out
+
+
 # ── Embeddings ──────────────────────────────────────────────────────────────
 
 def embeddings_cfg() -> dict:    return _section("embeddings")
