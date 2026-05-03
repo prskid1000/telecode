@@ -1051,9 +1051,9 @@ class HostSupervisor:
         # DOCGRAPH_* names. The flags below mirror Config.from_env one-for-one.
         if dg_cfg.host_gpu():
             argv.append("--gpu")
-        if dg_cfg.embeddings_directml_device_id() >= 0:
+        if dg_cfg.host_directml_device_id() >= 0:
             argv += ["--directml-device-id",
-                     str(dg_cfg.embeddings_directml_device_id())]
+                     str(dg_cfg.host_directml_device_id())]
         if dg_cfg.embeddings_model():
             argv += ["--embed-model", dg_cfg.embeddings_model()]
         if dg_cfg.rerank_model():
