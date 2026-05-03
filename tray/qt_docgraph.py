@@ -1144,15 +1144,34 @@ def _build_documents_index_card(window) -> tuple[QFrame, Callable[[], None] | No
     return card, None
 
 
+_DOCGRAPH_EMBED_MODELS: list[tuple[str, str]] = [
+    # Display, value. Empty value = "use docgraph default" (BAAI/bge-small-en-v1.5).
+    # Restricted to 384-dim models — DocGraph's Kuzu schema is fixed at 384;
+    # other dims would require a wipe + schema bump.
+    ("Default (BAAI/bge-small-en-v1.5)", ""),
+    ("BAAI/bge-small-en-v1.5 — 384 · English (default)", "BAAI/bge-small-en-v1.5"),
+    ("BAAI/bge-small-en — 384 · English", "BAAI/bge-small-en"),
+    ("sentence-transformers/all-MiniLM-L6-v2 — 384 · fastest", "sentence-transformers/all-MiniLM-L6-v2"),
+    ("sentence-transformers/all-MiniLM-L12-v2 — 384 · balanced", "sentence-transformers/all-MiniLM-L12-v2"),
+    ("sentence-transformers/paraphrase-MiniLM-L3-v2 — 384 · tiny", "sentence-transformers/paraphrase-MiniLM-L3-v2"),
+    ("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 — 384 · multilingual",
+     "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"),
+    ("snowflake/snowflake-arctic-embed-xs — 384 · Snowflake XS", "snowflake/snowflake-arctic-embed-xs"),
+    ("snowflake/snowflake-arctic-embed-s — 384 · Snowflake S", "snowflake/snowflake-arctic-embed-s"),
+    ("intfloat/multilingual-e5-small — 384 · multilingual", "intfloat/multilingual-e5-small"),
+    ("BAAI/bge-small-zh-v1.5 — 384 · Chinese", "BAAI/bge-small-zh-v1.5"),
+]
+
+
 def _build_embeddings_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     card, body = _card(
         "Embeddings",
         "Shared by index runs + host process.",
     )
-    body.addWidget(_line_row("docgraph.embeddings.model", "Model",
-                              "BAAI/bge-small-en-v1.5",
-                              "Empty = default.",
-                              cli="DOCGRAPH_EMBED_MODEL"))
+    body.addWidget(_enum_row_strs("docgraph.embeddings.model", "Model",
+                                    _DOCGRAPH_EMBED_MODELS,
+                                    "Switching model needs a full reindex (.docgraph wipe). "
+                                    "All 384-dim — schema is fixed."))
     body.addWidget(_toggle_row("docgraph.embeddings.gpu", "GPU embeddings",
                                 "Needs onnxruntime-gpu/-directml/-silicon.",
                                 cli="--gpu"))
