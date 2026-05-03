@@ -1051,6 +1051,9 @@ class HostSupervisor:
         # DOCGRAPH_* names. The flags below mirror Config.from_env one-for-one.
         if dg_cfg.host_gpu():
             argv.append("--gpu")
+        if dg_cfg.embeddings_directml_device_id() >= 0:
+            argv += ["--directml-device-id",
+                     str(dg_cfg.embeddings_directml_device_id())]
         if dg_cfg.embeddings_model():
             argv += ["--embed-model", dg_cfg.embeddings_model()]
         if dg_cfg.rerank_model():
@@ -1071,6 +1074,8 @@ class HostSupervisor:
                 argv += ["--llm-format", dg_cfg.llm_format()]
             if dg_cfg.llm_max_tokens():
                 argv += ["--llm-max-tokens", str(dg_cfg.llm_max_tokens())]
+            argv.append("--llm-docstrings" if dg_cfg.llm_docstrings() else "--no-llm-docstrings")
+        argv.append("--llm-wiki" if dg_cfg.llm_wiki() else "--no-llm-wiki")
         # Long-form prompt overrides — write the text to a temp file so we
         # can pass --llm-prompt-*-file rather than smuggling multi-line
         # content through argv (Windows command-line length limits, escaping

@@ -242,7 +242,8 @@ def _build_host_card(window) -> tuple[QFrame, Callable[[], None]]:
                                 "Default 500. Only used with watched roots.",
                                 cli="--debounce"))
     body.addWidget(_toggle_row("docgraph.host.gpu", "GPU embeddings",
-                                "Forwards DOCGRAPH_GPU=1.",
+                                "Embeddings on GPU when ONNX Runtime "
+                                "providers are available.",
                                 cli="--gpu"))
 
     actions = QWidget()
@@ -999,11 +1000,21 @@ class _RootRow(QFrame):
 def _build_llm_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     card, body = _card(
         "LLM augmentation",
-        "Optional local LLM for index docstrings + wiki pages.",
+        "Optional local LLM for index docstrings + wiki pages. The model "
+        "field alone does NOT enable either feature — toggle each on below.",
     )
+    body.addWidget(_toggle_row("docgraph.llm.docstrings", "Use LLM for docstrings",
+                                "Generate one-sentence summaries during "
+                                "indexing for entities with no native docstring. "
+                                "Off by default.",
+                                cli="--llm-docstrings"))
+    body.addWidget(_toggle_row("docgraph.llm.wiki", "Use LLM for wiki",
+                                "When off, wiki pages render the fact-sheet "
+                                "fallback even if a model is configured.",
+                                cli="--llm-wiki"))
     body.addWidget(_line_row("docgraph.llm.model", "Model",
                               "qwen3.6-35b",
-                              "Empty = off.",
+                              "LLM id used by both features above.",
                               cli="--llm-model"))
     body.addWidget(_line_row("docgraph.llm.host", "Host", "localhost",
                               cli="--llm-host"))
@@ -1238,10 +1249,10 @@ def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     """Two text editors that override docgraph's built-in LLM prompts.
 
     Stored at `docgraph.llm.prompts.docstring` / `.wiki` in settings.
-    Telecode forwards them to docgraph as
-    `DOCGRAPH_LLM_PROMPT_DOCSTRING` / `DOCGRAPH_LLM_PROMPT_WIKI` env vars
-    when launching the host or a wiki/index subprocess. Empty value =
-    use docgraph's built-in default."""
+    Telecode materializes the override text to a temp file and passes
+    `--llm-prompt-docstring-file` / `--llm-prompt-wiki-file` to docgraph
+    on host launch (and on index/wiki subprocesses). Empty value = use
+    docgraph's built-in default."""
     from PySide6.QtWidgets import QPlainTextEdit
     from PySide6.QtGui import QFontDatabase
 
@@ -1252,7 +1263,7 @@ def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     )
 
     def _editor(setting_path: str, default: str, label: str, help_text: str,
-                env_var: str, height: int) -> tuple[QWidget, QWidget]:
+                cli_flag: str, height: int) -> tuple[QWidget, QWidget]:
         """Returns (editor_row, actions_row) — both fully shaped via `_row()`."""
         te = QPlainTextEdit()
         te.setFixedHeight(height)
@@ -1302,7 +1313,7 @@ def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
         reset_btn.clicked.connect(_reset)
         clear_btn.clicked.connect(_clear)
 
-        editor_row = _row(row_label(label, help_text, setting_path, env_var), te)
+        editor_row = _row(row_label(label, help_text, setting_path, cli=cli_flag), te)
         actions_row = _row(row_label("Actions"), actions)
         return editor_row, actions_row
 
@@ -1310,8 +1321,8 @@ def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
         "docgraph.llm.prompts.docstring",
         _DOCSTRING_PROMPT_DEFAULT,
         "Docstring template",
-        "Used by `docgraph index --llm-model`.",
-        "DOCGRAPH_LLM_PROMPT_DOCSTRING",
+        "Used by `docgraph index --llm-docstrings`.",
+        "--llm-prompt-docstring-file",
         height=140,
     )
     body.addWidget(er); body.addWidget(ar)
@@ -1322,7 +1333,7 @@ def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
         _WIKI_PROMPT_DEFAULT,
         "Wiki output-format tail",
         "Used by `docgraph wiki`. Replaces the trailing output-format block.",
-        "DOCGRAPH_LLM_PROMPT_WIKI",
+        "--llm-prompt-wiki-file",
         height=140,
     )
     body.addWidget(er); body.addWidget(ar)
@@ -1466,13 +1477,20 @@ def _build_embeddings_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     body.addWidget(_toggle_row("docgraph.embeddings.gpu", "GPU embeddings",
                                 "Needs onnxruntime-gpu/-directml/-silicon.",
                                 cli="--gpu"))
+    body.addWidget(_number_row("docgraph.embeddings.directml_device_id",
+                                "DirectML adapter id",
+                                -1, 7, 1, 0, "",
+                                "-1 = let DirectML pick (windowless host "
+                                "processes usually land on the iGPU). Set "
+                                "to your dGPU's index (often 1) to force "
+                                "embeddings onto NVIDIA.",
+                                cli="--directml-device-id"))
     body.addWidget(_number_row("docgraph.index.workers", "Index workers",
                                 0, 64, 1, 0, "", "0 = default.",
                                 cli="--workers"))
     body.addWidget(_number_row("docgraph.index.embed_batch_size", "Embed batch size",
                                 0, 1024, 16, 0, "", "0 = default (256 CPU / 32 GPU). Lower if GPU saturates.",
                                 cli="--embed-batch-size"))
-    body.addWidget(_restart_host_row(window))
     return card, None
 
 
@@ -1508,9 +1526,9 @@ def _build_reranker_card(window) -> tuple[QFrame, Callable[[], None] | None]:
                                     _DOCGRAPH_RERANK_MODELS,
                                     "Lazy-loaded on first reranked search."))
     body.addWidget(_toggle_row("docgraph.rerank.gpu", "GPU reranker",
-                                "Forwards DOCGRAPH_RERANK_GPU=1. Independent "
-                                "of embeddings GPU. Needs onnxruntime-gpu/"
+                                "Cross-encoder on GPU. Independent of "
+                                "embeddings GPU. Needs onnxruntime-gpu/"
                                 "-directml/-silicon. Falls back to CPU on init "
-                                "failure."))
-    body.addWidget(_restart_host_row(window))
+                                "failure.",
+                                cli="--rerank-gpu"))
     return card, None

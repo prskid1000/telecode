@@ -130,6 +130,15 @@ def llm_host() -> str:           return str(llm_cfg().get("host", "localhost") o
 def llm_port() -> int:           return int(llm_cfg().get("port", 1235) or 1235)
 def llm_format() -> str:         return str(llm_cfg().get("format", "openai") or "openai")
 def llm_max_tokens() -> int:     return int(llm_cfg().get("max_tokens", 150) or 150)
+def llm_docstrings() -> bool:
+    """Whether LLM docstring augmentation runs during indexing. Default
+    False — even if a model is configured, the user must explicitly opt in
+    to docstring generation (it's slow + costs token budget)."""
+    return bool(llm_cfg().get("docstrings", False))
+def llm_wiki() -> bool:
+    """Whether the wiki builder uses the LLM. Default False — wiki falls
+    back to the fact-sheet renderer until the user explicitly enables it."""
+    return bool(llm_cfg().get("wiki", False))
 def llm_max_tokens_wiki() -> int:
     """Wiki generation needs a much bigger budget than docstring augmentation
     (the docgraph CLI defaults wiki to 4096, index to 150). Stored at
@@ -155,6 +164,15 @@ def llm_prompt_wiki() -> str:
 def embeddings_cfg() -> dict:    return _section("embeddings")
 def embeddings_model() -> str:   return str(embeddings_cfg().get("model", "") or "")
 def embeddings_gpu() -> bool:    return bool(embeddings_cfg().get("gpu", False))
+def embeddings_directml_device_id() -> int:
+    """DirectML adapter index for the embedder. -1 = let DirectML pick.
+    Set to the dGPU index (often 1) on hybrid-graphics laptops where
+    Windows otherwise routes the windowless host process to the iGPU."""
+    raw = embeddings_cfg().get("directml_device_id", -1)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return -1
 
 
 # ── Reranker (cross-encoder over top-K search candidates) ──────────────────
