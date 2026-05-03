@@ -138,6 +138,22 @@ def _path_already_indexed(path: str) -> bool:
         return False
 
 
+def _path_already_wiki_built(path: str) -> bool:
+    """Detect whether `<path>/.docgraph/wiki/` has any `.md` page.
+    Same purpose as `_path_already_indexed`: distinguish 'wiki has been
+    built sometime (perhaps via CLI directly)' from 'never built'."""
+    if not path:
+        return False
+    try:
+        from pathlib import Path as _Path
+        wiki_dir = _Path(path).expanduser() / ".docgraph" / "wiki"
+        if not wiki_dir.exists():
+            return False
+        return any(wiki_dir.glob("*.md"))
+    except (OSError, ValueError):
+        return False
+
+
 def _format_ago(ts: float | None) -> str:
     import time as _time
     if not ts:
@@ -241,27 +257,28 @@ def _host_status_text() -> tuple[bool, str]:
 def _build_roots_card(window) -> tuple[QFrame, Callable[[], None]]:
     card, body = _card(
         "Roots",
-        "Each row is a repo registered with the host. Per-row Index "
-        "POSTs /api/admin/index when the host is alive (else falls back "
-        "to a `docgraph index <path>` subprocess). The Full toggle below "
-        "governs both per-row Index and Index-all-roots — on = `--full` "
-        "(wipe + rebuild), off = incremental. Watch toggle is persistent "
-        "— flip and restart the host to take effect.",
+        "Each row is a repo registered with the host. Per-row Index POSTs "
+        "/api/admin/index (else falls back to `docgraph index <path>`); "
+        "per-row Wiki POSTs /api/wiki/build (else `docgraph wiki <path>`). "
+        "The Full toggle below governs both — on = `--full` for index / "
+        "`--force` for wiki (rebuild from scratch), off = incremental / "
+        "resumable. Watch toggle is persistent — flip and restart the host.",
     )
 
     # Build the master Full toggle FIRST so its state can be threaded
-    # into per-row Index buttons via a getter.
+    # into per-row Index/Wiki buttons via a getter.
     from tray.qt_widgets import Toggle as _Toggle
     all_force = _Toggle()
     all_force.setToolTip(
-        "Governs every Index button in this card.\n"
-        "On  = docgraph index --full   (wipe + rebuild)\n"
-        "Off = incremental"
+        "Governs every Index/Wiki button in this card.\n"
+        "On  = docgraph index --full / docgraph wiki --force\n"
+        "Off = incremental index / resumable wiki"
     )
 
     paths_widget = _RootsTable(window, force_getter=all_force.isChecked)
     body.addWidget(paths_widget)
 
+    # Index action row
     action_row = QHBoxLayout()
     action_row.setSpacing(8)
     all_force_lbl = QLabel("Full")
@@ -279,6 +296,22 @@ def _build_roots_card(window) -> tuple[QFrame, Callable[[], None]]:
     body.addLayout(action_row)
     body.addWidget(_log_hint("docgraph_index.log"))
 
+    # Wiki action row (mirrors the index row, separate runner + log file)
+    wiki_row = QHBoxLayout()
+    wiki_row.setSpacing(8)
+    wiki_lbl = QLabel("")  # spacer aligned under the Full toggle
+    wiki_lbl.setFixedWidth(all_force_lbl.sizeHint().width() + all_force.sizeHint().width() + 8)
+    run_all_wiki_btn = QPushButton("📖 Build all wikis")
+    cancel_wiki_btn = QPushButton("Cancel")
+    cancel_wiki_btn.setProperty("class", "danger")
+    wiki_status_lbl, refresh_wiki_status = _status_pill(_wiki_status_text)
+    wiki_row.addWidget(wiki_lbl)
+    wiki_row.addWidget(run_all_wiki_btn)
+    wiki_row.addWidget(cancel_wiki_btn)
+    wiki_row.addWidget(wiki_status_lbl, 1)
+    body.addLayout(wiki_row)
+    body.addWidget(_log_hint("docgraph_wiki.log"))
+
     def _all():
         async def _go():
             from docgraph.process import get_index
@@ -291,11 +324,26 @@ def _build_roots_card(window) -> tuple[QFrame, Callable[[], None]]:
             await get_index().cancel()
         _run(window, _go)
 
+    def _all_wiki():
+        async def _go():
+            from docgraph.process import get_wiki
+            await get_wiki().run_all(force=bool(all_force.isChecked()))
+        _run(window, _go)
+
+    def _on_cancel_wiki():
+        async def _go():
+            from docgraph.process import get_wiki
+            await get_wiki().cancel()
+        _run(window, _go)
+
     run_all_btn.clicked.connect(_all)
     cancel_btn.clicked.connect(_on_cancel)
+    run_all_wiki_btn.clicked.connect(_all_wiki)
+    cancel_wiki_btn.clicked.connect(_on_cancel_wiki)
 
     def refresh():
         refresh_status()
+        refresh_wiki_status()
         paths_widget.refresh()
 
     return card, refresh
@@ -309,6 +357,18 @@ def _index_status_text() -> tuple[bool, str]:
         return False, f"err: {exc}"
     if s["alive"]:
         what = "full" if s.get("current_force") else "incremental"
+        return True, f"running · {s.get('current_path') or '?'} ({what})"
+    return False, "idle"
+
+
+def _wiki_status_text() -> tuple[bool, str]:
+    try:
+        from docgraph.process import get_wiki
+        s = get_wiki().status()
+    except Exception as exc:
+        return False, f"err: {exc}"
+    if s["alive"]:
+        what = "force" if s.get("current_force") else "resumable"
         return True, f"running · {s.get('current_path') or '?'} ({what})"
     return False, "idle"
 
@@ -449,6 +509,15 @@ class _RootRow(QFrame):
         self._index_btn.clicked.connect(self._trigger_index)
         h.addWidget(self._index_btn)
 
+        self._wiki_btn = QPushButton("📖 Wiki")
+        self._wiki_btn.setToolTip(
+            "POST /api/wiki/build?root=<slug>  if host is alive,\n"
+            "else falls back to:  docgraph wiki <path>\n"
+            "Full toggle on = --force (rebuild every page)"
+        )
+        self._wiki_btn.clicked.connect(self._trigger_wiki)
+        h.addWidget(self._wiki_btn)
+
         watch_lbl = QLabel("Watch")
         watch_lbl.setStyleSheet(f"color: {FG_DIM};")
         watch_lbl.setToolTip(
@@ -468,7 +537,14 @@ class _RootRow(QFrame):
         self._pill = QLabel("…")
         self._pill.setProperty("class", "stat_pill")
         self._pill.setMinimumWidth(120)
+        self._pill.setToolTip("Index status")
         h.addWidget(self._pill, 1)
+
+        self._wiki_pill = QLabel("…")
+        self._wiki_pill.setProperty("class", "stat_pill")
+        self._wiki_pill.setMinimumWidth(120)
+        self._wiki_pill.setToolTip("Wiki status")
+        h.addWidget(self._wiki_pill, 1)
 
         rm_btn = QPushButton("✕")
         rm_btn.setFlat(True)
@@ -506,8 +582,22 @@ class _RootRow(QFrame):
             await get_index().run(path, force=force)
         _run(self._window, _go)
 
+    def _trigger_wiki(self) -> None:
+        path = self.text().strip()
+        if not path:
+            return
+        force = bool(self._force_getter())
+        async def _go():
+            from docgraph.process import get_wiki
+            await get_wiki().run(path, force=force)
+        _run(self._window, _go)
+
     def refresh_state(self) -> None:
         path = self.text().strip()
+        self._refresh_index_pill(path)
+        self._refresh_wiki_pill(path)
+
+    def _refresh_index_pill(self, path: str) -> None:
         try:
             from docgraph import index_state
             from docgraph.process import get_index
@@ -522,9 +612,6 @@ class _RootRow(QFrame):
             return
         self._index_btn.setEnabled(True)
         if not s:
-            # No telecode-tracked run for this path — check the filesystem
-            # so we don't show 'never indexed' for a repo someone already
-            # indexed via the CLI directly.
             already = _path_already_indexed(path)
             if already:
                 self._pill.setText("indexed (on disk)")
@@ -547,31 +634,81 @@ class _RootRow(QFrame):
             self._pill.setStyleSheet(f"color: {FG_MUTE};")
         self._pill.setText(text)
 
+    def _refresh_wiki_pill(self, path: str) -> None:
+        try:
+            from docgraph import wiki_state
+            from docgraph.process import get_wiki
+            s = wiki_state.get(path) if path else None
+            running_path = get_wiki().current_path()
+        except Exception:
+            s, running_path = None, None
+        if path and running_path == path:
+            self._wiki_pill.setText("wiki running…")
+            self._wiki_pill.setStyleSheet(f"color: {WARN};")
+            self._wiki_btn.setEnabled(False)
+            return
+        self._wiki_btn.setEnabled(True)
+        if not s:
+            already = _path_already_wiki_built(path)
+            if already:
+                self._wiki_pill.setText("wiki on disk")
+                self._wiki_pill.setStyleSheet(f"color: {OK};")
+            else:
+                self._wiki_pill.setText("no wiki")
+                self._wiki_pill.setStyleSheet(f"color: {FG_MUTE};")
+            return
+        ago = _format_ago(s.get("last_run", 0.0))
+        status = s.get("last_status", "?")
+        full = " · force" if s.get("last_was_full") else ""
+        text = f"wiki {ago} · {status}{full}"
+        if status == "ok":
+            self._wiki_pill.setStyleSheet(f"color: {OK};")
+        elif status == "failed":
+            self._wiki_pill.setStyleSheet(f"color: {ERR};")
+        elif status == "running":
+            self._wiki_pill.setStyleSheet(f"color: {WARN};")
+        else:
+            self._wiki_pill.setStyleSheet(f"color: {FG_MUTE};")
+        self._wiki_pill.setText(text)
+
 
 # ── LLM card ─────────────────────────────────────────────────────────────
 
 def _build_llm_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     card, body = _card(
         "LLM augmentation",
-        "Optional. Generates one-line docstrings for entities lacking native "
-        "docs. Applies at index time across every root.",
+        "Optional local LLM. Drives both `docgraph index` (one-line "
+        "docstrings, ~150 tokens each) and `docgraph wiki` (module pages, "
+        "~4096 tokens each). Endpoint settings (Model / Host / Port / "
+        "Format) are shared; max-tokens is split because the two callers "
+        "want very different budgets.",
     )
     body.addWidget(_line_row("docgraph.llm.model", "Model",
                               "qwen3.6-35b",
-                              "Empty = off. Setting any value enables --llm-model.",
-                              cli="docgraph index --llm-model"))
+                              "Empty = off. Setting any value enables --llm-model "
+                              "for both index and wiki.",
+                              cli="--llm-model  (index + wiki)"))
     body.addWidget(_line_row("docgraph.llm.host", "Host", "localhost",
-                              cli="docgraph index --llm-host"))
+                              cli="--llm-host  (index + wiki)"))
     body.addWidget(_number_row("docgraph.llm.port", "Port", 1, 65535, 1, 0,
-                                cli="docgraph index --llm-port"))
+                                cli="--llm-port  (index + wiki)"))
     body.addWidget(_enum_row_strs(
         "docgraph.llm.format", "Format",
         [("OpenAI-compatible", "openai"), ("Anthropic-compatible", "anthropic")],
-        "Wire format for the local LLM endpoint.",
+        "Wire format for the local LLM endpoint. Shared by index + wiki.",
     ))
-    body.addWidget(_number_row("docgraph.llm.max_tokens", "Max Tokens",
+    body.addWidget(_number_row("docgraph.llm.max_tokens", "Index Max Tokens",
                                 10, 4096, 50, 0,
+                                "Per-call budget for `docgraph index`. Each "
+                                "call generates a one-line docstring — 150 is "
+                                "the docgraph default.",
                                 cli="docgraph index --llm-max-tokens"))
+    body.addWidget(_number_row("docgraph.llm.max_tokens_wiki", "Wiki Max Tokens",
+                                256, 32768, 256, 0,
+                                "Per-call budget for `docgraph wiki`. Module "
+                                "pages need much more headroom — 4096 is the "
+                                "docgraph default.",
+                                cli="docgraph wiki --llm-max-tokens"))
     return card, None
 
 

@@ -211,6 +211,9 @@ def row_label(text: str, help_text: str = "", path: str = "",
     if pieces:
         p = QLabel("  ·  ".join(pieces))
         p.setProperty("class", "key_path")
+        # The label column is fixed at 280px (see _row); long CLI hints
+        # like "docgraph index --llm-max-tokens" get clipped without wrap.
+        p.setWordWrap(True)
         v.addWidget(p)
     w.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
     return w

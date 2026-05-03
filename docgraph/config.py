@@ -129,6 +129,11 @@ def llm_host() -> str:           return str(llm_cfg().get("host", "localhost") o
 def llm_port() -> int:           return int(llm_cfg().get("port", 1235) or 1235)
 def llm_format() -> str:         return str(llm_cfg().get("format", "openai") or "openai")
 def llm_max_tokens() -> int:     return int(llm_cfg().get("max_tokens", 150) or 150)
+def llm_max_tokens_wiki() -> int:
+    """Wiki generation needs a much bigger budget than docstring augmentation
+    (the docgraph CLI defaults wiki to 4096, index to 150). Stored at
+    `docgraph.llm.max_tokens_wiki` so the two can be tuned independently."""
+    return int(llm_cfg().get("max_tokens_wiki", 4096) or 4096)
 
 
 # ── Embeddings ──────────────────────────────────────────────────────────────
