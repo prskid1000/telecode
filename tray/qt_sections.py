@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QHeaderView, QLineEdit, QSpinBox, QSizePolicy,
 )
 
-from tray.qt_widgets import Toggle, NumberEditor, row_label
+from tray.qt_widgets import Toggle, NumberEditor, WrapLabel, row_label
 from tray.qt_helpers import (
     read_settings, get_path, patch_settings, remove_path, schedule,
     humanize, format_protocol, build_status,
@@ -74,19 +74,8 @@ def _card(title: str, sub: str = "") -> tuple[QFrame, QVBoxLayout]:
     title_row.addStretch(1)
     head_l.addLayout(title_row)
     if sub:
-        s = QLabel(sub)
+        s = WrapLabel(sub)
         s.setProperty("class", "card_sub")
-        # Long subtitles (docgraph's Host / External docs / LLM card all
-        # have multi-sentence descriptions) need the QLabel to be alone
-        # in its own row to actually wrap. Inside an HBoxLayout next to
-        # the title, the QLabel reports a huge single-line sizeHint and
-        # drags the card past the viewport regardless of wordWrap. On its
-        # own row, it expands to row width and wraps cleanly.
-        s.setWordWrap(True)
-        s.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
-        # Cap the natural sizeHint so QScrollArea's widthForWidth handshake
-        # doesn't blow the viewport out before wrap kicks in.
-        s.setMinimumWidth(0)
         head_l.addWidget(s)
     outer.addWidget(head)
 

@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
 )
 
-from tray.qt_widgets import row_label, Toggle
+from tray.qt_widgets import row_label, Toggle, WrapLabel
 from tray.qt_helpers import (
     read_settings, get_path, patch_settings, schedule, humanize,
 )
@@ -1007,13 +1007,11 @@ def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
         title.setProperty("class", "row_label")
         v.addWidget(title)
         if help_text:
-            hl = QLabel(help_text)
+            hl = WrapLabel(help_text)
             hl.setProperty("class", "row_help")
-            hl.setWordWrap(True)
             v.addWidget(hl)
-        cli_lbl = QLabel(setting_path + "  ·  " + placeholder)
+        cli_lbl = WrapLabel(setting_path + "  ·  " + placeholder)
         cli_lbl.setProperty("class", "key_path")
-        cli_lbl.setWordWrap(True)
         v.addWidget(cli_lbl)
 
         te = QPlainTextEdit()
