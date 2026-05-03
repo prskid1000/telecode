@@ -115,13 +115,6 @@ def _status_pill(getter):
     return pill, _refresh
 
 
-def _log_hint(basename: str) -> QLabel:
-    lbl = QLabel(f"📜 Live log → Logs section · file: <code>{basename}</code>")
-    lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
-    lbl.setTextFormat(Qt.TextFormat.RichText)
-    return lbl
-
-
 def _path_already_indexed(path: str) -> bool:
     """Detect whether `path` already has a docgraph index on disk.
 
@@ -281,39 +274,44 @@ def _build_roots_card(window) -> tuple[QFrame, Callable[[], None]]:
     paths_widget = _RootsTable(window, force_getter=all_force.isChecked)
     body.addWidget(paths_widget)
 
-    # Index action row
+    # Single global-actions row: Full toggle governs both buttons; each
+    # has its own compact ✕ cancel and inline status pill.
     action_row = QHBoxLayout()
-    action_row.setSpacing(8)
+    action_row.setSpacing(6)
     all_force_lbl = QLabel("Full")
     all_force_lbl.setStyleSheet(f"color: {FG_DIM};")
     all_force_lbl.setToolTip(all_force.toolTip())
-    run_all_btn = QPushButton("▶ Index all roots")
-    cancel_btn = QPushButton("Cancel")
+
+    run_all_btn = QPushButton("▶ Index all")
+    run_all_btn.setToolTip("Index every configured root.")
+    cancel_btn = QPushButton("✕")
     cancel_btn.setProperty("class", "danger")
+    cancel_btn.setFixedWidth(28)
+    cancel_btn.setToolTip("Cancel the running index pass.")
     status_lbl, refresh_status = _status_pill(_index_status_text)
+    status_lbl.setMaximumWidth(140)
+
+    run_all_wiki_btn = QPushButton("📖 Build wikis")
+    run_all_wiki_btn.setToolTip("Build the wiki for every configured root.")
+    cancel_wiki_btn = QPushButton("✕")
+    cancel_wiki_btn.setProperty("class", "danger")
+    cancel_wiki_btn.setFixedWidth(28)
+    cancel_wiki_btn.setToolTip("Cancel the running wiki build.")
+    wiki_status_lbl, refresh_wiki_status = _status_pill(_wiki_status_text)
+    wiki_status_lbl.setMaximumWidth(140)
+
     action_row.addWidget(all_force_lbl)
     action_row.addWidget(all_force)
+    action_row.addSpacing(4)
     action_row.addWidget(run_all_btn)
     action_row.addWidget(cancel_btn)
-    action_row.addWidget(status_lbl, 1)
+    action_row.addWidget(status_lbl, 0)
+    action_row.addSpacing(8)
+    action_row.addWidget(run_all_wiki_btn)
+    action_row.addWidget(cancel_wiki_btn)
+    action_row.addWidget(wiki_status_lbl, 0)
+    action_row.addStretch(1)
     body.addLayout(action_row)
-    body.addWidget(_log_hint("docgraph_index.log"))
-
-    # Wiki action row (mirrors the index row, separate runner + log file)
-    wiki_row = QHBoxLayout()
-    wiki_row.setSpacing(8)
-    wiki_lbl = QLabel("")  # spacer aligned under the Full toggle
-    wiki_lbl.setFixedWidth(all_force_lbl.sizeHint().width() + all_force.sizeHint().width() + 8)
-    run_all_wiki_btn = QPushButton("📖 Build all wikis")
-    cancel_wiki_btn = QPushButton("Cancel")
-    cancel_wiki_btn.setProperty("class", "danger")
-    wiki_status_lbl, refresh_wiki_status = _status_pill(_wiki_status_text)
-    wiki_row.addWidget(wiki_lbl)
-    wiki_row.addWidget(run_all_wiki_btn)
-    wiki_row.addWidget(cancel_wiki_btn)
-    wiki_row.addWidget(wiki_status_lbl, 1)
-    body.addLayout(wiki_row)
-    body.addWidget(_log_hint("docgraph_wiki.log"))
 
     def _all():
         async def _go():
@@ -502,7 +500,7 @@ class _RootRow(QFrame):
         self._edit.setMinimumWidth(140)
         self._edit.setMaximumWidth(240)
         self._edit.setToolTip(path or "/path/to/repo")
-        h.addWidget(self._edit, 1)
+        h.addWidget(self._edit, 0)
 
         self._index_btn = QPushButton("▶")
         self._index_btn.setToolTip(
@@ -556,6 +554,7 @@ class _RootRow(QFrame):
             "Restart the host to apply a flipped flag."
         )
         h.addWidget(self._watch)
+        h.addStretch(1)
 
         self._pill = QLabel("…")
         self._pill.setProperty("class", "stat_pill")
