@@ -1091,7 +1091,7 @@ class HostSupervisor:
             except Exception as exc:
                 self._last_error = str(exc)
                 log.error("docgraph host start failed: %s", exc)
-            raise
+                raise
 
     async def stop(self) -> None:
         async with self._lock:
