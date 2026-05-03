@@ -245,36 +245,41 @@ async def _index_via_host(path: str, full: bool, port: int, log_fp=None) -> tupl
             try:
                 async with session.post(url, json={"full": full}) as resp:
                     body = await resp.text()
-                    if resp.status == 499:
-                        # Server-side cancel landed (telecode hit /api/admin/cancel
-                        # or another caller did). Don't treat as failure.
-                        raise asyncio.CancelledError()
                     if resp.status != 200:
-                        return False, f"POST /api/admin/index → HTTP {resp.status}: {body[:500]}"
-                    # The host returns {slug, full, stats, log}. The `log`
-                    # field is the captured Rich transcript (progress bar
-                    # finals + per-stage timings); surface that into our log
-                    # file instead of dumping raw JSON.
-                    try:
-                        payload = json.loads(body)
-                    except Exception:
-                        return True, body[:2000]
-                    lines: list[str] = []
-                    cap = payload.get("log") or ""
-                    if cap:
-                        lines.append(cap.rstrip())
-                    stats = payload.get("stats") or {}
-                    if stats:
-                        summary = (
-                            f"\n--- done: {stats.get('files', '?')} files, "
-                            f"{stats.get('changed', '?')} changed, "
-                            f"{stats.get('deleted', '?')} deleted, "
-                            f"{stats.get('entities', '?')} entities, "
-                            f"{stats.get('errors', 0)} errors, "
-                            f"{stats.get('elapsed', 0):.2f}s ---"
-                        )
-                        lines.append(summary)
-                    return True, "\n".join(lines) if lines else body[:2000]
+                        return False, f"POST /api/admin/index -> HTTP {resp.status}: {body[:500]}"
+                    import json
+                    payload = json.loads(body)
+                    job_id = payload.get("job_id")
+                    if not job_id:
+                        return False, "No job_id returned"
+                
+                while True:
+                    await asyncio.sleep(2.0)
+                    async with session.get(f"{base}/api/jobs/{job_id}") as resp:
+                        if resp.status != 200:
+                            continue
+                        job = await resp.json()
+                        status = job.get("status")
+                        if status == "completed":
+                            stats = job.get("result") or {}
+                            cap = job.get("log") or ""
+                            lines: list[str] = []
+                            if cap:
+                                lines.append(cap.rstrip())
+                            summary = (
+                                f"\n--- done: {stats.get('files', '?')} files, "
+                                f"{stats.get('changed', '?')} changed, "
+                                f"{stats.get('deleted', '?')} deleted, "
+                                f"{stats.get('entities', '?')} entities, "
+                                f"{stats.get('errors', 0)} errors, "
+                                f"{stats.get('elapsed', 0):.2f}s ---"
+                            )
+                            lines.append(summary)
+                            return True, "\n".join(lines)
+                        elif status == "cancelled":
+                            raise asyncio.CancelledError()
+                        elif status == "failed":
+                            return False, f"Index job failed: {job.get('error')}"
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -482,13 +487,31 @@ async def add_doc_for(path: str, url: str) -> tuple[bool, dict | str]:
                                      json={"url": url}) as resp:
                 body = await resp.text()
                 if resp.status != 200:
-                    return False, f"POST /api/docs/add → HTTP {resp.status}: {body[:300]}"
-                try:
-                    return True, json.loads(body)
-                except Exception:
-                    return True, {"raw": body[:1000]}
-    except Exception as exc:
-        return False, f"host route failed: {exc}"
+                    return False, f"POST /api/docs/add -> HTTP {resp.status}: {body[:300]}"
+                import json
+                payload = json.loads(body)
+                job_id = payload.get("job_id")
+                if not job_id:
+                    return True, payload
+            
+            while True:
+                import asyncio
+                await asyncio.sleep(2.0)
+                async with session.get(f"{base}/api/jobs/{job_id}") as resp:
+                    if resp.status != 200:
+                        continue
+                    job = await resp.json()
+                    status = job.get("status")
+                    if status == "completed":
+                        return True, job.get("result") or {}
+                    elif status == "cancelled":
+                        return False, "docs add cancelled"
+                    elif status == "failed":
+                        return False, f"Docs add failed: {job.get('error')}"
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            return False, f"host route failed: {exc}"
 
 
 async def remove_doc_for(path: str, url: str) -> tuple[bool, dict | str]:
@@ -559,23 +582,37 @@ async def _wiki_via_host(path: str, force: bool, port: int, log_fp=None) -> tupl
             try:
                 async with session.post(url, json={"force": force}) as resp:
                     body = await resp.text()
-                    if resp.status == 499:
-                        raise asyncio.CancelledError()
                     if resp.status != 200:
-                        return False, f"POST /api/wiki/build → HTTP {resp.status}: {body[:500]}"
-                    try:
-                        payload = json.loads(body)
-                    except Exception:
-                        return True, body[:2000]
-                    built = payload.get("built", "?")
-                    modules = payload.get("modules") or []
-                    summary = (
-                        f"\n--- wiki: {built} module page(s) "
-                        f"({'rebuilt' if force else 'resumable'}) ---\n"
-                        + "\n".join(f"  · {m}" for m in modules[:50])
-                        + ("\n  · …" if len(modules) > 50 else "")
-                    )
-                    return True, summary
+                        return False, f"POST /api/wiki/build -> HTTP {resp.status}: {body[:500]}"
+                    import json
+                    payload = json.loads(body)
+                    job_id = payload.get("job_id")
+                    if not job_id:
+                        return False, "No job_id returned"
+                
+                while True:
+                    await asyncio.sleep(2.0)
+                    async with session.get(f"{base}/api/jobs/{job_id}") as resp:
+                        if resp.status != 200:
+                            continue
+                        job = await resp.json()
+                        status = job.get("status")
+                        if status == "completed":
+                            res = job.get("result") or {}
+                            built = res.get("built", "?")
+                            modules = res.get("modules") or []
+                            status_str = 'rebuilt' if force else 'resumable'
+                            summary = (
+                                f"\n--- wiki: {built} module page(s) "
+                                f"({status_str}) ---\n"
+                                + "\n".join(f"  * {m}" for m in modules[:50])
+                                + ("\n  * ..." if len(modules) > 50 else "")
+                            )
+                            return True, summary
+                        elif status == "cancelled":
+                            raise asyncio.CancelledError()
+                        elif status == "failed":
+                            return False, f"Wiki job failed: {job.get('error')}"
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
