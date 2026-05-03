@@ -490,68 +490,68 @@ class _RootRow(QFrame):
         )
         h = QHBoxLayout(self)
         h.setContentsMargins(8, 6, 8, 6)
-        h.setSpacing(8)
+        h.setSpacing(6)
 
         self._edit = QLineEdit(path)
         self._edit.setPlaceholderText("/path/to/repo")
         self._edit.editingFinished.connect(self._on_edit_done)
-        # Cap so the trailing widgets (Index / Watch / pill / ✕) stay visible
-        # without horizontal scroll on typical window widths. The QLineEdit
-        # still scrolls internally for longer paths, and the tooltip exposes
-        # the full string on hover.
-        self._edit.setMinimumWidth(160)
-        self._edit.setMaximumWidth(260)
+        # Cap so the trailing widgets (▶ / 📖 / 📊 / 🗑 / 👁 / pills / ✕) stay
+        # visible without horizontal scroll on typical window widths. The
+        # QLineEdit still scrolls internally for longer paths, and the
+        # tooltip exposes the full string on hover.
+        self._edit.setMinimumWidth(140)
+        self._edit.setMaximumWidth(240)
         self._edit.setToolTip(path or "/path/to/repo")
-        h.addWidget(self._edit)
+        h.addWidget(self._edit, 1)
 
-        self._index_btn = QPushButton("▶ Index")
+        self._index_btn = QPushButton("▶")
         self._index_btn.setToolTip(
+            "Index this root.\n"
             "POST /api/admin/index?root=<slug>  if host is alive,\n"
             "else falls back to:  docgraph index <path>"
         )
+        self._index_btn.setFixedWidth(34)
         self._index_btn.clicked.connect(self._trigger_index)
         h.addWidget(self._index_btn)
 
-        self._wiki_btn = QPushButton("📖 Wiki")
+        self._wiki_btn = QPushButton("📖")
         self._wiki_btn.setToolTip(
+            "Build the wiki for this root.\n"
             "POST /api/wiki/build?root=<slug>  if host is alive,\n"
             "else falls back to:  docgraph wiki <path>\n"
             "Full toggle on = --force (rebuild every page)"
         )
+        self._wiki_btn.setFixedWidth(34)
         self._wiki_btn.clicked.connect(self._trigger_wiki)
         h.addWidget(self._wiki_btn)
 
         self._stats_btn = QPushButton("📊")
         self._stats_btn.setToolTip(
-            "GET /api/stats?root=<slug> — entity + edge counts for this root.\n"
+            "Show stats for this root.\n"
+            "GET /api/stats?root=<slug> — entity + edge counts.\n"
             "Read-only; works while the host is alive (free) or via a brief\n"
             "`docgraph stats <path>` subprocess if not."
         )
-        self._stats_btn.setFixedWidth(36)
+        self._stats_btn.setFixedWidth(34)
         self._stats_btn.clicked.connect(self._trigger_stats)
         h.addWidget(self._stats_btn)
 
         self._clear_btn = QPushButton("🗑")
         self._clear_btn.setToolTip(
+            "Clear this root's index.\n"
             "POST /api/admin/clear?root=<slug> — wipe the index, cache, and\n"
             "wiki for this root. Confirmation required. Host stays alive;\n"
             "the workspace re-opens its read-only handle once the wipe is done."
         )
-        self._clear_btn.setFixedWidth(36)
+        self._clear_btn.setFixedWidth(34)
         self._clear_btn.clicked.connect(self._trigger_clear)
         h.addWidget(self._clear_btn)
 
-        watch_lbl = QLabel("Watch")
-        watch_lbl.setStyleSheet(f"color: {FG_DIM};")
-        watch_lbl.setToolTip(
-            "Forwards as `docgraph host --watch <path>`. "
-            "Restart the host to apply a flipped flag."
-        )
-        h.addWidget(watch_lbl)
         self._watch = Toggle()
         self._watch.setChecked(bool(watch))
         self._watch.toggled.connect(self._on_watch_toggled)
         self._watch.setToolTip(
+            "Watch — auto-reindex on file changes.\n"
             "Forwards as `docgraph host --watch <path>`. "
             "Restart the host to apply a flipped flag."
         )
@@ -560,16 +560,18 @@ class _RootRow(QFrame):
         self._pill = QLabel("…")
         self._pill.setProperty("class", "stat_pill")
         self._pill.setMinimumWidth(0)
-        self._pill.setMaximumWidth(170)
+        self._pill.setMaximumWidth(140)
         self._pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._pill.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         self._pill.setToolTip("Index status")
         h.addWidget(self._pill, 0)
 
         self._wiki_pill = QLabel("…")
         self._wiki_pill.setProperty("class", "stat_pill")
         self._wiki_pill.setMinimumWidth(0)
-        self._wiki_pill.setMaximumWidth(140)
+        self._wiki_pill.setMaximumWidth(120)
         self._wiki_pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._wiki_pill.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         self._wiki_pill.setToolTip("Wiki status")
         h.addWidget(self._wiki_pill, 0)
 
