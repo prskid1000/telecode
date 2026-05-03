@@ -1144,22 +1144,21 @@ def _build_documents_index_card(window) -> tuple[QFrame, Callable[[], None] | No
     return card, None
 
 
+# 384-dim fastembed text models (verified against TextEmbedding.list_supported_models()).
+# DocGraph's Kuzu schema is fixed at 384 — picking a different-dim model would
+# silently break indexing, so the dropdown is restricted to this set.
+# Empty value = "use docgraph default" (which is BAAI/bge-small-en-v1.5).
 _DOCGRAPH_EMBED_MODELS: list[tuple[str, str]] = [
-    # Display, value. Empty value = "use docgraph default" (BAAI/bge-small-en-v1.5).
-    # Restricted to 384-dim models — DocGraph's Kuzu schema is fixed at 384;
-    # other dims would require a wipe + schema bump.
-    ("Default (BAAI/bge-small-en-v1.5)", ""),
-    ("BAAI/bge-small-en-v1.5 — 384 · English (default)", "BAAI/bge-small-en-v1.5"),
-    ("BAAI/bge-small-en — 384 · English", "BAAI/bge-small-en"),
-    ("sentence-transformers/all-MiniLM-L6-v2 — 384 · fastest", "sentence-transformers/all-MiniLM-L6-v2"),
-    ("sentence-transformers/all-MiniLM-L12-v2 — 384 · balanced", "sentence-transformers/all-MiniLM-L12-v2"),
-    ("sentence-transformers/paraphrase-MiniLM-L3-v2 — 384 · tiny", "sentence-transformers/paraphrase-MiniLM-L3-v2"),
-    ("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 — 384 · multilingual",
+    ("BAAI/bge-small-en-v1.5  ·  default · 67 MB · 512 tok", ""),
+    ("sentence-transformers/all-MiniLM-L6-v2  ·  90 MB · 256 tok",
+     "sentence-transformers/all-MiniLM-L6-v2"),
+    ("snowflake/snowflake-arctic-embed-xs  ·  90 MB · 512 tok",
+     "snowflake/snowflake-arctic-embed-xs"),
+    ("snowflake/snowflake-arctic-embed-s  ·  130 MB · 512 tok",
+     "snowflake/snowflake-arctic-embed-s"),
+    ("BAAI/bge-small-en  ·  130 MB · 512 tok (older than v1.5)", "BAAI/bge-small-en"),
+    ("paraphrase-multilingual-MiniLM-L12-v2  ·  220 MB · ~50 langs · 128 tok",
      "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"),
-    ("snowflake/snowflake-arctic-embed-xs — 384 · Snowflake XS", "snowflake/snowflake-arctic-embed-xs"),
-    ("snowflake/snowflake-arctic-embed-s — 384 · Snowflake S", "snowflake/snowflake-arctic-embed-s"),
-    ("intfloat/multilingual-e5-small — 384 · multilingual", "intfloat/multilingual-e5-small"),
-    ("BAAI/bge-small-zh-v1.5 — 384 · Chinese", "BAAI/bge-small-zh-v1.5"),
 ]
 
 
