@@ -559,15 +559,19 @@ class _RootRow(QFrame):
 
         self._pill = QLabel("…")
         self._pill.setProperty("class", "stat_pill")
-        self._pill.setMinimumWidth(120)
+        self._pill.setMinimumWidth(0)
+        self._pill.setMaximumWidth(170)
+        self._pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._pill.setToolTip("Index status")
-        h.addWidget(self._pill, 1)
+        h.addWidget(self._pill, 0)
 
         self._wiki_pill = QLabel("…")
         self._wiki_pill.setProperty("class", "stat_pill")
-        self._wiki_pill.setMinimumWidth(120)
+        self._wiki_pill.setMinimumWidth(0)
+        self._wiki_pill.setMaximumWidth(140)
+        self._wiki_pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._wiki_pill.setToolTip("Wiki status")
-        h.addWidget(self._wiki_pill, 1)
+        h.addWidget(self._wiki_pill, 0)
 
         rm_btn = QPushButton("✕")
         rm_btn.setFlat(True)
