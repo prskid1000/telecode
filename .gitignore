@@ -11,3 +11,7 @@ settings.json
 
 # setup.ps1 venv
 telecode-venv/
+
+# docgraph indexes telecode itself when registered as a root; .docgraph/
+# holds the Kuzu DB + per-file cache, both runtime artifacts.
+.docgraph/
