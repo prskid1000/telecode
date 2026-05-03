@@ -25,6 +25,7 @@ import aiohttp
 
 from process import bind_to_lifetime_job, kill_process_tree, sweep_port
 
+import config as app_config
 from . import config as dg_cfg
 from . import bridge as dg_bridge
 from . import index_state
@@ -702,22 +703,44 @@ class IndexRunner:
                         argv += ["--embed-batch-size", str(dg_cfg.index_embed_batch_size())]
                     if dg_cfg.embeddings_gpu():
                         argv.append("--gpu")
+                    if dg_cfg.embeddings_model():
+                        argv += ["--embed-model", dg_cfg.embeddings_model()]
                     if dg_cfg.llm_model():
                         argv += ["--llm-model", dg_cfg.llm_model(),
                                  "--llm-host", dg_cfg.llm_host(),
                                  "--llm-port", str(dg_cfg.llm_port()),
                                  "--llm-format", dg_cfg.llm_format(),
                                  "--llm-max-tokens", str(dg_cfg.llm_max_tokens())]
+                    # Long-form prompt overrides go through temp files so we
+                    # avoid argv-length / quoting hazards. Files live next
+                    # to the host's prompt files for consistency.
+                    runtime_dir = os.path.join(
+                        os.path.dirname(app_config.logs_dir()) or ".", "runtime",
+                    )
+                    docstring_text = (dg_cfg.llm_prompt_docstring() or "").strip()
+                    if docstring_text:
+                        try:
+                            os.makedirs(runtime_dir, exist_ok=True)
+                            tmp_path = os.path.join(runtime_dir, "docgraph_llm_prompt_docstring.txt")
+                            with open(tmp_path, "w", encoding="utf-8") as f:
+                                f.write(docstring_text)
+                            argv += ["--llm-prompt-docstring-file", tmp_path]
+                        except Exception as exc:
+                            log.warning("docgraph index: failed to materialize docstring prompt: %s", exc)
+                    if dg_cfg.documents_enabled():
+                        argv.append("--documents")
+                    text_exts = dg_cfg.text_extensions()
+                    if text_exts and tuple(text_exts) != dg_cfg._DEFAULT_TEXT_EXTS:
+                        argv += ["--text-exts", ",".join(text_exts)]
+                    asset_exts = dg_cfg.asset_extensions()
+                    if asset_exts and tuple(asset_exts) != dg_cfg._DEFAULT_ASSET_EXTS:
+                        argv += ["--asset-exts", ",".join(asset_exts)]
+                    # Only PYTHONIOENCODING / PYTHONUTF8 stay as env — they
+                    # govern Python stdio encoding and have no CLI equivalent.
                     env = {
-                        # Force UTF-8 stdio so Rich progress glyphs don't crash
-                        # the log writer on Windows (cp1252 default).
                         "PYTHONIOENCODING": "utf-8",
                         "PYTHONUTF8": "1",
                     }
-                    if dg_cfg.embeddings_model():
-                        env["DOCGRAPH_EMBED_MODEL"] = dg_cfg.embeddings_model()
-                    env.update(dg_cfg.prompt_env())
-                    env.update(dg_cfg.documents_env())
                     self._log_fp.write(
                         f"\n--- index {path} {'(--full)' if force else '(incremental)'} ---\n".encode()
                     )
@@ -891,11 +914,23 @@ class WikiRunner:
                                  "--llm-port", str(dg_cfg.llm_port()),
                                  "--llm-format", dg_cfg.llm_format(),
                                  "--llm-max-tokens", str(dg_cfg.llm_max_tokens_wiki())]
+                    runtime_dir = os.path.join(
+                        os.path.dirname(app_config.logs_dir()) or ".", "runtime",
+                    )
+                    wiki_text = (dg_cfg.llm_prompt_wiki() or "").strip()
+                    if wiki_text:
+                        try:
+                            os.makedirs(runtime_dir, exist_ok=True)
+                            tmp_path = os.path.join(runtime_dir, "docgraph_llm_prompt_wiki.txt")
+                            with open(tmp_path, "w", encoding="utf-8") as f:
+                                f.write(wiki_text)
+                            argv += ["--llm-prompt-wiki-file", tmp_path]
+                        except Exception as exc:
+                            log.warning("docgraph wiki: failed to materialize wiki prompt: %s", exc)
                     env = {
                         "PYTHONIOENCODING": "utf-8",
                         "PYTHONUTF8": "1",
                     }
-                    env.update(dg_cfg.prompt_env())
                     self._log_fp.write(
                         f"\n--- wiki {path} {'(--force)' if force else '(resumable)'} ---\n".encode()
                     )
@@ -1008,23 +1043,66 @@ class HostSupervisor:
         watched = [w for w in dg_cfg.root_paths_to_watch() if w in roots]
         for w in watched:
             argv += ["--watch", w]
-        # Only pass --debounce when watchers are active and the user
-        # actually deviated from docgraph's default; keeps the argv tidy.
         if watched and dg_cfg.host_debounce() and dg_cfg.host_debounce() != 500:
             argv += ["--debounce", str(dg_cfg.host_debounce())]
-        env = {}
+        # Configuration goes through `docgraph host` CLI flags rather than
+        # env vars. Keeps the spawn introspectable from `ps` / Process Hacker
+        # and removes the historical drift between settings.json keys and
+        # DOCGRAPH_* names. The flags below mirror Config.from_env one-for-one.
         if dg_cfg.host_gpu():
-            env["DOCGRAPH_GPU"] = "1"
+            argv.append("--gpu")
         if dg_cfg.embeddings_model():
-            env["DOCGRAPH_EMBED_MODEL"] = dg_cfg.embeddings_model()
+            argv += ["--embed-model", dg_cfg.embeddings_model()]
         if dg_cfg.rerank_model():
-            env["DOCGRAPH_RERANK_MODEL"] = dg_cfg.rerank_model()
+            argv += ["--rerank-model", dg_cfg.rerank_model()]
         if dg_cfg.rerank_default():
-            env["DOCGRAPH_RERANK_DEFAULT"] = "1"
+            argv.append("--rerank-default")
         if dg_cfg.rerank_gpu():
-            env["DOCGRAPH_RERANK_GPU"] = "1"
-        env.update(dg_cfg.prompt_env())
-        env.update(dg_cfg.documents_env())
+            argv.append("--rerank-gpu")
+        # LLM augmentation knobs — only forwarded when a model is configured
+        # (setting just the model implies enable, mirroring docgraph's CLI).
+        if dg_cfg.llm_model():
+            argv += ["--llm-model", dg_cfg.llm_model()]
+            if dg_cfg.llm_host():
+                argv += ["--llm-host", dg_cfg.llm_host()]
+            if dg_cfg.llm_port():
+                argv += ["--llm-port", str(dg_cfg.llm_port())]
+            if dg_cfg.llm_format():
+                argv += ["--llm-format", dg_cfg.llm_format()]
+            if dg_cfg.llm_max_tokens():
+                argv += ["--llm-max-tokens", str(dg_cfg.llm_max_tokens())]
+        # Long-form prompt overrides — write the text to a temp file so we
+        # can pass --llm-prompt-*-file rather than smuggling multi-line
+        # content through argv (Windows command-line length limits, escaping
+        # hassle). Files live under data/runtime/ and are overwritten each
+        # spawn so they stay in sync with settings.json.
+        for kind, text in (("docstring", dg_cfg.llm_prompt_docstring()),
+                           ("wiki",      dg_cfg.llm_prompt_wiki())):
+            text = (text or "").strip()
+            if not text:
+                continue
+            try:
+                runtime_dir = os.path.join(
+                    os.path.dirname(app_config.logs_dir()) or ".", "runtime",
+                )
+                os.makedirs(runtime_dir, exist_ok=True)
+                tmp_path = os.path.join(runtime_dir, f"docgraph_llm_prompt_{kind}.txt")
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    f.write(text)
+                argv += [f"--llm-prompt-{kind}-file", tmp_path]
+            except Exception as exc:
+                log.warning("docgraph host: failed to materialize %s prompt: %s", kind, exc)
+        # Document + asset indexing — the master toggle plus optional
+        # extension overrides. Empty strings would still flip --documents
+        # on via the implies-rule, so only emit when they actually differ.
+        if dg_cfg.documents_enabled():
+            argv.append("--documents")
+        text_exts = dg_cfg.text_extensions()
+        if text_exts and tuple(text_exts) != dg_cfg._DEFAULT_TEXT_EXTS:
+            argv += ["--text-exts", ",".join(text_exts)]
+        asset_exts = dg_cfg.asset_extensions()
+        if asset_exts and tuple(asset_exts) != dg_cfg._DEFAULT_ASSET_EXTS:
+            argv += ["--asset-exts", ",".join(asset_exts)]
 
         self._port = port
         self._log_fp = _open_log(self.role)
@@ -1032,7 +1110,7 @@ class HostSupervisor:
             sweep_port(self._port, ("docgraph",))
         except Exception:
             pass
-        self._proc = self._spawn(argv, extra_env=env)
+        self._proc = self._spawn(argv, extra_env=None)
         self._started_at = time.time()
         try:
             await self._wait_ready()
