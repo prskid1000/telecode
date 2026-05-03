@@ -497,6 +497,8 @@ class IndexRunner:
                     argv.append("--full")
                 if dg_cfg.index_workers() > 0:
                     argv += ["--workers", str(dg_cfg.index_workers())]
+                if dg_cfg.index_embed_batch_size() > 0:
+                    argv += ["--embed-batch-size", str(dg_cfg.index_embed_batch_size())]
                 if dg_cfg.embeddings_gpu():
                     argv.append("--gpu")
                 if dg_cfg.llm_model():
@@ -669,6 +671,8 @@ class WikiRunner:
                 argv = [binary, "wiki", path]
                 if force:
                     argv.append("--force")
+                if dg_cfg.wiki_depth() and dg_cfg.wiki_depth() != 12:
+                    argv += ["--depth", str(dg_cfg.wiki_depth())]
                 if dg_cfg.llm_model():
                     argv += ["--llm-model", dg_cfg.llm_model(),
                              "--llm-host", dg_cfg.llm_host(),
@@ -789,9 +793,13 @@ class HostSupervisor:
         argv = [binary, "host", "--host", host_addr, "--port", str(port)]
         for r in roots:
             argv += ["--root", r]
-        for w in dg_cfg.root_paths_to_watch():
-            if w in roots:
-                argv += ["--watch", w]
+        watched = [w for w in dg_cfg.root_paths_to_watch() if w in roots]
+        for w in watched:
+            argv += ["--watch", w]
+        # Only pass --debounce when watchers are active and the user
+        # actually deviated from docgraph's default; keeps the argv tidy.
+        if watched and dg_cfg.host_debounce() and dg_cfg.host_debounce() != 500:
+            argv += ["--debounce", str(dg_cfg.host_debounce())]
         env = {}
         if dg_cfg.host_gpu():
             env["DOCGRAPH_GPU"] = "1"
