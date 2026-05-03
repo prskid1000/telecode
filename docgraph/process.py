@@ -861,6 +861,10 @@ class HostSupervisor:
             env["DOCGRAPH_GPU"] = "1"
         if dg_cfg.embeddings_model():
             env["DOCGRAPH_EMBED_MODEL"] = dg_cfg.embeddings_model()
+        if dg_cfg.rerank_model():
+            env["DOCGRAPH_RERANK_MODEL"] = dg_cfg.rerank_model()
+        if dg_cfg.rerank_default():
+            env["DOCGRAPH_RERANK_DEFAULT"] = "1"
         env.update(dg_cfg.prompt_env())
         env.update(dg_cfg.documents_env())
 
