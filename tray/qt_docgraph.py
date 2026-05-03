@@ -59,6 +59,7 @@ def build_docgraph_tabs(window) -> QWidget:
         _build_host_card,
         _build_roots_card,
         _build_docs_card,
+        _build_documents_index_card,
         _build_llm_card,
         _build_prompts_card,
         _build_embeddings_card,
@@ -1084,6 +1085,63 @@ def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
         "files, top classes/functions, importers, tests) sit above it.",
         "DOCGRAPH_LLM_PROMPT_WIKI",
         height=140,
+    ))
+    return card, None
+
+
+# ── Document indexing (tier 2 + 3) ─────────────────────────────────────
+
+_DOC_DEFAULT_TEXT_EXTS = ("md", "markdown", "txt", "rst", "csv")
+_DOC_DEFAULT_ASSET_EXTS = (
+    "pdf", "xlsx", "xls", "docx", "doc", "ppt", "pptx",
+    "png", "jpg", "jpeg", "gif", "svg", "webp", "ico", "bmp", "tiff",
+    "mp4", "mov", "webm", "avi", "mkv", "mp3", "wav", "flac", "ogg", "m4a",
+    "zip", "tar", "gz", "tgz", "7z", "rar", "bz2", "xz",
+    "parquet", "feather", "arrow", "h5", "hdf5", "pkl", "pickle", "npz", "npy",
+    "ttf", "woff", "woff2", "otf", "eot",
+    "gltf", "glb", "fbx", "obj", "stl", "blend",
+)
+
+
+def _build_documents_index_card(window) -> tuple[QFrame, Callable[[], None] | None]:
+    """Settings for `docgraph index --documents`. Off by default. When
+    enabled, the indexer adds:
+      - Text-tier Doc nodes from .md/.txt/.rst/small CSVs.
+      - Asset nodes for media / large / binary files.
+      - REFERENCES_ edges from any code or doc that mentions an Asset
+        path in a quoted string literal or markdown link.
+    """
+    card, body = _card(
+        "Document indexing",
+        "Tier-2 (text docs) + tier-3 (binary assets). Forwarded to "
+        "`docgraph index --documents` and to the host process as "
+        "DOCGRAPH_INDEX_DOCUMENTS=1. Settings take effect on the next "
+        "index run / host restart. Light-weight — extension-based "
+        "walker, no extra dependencies.",
+    )
+
+    body.addWidget(_toggle_row(
+        "docgraph.index.documents.enabled", "Enabled",
+        "Master switch for the document + asset pass.",
+        cli="docgraph index --documents  /  DOCGRAPH_INDEX_DOCUMENTS=1",
+    ))
+    body.addWidget(_list_row(
+        "docgraph.index.documents.text_extensions",
+        "Text extensions",
+        "Files with these extensions are extracted, chunked, embedded "
+        "as Doc nodes (tier 2). Empty = use docgraph defaults: " +
+        ", ".join(_DOC_DEFAULT_TEXT_EXTS),
+        placeholder="md",
+    ))
+    body.addWidget(_list_row(
+        "docgraph.index.documents.asset_extensions",
+        "Asset extensions",
+        "Files with these extensions are registered as Asset nodes "
+        "(path / size / mime, no content). Code and docs that mention "
+        "them by path get REFERENCES_ edges. Empty = use docgraph "
+        "defaults (pdf, xlsx, docx, png, mp4, parquet, fonts, archives, "
+        "3D meshes, …).",
+        placeholder="pdf",
     ))
     return card, None
 
