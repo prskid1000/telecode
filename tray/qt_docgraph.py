@@ -432,7 +432,14 @@ class _RootRow(QFrame):
         self._edit = QLineEdit(path)
         self._edit.setPlaceholderText("/path/to/repo")
         self._edit.editingFinished.connect(self._on_edit_done)
-        h.addWidget(self._edit, 1)
+        # Cap so the trailing widgets (Index / Watch / pill / ✕) stay visible
+        # without horizontal scroll on typical window widths. The QLineEdit
+        # still scrolls internally for longer paths, and the tooltip exposes
+        # the full string on hover.
+        self._edit.setMinimumWidth(160)
+        self._edit.setMaximumWidth(260)
+        self._edit.setToolTip(path or "/path/to/repo")
+        h.addWidget(self._edit)
 
         self._index_btn = QPushButton("▶ Index")
         self._index_btn.setToolTip(
@@ -460,8 +467,8 @@ class _RootRow(QFrame):
 
         self._pill = QLabel("…")
         self._pill.setProperty("class", "stat_pill")
-        self._pill.setMinimumWidth(180)
-        h.addWidget(self._pill)
+        self._pill.setMinimumWidth(120)
+        h.addWidget(self._pill, 1)
 
         rm_btn = QPushButton("✕")
         rm_btn.setFlat(True)
@@ -482,6 +489,7 @@ class _RootRow(QFrame):
         return bool(self._watch.isChecked())
 
     def _on_edit_done(self) -> None:
+        self._edit.setToolTip(self._edit.text() or "/path/to/repo")
         self._on_change()
         self.refresh_state()
 
