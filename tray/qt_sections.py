@@ -76,7 +76,16 @@ def _card(title: str, sub: str = "") -> tuple[QFrame, QVBoxLayout]:
     if sub:
         s = WrapLabel(sub)
         s.setProperty("class", "card_sub")
+        # WrapLabel defaults to vertical=MinimumExpanding so it fills any
+        # leftover space in the parent layout. That's fine inside row help
+        # text but inside _card it pushes the sub-title into the middle of
+        # an empty header band when the body widget is tall (Logs viewer,
+        # Requests splitter, Raw JSON editor). Pin it to content height.
+        s.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Maximum)
         head_l.addWidget(s)
+    # Same reason — head as a whole shouldn't grow vertically beyond its
+    # natural size, regardless of body height.
+    head.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
     outer.addWidget(head)
 
     sep = QFrame()
@@ -88,7 +97,7 @@ def _card(title: str, sub: str = "") -> tuple[QFrame, QVBoxLayout]:
     body_l = QVBoxLayout(body)
     body_l.setContentsMargins(18, 14, 18, 14)
     body_l.setSpacing(12)
-    outer.addWidget(body)
+    outer.addWidget(body, 1)
     return card, body_l
 
 
