@@ -186,16 +186,18 @@ def _build_host_card(window) -> tuple[QFrame, Callable[[], None]]:
                                 "Forwards DOCGRAPH_GPU=1 to the host process.",
                                 cli="DOCGRAPH_GPU=1 / docgraph host --gpu"))
 
-    action_row = QHBoxLayout()
-    action_row.setSpacing(8)
+    actions = QWidget()
+    ar = QHBoxLayout(actions)
+    ar.setContentsMargins(0, 0, 0, 0); ar.setSpacing(8)
     start_btn = QPushButton("▶ Start"); start_btn.setProperty("class", "primary")
     stop_btn  = QPushButton("Stop");    stop_btn.setProperty("class", "danger")
     restart_btn = QPushButton("Restart")
-    action_row.addWidget(start_btn)
-    action_row.addWidget(stop_btn)
-    action_row.addWidget(restart_btn)
-    action_row.addStretch(1)
-    body.addLayout(action_row)
+    ar.addWidget(start_btn); ar.addWidget(stop_btn); ar.addWidget(restart_btn)
+    ar.addStretch(1)
+    body.addWidget(_row(row_label("Actions",
+        "Start / stop / restart the host process. Bind config and the "
+        "GPU flag are read at startup, so a restart is required to apply."),
+        actions))
     # Status pill + log hint omitted — the global Status tile and Logs
     # section already cover both. No-op refresher kept so the card's
     # public shape (refresh callable) is unchanged.
@@ -274,44 +276,53 @@ def _build_roots_card(window) -> tuple[QFrame, Callable[[], None]]:
     paths_widget = _RootsTable(window, force_getter=all_force.isChecked)
     body.addWidget(paths_widget)
 
-    # Single global-actions row: Full toggle governs both buttons; each
-    # has its own compact ✕ cancel and inline status pill.
-    action_row = QHBoxLayout()
-    action_row.setSpacing(6)
-    all_force_lbl = QLabel("Full")
-    all_force_lbl.setStyleSheet(f"color: {FG_DIM};")
-    all_force_lbl.setToolTip(all_force.toolTip())
+    body.addWidget(_section_header("Global actions"))
 
+    # Full toggle row.
+    body.addWidget(_row(row_label(
+        "Full reindex / wiki rebuild",
+        "On  = `docgraph index --full` and `docgraph wiki --force` (rebuild).\n"
+        "Off = incremental index / resumable wiki.\n"
+        "Governs every Index/Wiki button in this card, including the per-row ones."),
+        _wrap_align(all_force, Qt.AlignmentFlag.AlignLeft)))
+
+    # Index all row: ▶ + ✕ cancel + status pill.
     run_all_btn = QPushButton("▶ Index all")
+    run_all_btn.setProperty("class", "primary")
     run_all_btn.setToolTip("Index every configured root.")
     cancel_btn = QPushButton("✕")
     cancel_btn.setProperty("class", "danger")
     cancel_btn.setFixedWidth(28)
     cancel_btn.setToolTip("Cancel the running index pass.")
     status_lbl, refresh_status = _status_pill(_index_status_text)
-    status_lbl.setMaximumWidth(140)
 
+    idx_w = QWidget()
+    il = QHBoxLayout(idx_w); il.setContentsMargins(0, 0, 0, 0); il.setSpacing(8)
+    il.addWidget(run_all_btn); il.addWidget(cancel_btn); il.addWidget(status_lbl, 1)
+    body.addWidget(_row(row_label(
+        "Index all roots",
+        "Walk every configured root in sequence and run the indexer.\n"
+        "Honours the Full toggle above."),
+        idx_w))
+
+    # Build wikis row: 📖 + ✕ cancel + status pill.
     run_all_wiki_btn = QPushButton("📖 Build wikis")
+    run_all_wiki_btn.setProperty("class", "primary")
     run_all_wiki_btn.setToolTip("Build the wiki for every configured root.")
     cancel_wiki_btn = QPushButton("✕")
     cancel_wiki_btn.setProperty("class", "danger")
     cancel_wiki_btn.setFixedWidth(28)
     cancel_wiki_btn.setToolTip("Cancel the running wiki build.")
     wiki_status_lbl, refresh_wiki_status = _status_pill(_wiki_status_text)
-    wiki_status_lbl.setMaximumWidth(140)
 
-    action_row.addWidget(all_force_lbl)
-    action_row.addWidget(all_force)
-    action_row.addSpacing(4)
-    action_row.addWidget(run_all_btn)
-    action_row.addWidget(cancel_btn)
-    action_row.addWidget(status_lbl, 0)
-    action_row.addSpacing(8)
-    action_row.addWidget(run_all_wiki_btn)
-    action_row.addWidget(cancel_wiki_btn)
-    action_row.addWidget(wiki_status_lbl, 0)
-    action_row.addStretch(1)
-    body.addLayout(action_row)
+    wiki_w = QWidget()
+    wl = QHBoxLayout(wiki_w); wl.setContentsMargins(0, 0, 0, 0); wl.setSpacing(8)
+    wl.addWidget(run_all_wiki_btn); wl.addWidget(cancel_wiki_btn); wl.addWidget(wiki_status_lbl, 1)
+    body.addWidget(_row(row_label(
+        "Build wikis for all roots",
+        "Run `docgraph wiki` against every configured root.\n"
+        "Honours the Full toggle above (`--force` rebuilds every page)."),
+        wiki_w))
 
     def _all():
         async def _go():
@@ -765,13 +776,13 @@ def _build_llm_card(window) -> tuple[QFrame, Callable[[], None] | None]:
         "Wire format for the local LLM endpoint. Shared by index + wiki.",
     ))
     body.addWidget(_number_row("docgraph.llm.max_tokens", "Index Max Tokens",
-                                10, 4096, 50, 0,
+                                10, 4096, 50, 0, "",
                                 "Per-call budget for `docgraph index`. Each "
                                 "call generates a one-line docstring — 150 is "
                                 "the docgraph default.",
                                 cli="docgraph index --llm-max-tokens"))
     body.addWidget(_number_row("docgraph.llm.max_tokens_wiki", "Wiki Max Tokens",
-                                256, 32768, 256, 0,
+                                256, 32768, 256, 0, "",
                                 "Per-call budget for `docgraph wiki`. Module "
                                 "pages need much more headroom — 4096 is the "
                                 "docgraph default.",
@@ -799,32 +810,36 @@ def _build_docs_card(window) -> tuple[QFrame, Callable[[], None]]:
         ".docgraph/ to write into.",
     )
 
-    picker_row = QHBoxLayout()
-    picker_row.setSpacing(8)
-    picker_row.addWidget(QLabel("Root:"))
     picker = QComboBox()
-    picker.setMinimumWidth(220)
-    picker_row.addWidget(picker)
-    picker_row.addStretch(1)
+    picker.setMinimumWidth(0)
     refresh_btn = QPushButton("Refresh")
     refresh_btn.setProperty("class", "ghost")
-    picker_row.addWidget(refresh_btn)
-    body.addLayout(picker_row)
+    refresh_btn.setMaximumWidth(100)
+    picker_w = QWidget()
+    pl = QHBoxLayout(picker_w); pl.setContentsMargins(0, 0, 0, 0); pl.setSpacing(8)
+    pl.addWidget(picker, 1); pl.addWidget(refresh_btn, 0)
+    body.addWidget(_row(row_label(
+        "Root",
+        "Pick which repo's `.docgraph/` will receive the Doc nodes."),
+        picker_w))
 
-    add_row = QHBoxLayout()
-    add_row.setSpacing(8)
     url_edit = QLineEdit()
     url_edit.setPlaceholderText("https://example.com/docs")
     url_edit.setMinimumWidth(0)
     add_btn = QPushButton("+ Add")
     add_btn.setProperty("class", "primary")
     add_btn.setMaximumWidth(100)
-    add_row.addWidget(url_edit, 1)
-    add_row.addWidget(add_btn)
-    body.addLayout(add_row)
+    add_w = QWidget()
+    al = QHBoxLayout(add_w); al.setContentsMargins(0, 0, 0, 0); al.setSpacing(8)
+    al.addWidget(url_edit, 1); al.addWidget(add_btn, 0)
+    body.addWidget(_row(row_label(
+        "Add doc URL",
+        "Fetch the URL, chunk + embed it, and store as Doc nodes under the picked root."),
+        add_w))
 
     status_lbl = QLabel("")
     status_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
+    status_lbl.setWordWrap(True)
     body.addWidget(status_lbl)
 
     from PySide6.QtWidgets import QSizePolicy as _QSP
@@ -1010,22 +1025,8 @@ def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     )
 
     def _editor(setting_path: str, default: str, label: str, help_text: str,
-                placeholder: str, height: int) -> QWidget:
-        wrap = QWidget()
-        v = QVBoxLayout(wrap)
-        v.setContentsMargins(0, 0, 0, 8)
-        v.setSpacing(4)
-        title = QLabel(label)
-        title.setProperty("class", "row_label")
-        v.addWidget(title)
-        if help_text:
-            hl = WrapLabel(help_text)
-            hl.setProperty("class", "row_help")
-            v.addWidget(hl)
-        cli_lbl = WrapLabel(setting_path + "  ·  " + placeholder)
-        cli_lbl.setProperty("class", "key_path")
-        v.addWidget(cli_lbl)
-
+                env_var: str, height: int) -> tuple[QWidget, QWidget]:
+        """Returns (editor_row, actions_row) — both fully shaped via `_row()`."""
         te = QPlainTextEdit()
         te.setFixedHeight(height)
         mono = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
@@ -1034,10 +1035,10 @@ def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
         cur = str(get_path(read_settings(), setting_path, "") or "")
         te.setPlaceholderText("(empty — using built-in default)")
         te.setPlainText(cur)
-        v.addWidget(te)
+        # Cap so the editor doesn't span the entire window on wide
+        # displays — same rationale as `_line_row`'s 720 cap.
+        te.setMaximumWidth(720)
 
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
         save_btn = QPushButton("Save")
         save_btn.setProperty("class", "primary")
         reset_btn = QPushButton("Reset to default")
@@ -1046,25 +1047,23 @@ def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
         clear_btn.setProperty("class", "ghost")
         info_lbl = QLabel("")
         info_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
-        btn_row.addWidget(save_btn)
-        btn_row.addWidget(reset_btn)
-        btn_row.addWidget(clear_btn)
-        btn_row.addWidget(info_lbl, 1)
-        v.addLayout(btn_row)
+        info_lbl.setWordWrap(True)
+
+        actions = QWidget()
+        ar = QHBoxLayout(actions); ar.setContentsMargins(0, 0, 0, 0); ar.setSpacing(8)
+        ar.addWidget(save_btn); ar.addWidget(reset_btn); ar.addWidget(clear_btn)
+        ar.addWidget(info_lbl, 1)
 
         def _save():
             patch_settings(setting_path, te.toPlainText())
             info_lbl.setStyleSheet(f"color: {OK}; font-size: 11px;")
-            info_lbl.setText(
-                "Saved. Restart the host to apply (the env var is read at "
-                "host startup)."
-            )
+            info_lbl.setText("Saved. Restart the host to apply.")
 
         def _reset():
             te.setPlainText(default)
             patch_settings(setting_path, default)
             info_lbl.setStyleSheet(f"color: {OK}; font-size: 11px;")
-            info_lbl.setText("Reset to docgraph's built-in default. Restart the host to apply.")
+            info_lbl.setText("Reset to default. Restart the host to apply.")
 
         def _clear():
             te.setPlainText("")
@@ -1075,9 +1074,15 @@ def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
         save_btn.clicked.connect(_save)
         reset_btn.clicked.connect(_reset)
         clear_btn.clicked.connect(_clear)
-        return wrap
 
-    body.addWidget(_editor(
+        editor_row = _row(row_label(label, help_text, setting_path, env_var), te)
+        actions_row = _row(row_label("Actions",
+            "Save persists to settings.json; the env var is read at host "
+            "startup, so restart the host to apply changes."),
+            actions)
+        return editor_row, actions_row
+
+    er, ar = _editor(
         "docgraph.llm.prompts.docstring",
         _DOCSTRING_PROMPT_DEFAULT,
         "Docstring template",
@@ -1085,8 +1090,11 @@ def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
         "docstrings for entities lacking native docs.",
         "DOCGRAPH_LLM_PROMPT_DOCSTRING",
         height=140,
-    ))
-    body.addWidget(_editor(
+    )
+    body.addWidget(er); body.addWidget(ar)
+
+    body.addWidget(_section_header("Wiki"))
+    er, ar = _editor(
         "docgraph.llm.prompts.wiki",
         _WIKI_PROMPT_DEFAULT,
         "Wiki output-format tail",
@@ -1095,7 +1103,8 @@ def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
         "files, top classes/functions, importers, tests) sit above it.",
         "DOCGRAPH_LLM_PROMPT_WIKI",
         height=140,
-    ))
+    )
+    body.addWidget(er); body.addWidget(ar)
     return card, None
 
 
