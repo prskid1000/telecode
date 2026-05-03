@@ -82,7 +82,7 @@ To run in the background without a console window (Windows):
 pythonw main.py
 ```
 
-### Session & Task Management (pythonmagic-style)
+### Session & Task Management
 
 Telecode includes a fully-featured stateful **Session and Task Management** system, with persistent **Agents**, multi-step **Job pipelines**, and a cron-style **Heartbeat scheduler** for self-running agents.
 
