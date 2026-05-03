@@ -150,20 +150,6 @@ def llm_prompt_wiki() -> str:
     return str(prompts.get("wiki", "") or "")
 
 
-def prompt_env() -> dict[str, str]:
-    """Env-var dict to forward to docgraph child processes. Only emits
-    keys for non-empty overrides so docgraph's built-in defaults stay
-    in effect when the user clears the textboxes."""
-    out: dict[str, str] = {}
-    d = llm_prompt_docstring()
-    if d:
-        out["DOCGRAPH_LLM_PROMPT_DOCSTRING"] = d
-    w = llm_prompt_wiki()
-    if w:
-        out["DOCGRAPH_LLM_PROMPT_WIKI"] = w
-    return out
-
-
 # ── Embeddings ──────────────────────────────────────────────────────────────
 
 def embeddings_cfg() -> dict:    return _section("embeddings")
@@ -232,22 +218,6 @@ def asset_extensions() -> tuple[str, ...]:
     if isinstance(raw, list) and raw:
         return tuple(str(e).strip().lstrip(".").lower() for e in raw if str(e).strip())
     return _DEFAULT_ASSET_EXTS
-
-
-def documents_env() -> dict[str, str]:
-    """Env-var dict to forward to docgraph children when document
-    indexing is enabled. Off-by-default keeps docgraph's existing
-    behavior unchanged for users who haven't opted in."""
-    if not documents_enabled():
-        return {}
-    out = {"DOCGRAPH_INDEX_DOCUMENTS": "1"}
-    text = text_extensions()
-    if text and tuple(text) != _DEFAULT_TEXT_EXTS:
-        out["DOCGRAPH_TEXT_EXTS"] = ",".join(text)
-    assets = asset_extensions()
-    if assets and tuple(assets) != _DEFAULT_ASSET_EXTS:
-        out["DOCGRAPH_ASSET_EXTS"] = ",".join(assets)
-    return out
 
 
 # ── Logs ─────────────────────────────────────────────────────────────────────
