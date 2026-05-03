@@ -47,16 +47,20 @@ def _binary_or_raise() -> str:
 
 
 def _open_log(role: str, slug: str | None = None):
-    """Open a fresh log file for `role` (truncating any previous content).
+    """Open the log file for `role`.
 
-    Append mode used to make every reindex attempt accumulate into one
-    file across telecode sessions, which made debugging unreadable —
-    you'd see five layers of historical errors in the Logs viewer.
-    Truncating per spawn means the live log only shows the current run.
+    Host log is shared with the telecode-side `telecode.docgraph` logger,
+    so it must stay in append mode — truncating would wipe wrapper-side
+    INFO/ERROR events that have already been written this session. A
+    banner separates each spawn so the live tail still reads cleanly.
+
+    Index and wiki logs are short-lived per-run files; they truncate on
+    open so each spawn shows only the current run.
     """
     path = dg_cfg.log_path(role, slug)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    fp = open(path, "wb", buffering=0)
+    mode = "ab" if role == "host" else "wb"
+    fp = open(path, mode, buffering=0)
     fp.write(f"===== telecode: spawning docgraph {role}".encode()
              + (f" ({slug})".encode() if slug else b"")
              + b" =====\n")
