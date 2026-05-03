@@ -68,6 +68,42 @@ def _creation_flags() -> int:
     return subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 
+def _ensure_high_perf_gpu(exe_path: str) -> None:
+    """Mark `exe_path` as preferring the discrete GPU on Windows hybrid
+    graphics. Without this, processes spawned with CREATE_NO_WINDOW get
+    handed the iGPU by DXGI's default adapter enumeration, and ONNX
+    Runtime / DirectML lands on Intel Graphics — slow at best, device-hung
+    under sustained load at worst.
+
+    Writes `HKCU\\Software\\Microsoft\\DirectX\\UserGpuPreferences` with
+    the absolute exe path → `GpuPreference=2;` (2 = High Performance).
+    Idempotent: skip if the value already matches. No-op off Windows or
+    if the path is unresolvable."""
+    if sys.platform != "win32" or not exe_path:
+        return
+    try:
+        path = os.path.abspath(exe_path)
+        if not os.path.exists(path):
+            return
+        import winreg  # stdlib on Windows
+        key_path = r"Software\Microsoft\DirectX\UserGpuPreferences"
+        wanted = "GpuPreference=2;"
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_path, 0,
+                                winreg.KEY_READ | winreg.KEY_WRITE) as k:
+            try:
+                cur, _ = winreg.QueryValueEx(k, path)
+                if cur == wanted:
+                    return
+            except FileNotFoundError:
+                pass
+            winreg.SetValueEx(k, path, 0, winreg.REG_SZ, wanted)
+            log.info("docgraph: wrote GpuPreference=2 (high-perf) for %s", path)
+    except Exception as exc:
+        # Not fatal — host still runs, just may end up on iGPU under
+        # CREATE_NO_WINDOW. Log and move on.
+        log.warning("could not set GpuPreference for %s: %s", exe_path, exc)
+
+
 def _alive(proc: subprocess.Popen | None) -> bool:
     return bool(proc and proc.poll() is None)
 
@@ -1049,11 +1085,10 @@ class HostSupervisor:
         # env vars. Keeps the spawn introspectable from `ps` / Process Hacker
         # and removes the historical drift between settings.json keys and
         # DOCGRAPH_* names. The flags below mirror Config.from_env one-for-one.
-        if dg_cfg.host_gpu():
+        # Single source of truth for GPU embeddings — `embeddings.gpu` —
+        # used by both the host spawn and the index-subprocess fallback.
+        if dg_cfg.embeddings_gpu():
             argv.append("--gpu")
-        if dg_cfg.host_directml_device_id() >= 0:
-            argv += ["--directml-device-id",
-                     str(dg_cfg.host_directml_device_id())]
         if dg_cfg.embeddings_model():
             argv += ["--embed-model", dg_cfg.embeddings_model()]
         if dg_cfg.rerank_model():
@@ -1197,6 +1232,16 @@ class HostSupervisor:
             env.update(extra_env)
         binary = argv[0]
         argv[0] = shutil.which(binary) or binary
+        # On Windows hybrid graphics, processes spawned with CREATE_NO_WINDOW
+        # default to the power-saving GPU (Intel iGPU) for DXGI / DirectML
+        # adapter enumeration. ONNX Runtime then lands on the iGPU and either
+        # runs slow or device-hangs under sustained inference load. Setting
+        # the per-app GpuPreference=2 (High Performance) override in
+        # HKCU\Software\Microsoft\DirectX\UserGpuPreferences forces Windows
+        # to expose the discrete GPU to that exe regardless of windowed
+        # state. Idempotent — only writes when the value is missing or
+        # different. No-op off Windows.
+        _ensure_high_perf_gpu(argv[0])
         proc = subprocess.Popen(
             argv,
             stdout=self._log_fp,
