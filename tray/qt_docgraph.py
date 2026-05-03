@@ -160,6 +160,64 @@ def _format_ago(ts: float | None) -> str:
     return f"{delta // 86400}d ago"
 
 
+# ── Phase metadata for index/wiki progress bars ─────────────────────────
+#
+# Mirrors the `_emit("<phase>", ...)` calls in docgraph/index.py + wiki.py.
+# Each phase carries:
+#   - a human label
+#   - whether it's count-driven (else indeterminate)
+# The order defines the "[i/N]" ordinal shown to the user. Phases that
+# are conditional on cfg (llm_augment, embed_chunks, documents) still
+# get a slot — if they don't fire, the ordinal just skips them.
+
+_INDEX_PHASES: list[tuple[str, str, bool]] = [
+    ("start",          "starting",        False),
+    ("delete",         "removing stale",  True),
+    ("parse",          "parsing files",   True),
+    ("llm_augment",    "llm docstrings",  True),
+    ("seed_ids",       "seeding ids",     False),
+    ("embed_entities", "embed entities",  True),
+    ("embed_chunks",   "embed chunks",    True),
+    ("symbol_table",   "symbol table",    False),
+    ("edges",          "writing edges",   False),
+    ("tier4_pagerank", "pagerank",        False),
+    ("documents",      "documents",       False),
+    ("done",           "done",            True),
+]
+_INDEX_PHASE_INDEX = {p[0]: (i, p[1]) for i, p in enumerate(_INDEX_PHASES)}
+
+_WIKI_PHASES: list[tuple[str, str, bool]] = [
+    ("start",  "preparing modules", True),
+    ("module", "writing module",    True),
+    ("done",   "done",              True),
+]
+_WIKI_PHASE_INDEX = {p[0]: (i, p[1]) for i, p in enumerate(_WIKI_PHASES)}
+
+
+def _fmt_count(n: int) -> str:
+    """Compact integer formatter — 173553 → '173.5k', 1234567 → '1.23M'."""
+    n = int(n)
+    if n < 1000:
+        return str(n)
+    if n < 1_000_000:
+        return f"{n / 1000:.1f}k".replace(".0k", "k")
+    if n < 1_000_000_000:
+        return f"{n / 1_000_000:.2f}M".rstrip("0").rstrip(".")
+    return f"{n / 1_000_000_000:.2f}B".rstrip("0").rstrip(".")
+
+
+def _fmt_phase_label(kind: str, phase: str, module: str = "") -> tuple[str, int, int]:
+    """Return (display_label, ordinal, total_phases) for the given phase."""
+    table = _INDEX_PHASE_INDEX if kind == "index" else _WIKI_PHASE_INDEX
+    total = len(_INDEX_PHASES) if kind == "index" else len(_WIKI_PHASES)
+    if phase in table:
+        i, label = table[phase]
+        if kind == "wiki" and phase == "module" and module:
+            label = f"{label} · {module}"
+        return label, i + 1, total
+    return phase or "?", 0, total
+
+
 # ── Host card ────────────────────────────────────────────────────────────
 
 def _build_host_card(window) -> tuple[QFrame, Callable[[], None]]:
@@ -529,7 +587,22 @@ class _RootRow(QFrame):
         self._wiki_pill.setToolTip("Wiki status")
         pl.addWidget(self._wiki_pill, 1)
 
+        # Auto-refreshing stats chip — entity / edge counts pulled from
+        # /api/stats every ~10s while the host is alive. Replaces the
+        # old 📊 Stats button.
+        self._stats_chip = QLabel("—")
+        self._stats_chip.setProperty("class", "stat_chip")
+        self._stats_chip.setProperty("muted", "true")
+        self._stats_chip.setMinimumWidth(0)
+        self._stats_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._stats_chip.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        self._stats_chip.setToolTip("Live counts (entities · edges). Auto-refreshed.")
+        pl.addWidget(self._stats_chip, 1)
+
         h.addWidget(pills_w, 1)
+        # Tracks the last time we fired an /api/stats fetch for this row
+        # so the 1s tray tick doesn't hammer the host.
+        self._stats_last_fetch: float = 0.0
 
         rm_btn = QPushButton("✕")
         rm_btn.setFlat(True)
@@ -568,16 +641,6 @@ class _RootRow(QFrame):
         self._wiki_btn.clicked.connect(self._trigger_wiki)
         bh.addWidget(self._wiki_btn)
 
-        self._stats_btn = QPushButton("📊 Stats")
-        self._stats_btn.setToolTip(
-            "Show stats for this root.\n"
-            "GET /api/stats?root=<slug> — entity + edge counts.\n"
-            "Read-only; works while the host is alive (free) or via a brief\n"
-            "`docgraph stats <path>` subprocess if not."
-        )
-        self._stats_btn.clicked.connect(self._trigger_stats)
-        bh.addWidget(self._stats_btn)
-
         self._clear_btn = QPushButton("🗑 Clear")
         self._clear_btn.setProperty("class", "danger")
         self._clear_btn.setToolTip(
@@ -606,29 +669,33 @@ class _RootRow(QFrame):
 
         outer.addWidget(line2)
 
-        # ── Line 3: live progress bars (index + wiki). Shown only while
-        # the corresponding op is in flight; hidden otherwise.
+        # ── Line 3: paired progress bars (index left, wiki right).
+        # Always visible so the row keeps a consistent 3-line height;
+        # bars sit in the "idle" state when nothing is running.
         self._line3 = QWidget()
         l3 = QHBoxLayout(self._line3)
         l3.setContentsMargins(0, 0, 0, 0)
         l3.setSpacing(8)
 
-        self._idx_bar = QProgressBar()
-        self._idx_bar.setRange(0, 100)
-        self._idx_bar.setTextVisible(True)
-        self._idx_bar.setFormat("idx idle")
-        self._idx_bar.setFixedHeight(16)
+        def _mkbar(kind: str, idle_label: str) -> QProgressBar:
+            bar = QProgressBar()
+            bar.setProperty("kind", kind)
+            bar.setProperty("state", "idle")
+            bar.setRange(0, 100)
+            bar.setValue(0)
+            bar.setTextVisible(True)
+            bar.setFormat(idle_label)
+            bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            bar.setFixedHeight(20)
+            return bar
+
+        self._idx_bar = _mkbar("idx", "index · idle")
         l3.addWidget(self._idx_bar, 1)
 
-        self._wiki_bar = QProgressBar()
-        self._wiki_bar.setRange(0, 100)
-        self._wiki_bar.setTextVisible(True)
-        self._wiki_bar.setFormat("wiki idle")
-        self._wiki_bar.setFixedHeight(16)
+        self._wiki_bar = _mkbar("wiki", "wiki · idle")
         l3.addWidget(self._wiki_bar, 1)
 
         outer.addWidget(self._line3)
-        self._line3.setVisible(False)
 
         self.refresh_state()
 
@@ -664,21 +731,6 @@ class _RootRow(QFrame):
         async def _go():
             from docgraph.process import get_wiki
             await get_wiki().run(path, force=force)
-        _run(self._window, _go)
-
-    def _trigger_stats(self) -> None:
-        path = self.text().strip()
-        if not path:
-            return
-        async def _go():
-            from docgraph.process import fetch_stats
-            text = await fetch_stats(path)
-            from PySide6.QtWidgets import QMessageBox
-            from PySide6.QtCore import QMetaObject, Qt as _Qt, QTimer
-            # Hop to the GUI thread — _go() runs on the asyncio loop.
-            QTimer.singleShot(0, lambda: QMessageBox.information(
-                self, f"Stats — {path}", text
-            ))
         _run(self._window, _go)
 
     def _trigger_clear(self) -> None:
@@ -723,60 +775,131 @@ class _RootRow(QFrame):
         path = self.text().strip()
         self._refresh_index_pill(path)
         self._refresh_wiki_pill(path)
+        self._refresh_stats_chip(path)
         self._refresh_progress_bars(path)
 
+    def _apply_bar_state(self, bar: QProgressBar, state: str) -> None:
+        """Flip the bar between 'idle' / 'run' so the QSS picks up the
+        right styling (dashed border vs. gradient chunk). Qt only re-runs
+        the stylesheet on a property change if you nudge it via
+        unpolish + polish."""
+        if bar.property("state") == state:
+            return
+        bar.setProperty("state", state)
+        st = bar.style()
+        st.unpolish(bar)
+        st.polish(bar)
+
+    def _paint_bar(self, bar: QProgressBar, kind: str, ps: dict | None,
+                   running: bool, idle_label: str) -> None:
+        if not running:
+            self._apply_bar_state(bar, "idle")
+            bar.setRange(0, 100)
+            bar.setValue(0)
+            bar.setFormat(idle_label)
+            return
+
+        self._apply_bar_state(bar, "run")
+        phase = (ps or {}).get("phase") or "start"
+        module = (ps or {}).get("module") or ""
+        label, ord_, total_phases = _fmt_phase_label(kind, phase, module)
+        cur = int((ps or {}).get("current") or 0)
+        tot = int((ps or {}).get("total") or 0)
+
+        if tot > 0:
+            pct = max(0, min(100, int(cur * 100 / tot)))
+            bar.setRange(0, 100)
+            bar.setValue(pct)
+            bar.setFormat(
+                f"[{ord_}/{total_phases}] {label}  ·  {pct}%  "
+                f"({_fmt_count(cur)}/{_fmt_count(tot)})"
+            )
+        else:
+            # Indeterminate — Qt renders a marquee chunk when range is 0/0.
+            bar.setRange(0, 0)
+            bar.setFormat(f"[{ord_}/{total_phases}] {label}  ·  …")
+
     def _refresh_progress_bars(self, path: str) -> None:
-        """Paint the live SSE progress into the per-row QProgressBars.
-        Each bar is shown while its op is in flight and hidden otherwise."""
+        """Paint the live SSE progress into the per-row QProgressBars."""
         try:
             from docgraph import progress_state
             from docgraph.process import get_index, get_wiki
-            idx_running = get_index().current_path() == path if path else False
-            wiki_running = get_wiki().current_path() == path if path else False
+            idx_running = bool(path) and get_index().current_path() == path
+            wiki_running = bool(path) and get_wiki().current_path() == path
+            idx_ps = progress_state.get(path, "index") if path else None
+            wiki_ps = progress_state.get(path, "wiki") if path else None
         except Exception:
-            idx_running, wiki_running = False, False
-            progress_state = None  # type: ignore
+            idx_running = wiki_running = False
+            idx_ps = wiki_ps = None
 
-        any_visible = False
+        self._paint_bar(self._idx_bar, "index", idx_ps, idx_running, "index · idle")
+        self._paint_bar(self._wiki_bar, "wiki", wiki_ps, wiki_running, "wiki · idle")
 
-        # Index bar
-        if idx_running:
-            any_visible = True
-            self._idx_bar.setVisible(True)
-            ps = progress_state.get(path, "index") if progress_state else None
-            if ps and ps.get("total", 0) > 0:
-                cur, tot = int(ps["current"]), int(ps["total"])
-                pct = max(0, min(100, int(cur * 100 / tot)))
-                self._idx_bar.setRange(0, 100)
-                self._idx_bar.setValue(pct)
-                self._idx_bar.setFormat(f"idx · {ps.get('phase','?')} {pct}% ({cur}/{tot})")
-            else:
-                # Indeterminate — phase started but no count yet.
-                self._idx_bar.setRange(0, 0)
-                phase = (ps or {}).get("phase", "starting")
-                self._idx_bar.setFormat(f"idx · {phase}")
+    def _refresh_stats_chip(self, path: str) -> None:
+        """Display live entity/edge counts and trigger a background
+        refresh when the cached snapshot is older than 10s. Cheap when
+        the host is alive (one /api/stats roundtrip), no-op otherwise."""
+        try:
+            from docgraph import stats_state
+            from docgraph.process import get_host
+            host_alive = bool(get_host().alive())
+        except Exception:
+            host_alive = False
+            stats_state = None  # type: ignore
+
+        # Render whatever we have cached.
+        snap = stats_state.get(path) if (stats_state and path) else None
+        muted = "true"
+        if snap:
+            ents = sum(int(snap.get(k, 0) or 0)
+                       for k in ("File", "Module", "Class", "Function", "Variable"))
+            tables = snap.get("tables") or []
+            edges = sum(int(t.get("count", 0) or 0) for t in tables
+                        if isinstance(t, dict) and "->" in str(t.get("name", "")))
+            self._stats_chip.setText(f"{_fmt_count(ents)} ents · {_fmt_count(edges)} edges")
+            tip_lines = [f"{path or '(no path)'}", ""]
+            for label in ("File", "Module", "Class", "Function", "Variable"):
+                tip_lines.append(f"  {label:<10} {snap.get(label, 0)}")
+            self._stats_chip.setToolTip("\n".join(tip_lines))
+            muted = "false"
         else:
-            self._idx_bar.setVisible(False)
+            self._stats_chip.setText("— · —" if host_alive else "host offline")
+            self._stats_chip.setToolTip(
+                "Live counts auto-refresh while the host is alive."
+                if host_alive else
+                "Start the docgraph host to see live counts."
+            )
+        if self._stats_chip.property("muted") != muted:
+            self._stats_chip.setProperty("muted", muted)
+            st = self._stats_chip.style()
+            st.unpolish(self._stats_chip); st.polish(self._stats_chip)
 
-        # Wiki bar
-        if wiki_running:
-            any_visible = True
-            self._wiki_bar.setVisible(True)
-            ps = progress_state.get(path, "wiki") if progress_state else None
-            if ps and ps.get("total", 0) > 0:
-                cur, tot = int(ps["current"]), int(ps["total"])
-                pct = max(0, min(100, int(cur * 100 / tot)))
-                self._wiki_bar.setRange(0, 100)
-                self._wiki_bar.setValue(pct)
-                mod = ps.get("module") or ps.get("phase", "?")
-                self._wiki_bar.setFormat(f"wiki · {mod} {pct}% ({cur}/{tot})")
-            else:
-                self._wiki_bar.setRange(0, 0)
-                self._wiki_bar.setFormat("wiki · starting")
-        else:
-            self._wiki_bar.setVisible(False)
+        # Maybe schedule a fresh fetch. Skip if no path, no host, or
+        # we already have a fresh snapshot. Throttle per-row at 10s and
+        # use stats_state's in-flight flag to dedupe across rows pointing
+        # at the same path.
+        if not path or not host_alive or stats_state is None:
+            return
+        import time as _time
+        now = _time.time()
+        if now - self._stats_last_fetch < 10.0:
+            return
+        if stats_state.age(path) < 10.0:
+            self._stats_last_fetch = now
+            return
+        if not stats_state.mark_in_flight(path):
+            return
+        self._stats_last_fetch = now
 
-        self._line3.setVisible(any_visible)
+        async def _go():
+            try:
+                from docgraph.process import fetch_stats_dict
+                data = await fetch_stats_dict(path)
+                if data is not None:
+                    stats_state.set(path, data)
+            finally:
+                stats_state.clear_in_flight(path)
+        _run(self._window, _go)
 
     def _refresh_index_pill(self, path: str) -> None:
         try:

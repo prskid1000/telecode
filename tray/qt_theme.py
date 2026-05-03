@@ -261,6 +261,75 @@ QLabel.stat_pill {{
 QLabel.stat_pill_ok  {{ color: {OK};  border-color: rgba(86, 224, 194, 80); }}
 QLabel.stat_pill_err {{ color: {ERR}; border-color: rgba(255, 110, 110, 80); }}
 
+/* Compact stat chip — paired with .stat_pill in the docgraph row strip.
+   Smaller padding, monospace digits, used for live count badges. */
+QLabel.stat_chip {{
+    background: rgba(107, 164, 255, 18);
+    border: 1px solid rgba(107, 164, 255, 60);
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-size: 10.5px;
+    font-family: "JetBrains Mono", Consolas, "Courier New", monospace;
+    color: {FG};
+    letter-spacing: 0.02em;
+}}
+QLabel.stat_chip[muted="true"] {{
+    background: {BG_CARD};
+    border: 1px solid {BORDER};
+    color: {FG_MUTE};
+}}
+
+/* Progress bars — sleek, slim, gradient-filled. Two color variants
+   keyed off a `kind` dynamic property: idx (accent blue) and wiki
+   (accent teal). Uses a gradient chunk so the bar reads as a
+   first-class status surface, not a stock Qt control. */
+QProgressBar {{
+    background: #0a0d12;
+    border: 1px solid {BORDER};
+    border-radius: 5px;
+    padding: 0;
+    text-align: center;
+    color: {FG};
+    font-family: "JetBrains Mono", Consolas, "Courier New", monospace;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    min-height: 18px;
+    max-height: 18px;
+}}
+QProgressBar::chunk {{
+    border-radius: 4px;
+    margin: 1px;
+    background: qlineargradient(
+        x1: 0, y1: 0, x2: 1, y2: 0,
+        stop: 0 rgba(107, 164, 255, 220),
+        stop: 1 rgba(86, 224, 194, 220)
+    );
+}}
+QProgressBar[kind="idx"]::chunk {{
+    background: qlineargradient(
+        x1: 0, y1: 0, x2: 1, y2: 0,
+        stop: 0   rgba(107, 164, 255, 235),
+        stop: 0.5 rgba(125, 176, 255, 235),
+        stop: 1   rgba(150, 195, 255, 235)
+    );
+}}
+QProgressBar[kind="wiki"]::chunk {{
+    background: qlineargradient(
+        x1: 0, y1: 0, x2: 1, y2: 0,
+        stop: 0   rgba(86, 224, 194, 235),
+        stop: 0.5 rgba(120, 232, 208, 235),
+        stop: 1   rgba(160, 240, 220, 235)
+    );
+}}
+QProgressBar[state="idle"]::chunk {{
+    background: transparent;
+}}
+QProgressBar[state="idle"] {{
+    color: {FG_MUTE};
+    border: 1px dashed {BORDER};
+}}
+
 QLabel.toggle_label {{ color: {FG}; font-size: 12px; }}
 
 /* Scrollbars — visible on dark backgrounds. Vertical was 8px on a
