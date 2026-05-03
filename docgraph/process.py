@@ -514,6 +514,7 @@ class IndexRunner:
                 if dg_cfg.embeddings_model():
                     env["DOCGRAPH_EMBED_MODEL"] = dg_cfg.embeddings_model()
                 env.update(dg_cfg.prompt_env())
+                env.update(dg_cfg.documents_env())
                 self._log_fp.write(
                     f"\n--- index {path} {'(--full)' if force else '(incremental)'} ---\n".encode()
                 )
@@ -797,6 +798,7 @@ class HostSupervisor:
         if dg_cfg.embeddings_model():
             env["DOCGRAPH_EMBED_MODEL"] = dg_cfg.embeddings_model()
         env.update(dg_cfg.prompt_env())
+        env.update(dg_cfg.documents_env())
 
         self._port = port
         self._log_fp = _open_log(self.role)

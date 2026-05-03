@@ -176,6 +176,58 @@ def index_cfg() -> dict:         return _section("index")
 def index_workers() -> int:      return int(index_cfg().get("workers", 0) or 0)
 
 
+# ── Document indexing (tier 2 + tier 3 — opt-in) ──────────────────────────
+
+_DEFAULT_TEXT_EXTS = ("md", "markdown", "txt", "rst", "csv")
+_DEFAULT_ASSET_EXTS = (
+    "pdf", "xlsx", "xls", "docx", "doc", "ppt", "pptx",
+    "png", "jpg", "jpeg", "gif", "svg", "webp", "ico", "bmp", "tiff",
+    "mp4", "mov", "webm", "avi", "mkv", "mp3", "wav", "flac", "ogg", "m4a",
+    "zip", "tar", "gz", "tgz", "7z", "rar", "bz2", "xz",
+    "parquet", "feather", "arrow", "h5", "hdf5", "pkl", "pickle", "npz", "npy",
+    "ttf", "woff", "woff2", "otf", "eot",
+    "gltf", "glb", "fbx", "obj", "stl", "blend",
+)
+
+
+def documents_cfg() -> dict:     return index_cfg().get("documents") or {}
+
+
+def documents_enabled() -> bool:
+    """Master toggle for the document + asset pass."""
+    return bool(documents_cfg().get("enabled", False))
+
+
+def text_extensions() -> tuple[str, ...]:
+    raw = documents_cfg().get("text_extensions")
+    if isinstance(raw, list) and raw:
+        return tuple(str(e).strip().lstrip(".").lower() for e in raw if str(e).strip())
+    return _DEFAULT_TEXT_EXTS
+
+
+def asset_extensions() -> tuple[str, ...]:
+    raw = documents_cfg().get("asset_extensions")
+    if isinstance(raw, list) and raw:
+        return tuple(str(e).strip().lstrip(".").lower() for e in raw if str(e).strip())
+    return _DEFAULT_ASSET_EXTS
+
+
+def documents_env() -> dict[str, str]:
+    """Env-var dict to forward to docgraph children when document
+    indexing is enabled. Off-by-default keeps docgraph's existing
+    behavior unchanged for users who haven't opted in."""
+    if not documents_enabled():
+        return {}
+    out = {"DOCGRAPH_INDEX_DOCUMENTS": "1"}
+    text = text_extensions()
+    if text and tuple(text) != _DEFAULT_TEXT_EXTS:
+        out["DOCGRAPH_TEXT_EXTS"] = ",".join(text)
+    assets = asset_extensions()
+    if assets and tuple(assets) != _DEFAULT_ASSET_EXTS:
+        out["DOCGRAPH_ASSET_EXTS"] = ",".join(assets)
+    return out
+
+
 # ── Logs ─────────────────────────────────────────────────────────────────────
 
 def log_path(role: str = "host", slug: str | None = None) -> str:
