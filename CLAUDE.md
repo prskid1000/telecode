@@ -1,441 +1,244 @@
 # CLAUDE.md — Telecode developer guide
 
-Telecode is a **Telegram bot** that runs **CLI tools** (Claude Code, Codex, shell) inside a **pseudo-terminal**, reads their screen with **pyte**, and posts text to **forum topic** threads. It also supports **screen image capture**, **screen video recording**, and **vision-LLM-driven computer control** of any window or the full screen.
+Telegram bot that runs CLI tools (Claude Code / Codex / shell) inside a pseudo-terminal, reads pyte snapshots, posts text to forum-topic threads. Also: screen image / video capture, vision-LLM computer control, llama.cpp + dual-protocol proxy, an in-process Qt tray, and a DocGraph host supervisor.
 
-User-facing docs (setup, commands, settings reference) are in [README.md](README.md).
+User-facing docs in [README.md](README.md).
 
 ---
 
-## Architecture
+## Architecture (one-liners)
 
 ```
-User message (topic thread)
-    -> handlers.handle_text / voice / document
-    -> SessionManager.get_session_by_thread -> SessionManager.send()
-    -> PTYProcess.send()  (adds \r)
-    -> pyte parses output -> snapshot -> diff vs last snapshot -> subscribers
-    -> _send_output -> _LiveMessage.append -> editMessageText (<pre>, HTML)
+PTY: handler → SessionManager.send → PTYProcess.send → pyte → snapshot diff →
+     subscribers → _LiveMessage.append → editMessageText (HTML <pre>)
 
-Screen image capture:
-    /new screen -> window picker (inline keyboard)
-    -> user picks window -> ScreenCapture(hwnd) starts
-    -> capture_window(hwnd) -> JPEG -> subscribers
-    -> _FrameSender.set_frame -> send_photo (interval = capture.image_interval)
+Image:  /new screen  → ScreenCapture(hwnd)  → capture_window → JPEG → _FrameSender.send_photo
+Video:  /new video   → VideoCapture(hwnd)   → frames → ffmpeg → MP4 chunks → send_video
+Vision: /new computer → ComputerControl     → screenshot → vision LLM JSON → pyautogui → loop
 
-Screen video capture:
-    /new video -> window picker (inline keyboard)
-    -> user picks window -> VideoCapture(hwnd) starts
-    -> capture_window(hwnd) -> JPEG frames saved to temp dir (3fps)
-    -> every capture.video_interval seconds: ffmpeg encodes frames -> MP4 -> send_video
-    -> repeats until /stop
-
-Computer control (vision LLM):
-    /new computer -> window picker + "Full Screen" option
-    -> user picks target -> ComputerControl(hwnd) starts
-    -> user sends instruction via Telegram
-    -> capture screenshot (with cursor drawn) -> send to user + vision LLM
-    -> LLM returns structured JSON: {thought, done, action}
-    -> execute action via pyautogui (click/type/key/scroll)
-    -> capture post-action screenshot -> edit same photo message
-    -> repeat (one action per LLM call) until done=true or user sends new message
-
-llama.cpp + dual-protocol proxy (for local models):
-    bot startup -> LlamaSupervisor.start_default() -> wait /health ok
-                -> proxy starts on http://127.0.0.1:1235
-    client request -> translate to OpenAI internal shape
-                   -> model swap if needed -> intercept loop -> upstream SSE
-                   -> stream back as Anthropic or OpenAI (per client)
-    See `## Proxy pipeline` for the full per-step breakdown.
-
-Session & Task system (pythonmagic-style):
-    - Background task queue for long-running agentic loops.
-    - Filesystem-backed sessions with persistent state.
-    - Specialized Claude Code task handler with JSON stream parsing.
-    - Web UI: **Team Mode** (`/ui`) and **Task Mode** (`/ui/legacy`).
-    - Themed browser titles ("Telecode-Team"/"Telecode-Task") and icons per mode.
+llama.cpp + proxy: bot startup → LlamaSupervisor → /health ok → proxy on :1235
+                   client req → translate to OpenAI → model swap → intercept loop → SSE back
 
 Agent → Job → Run pipeline (Team Mode):
-    Agent has 5 internal markdown files in data/agents/<id>/internal/:
-        SOUL.md, USER.md, AGENT.md, MEMORY.md, HEARTBEAT.md
-    Job.pipeline = {mode: single|sequential|parallel|custom, steps:[{agent_id, prompt_override, depends_on_text, phase}]}
-    Steps are grouped by `phase` (int). Phases run sequentially; same-phase steps run in parallel.
-      single   = 1 step, phase 0
-      sequential = step i → phase i
-      parallel = all phase 0
-      custom   = arbitrary; UI exposes "+ Add phase" / "+ parallel step in phase"
-    UI ▶ Run -> POST /api/jobs/:id/runs -> Run record -> executor thread
-        per step:
-            stage_for_run() copies SOUL/USER/MEMORY -> workspace/, AGENT.md -> workspace/CLAUDE.md (or GEMINI.md)
-            queue.submit_task(CLAUDE_CODE|GEMINI, prompt, agent_id, session_id=workspace)
-            wait for status; capture result.result text for next step's <previous_output>
-            on exit: writeback any modified file in workspace -> data/agents/<id>/internal/, unstage
-        sequential = single workspace, lock; parallel = ephemeral session per step
-        Run.status finalised from per-step statuses (completed | partial | failed | cancelled)
+  Agent owns 5 markdown files in data/agents/<id>/internal/ (SOUL/USER/AGENT/MEMORY/HEARTBEAT).
+  Job.pipeline = {mode, steps:[{agent_id, prompt_override, depends_on_text, phase}]}
+  Phases run sequentially; same-phase steps run in parallel.
+  Run executor: stage_for_run() copies SOUL/USER/MEMORY → workspace/, AGENT.md → CLAUDE.md/GEMINI.md;
+                queue.submit_task; on exit writes back any modified files; unstage.
 
-Heartbeat scheduler (off by default):
-    settings.heartbeat.enabled=true -> async tick loop (default 60s) in main.py post_init
-    per agent each tick:
-        parse data/agents/<id>/internal/HEARTBEAT.md (yaml fences in md)
-        reconcile: HB Jobs (kind="heartbeat") created/updated/archived to mirror entries
-        for each due, enabled entry: fire(agent_id, entry)
-            ephemeral: create session (namespace="heartbeat") -> submit_task -> on completion delete
-            persistent: submit_task on entry.workspace_id
-    state in data/heartbeat-state.json: (agent_id, entry_name) -> {last_run, last_status, last_task_id}
-    ephemeral fires share the same staging/writeback path as user runs.
+Heartbeat scheduler (off by default, settings.heartbeat.enabled=true):
+  per agent each tick: parse HEARTBEAT.md (yaml fences) → reconcile to kind="heartbeat" Jobs
+  → fire due+enabled entries; ephemeral=create+delete-after, persistent=submit on entry.workspace_id
 ```
 
-- **Session key:** `{backend}:{name}` -- colon is the separator; do not use colons in names.
-- **Session naming:** auto-numbered (`claude-1`, `claude-2`) when no name given. Screen/video sessions use the window title.
-- **Routing:** only `message_thread_id` -> session. No other routing.
-- **Persistence:** `store.py` JSON file -- topic id per `(user_id, session_key)`.
-- **PTY working directory:** always `Path.home()`, resolved via `config.pty_cwd()`.
-
----
+- **Session key:** `{backend}:{name}` — colon is the separator; no colons in names.
+- **Routing:** only `message_thread_id` → session.
+- **Persistence:** `store.py` JSON file — topic id per `(user_id, session_key)`.
+- **PTY working dir:** always `Path.home()` via `config.pty_cwd()`.
 
 ## Session cleanup
 
-**Two cleanup levels:**
-- **Fast cleanup** (`cleanup_stale_sessions`): runs on every picker click. Checks `process.alive` and removes dead sessions. No API calls.
-- **Full cleanup** (`full_cleanup`): runs on `/start` only. Probes each session's topic via `sendMessage`+`deleteMessage` to detect externally deleted topics. Safe because `/start` is infrequent.
-
-**Topic deleted externally:** detected in two ways:
-1. On `/start`: `full_cleanup` probes topics and detects "thread not found".
-2. On output send: `_LiveMessage`, `_FrameSender`, and video callbacks detect "thread not found" and call `handle_topic_gone()`.
-
-**`/stop` behavior:**
-- `/stop` in a session topic: stops only that session.
-- `/stop` in General (no args): stops all sessions.
-- `/stop <name>`: stops a specific session by name/key.
+- **Fast** (`cleanup_stale_sessions`): every picker click. Checks `process.alive`. No API calls.
+- **Full** (`full_cleanup`): on `/start` only. Probes each topic via `sendMessage`+`deleteMessage` to detect externally deleted topics.
+- **Topic deleted externally:** caught by `_LiveMessage` / `_FrameSender` / video callbacks → `handle_topic_gone()`.
+- **`/stop`:** in a session topic = stops that one; in General with no args = all; `/stop <name>` = specific.
 
 ---
 
 ## Key files
 
 | Path | Role |
-|------|------|
-| `settings.json` | Only config source |
-| `config.py` | Read/write accessors (must be **functions** for hot-reload). `store_path` / `logs_dir` resolve relative paths against the `settings.json` directory (not cwd). |
-| `main.py` | App startup, handlers, `set_my_commands`. No background STT poll: voice.health state is updated by real `voice.stt.transcribe` calls. |
-| `store.py` | Topics JSON |
-| `sessions/terminal.py` | PTY + pyte + snapshot diff + timers (was `sessions/process.py`) |
-| `sessions/screen.py` | Image capture, video recording, window enumeration |
-| `sessions/computer.py` | Vision LLM computer control (capture + actions + LLM loop) |
-| `sessions/manager.py` | Start/kill sessions, send, send_raw, interrupt, pause/resume |
-| `bot/handlers.py` | Commands, callbacks, window pickers, capture controls |
-| `bot/live.py` | `LiveMessage`, `FrameSender`, `TypingPinger`, per-chat flood backoff, overlap detection, HTML-escape-aware splitting |
-| `bot/rate.py` | Stale session cleanup, topic probing, topic-gone detection |
-| `bot/topic_manager.py` | Create/reuse forum topics |
-| `bot/settings_handler.py` | `/settings` parsing |
-| `backends/implementations.py` | `GenericCLIBackend` (data-driven) + Screen, Video (non-PTY) |
-| `backends/registry.py` | Auto-built from `settings.json` tools; `get_backend`, `all_backends`, `refresh` |
-| `backends/params.py` | Load tool params from settings |
-| `voice/*` | STT transcribe + lazy health. `transcribe()` records success/failure per call — no startup probe, no background loop. Default reachable=True so the first message hits the endpoint; a failure flips it off until the next success. |
-| `process.py` | All subprocess-lifecycle code in one file: Windows Job Object (`KILL_ON_JOB_CLOSE`) that binds every spawned child (llama-server, Tailscale, PTY CLIs) to this Python's lifetime; `kill_process_tree(pid)`; `sweep_port()` — command-line-aware orphan killer; `LlamaSupervisor` — babysits llama-server with readiness probe (poll-death + post-`/health` stability guard), inflight-gated idle unload, model-swap on demand. |
-| `llamacpp/argv.py` | Builds llama-server CLI argv from `llamacpp.models.<m>` + `extra_args` |
-| `llamacpp/config.py` | `llamacpp.*` settings accessors + model registry resolution |
-| `llamacpp/state.py` | Persist last-active model name (`data/llama-state.json`) |
-| `tray/app.py` | Qt tray — daemon thread runs `QApplication.exec()` with tray icon + `SettingsWindow`. Menu async actions via `run_coroutine_threadsafe(coro, bot_loop)`. |
-| `tray/icon.py` | White lightning-bolt icon (4× LANCZOS supersample → QPixmap). |
-| `tray/qt_theme.py` | Single QSS dark theme; palette constants exported. |
-| `tray/qt_widgets.py` | Custom `Toggle` (animated pill checkbox) and `NumberEditor` (linked text + slider). |
-| `tray/qt_helpers.py` | `read_settings` / `patch_settings` (atomic + reload), `schedule(loop, coro)`, `humanize(id)`, `build_status()`. |
-| `tray/qt_window.py` | `SettingsWindow` — frameless `QMainWindow` with sidebar + `QStackedWidget`. Per-section `refresh()` on a 1s `QTimer`. Persists last-viewed section. |
-| `tray/qt_sections.py` | One builder per sidebar entry (Status, llama, Models, Proxy, MCP, Managed, **DocGraph**, Tools, Telegram, Voice, Computer, Sessions, Requests, Logs, Raw). The Status section uses `_StatusTile` (color-stripe accent + value + sub + viz slot) — 5 tiles (llama, Proxy, DocGraph, MCP, Sessions) refreshed every 1s with section-specific viz (progress bars, dot grids, chips). The Managed Tools panel groups rows whose name shares a prefix (e.g. `docgraph_*`) under one uppercase header with a master toggle that flips every child on/off. Raw is a JSON editor over the whole settings.json. |
-| `docgraph/config.py` | Accessors over `settings.docgraph.*` — `host_*`, `roots()` / `root_paths()` / `root_paths_to_watch()`, `llm_*`, `embeddings_*`, `index_workers`. New schema: `host`, `roots: [{path, watch}]`, `llm`, `embeddings`, `index`. |
-| `docgraph/process.py` | Single `HostSupervisor` (replaces the old `WatchSupervisor / ServeSupervisor / DaemonSupervisor / McpSupervisor` quartet) — supervises one `docgraph host --root … [--watch …] --port <N>` child for **all** configured roots. `IndexRunner` (one-shot per root): when the host is alive, POSTs `/api/admin/index?root=<slug>` and writes the captured `log` field into `docgraph_index.log`; only falls back to spawning a `docgraph index` subprocess when the host is down (so the two never race for Kuzu's exclusive writer lock). Subprocess env carries `PYTHONIOENCODING=utf-8` + `PYTHONUTF8=1` to keep Rich's braille progress glyphs from crashing on Windows cp1252 stdout. |
-| `docgraph/bridge.py` | MCP-client → managed_tools registration. Single `bridge_host(host, port)` opens an MCP streamable-HTTP session against the running host's `/mcp`, calls `list_tools()`, and registers each as `docgraph_<tool>` in `proxy.managed_tools._REGISTRY`. No per-root prefix — agents pass `root=<slug>` per call (the host's closed enum scopes the query). `unbridge_host()` drops the entries and closes the client. |
-| `proxy/request_log.py` | Thread-safe ring buffer (`MAX_ENTRIES=200`) of recent requests — `new_request`/`set_request_preview`/`set_response_preview`/`append_intercept`/`finish`. `proxy.debug=true` dumps finished entries to `data/logs/requests/`. |
+|---|---|
+| `settings.json` | Only config source. |
+| `config.py` | Read/write accessors (always functions for hot-reload). `store_path` / `logs_dir` resolve relative to the `settings.json` directory. |
+| `main.py` | App startup, handlers, `set_my_commands`. No background STT poll. |
+| `store.py` | Topics JSON. |
+| `sessions/terminal.py` | PTY + pyte + snapshot diff + timers. |
+| `sessions/screen.py` | Image capture, video recording, window enumeration. |
+| `sessions/computer.py` | Vision-LLM computer control loop (capture + actions + LLM). |
+| `sessions/manager.py` | Start/kill sessions, send/send_raw, interrupt, pause/resume. |
+| `bot/handlers.py` | Commands, callbacks, window pickers, capture controls. |
+| `bot/live.py` | `LiveMessage`, `FrameSender`, `TypingPinger`. Per-chat flood backoff, overlap detection, HTML-aware splitting. |
+| `bot/rate.py` | Stale session cleanup, topic probing. |
+| `bot/topic_manager.py` | Create/reuse forum topics. |
+| `bot/settings_handler.py` | `/settings` parsing. |
+| `backends/implementations.py` | `GenericCLIBackend` (data-driven) + Screen / Video (non-PTY). |
+| `backends/registry.py` | Auto-built from `settings.json` tools. |
+| `voice/*` | STT transcribe + lazy health (per-call success/failure tracking, no startup probe). |
+| `process.py` | All subprocess lifecycle: Windows Job Object (`KILL_ON_JOB_CLOSE`) binding every spawned child to this Python's lifetime; `kill_process_tree(pid)`; `sweep_port()` (cmdline-aware orphan killer); `LlamaSupervisor` (readiness probe + post-`/health` stability guard, inflight-gated idle unload, model swap). |
+| `llamacpp/argv.py`, `config.py`, `state.py` | Build llama-server argv + read settings + persist last-active model. |
+| `tray/app.py` | Qt tray on a daemon thread. Async actions via `run_coroutine_threadsafe(coro, bot_loop)`. |
+| `tray/qt_window.py` | `SettingsWindow` — frameless `QMainWindow` with sidebar + `QStackedWidget`. Per-section refresh on a 1s `QTimer`. |
+| `tray/qt_sections.py` | Builders for Status / llama / Models / Proxy / MCP / Managed / **DocGraph** / Tools / Telegram / Voice / Computer / Sessions / Requests / Logs / Raw. |
+| `tray/qt_docgraph.py` | DocGraph settings panel (Host / Roots / LLM / Embeddings / Reranker cards). Per-row stats chip + progress bars. Restart-host buttons inside cards whose settings need a host respawn. |
+| `docgraph/config.py` | Accessors over `settings.docgraph.*` — `host_*`, `roots()` / `root_paths_to_watch()`, `llm_*`, `embeddings_*`, `rerank_*`, `index_workers`, `documents_*`. |
+| `docgraph/process.py` | One `HostSupervisor` (single `docgraph host --root … [--watch …] --port <N>` child). `IndexRunner` POSTs `/api/admin/index?root=<slug>` when the host is alive; subprocess fallback when down. **All config goes through CLI flags** — no `DOCGRAPH_*` env vars. Long-form prompt overrides written to `data/runtime/*.txt` and passed via `--llm-prompt-*-file`. |
+| `docgraph/bridge.py` | MCP-client → managed_tools registration. `bridge_host(host, port)` opens a streamable-HTTP session against `/mcp`, calls `list_tools()`, registers each as `docgraph_<tool>` (no per-root prefix — agents pass `root=<slug>` per call). |
+| `docgraph/{stats,index,wiki,progress}_state.py` | TTL'd in-memory caches for the tray. `stats_state` dedups parallel fetches via in-flight set. |
+| `proxy/server.py` | Dual-protocol (Anthropic + OpenAI) aiohttp proxy with intercept loop. |
+| `proxy/translate.py` | Anthropic ↔ OpenAI shape conversions. `ReasoningState` `<think>` machine. `AnthropicStreamState` rebuilds `message_start` / `content_block_*` / `thinking` / `tool_use` / `message_stop` from OpenAI SSE. |
+| `proxy/tokenizer.py` | Wraps llama.cpp `/tokenize` + `/apply-template` for accurate `count_tokens`. |
+| `proxy/tool_search.py`, `tool_registry.py` | BM25 + regex search engine; core/deferred tool splitting; `ToolSearch` meta-tool. |
+| `proxy/managed_tools.py` | Registry of proxy-handled tools (WebSearch, speak, transcribe). MCP tools auto-bridged. |
+| `proxy/api_{sessions,tasks,agents,jobs,runs}.py` | Pythonmagic-style task/agent/job/run REST surface. |
 | `proxy/runtime_state.py` | Persists managed/MCP-tool toggles to `data/runtime-overrides.json`. |
-| `llamacpp/state.py` | Persists last-active model to `data/llama-state.json`. Not auto-loaded unless `llamacpp.auto_start: true`. |
-| `proxy/__main__.py` | Standalone entry: `python -m proxy` |
-| `proxy/server.py` | Dual-protocol (Anthropic + OpenAI) aiohttp proxy with intercept loop |
-| `proxy/translate.py` | Anthropic ↔ OpenAI shape conversions; ReasoningState `<think>` state machine; AnthropicStreamState that reconstructs message_start / content_block_* / thinking / tool_use / message_stop from OpenAI SSE |
-| `proxy/tokenizer.py` | Wrapper around llama.cpp `/tokenize` + `/apply-template` for accurate count_tokens |
-| `proxy/tool_search.py` | BM25 + regex search engine (zero deps) |
-| `proxy/tool_registry.py` | Core/deferred tool splitting, ToolSearch meta-tool schema, system instruction loading |
-| `proxy/llm.py` | `structured_call(prompt, schema)` — llama.cpp via `/v1/chat/completions` for proxy-internal use |
-| `proxy/managed_tools.py` | Registry of proxy-handled tools (WebSearch, speak, transcribe); schemas + handlers + LLM hooks |
-| `proxy/web_search.py` | Brave Search scraper + result formatter |
-| `proxy/config.py` | Proxy settings (port, protocols, CORS, core tools, client_profiles, model_mapping) |
-| `proxy/instructions/system.md` | Default Claude Code system instruction (tool_search path) |
-| `proxy/instructions/office.md` | Office add-in profile system instruction |
-| `proxy/api_sessions.py` | AIOHTTP routes for task sessions (pythonmagic-style) |
-| `proxy/api_tasks.py` | AIOHTTP routes for background task queue |
-| `proxy/api_agents.py` | Agents CRUD + 5-file internal editor (SOUL/USER/AGENT/MEMORY/HEARTBEAT) + `/heartbeat/validate` + `/heartbeat/reconcile` |
-| `proxy/api_jobs.py` | Jobs CRUD with `?kind=` and `?include_archived=` filters |
-| `proxy/api_runs.py` | Run CRUD: `POST /api/jobs/:id/runs` starts a Run; `POST .../cancel`; `GET /api/runs/:id` |
-| `services/session/session_store.py` | Filesystem-backed persistent sessions |
-| `services/task/task_manager.py` | Async task queue with status/event tracking |
-| `services/task/task_utils.py` | Task progress and event logging helpers |
-| `services/task/staging.py` | `stage_for_run()` context manager — copies SOUL/USER/MEMORY → workspace/, AGENT.md → workspace/CLAUDE.md or GEMINI.md (engine-dependent rename); on exit diffs vs snapshot, writes back any modified file to agent storage, then deletes staged files. Per-workspace `threading.Lock`. HEARTBEAT.md is intentionally NOT staged. |
-| `services/task/handlers/claude_code.py` | Background Claude Code task with JSON stream parsing. Wrapped in `stage_for_run` when `agent_id` is provided. |
-| `services/task/handlers/gemini.py` | Same shape, engine="gemini". |
-| `services/agent/agent_manager.py` | Agent CRUD + `INTERNAL_FILES` whitelist + `get_internal_files`/`set_internal_files`. Per-agent `threading.Lock` around writeback. |
-| `services/job/job_manager.py` | Job CRUD with `kind` (`user`/`heartbeat`), `archived`, `heartbeat_entry`, and `pipeline = {mode, steps[]}`. `_normalize_pipeline` enforces shape. `find_heartbeat_job(agent_id, entry_name)` for the scheduler. |
-| `services/run/run_store.py` | `data/runs/<run_id>.json` — Run + per-step status (`pending/running/completed/failed/cancelled/skipped`). `finalise()` aggregates step statuses → run status. |
-| `services/run/executor.py` | Pipeline driver thread per Run. Phase-based: groups steps by `phase` index, runs phases sequentially. Single-step phase → job workspace; multi-step phase → ephemeral session per step (namespace `run-parallel`, copies job workspace files in, deletes after). Threads previous phase's outputs via `<previous_output>` / `<previous_outputs>` when `depends_on_text` is set. `cancel_run(run_id)` signals driver and cancels in-flight tasks. |
-| `services/heartbeat/parser.py` | Extracts ` ```yaml ` fences from HEARTBEAT.md, validates each entry (name unique / cron valid / prompt present / workspace+workspace_id consistent / engine in whitelist). Returns `ParseResult` with entries + per-entry errors. `next_fires(entry)` returns ISO strings via croniter. |
-| `services/heartbeat/state.py` | Atomic JSON state at `data/heartbeat-state.json`, keyed by `<agent_id>:<entry_name>` → `{last_run, last_status, last_task_id}`. `prune_orphans(known_keys)` clears keys for entries deleted from YAML. |
-| `services/heartbeat/reconcile.py` | `reconcile_agent(agent_id)` syncs HEARTBEAT.md entries → `kind:"heartbeat"` Jobs. Creates new, updates drift, archives jobs whose YAML entry was removed. |
-| `services/heartbeat/scheduler.py` | Async tick loop wired in `main.py:_post_init` when `heartbeat.enabled=true`. Each tick reconciles every agent, fires due+enabled entries up to `max_concurrent_fires`, tracks ephemeral sessions for post-completion deletion. |
-| `mcp_server/app.py` | FastMCP instance (stateless streamable HTTP) |
-| `mcp_server/server.py` | Background startup (daemon thread, like proxy) |
-| `mcp_server/__main__.py` | Standalone entry: `python -m mcp_server` |
-| `mcp_server/tools/__init__.py` | Auto-discovers tool modules (drop-in) |
-| `mcp_server/tools/tts.py` | `speak` tool — Kokoro TTS → audio file |
-| `mcp_server/tools/stt.py` | `transcribe` tool — Whisper STT → text |
-| `mcp_server/tools/web_search.py` | `web_search` — Brave scraper (shared with proxy managed). |
-| `mcp_server/tools/code_execution.py` | `code_execution` — sandboxed Python subprocess. |
-| `mcp_server/resources/__init__.py` | Auto-discovers resource modules (drop-in) |
-| `mcp_server/prompts/__init__.py` | Auto-discovers prompt modules (drop-in) |
+| `services/task/staging.py` | `stage_for_run()` ctx-mgr — copies SOUL/USER/MEMORY → workspace/, AGENT.md → workspace/CLAUDE.md or GEMINI.md (engine-dependent). On exit, diffs vs snapshot, writes back modified files, deletes staged. Per-workspace `threading.Lock`. HEARTBEAT.md is intentionally NOT staged. |
+| `services/run/executor.py` | Pipeline driver thread per Run. Phase-based; single-step phase = job workspace, multi-step = ephemeral session per step. Threads outputs via `<previous_output>` / `<previous_outputs>`. |
+| `services/heartbeat/{parser,state,reconcile,scheduler}.py` | YAML-fence parser, atomic JSON state, sync HEARTBEAT.md → `kind:"heartbeat"` Jobs, async tick loop. |
+| `mcp_server/app.py`, `tools/*` | FastMCP (stateless streamable HTTP, port 1236). Drop-in tools/resources/prompts auto-discovered. |
 
 ---
 
 ## Rules (do not break)
 
-1. **Config** -- only `settings.json`; no scattered env vars except `TELECODE_SETTINGS`.
-2. **`config.py`** -- always `config.foo()`, never cached module-level constants for values that can change.
-3. **Sessions** -- key format `backend:name`; routing by `thread_id` only.
-4. **Processes** -- real PTY (Unix `openpty`, Windows ConPTY via pywinpty), not plain pipes. Screen capture uses PrintWindow (Win) / screencapture (Mac) / import (Linux), not PTY. Computer control uses `pyautogui` for mouse/keyboard. llama-server is spawned and babysat by `LlamaSupervisor`; do not start it manually in the same lifecycle.
-5. **Telegram** -- `ParseMode.HTML`; escape user/process text with `html.escape()` where needed.
-6. **No** in-bot AI and **no** separate "memory" layer -- CLIs own context.
-7. **`cache_control`** -- always stripped in the translator; never a per-profile toggle. llama.cpp does its own slot-based KV caching; Anthropic's cache_control metadata has no meaning downstream.
-8. **Internal canonical shape is OpenAI.** All intercept-loop logic works on OpenAI tools / tool_calls / role:"tool" messages. Protocol-specific concerns live only in the two `ClientAdapter` subclasses and in `proxy/translate.py`.
+1. **Config** — only `settings.json`; no scattered env vars except `TELECODE_SETTINGS`.
+2. **`config.py`** — always `config.foo()`, never cached module-level constants for values that can change.
+3. **Sessions** — key format `backend:name`; routing by `thread_id` only.
+4. **Processes** — real PTY (Unix `openpty`, Windows ConPTY via pywinpty). llama-server is owned by `LlamaSupervisor`; do not spawn it manually.
+5. **Telegram** — `ParseMode.HTML`; escape user/process text with `html.escape()`.
+6. **No** in-bot AI and **no** separate "memory" layer — CLIs own context.
+7. **`cache_control`** — always stripped in the translator; never a per-profile toggle.
+8. **Internal canonical shape is OpenAI.** All intercept-loop logic works on OpenAI tools / tool_calls. Protocol-specific concerns live only in the two `ClientAdapter` subclasses and `proxy/translate.py`.
+9. **DocGraph configuration is CLI-flag-only.** No `DOCGRAPH_*` env vars in our spawn calls — every knob is a `--flag`.
 
 ---
 
-## PTY output pipeline (`sessions/terminal.py`)
+## PTY output (`sessions/terminal.py`)
 
-1. Raw bytes -> **pyte** `HistoryScreen` + `Stream`.
-2. Each snapshot = **history lines** + **display lines** (one top-to-bottom list).
-3. Compare to **previous** full list: find **new** lines only (patience/histogram anchors + segment diff + "similar line" filter so spinners/status lines do not spam).
-4. Emit chunks to subscribers on **idle** (defaults 2s) or **max wait** (defaults 5s); poll safety net every 5s.
-5. **Input:** `send()` appends `\r` (not `\n`) so TUIs accept the line.
+Raw bytes → pyte `HistoryScreen` + `Stream` → snapshot = history + display lines → diff vs previous (patience anchors + segment diff + similar-line filter so spinners don't spam) → emit on idle (default 2s) or max-wait (5s); poll every 5s. `send()` appends `\r` (not `\n`) so TUIs accept the line. Tunable per-tool via `tools.<key>.streaming.{idle_sec,max_wait_sec}`.
 
-Both thresholds are tunable per-backend via `tools.<key>.streaming.{idle_sec,max_wait_sec}`, falling back to the global `streaming.{idle_sec,max_wait_sec}` in `settings.json`. Loaded by `backends/params.py` → `BackendParams.idle_sec` / `max_wait_sec` → `PTYProcess(..., idle_sec=..., max_wait_sec=...)`. Short-output shells (`shell`, `powershell`) flush faster than TUIs like Claude Code; tune per-tool to taste.
+## Screen image capture (`sessions/screen.py`)
 
-Other tunables near top of `sessions/terminal.py`: screen rows/history size.
+`enumerate_windows()` is platform-specific (Windows: `EnumWindows` + `DwmGetWindowAttribute(DWMWA_CLOAKED)`; Linux: `wmctrl`/`xdotool`; macOS: `CGWindowListCopyWindowInfo`). `capture_window()` uses `PrintWindow` (Windows, z-order independent), `import` (Linux, fallback `mss`), or `screencapture` (macOS, fallback `mss`). Frames pushed to subscribers every `capture.image_interval` seconds; `_FrameSender` sends each as a new photo. Session 0 (Windows service) spawns a helper in the user's session via `WTSQueryUserToken` + `CreateProcessAsUser`.
 
----
+## Screen video (`sessions/screen.py`)
 
-## Screen image capture pipeline (`sessions/screen.py`)
+`VideoCapture(hwnd, duration=capture.video_interval, fps=3)` saves numbered JPEGs, encodes with `ffmpeg libx264 -preset ultrafast -crf 32 -pix_fmt yuv420p`, sends MP4 with `_capture_controls_kb`. `scale=trunc(iw/2)*2:trunc(ih/2)*2` for libx264 even-dim requirement.
 
-1. `enumerate_windows()` -- platform-specific window enumeration. Windows uses `EnumWindows` + `DwmGetWindowAttribute(DWMWA_CLOAKED)` to list only taskbar windows (no skip lists). Linux uses `wmctrl`/`xdotool`. macOS uses `CGWindowListCopyWindowInfo`.
-2. `ScreenCapture(hwnd)` captures the window via `capture_window(hwnd)`.
-3. `capture_window()` acquires a per-hwnd lock, auto-restores minimized windows, then uses platform-specific capture:
-   - **Windows**: `PrintWindow` API (z-order independent, captures even behind other windows).
-   - **Linux**: ImageMagick `import -window`, falls back to `mss` region capture.
-   - **macOS**: `screencapture -l<wid>`, falls back to `mss` region capture.
-4. Pillow encodes to JPEG (quality 80, full resolution).
-5. Frames pushed to subscribers at `capture.image_interval` seconds (default 15).
-6. `_FrameSender` sends each frame as a **new photo message**. Send interval = `capture.image_interval` seconds.
-7. Pause: drops frames in `set_frame()` and cancels pending send timers.
-8. Window gone: capture returns None → auto-stops and notifies.
-9. **Session 0** (Windows service): spawns helper process in user's session via `WTSQueryUserToken` + `CreateProcessAsUser`.
+## Computer control (`sessions/computer.py`)
 
----
-
-## Screen video capture pipeline (`sessions/screen.py`)
-
-1. `VideoCapture(hwnd, duration=capture.video_interval, fps=3)` records continuously in chunks.
-2. Each chunk: captures frames via `capture_window()` at 3fps, saves as numbered JPEGs in a temp dir.
-3. After `capture.video_interval` seconds (default 60), encodes with ffmpeg: `libx264 -preset ultrafast -crf 32 -pix_fmt yuv420p`.
-4. `scale=trunc(iw/2)*2:trunc(ih/2)*2` filter ensures even dimensions for libx264.
-5. Sends encoded MP4 via `send_video` with `_capture_controls_kb` (⏸/▶/⏹) attached to each chunk, then starts the next chunk.
-6. Continues until the inline ⏹ Stop button or `/stop`. On stop, encodes and sends any remaining frames.
-7. Pause: recording loop sleeps, paused time doesn't count towards chunk duration. Triggered via the ⏸ Pause inline button.
-8. Minimized windows: auto-restored before each frame capture.
-
----
-
-## Computer control pipeline (`sessions/computer.py`)
-
-1. `ComputerControl(hwnd)` — duck-type compatible with PTYProcess/ScreenCapture (`.alive`, `.start()`, `.stop()`, `.subscribe()`, `.send()`).
-2. `hwnd=0` (sentinel `FULL_SCREEN_HWND`) captures the entire screen via `mss`. Otherwise captures the specific window via `capture_window()`.
-3. Mouse cursor position is drawn onto every screenshot as a red crosshair (since PrintWindow/mss don't capture the OS cursor).
-4. Coordinates: screenshots are physical pixels, window rect is logical pixels. The ratio `img_w/win_w` naturally handles DPI scaling. `pyautogui` receives logical coords.
-5. Action loop (one action per LLM call):
-   - User sends message → capture screenshot → send to vision LLM with conversation history.
-   - LLM returns structured JSON: `{thought, done, action}` via `response_format: json_schema`.
-   - If `done=false`: execute the single action via `pyautogui`, capture post-action screenshot, send to user (edit photo in place), loop back to call LLM again.
-   - `wait` actions are handled async (not blocking a thread), capped at 30s. After wait, screenshot is sent to LLM with "Continue." to check if the UI has updated.
-   - If `done=true`: send final screenshot, break loop, wait for next user message.
-   - If user sends new message mid-loop: interrupts via `_msg_queue.get_nowait()`, restarts with new instruction.
-6. LLM API: supports OpenAI (`/chat/completions`), Anthropic (`/messages`), and Claude Code CLI (`claude -p --output-format json`) wire formats, toggled by `api.format` in settings (`"openai"`, `"anthropic"`, `"claude-code"`). Claude Code format uses `--resume` for conversation continuity and `--json-schema` for structured output. When `base_url`/`api_key`/`model` are set with `claude-code` format, they are passed as `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_MODEL` env vars to the subprocess — enabling local LM Studio backends without code changes.
-7. Conversation history: rolling window of `max_history` turns. System prompt teaches computer interaction fundamentals (mouse, focus, text cursor, selection, editing, UI elements).
-8. Photo delivery: first screenshot sends a new photo message, subsequent screenshots edit the same message via `edit_message_media`.
-9. Text delivery: thoughts and action summaries go through `_send_output` → `_LiveMessage.append()` (same as PTY sessions).
+`ComputerControl(hwnd)` is duck-type compatible with PTYProcess/ScreenCapture. `hwnd=0` (sentinel `FULL_SCREEN_HWND`) = entire screen via `mss`. Mouse cursor drawn onto every screenshot as a red crosshair. Coordinates: screenshots are physical pixels, window rect is logical pixels — the ratio handles DPI scaling. `pyautogui` receives logical coords. Action loop: capture → vision LLM (structured `{thought, done, action}`) → `pyautogui` action → post-action capture (edited photo in place) → loop until `done=true` or new user message. `wait` actions handled async, capped at 30s. LLM API supports openai / anthropic / claude-code wire formats (toggled by `api.format`); claude-code uses `--resume` + `--json-schema` and forwards `base_url`/`api_key`/`model` as `ANTHROPIC_*` env vars to the subprocess. First screenshot = new photo; subsequent = `edit_message_media`.
 
 ---
 
 ## Subprocess lifecycle (`process.py`)
 
-All subprocess-lifecycle code was consolidated into one top-level `process.py`. Two layers:
+**Generic primitives:**
+- **Windows Job Object** — every spawn (`bind_to_lifetime_job(pid, proc=…)`) bound to a process-wide Job flagged `KILL_ON_JOB_CLOSE`. When this Python exits for any reason, the OS releases the handle and every member dies.
+- **atexit fallback** for clean exits without pywin32.
+- **`kill_process_tree(pid, force=False)`** — graceful first; `taskkill /T` on Windows, `killpg` on Unix.
+- **`sweep_port(port, whitelist)`** — kills orphans holding a port whose exe **or** cmdline matches the whitelist. Foreign listeners are logged, not killed.
 
-**Generic primitives (crash safety + graceful kill):**
-- **Windows Job Object** — every subprocess we spawn (llama-server, Tailscale funnels, PTY-driven CLIs like Claude Code / Codex / bash / powershell) gets bound to a single process-wide Job Object flagged `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` via `bind_to_lifetime_job(pid, proc=…)`. When this Python interpreter exits **for any reason** (Ctrl+C, Task Manager kill, pythonw crash, OS shutdown), the OS releases the job handle, the job closes, and every member process dies.
-- **atexit fallback** — `_atexit_kill_tracked` covers clean-exit paths where pywin32 isn't available.
-- **`kill_process_tree(pid, force=False)`** — graceful shutdown path. `taskkill /PID <pid> /T` on Windows, `killpg` on Unix. Walks the full tree, so workers spawned by the immediate child die too.
-- **`sweep_port(port, whitelist)`** — kills orphans holding a port whose exe **or** command line matches the whitelist. Foreign listeners are logged, not killed. Called before each llama-server spawn so a previous telecode that couldn't bind the Job (or died before atexit fired) can't keep the port across restarts.
+**`LlamaSupervisor`** — one active llama-server, model-swap via `ensure_model(name)` under an asyncio lock. `_wait_ready` polls `/health`, checks `proc.poll()` per iteration, and after `status:"ok"` waits 1s and re-polls to catch an orphan that would fake readiness on the same port. Inflight-gated idle unload (`begin_request` / `end_request` + watcher).
 
-**`LlamaSupervisor` (the only subprocess-babysitter in telecode):**
-- One active llama-server at a time; model-swap via `ensure_model(name)` under an asyncio lock.
-- `_wait_ready` — polls `/health`, checks `proc.poll()` each iteration, and after a `status:"ok"` response waits 1s and re-polls the child to catch an orphan on the same port that would otherwise fake readiness.
-- `_stop_locked` — graceful `kill_process_tree`, 4s wait, then force.
-- Inflight-gated idle unload (`begin_request` / `end_request` + watcher task).
-
-If a tracked subprocess refuses to die: check `tasklist /FI "IMAGENAME eq llama-server.exe"` after telecode exits — should be empty within ~2s. If not, the Job Object didn't take (look for `could not create Job Object` in `data/logs/telecode.log`) — usually a missing `pywin32` install.
+If a tracked subprocess refuses to die: check `tasklist /FI "IMAGENAME eq llama-server.exe"` after telecode exits — should be empty within ~2s. If not, the Job didn't take (look for `could not create Job Object` in `data/logs/telecode.log` — usually missing pywin32).
 
 ---
 
 ## System tray UI (`tray/`)
 
-Qt tray menu + settings window running in a daemon thread inside the bot process. No separate tray process, no webview, no PyInstaller bundle — `python main.py` (or `pythonw main.py`) starts bot + tray together.
+Qt tray + settings window in a daemon thread inside the bot process. No separate tray process, no webview, no PyInstaller bundle.
 
 - `main.py:_post_init` → `tray.app.start_tray_in_thread(app, loop)`.
-- Sync actions (settings patch, log open) run on the tray thread directly.
-- Async actions (model swap, session kill) use `asyncio.run_coroutine_threadsafe(coro, bot_loop)`.
+- Sync actions run on the tray thread; async use `asyncio.run_coroutine_threadsafe(coro, bot_loop)`.
 - Quit → `app.stop_running()` on the loop → `run_polling` returns → clean exit.
-
-Right-click submenus (Llama / Proxy / MCP / Bot) refreshed every 2s; all toggles persist via `patch_settings` (atomic write + `config.reload()`). Managed/MCP-tool toggles persist to `data/runtime-overrides.json`; last-active llama model to `data/llama-state.json`.
+- Right-click submenus refreshed every 2s; toggles persist via `patch_settings` (atomic write + `config.reload()`). Managed/MCP-tool toggles → `data/runtime-overrides.json`; last-active llama model → `data/llama-state.json`.
 
 ---
 
 ## DocGraph integration (`docgraph/`)
 
-Single-host model. Telecode supervises **one** [DocGraph](../.docgraph) subprocess (`docgraph host --root … --root … --port 5500`) covering every configured root. The host exposes web UI + JSON API + MCP HTTP on one port; the bridge registers each tool once as `docgraph_<tool>` (no per-root prefix — agents pick the repo per call via the closed-enum `root` argument the host emits in the tool schema).
+Telecode supervises **one** [DocGraph](../.docgraph) subprocess (`docgraph host --root … --root … --port 5500`) covering every configured root. The host exposes web UI + JSON API + MCP HTTP on one port; the bridge registers each tool once as `docgraph_<tool>` (agents pick the repo per call via the closed-enum `root` argument).
 
 | Concept | Shape |
 |---|---|
-| Long-running supervisor | `HostSupervisor` (only one). Spawns `docgraph host --host <h> --port <p> --root <p1> --root <p2> [--watch <pX>] …`. |
-| One-shot index | `IndexRunner`. **Two routes:** (a) host alive → POSTs `http://h:p/api/admin/index?root=<slug>&full=<bool>`, lets the host run the index pass in-process via the workspace's writer-lock dance, and writes the response's captured `log` field to `docgraph_index.log`; (b) host down → spawns `docgraph index <path> [--full] [--workers N] [--gpu] [--llm-* …]` as a subprocess. The host route is preferred because Kuzu's writer lock is exclusive vs. any other connection on the same DB file — running both at once would error out with "Could not set lock on file". |
-| Stdio MCP for editors | Not telecode-managed. Editors launch `docgraph mcp <path> --transport stdio`, which probes the running host and proxies through it (strict mode — refuses if the path isn't a registered root, see docgraph CLAUDE.md for the rationale). |
+| Long-running supervisor | `HostSupervisor` (only one). Spawns `docgraph host --host <h> --port <p> --root <p1> --root <p2> [--watch <pX>] …` plus every applicable config flag (`--gpu`, `--embed-model`, `--rerank-*`, `--llm-*`, `--documents`, …). |
+| One-shot index | `IndexRunner`. **Two routes:** (a) host alive → POSTs `http://h:p/api/admin/index?root=<slug>&full=<bool>`, lets the host run the pass in-process via the workspace's writer-lock dance, writes the response's captured `log` into `docgraph_index.log`; (b) host down → spawns `docgraph index <path>` with all CLI flags. The host route is preferred — Kuzu's writer lock is exclusive vs. any other connection on the same DB file. |
+| Stdio MCP for editors | Not telecode-managed. Editors launch `docgraph mcp <path> --transport stdio`, which probes the running host and proxies through it. |
+
+**Config is CLI-flag-only.** Everything in `settings.docgraph.*` becomes a flag at spawn time. Long-form prompt text (`docgraph.llm.prompts.docstring` / `.wiki`) is materialized to `data/runtime/docgraph_llm_prompt_{docstring,wiki}.txt` and passed via `--llm-prompt-{docstring,wiki}-file` so we dodge argv-length / quoting hazards. The only env vars on subprocess spawns are `PYTHONIOENCODING=utf-8` + `PYTHONUTF8=1` (govern Python stdio encoding; no CLI equivalent).
 
 **Binary detection.** `docgraph.binary` empty → `shutil.which("docgraph")` → fall through to `<settings_dir>/.venv/Scripts/docgraph.exe`, `~/.local/bin/docgraph.bat`, `~/.docgraph/.venv/Scripts/docgraph.exe`. Non-empty = use verbatim.
 
 **Settings shape** (`settings.docgraph.*`):
-- `binary`: optional override for the docgraph executable.
-- `host.{enabled, auto_start, auto_restart, host, port, gpu}`: host process toggles + bind config.
-- `roots: [{path, watch}, ...]`: registered roots. Each entry's `watch` flag is wired to the host as a `--watch <path>` flag at spawn time. Flipping `watch` requires a host restart to take effect (workspace immutability is by design — see docgraph CLAUDE.md).
-- `llm.{model, host, port, format, max_tokens}`: applies at index time.
-- `embeddings.{model, gpu}`: shared by index + host.
-- `index.workers`: optional override for the indexer's process pool.
+- `binary`, `host.{enabled, auto_start, auto_restart, host, port, gpu, debounce}`.
+- `roots: [{path, watch}, ...]`. Flipping `watch` requires a host restart.
+- `llm.{model, host, port, format, max_tokens, max_tokens_wiki, prompts.{docstring, wiki}}`.
+- `embeddings.{model, gpu}`.
+- `rerank.{default, model, gpu}`.
+- `index.{workers, embed_batch_size, documents.{enabled, text_extensions, asset_extensions}}`.
+- `wiki.depth`.
 
-**MCP bridge** (`docgraph/bridge.py`). On `HostSupervisor` start, after `/api/roots` is reachable: open `streamablehttp_client("http://<h>:<port>/mcp")`, `await session.list_tools()`, register each tool in `proxy.managed_tools._REGISTRY` as `docgraph_<tool>`. Handler closure opens a transient session per invocation. The closed-enum `root` argument in each tool's schema is what scopes calls to a specific repo.
+**MCP bridge** (`docgraph/bridge.py`). On `HostSupervisor` start, after `/api/roots` is reachable: open `streamablehttp_client("http://<h>:<port>/mcp")`, `await session.list_tools()`, register each in `proxy.managed_tools._REGISTRY` as `docgraph_<tool>`. Handler closure opens a transient session per invocation. The closed-enum `root` argument scopes calls to a specific repo.
 
-**Auto-start.** `docgraph.host.auto_start: true` → spawned in `main.py:_post_init` after the proxy. **Independent of `host.enabled`** — Auto-start fires even if Enabled is OFF. Enabled is the live-state flag (off here = host is currently stopped); use Auto-start to control "should the host come up at boot". `_post_shutdown` tears down: bridge → host process.
+**Auto-start.** `docgraph.host.auto_start: true` → spawned in `main.py:_post_init` after the proxy. **Independent of `host.enabled`** — Auto-start fires even if Enabled is OFF (Enabled is the live-state flag). `_post_shutdown` tears down: bridge → host process.
 
-**Logs.** `data/logs/docgraph_host.log` (single host child) + `data/logs/docgraph_index.log` (index runner). Live tail in the global Logs section.
+**Tray UI.** Cards: Host (start/stop/restart + bind config), Roots (table with per-row Index/Wiki/Clear/Watch + ✕ remove + `+ Add root`), LLM, Embeddings, Reranker. Embeddings + Reranker cards have a "🔄 Restart host" button — those settings only take effect on the next host spawn.
 
-**Tray UI.** 4 cards: Host (start/stop/restart + bind config), Roots (table with per-row Index button + Watch toggle + ✕ remove + `+ Add root`), LLM (augmentation knobs), Embeddings (model + GPU). Per-row Watch toggle persists to `docgraph.roots[i].watch` — the host needs a restart to pick up flipped watch flags. Per-row Index runs a one-shot subprocess and updates `data/docgraph-index-state.json`.
+**Logs.** `data/logs/docgraph_host.log` + `data/logs/docgraph_index.log`. Live tail in the global Logs section.
+
+---
 
 ## llama.cpp supervisor (`llamacpp/`)
 
-1. **Spawning:** `LlamaSupervisor.start_default()` runs from `main.py:_post_init` BEFORE the proxy. `llamacpp.binary` → `shutil.which` → `subprocess.Popen`. stdout+stderr merged into `data/logs/llama.log` (append mode, one `===== spawning =====` banner per restart).
-
-2. **argv builder** (`llamacpp/argv.py`): walks `llamacpp.models.<model>` and emits flags via a table-driven mapper — `ctx_size → --ctx-size`, `n_gpu_layers → --n-gpu-layers`, `flash_attn → --flash-attn`, `mmproj → --mmproj`, `draft_model → --model-draft`, `chat_template`, `jinja`, `cache_type_k/v`, `slot_save_path`, LoRA, grammar, etc. Anything not special-cased goes through `extra_args: [["--flag","value"]]` verbatim. Both per-model and top-level `llamacpp.extra_args` are honored.
-
-3. **Model swap:** `ensure_model(name)` resolves the request's model through `llamacpp.models` → `proxy.model_mapping` → `default_model`. If the resolved key differs from the running model, the supervisor stops and respawns with the new argv; `/health` is polled until `"ok"`. Swap latency surfaces as normal generation time — heartbeat pings already cover it.
-
-4. **Ready probe:** `/health` status `"ok"` = loaded + ready; `503` / `"loading model"` = still warming up; connection errors = not up yet. Deadline = `llamacpp.ready_timeout_sec` (default 120).
-
-5. **Shutdown:** `shutdown_supervisor()` in `main.py:_post_shutdown` sends SIGTERM (Win: `terminate()`), waits 4s, then `kill()`. Fired AFTER the proxy runner so no request is mid-flight.
+1. **Spawn:** `LlamaSupervisor.start_default()` runs from `main.py:_post_init` BEFORE the proxy. stdout+stderr merged into `data/logs/llama.log` (append, one banner per restart).
+2. **argv builder** (`llamacpp/argv.py`): walks `llamacpp.models.<model>` → flags via a table-driven mapper (`ctx_size → --ctx-size`, `n_gpu_layers → --n-gpu-layers`, `flash_attn → --flash-attn`, `mmproj`, `draft_model → --model-draft`, `chat_template`, `jinja`, `cache_type_k/v`, `slot_save_path`, LoRA, grammar, …). Anything else: `extra_args: [["--flag","value"]]`. Both per-model and top-level `extra_args` honored.
+3. **Model swap:** `ensure_model(name)` resolves through `llamacpp.models` → `proxy.model_mapping` → `default_model`. Different model = stop + respawn + `/health` poll.
+4. **Ready probe:** `/health` `"ok"` = ready; `503` / `"loading model"` = warming; connection error = not up. Deadline: `llamacpp.ready_timeout_sec` (default 120).
+5. **Shutdown:** `shutdown_supervisor()` in `main.py:_post_shutdown` — SIGTERM, 4s wait, then kill. Fired AFTER the proxy runner.
 
 ---
 
 ## Proxy pipeline (`proxy/`)
 
-Dual-protocol middleware in front of llama.cpp. Both **Anthropic** `/v1/messages` and **OpenAI** `/v1/chat/completions` are exposed to clients; internally everything is canonicalised to OpenAI shape (llama.cpp's native format) before hitting upstream. Every transform is an independent flag; profiles override per-client.
+Dual-protocol middleware in front of llama.cpp. Both **Anthropic** `/v1/messages` and **OpenAI** `/v1/chat/completions` exposed; internal canonical shape is OpenAI.
 
-1. **Startup:** `start_proxy_background()` from `main.py:_post_init`, AFTER the supervisor. Port 1235 by default. Also runs standalone via `python -m proxy` (supervisor spawn must already be running in that mode).
+1. **Startup:** `start_proxy_background()` from `main.py:_post_init` AFTER the supervisor. Port 1235 by default. Standalone via `python -m proxy`.
+2. **Protocols** (`proxy.protocols`): `["anthropic", "openai"]` by default.
+3. **Profile matching:** `_match_profile(headers)` — first `client_profile` whose `match.header` contains `match.contains` wins.
+4. **Model mapping** (`proxy.model_mapping`): rewrites `body.model`. Resolved via `llama_cfg.resolve_model()` (registry → mapping → default). Response model reverse-mapped back to client alias.
+5. **Translation** (`proxy/translate.py`): `anthropic_request_to_internal` (blocks → OpenAI parts; `tool_use` → assistant `tool_calls`; `tool_result` arrays → `role:"tool"` strings + lifted user message with image parts; `cache_control` dropped recursively; `system` flattened into leading `{"role":"system"}`); `openai_request_to_internal` (near-identity + `cache_prompt=true` + `stream_options.include_usage=true`). Inference defaults merged from `llamacpp.inference` + per-model `inference_defaults`, overridable by request.
+6. **Managed-tool injection** (`inject_managed`): registry names + `strip_from_cc` lists become a strip set; Anthropic-shape schemas converted to OpenAI tools. Always intercepted.
+7. **Tool search** (`tool_search: true`): splits OpenAI tools into core + deferred; `ToolSearch` meta-tool injected when deferred non-empty. Deferred names listed in a `<system-reminder>` on the first user message.
+   - **Auto-load** (`auto_load_tools: true`): first blind call → schema returned as tool_result; model retries.
+   - **Unloaded-tool guard** (`auto_load_tools: false`): blocks; instructs `ToolSearch(select:Name)`.
+   - **Hallucination guard**: unknown name → BM25 top-5 suggestions in a `<functions>` block.
+8. **System prompts**: `system_instruction` (profile, prepends a markdown file with `<if dotted.key="value">` conditionals); `inject_date_location` (appends date + location as `<system-reminder>`).
+9. **Message transforms**: `strip_reminders` (keeps skills + deferred-tools listing), `cache_control` always stripped, tool-result image lifting always on.
+10. **Intercept loop** (`_run_streaming` / `_run_non_streaming`): operates on internal (OpenAI) shape. Each round-trip → `_run_upstream_round` reads OpenAI SSE and **branches on first content signal**. Intercepted tool_call → assemble args → return `InterceptedToolCall`. Anything else → stream live through the adapter. `_start_heartbeat` runs for the request lifetime — Anthropic clients get `: keepalive` + `event: ping` every `proxy.ping_interval`; OpenAI clients get `: keepalive` only. Loops up to `proxy.max_roundtrips` (default 15).
+11. **Client adapters** (`AnthropicAdapter` / `OpenAIAdapter`): own per-round `*StreamState`. Status lines are synthetic content blocks at indices `0..status_emitted-1`. `<think>` openers across delta boundaries handled via max-tag-length lookahead. `thinking_delta` blocks emitted when `emit_thinking_blocks=true`.
+12. **Intercept handlers** (5 branches in `_run_streaming`): `ToolSearch` (BM25), managed tools (`pre_llm` → `handler` → `post_llm`), auto-load first blind call, unloaded-tool guard, hallucination guard.
+13. **Token counting** (`/v1/messages/count_tokens`): full prepare pipeline → llama.cpp `/apply-template` → `/tokenize`. Exact, no generation.
+14. **Embeddings** (`/v1/embeddings`): forwarded to llama-server verbatim.
+15. **CORS**: `cors_origins` list. Streaming responses get headers via `_apply_cors_to_stream()` before `prepare()`.
 
-2. **Protocols** (`proxy.protocols`): `["anthropic", "openai"]` by default — both route sets registered. Disabling one unregisters its routes. `/v1/models` stays dual and picks shape by header sniff (`anthropic-version` / `x-api-key` → Anthropic, else OpenAI).
-
-3. **Profile matching:** `_match_profile(headers)` — first `client_profile` whose `match.header` contains `match.contains` wins. Each profile independently overrides any feature flag; unset fields fall back to global `proxy.*`.
-
-4. **Model mapping** (`proxy.model_mapping`): rewrites `body.model` (e.g. `claude-opus-4-6` → `qwen3.5-35b`). `body.model` is resolved via `llama_cfg.resolve_model()` (registry → mapping → default). Response `model` is reverse-mapped back to the client's alias.
-
-5. **Client-body translation** (`proxy/translate.py`):
-   - **anthropic_request_to_internal**: Anthropic blocks → OpenAI content parts (text/image_url). Tool_use → assistant `tool_calls`. Tool_result arrays → `role:"tool"` string content + lifted user message with image parts (OpenAI `tool` role requires string content; images ride alongside). `cache_control` dropped recursively. `system` (string or list) flattened into leading `{"role":"system"}`.
-   - **openai_request_to_internal**: near-identity; applies inference defaults, sets `stream_options.include_usage=true`, `cache_prompt=true`.
-   - Inference defaults merged from `llamacpp.inference` + per-model `llamacpp.models.<m>.inference_defaults`, overridable by request body.
-
-6. **Managed-tool injection** (`inject_managed`): registry names + their `strip_from_cc` list become a strip set; Anthropic-shape schemas are converted to OpenAI-shape tools and injected. Always intercepted.
-
-7. **Tool search** (`tool_search: true`): `_apply_tool_transforms` splits OpenAI-shape tools into core + deferred (BM25 haystack in Anthropic shape). `ToolSearch` meta-tool injected when deferred is non-empty. Deferred names listed in a `<system-reminder>` appended to the first user message.
-
-   - **Auto-load** (`auto_load_tools: true`): first blind call to a deferred name triggers the proxy to return its schema as a tool_result (schema also added to `body.tools` / `core_visible_names`); model retries, next call flushes through to the client.
-   - **Unloaded-tool guard** (`auto_load_tools: false`): blocks direct calls to deferred names and instructs `ToolSearch(select:Name)`.
-   - **Hallucination guard**: tool names not in `core_visible ∪ deferred ∪ managed ∪ ToolSearch` are intercepted; BM25 over `core + deferred` with the bogus name as query returns the top-5 suggestions in a `<functions>` block. No schemas auto-injected (would bloat context).
-
-8. **System prompts** — two independent injections:
-   - `system_instruction` (profile): prepends a markdown file from `proxy/instructions/` to the leading system message. `<if dotted.key="value">...</if>` conditionals supported.
-   - `inject_date_location`: appends current date + location as a `<system-reminder>` (location from `proxy.location` or `ip-api.com`).
-
-9. **Message transforms**:
-   - `strip_reminders`: strip `<system-reminder>` blocks (keeps skills + our deferred-tools listing).
-   - `cache_control` stripping: always on; not a knob anymore.
-   - Tool-result image handling: always on; images lifted into a follow-on user message so llama.cpp's vision path sees them.
-
-10. **Intercept loop** (`_run_streaming` / `_run_non_streaming`): operates on internal (OpenAI) shape. Each round-trip calls `_run_upstream_round`, which reads OpenAI SSE from llama.cpp and **branches on the first content signal**:
-    - First `tool_call` with an intercepted (or hallucinated) name → keep assembling arguments until `finish_reason=tool_calls`, return `InterceptedToolCall`. Nothing written to client.
-    - Anything else (text delta / non-intercepted tool_call / finish) → stream live through the adapter.
-
-    `_start_heartbeat` runs for the full request lifetime; per-protocol:
-    - Anthropic clients: `: keepalive\n\n` every 2s + `event: ping\ndata: {"type":"ping"}\n\n` every `proxy.ping_interval` (10s) — CC / pivot / Office add-ins recognize the ping and don't time out.
-    - OpenAI clients: `: keepalive\n\n` only (no ping in the OpenAI SSE spec).
-
-    Loops up to `proxy.max_roundtrips` (default 15). Always intercepted: `ToolSearch` (when deferred exists), all injected managed tools, all deferred names (auto-load or unloaded-guard).
-
-11. **Client adapters** (`ClientAdapter` subclasses):
-    - `AnthropicAdapter`: owns an `AnthropicStreamState` per round, which wraps a `ReasoningState` (the `<think>...</think>` state machine). Status lines = synthetic text content blocks at indices `0..status_emitted-1`; real blocks start at `status_emitted`. Stream state rebuilds `message_start` / `content_block_start` / `content_block_delta` / `message_delta` / `message_stop` events from OpenAI chunks. `<think>` openers across delta boundaries are handled via a max-tag-length lookahead buffer. `thinking_delta` blocks emitted when `emit_thinking_blocks=true` (default), stripped when false.
-    - `OpenAIAdapter`: near-identity for chat.completion.chunk events. Rewrites `model` → client alias, unifies `id` across round-trips. Status lines = synthetic assistant content-delta chunks (renders as prepended text in OpenAI-speaking UIs).
-
-12. **Intercept handlers** — five branches in `_run_streaming`:
-    - **`ToolSearch`** → BM25 over deferred. Status: `● ToolSearch("q") / └  N schemas loaded: A, B, C` or `└  No matches`.
-    - **Managed tools** (`is_managed`) → `pre_llm` → `handler` → `post_llm`. Status: `format_visibility(name, input, summary)`. Errors: `● Tool() / └  Failed: <exc>`.
-    - **Auto-load first blind call** — deferred name not yet loaded. Schema added, model told to retry. Status: `● Loaded ToolName / └  Schema delivered · awaiting retry`.
-    - **Unloaded-tool guard** — blocks the call; instructs `ToolSearch(select:...)`. Status: `● Blocked: ToolName (unloaded) / └  Model instructed to ToolSearch first`.
-    - **Hallucination guard** — top-5 BM25 suggestions returned (no schemas). Status: `● Unknown tool: X / └  Suggested: A, B, C` or `└  No close matches · model told to ToolSearch with keywords`.
-
-13. **Token counting** (`/v1/messages/count_tokens`): runs the full prepare pipeline, then calls llama.cpp `/apply-template` → `/tokenize`. Exact, no generation. Replaces the old `max_tokens=1` round-trip hack.
-
-14. **Embeddings** (`/v1/embeddings`): forwarded to llama-server verbatim. Use for RAG etc.
-
-15. **Managed tools registry** (`proxy/managed_tools.py`): unchanged — `ManagedTool` with Anthropic-format schema, async handler `(input) -> (summary, result)`, optional `strip_from_cc`, optional `pre_llm`/`post_llm` `LLMHook`. MCP tools auto-bridged.
-
-16. **CORS**: `cors_origins` list. Streaming responses get headers via `_apply_cors_to_stream()` before `prepare()`.
-
-To use: set `llamacpp.enabled: true` + `proxy.enabled: true`, fill in `llamacpp.binary` and `llamacpp.models.<name>.path`, point client tools at `http://localhost:1235` (Anthropic clients: `ANTHROPIC_BASE_URL`; OpenAI clients: `OPENAI_BASE_URL` or `base_url`).
+To use: `llamacpp.enabled: true` + `proxy.enabled: true`, fill in `llamacpp.binary` + `llamacpp.models.<name>.path`, point client tools at `http://localhost:1235`.
 
 ---
 
 ## Live Telegram messages (`bot/live.py`)
 
-Delivery layer lives in `bot/live.py`; `bot/handlers.py` only imports and wires.
-
-- **`LiveMessage`:** one text message per "turn", updated by `append()`. First chunk of a turn edits the message immediately (no debounce); subsequent chunks coalesce on a ~1s debounce so Telegram's per-chat edit rate isn't exceeded. Overflow loops into fresh messages — no head-truncation fallback, nothing is ever silently dropped. `_safe_split` uses cumulative escape-count prefix sums + binary search (O(n + log n), not the old quadratic step-back). Overlap with prior text is trimmed by `find_overlap_end`, a Z-algorithm scan over the non-whitespace projection.
-- **`finalize()` retry:** if the last `_do_edit` didn't land (full_text != _last_sent), schedules one more `_do_edit` 2s later so transient Telegram errors don't freeze a turn at a truncated reply.
-- **`TypingPinger`:** started in `LiveMessage.__init__`, re-sends `sendChatAction("typing")` every 4s until the first reply message is created, then stops. Also stops on topic-gone, on `finalize()`, or after a 60s hard cap so a turn with no PTY output can't leak the ping loop.
-- **Placeholder under flood:** `_ensure_msg` does NOT preemptively bail when the chat is flood-backed off — the send attempt either succeeds or surfaces `RetryAfter` (which sets the per-chat backoff). Preemptive bailing was stranding turns that produced only one short chunk.
-- **Per-chat flood:** `flood_active(chat_id)` / `set_flood_backoff(chat_id, retry_after)` — state is `dict[chat_id, float]`. A flood in one chat no longer throttles edits in another.
-- **`FrameSender`:** sends each frame as a **new photo message**. Send interval = `capture.image_interval`. Drops frames while paused. Inline buttons (⏸ Pause / ▶ Resume / ⏹ Stop) — callbacks `cap_pause:` / `cap_resume:` / `stop:` (see `_capture_controls_kb`). `controls_kb_factory` + `track_controls` are passed in at construction so this module doesn't import `bot/handlers.py` back.
-- **Latest-message-only controls** (in `bot/handlers.py`): `_track_controls(bot, msg)` keeps a per-thread pointer (`_latest_controls_msg: dict[thread_id, message_id]`) to the most recent inline-keyboard message. Every site that sends `reply_markup=…` — `/start` picker, `/new` usage picker, dead-session picker, window picker, capture/video startup messages, each `FrameSender` photo, each video chunk — calls `_track_controls`, which silently strips the keyboard from the previously tracked message via `edit_message_reply_markup(reply_markup=None)` before recording the new one. Pause/Resume callbacks use `q.edit_message_reply_markup` (same message_id) so the tracker is still valid. Errors are swallowed (message gone / too old / unchanged).
+- **`LiveMessage`:** one text message per "turn", updated by `append()`. First chunk edits immediately; subsequent chunks coalesce on a ~1s debounce. Overflow loops into fresh messages — no head-truncation. `_safe_split` uses cumulative escape-count prefix sums + binary search. Overlap with prior text trimmed by `find_overlap_end` (Z-algorithm scan).
+- **`finalize()` retry:** if the last `_do_edit` didn't land, schedules one more 2s later.
+- **`TypingPinger`:** `sendChatAction("typing")` every 4s until first reply, or topic-gone, or `finalize()`, or 60s hard cap.
+- **Per-chat flood:** `flood_active(chat_id)` / `set_flood_backoff(chat_id, retry_after)` — per-chat dict, not global.
+- **`FrameSender`:** new photo per frame (interval = `capture.image_interval`). Inline buttons (`cap_pause:` / `cap_resume:` / `stop:`). `controls_kb_factory` + `track_controls` injected at construction so this module doesn't import `bot/handlers.py` back.
+- **Latest-message-only controls** (in `bot/handlers.py`): `_track_controls(bot, msg)` keeps a per-thread pointer to the most recent inline-keyboard message. Every send-with-`reply_markup` call funnels through it; the previously tracked message has its keyboard stripped via `edit_message_reply_markup(reply_markup=None)` first.
 
 ---
 
 ## Logging & crash traces (`main.py`)
 
-- Log file: `data/logs/telecode.log`. On startup it is **rotated to `telecode.log.prev`**, not deleted — so after a crash + restart the previous run's traceback survives in `.prev`.
-- `_install_crash_handlers` installs `sys.excepthook` + `threading.excepthook`; `_install_asyncio_exception_handler` attaches a loop-level handler in `_post_init`. These route uncaught exceptions (including task exceptions that were never awaited) into `telecode.log`. Essential under `pythonw`, where `sys.stderr` goes nowhere.
-- `run_polling` is wrapped in a try/except that logs a `CRITICAL Bot crashed: …` line before re-raising — so a fatal error at the polling layer lands in the log before the process exits.
-- When debugging a crash, always check `data/logs/telecode.log.prev` first; the current `telecode.log` is from *after* the restart and won't have the failing run's trace.
+- Log file: `data/logs/telecode.log`. On startup it's **rotated to `telecode.log.prev`** (not deleted) — so after a crash + restart the previous run's traceback survives.
+- `_install_crash_handlers` + `_install_asyncio_exception_handler` route uncaught exceptions (incl. unawaited task exceptions) to the log. Essential under `pythonw`.
+- `run_polling` is wrapped — a fatal error logs `CRITICAL Bot crashed: …` before re-raising.
+- **When debugging a crash, always check `telecode.log.prev` first** — the live `telecode.log` is from after the restart.
 
 ---
 
 ## Adding a CLI backend
 
-Just add a `tools.<key>` entry in `settings.json`:
+Add a `tools.<key>` to `settings.json`:
 
 ```json
 "my-tool": {
@@ -449,15 +252,7 @@ Just add a `tools.<key>` entry in `settings.json`:
 }
 ```
 
-The registry auto-creates a `GenericCLIBackend` for any key that isn't a special non-PTY backend (`screen`, `video`).
-`name` and `icon` are optional — defaults to title-cased key and 🔧.
-`streaming` is optional — overrides the global `streaming.idle_sec` / `streaming.max_wait_sec`. Short-output shells benefit from tighter values (~0.5s / 2.5s) than TUIs like Claude Code (the defaults 2s / 5s).
-
-No code changes needed.
-
-Test: `/settings reload` then `/new <key> test`.
-
----
+The registry auto-creates a `GenericCLIBackend` for any key that isn't a special non-PTY backend (`screen`, `video`). No code changes needed. Test: `/settings reload` then `/new <key> test`.
 
 ## Adding a Telegram command
 
@@ -465,11 +260,9 @@ Test: `/settings reload` then `/new <key> test`.
 2. `app.add_handler(CommandHandler("xxx", cmd_xxx))` in `main.py`.
 3. Add to `BOT_COMMANDS` and `cmd_help()`.
 
----
-
 ## MCP server (`mcp_server/`)
 
-Streamable HTTP MCP server (FastMCP, port 1236). Drop-in tools/resources/prompts under `mcp_server/tools/`, `resources/`, `prompts/` — auto-discovered via `pkgutil.iter_modules`. Built-in tools: `speak` (Kokoro TTS), `transcribe` (Whisper STT), `web_search` (Brave scraper, same backend as the proxy's managed WebSearch). For local models routed through the proxy, these tools are injected automatically via `managed_tools.py` — no MCP connection needed. The MCP server is for external clients or Claude Code running against the real Anthropic API.
+FastMCP streamable HTTP, port 1236. Drop-in `tools/` / `resources/` / `prompts/` auto-discovered via `pkgutil.iter_modules`. Built-ins: `speak` (Kokoro TTS), `transcribe` (Whisper STT), `web_search` (Brave). For local models routed through the proxy these are injected via `managed_tools.py` — no MCP connection needed; the MCP server is for external clients or Claude Code against the real Anthropic API.
 
 `claude mcp add telecode --transport streamable-http --url http://127.0.0.1:1236/mcp`
 
@@ -478,41 +271,38 @@ Streamable HTTP MCP server (FastMCP, port 1236). Drop-in tools/resources/prompts
 ## Common problems
 
 | Symptom | What to check |
-|--------|----------------|
-| Bot silent | Token, group id, bot admin, Topics on. Also check `data/logs/telecode.log.prev` for the previous run's crash trace |
-| Bot stops after a while | Read `data/logs/telecode.log.prev` — crash handlers route uncaught exceptions and `run_polling` failures there |
-| "No session for thread" | `/new` again; store may be missing mapping |
-| CLI exits at once | Missing API key, wrong `startup_cmd`, binary not on PATH |
-| Stuck on prompt | User sends `/key enter` or `/key y` |
-| Garbled / noisy stream | TUI limitation; tune diff in `process.py` or use a non-interactive CLI mode |
-| `settings` change ignored | `/settings reload` or restart |
-| Screen capture blank | Window may be on another virtual desktop; minimized windows are auto-restored |
-| Video encoding fails | Ensure ffmpeg is on PATH; check logs for ffmpeg stderr |
-| Computer control clicks wrong spot | DPI scaling issue; check `_get_window_rect` returns logical coords |
-| Computer control LLM error | Check llama-server is up and the proxy is running; `base_url` should point at the proxy (`http://localhost:1235/v1`), not llama-server directly |
-| Voice not working | Start STT service and send a voice message. First request hits the endpoint directly; no background probe means no "wait 60s" delay, but also no passive liveness. |
-| Proxy not starting | Check `proxy.enabled` is `true` in settings.json; check port not in use |
-| llama-server won't start | Check `data/logs/llama.log` for the actual binary output. Verify `llamacpp.binary` path and `llamacpp.models.<default>.path` point at real files |
-| Model swap hangs | `llamacpp.ready_timeout_sec` (default 120) too short for a large GGUF to load; increase it |
-| `<think>` blocks leak into text | Per-model `llamacpp.models.<m>.inference_defaults.reasoning.start/end` tags must match what the model actually emits |
-| ToolSearch not triggered | Model may not call it; check upstream is reachable; with `proxy.debug` on, inspect `data/logs/proxy_full_*.json` dumps |
-| Tools missing after search | Tool may not match query; try regex with `re:` prefix; check `MAX_SEARCH_RESULTS` |
-| MCP server not starting | Check `mcp_server.enabled` is `true`; check port 1236 not in use |
-| MCP speak fails | Kokoro TTS must be running on `mcp_server.tts_url` (default :6500) |
-| MCP transcribe fails | Whisper STT must be running on `mcp_server.stt_url` (default :6600) |
-| DocGraph host won't start | Check `data/logs/docgraph_host.log`. Verify `docgraph.binary` points at a real CLI; empty = `shutil.which("docgraph")` then venv fallbacks. |
-| DocGraph host can't bind port | Another process holds `docgraph.host.port`. The supervisor sweeps before bind; if it persists, raise `docgraph.host.port` or kill the offending process. |
-| DocGraph index fails with Kuzu lock error | A `docgraph index` subprocess and the host both opened the same DB. The IndexRunner is supposed to route through `/api/admin/index` when the host is alive — check `docgraph_index.log` for "host route failed" messages. |
-| DocGraph bridge tools missing in proxy | Host must be alive AND `/mcp` must respond (lifespan must be `on` in the host's uvicorn config). Check `docgraph_host.log` for `mcp.server.streamable_http_manager: ... session manager started`. |
+|---|---|
+| Bot silent | Token, group id, bot admin, Topics on. Also `data/logs/telecode.log.prev`. |
+| Bot stops after a while | `data/logs/telecode.log.prev` — crash handlers route exceptions there. |
+| "No session for thread" | `/new` again; store may be missing mapping. |
+| CLI exits at once | Missing API key, wrong `startup_cmd`, binary not on PATH. |
+| Stuck on prompt | `/key enter` or `/key y`. |
+| Garbled stream | TUI limitation; tune diff in `process.py` or use a non-interactive CLI mode. |
+| `settings` change ignored | `/settings reload` or restart. |
+| Screen capture blank | Window may be on another virtual desktop; minimized are auto-restored. |
+| Video encoding fails | Ensure ffmpeg is on PATH; check ffmpeg stderr in logs. |
+| Computer control wrong spot | DPI scaling — `_get_window_rect` must return logical coords. |
+| Computer control LLM error | `base_url` should point at the proxy (`http://localhost:1235/v1`), not llama-server directly. |
+| Voice not working | Start STT and send a voice message. First request hits the endpoint directly. |
+| Proxy not starting | `proxy.enabled: true`, port not in use. |
+| llama-server won't start | `data/logs/llama.log` for the binary output; verify `binary` and `models.<default>.path`. |
+| Model swap hangs | `llamacpp.ready_timeout_sec` too short for a large GGUF — increase. |
+| `<think>` blocks leak into text | Per-model `inference_defaults.reasoning.start/end` tags must match what the model emits. |
+| ToolSearch not triggered | Model may not call it; check upstream reachable; with `proxy.debug` on, inspect `data/logs/proxy_full_*.json`. |
+| Tools missing after search | Try `re:` prefix; check `MAX_SEARCH_RESULTS`. |
+| MCP server not starting | `mcp_server.enabled: true`; port 1236 free. |
+| MCP speak/transcribe fails | Kokoro TTS on `:6500` / Whisper STT on `:6600` must be running. |
+| DocGraph host won't start | `data/logs/docgraph_host.log`. Verify `docgraph.binary`. |
+| DocGraph host can't bind port | Another process holds `docgraph.host.port`. The supervisor sweeps before bind. |
+| DocGraph index Kuzu lock error | `docgraph index` subprocess and host both opened the same DB. The IndexRunner is supposed to route through `/api/admin/index` when the host is alive — check `docgraph_index.log` for "host route failed". |
+| DocGraph bridge tools missing | Host must be alive AND `/mcp` must respond (lifespan must be `on` in uvicorn). Check `docgraph_host.log` for `mcp.server.streamable_http_manager: ... session manager started`. |
 
 ---
 
 ## Running in background (Windows)
 
-Use `pythonw main.py` instead of `python main.py` to run without a console window. For auto-start, create a Windows Scheduled Task with `pythonw.exe` as the executable — this keeps the bot hidden with no terminal window. See README.md for the full PowerShell command.
-
----
+`pythonw main.py` instead of `python main.py` — no console window. For auto-start, use a Windows Scheduled Task with `pythonw.exe` as the executable.
 
 ## Dependencies (see `requirements.txt`)
 
-**python-telegram-bot**, **aiohttp**, **aiofiles**, **pyte**, **pywinpty** (Windows PTY), **mss** (fallback capture on Linux/Mac), **Pillow** (JPEG encoding), **pywin32** (Windows Session 0 support), **pyautogui** (mouse/keyboard for computer control), **mcp** (MCP SDK for audio server). ffmpeg must be on PATH for video recording.
+**python-telegram-bot**, **aiohttp**, **aiofiles**, **pyte**, **pywinpty** (Windows PTY), **mss** (fallback capture on Linux/Mac), **Pillow** (JPEG), **pywin32** (Windows Session 0), **pyautogui** (mouse/keyboard), **mcp** (MCP SDK). ffmpeg on PATH for video.

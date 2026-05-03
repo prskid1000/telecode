@@ -632,7 +632,7 @@ Telecode supervises **one** [DocGraph](https://github.com/prithwirajs/docgraph) 
 | `auto_start` | Spawn the host at `main.py:_post_init`. **Independent of `enabled`** — Auto-start fires even when Enabled is off, so the host comes up at boot regardless of the live-state flag. |
 | `auto_restart` | Re-spawn on unexpected exit. |
 | `host`, `port` | Bind address. Defaults: `127.0.0.1`, `5500`. |
-| `gpu` | Forwarded via `DOCGRAPH_GPU=1`. The embedder transparently falls back to CPU if a GPU session is poisoned mid-inference (e.g. another process saturating the GPU), so this is safe to leave on. |
+| `gpu` | Passed to `docgraph host` as `--gpu`. The embedder transparently falls back to CPU if a GPU session is poisoned mid-inference (e.g. another process saturating the GPU), so this is safe to leave on. |
 
 #### `docgraph.roots`
 
@@ -642,8 +642,13 @@ Array of `{path, watch}` entries. Each `path` is registered with the host as `--
 
 | Key | Description |
 |---|---|
-| `llm.{model, host, port, format, max_tokens}` | Optional LLM-augmented docstrings. Setting `llm.model` is enough to enable. Passed to `docgraph index` as `--llm-*` flags. |
-| `embeddings.{model, gpu}` | Embedding model + GPU opt-in, shared by both the index runner and the host. |
+| `llm.{model, host, port, format, max_tokens, max_tokens_wiki, prompts.{docstring, wiki}}` | Optional LLM-augmented docstrings + wiki. Setting `llm.model` is enough to enable. Passed to `docgraph host` / `index` / `wiki` as `--llm-*` flags; long-form prompt overrides materialized to `data/runtime/*.txt` and passed via `--llm-prompt-{docstring,wiki}-file`. |
+| `embeddings.{model, gpu}` | Embedding model + GPU opt-in, shared by both the index runner and the host. Passed as `--embed-model` / `--gpu`. |
+| `rerank.{default, model, gpu}` | Cross-encoder reranker config. `default=true` flips `/api/search` and MCP search to rerank by default. `gpu=true` runs the reranker on GPU independently from `embeddings.gpu`. |
+| `index.documents.{enabled, text_extensions, asset_extensions}` | Tier-2 / tier-3 document + asset pass for `docgraph index` (off by default). |
+| `wiki.depth` | Max directory depth for wiki page bucketing. |
+
+**No environment variables.** Every config knob in `settings.docgraph.*` is forwarded to docgraph as a CLI flag. The only env vars on docgraph subprocess spawns are `PYTHONIOENCODING=utf-8` + `PYTHONUTF8=1` (govern Python stdio encoding; no CLI equivalent).
 
 #### `docgraph.index`
 
