@@ -62,6 +62,7 @@ def build_docgraph_tabs(window) -> QWidget:
         _build_llm_card,
         _build_prompts_card,
         _build_embeddings_card,
+        _build_reranker_card,
     ):
         card, refresh = build(window)
         layout.addWidget(card)
@@ -1183,8 +1184,8 @@ def _build_embeddings_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     )
     body.addWidget(_enum_row_strs("docgraph.embeddings.model", "Model",
                                     _DOCGRAPH_EMBED_MODELS,
-                                    "Switching model needs a full reindex (.docgraph wipe). "
-                                    "All 384-dim — schema is fixed."))
+                                    "Schema dim auto-aligns to model. "
+                                    "Switching model = Clear + reindex."))
     body.addWidget(_toggle_row("docgraph.embeddings.gpu", "GPU embeddings",
                                 "Needs onnxruntime-gpu/-directml/-silicon.",
                                 cli="--gpu"))
@@ -1194,4 +1195,38 @@ def _build_embeddings_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     body.addWidget(_number_row("docgraph.index.embed_batch_size", "Embed batch size",
                                 0, 1024, 16, 0, "", "0 = default (256 CPU / 32 GPU). Lower if GPU saturates.",
                                 cli="--embed-batch-size"))
+    return card, None
+
+
+# fastembed cross-encoder rerankers (verified against
+# TextCrossEncoder.list_supported_models()). Cross-encoders run query+doc
+# pairs through one model — much more accurate than the bi-encoder embedding
+# search but only viable on the top ~50 candidates. Loaded lazily on first
+# use; never paid if rerank stays off.
+_DOCGRAPH_RERANK_MODELS: list[tuple[str, str]] = [
+    ("Default (jinaai/jina-reranker-v1-tiny-en)  ·  130 MB · English · 8K ctx", ""),
+    ("jinaai/jina-reranker-v1-turbo-en  ·  150 MB · English · 8K ctx",
+     "jinaai/jina-reranker-v1-turbo-en"),
+    ("jinaai/jina-reranker-v2-base-multilingual  ·  1.1 GB · ~100 langs",
+     "jinaai/jina-reranker-v2-base-multilingual"),
+    ("BAAI/bge-reranker-base  ·  1.0 GB · English · MTEB strong",
+     "BAAI/bge-reranker-base"),
+    ("Xenova/ms-marco-MiniLM-L-12-v2  ·  120 MB · English · classic ms-marco",
+     "Xenova/ms-marco-MiniLM-L-12-v2"),
+    ("Xenova/ms-marco-MiniLM-L-6-v2  ·  80 MB · English · smallest",
+     "Xenova/ms-marco-MiniLM-L-6-v2"),
+]
+
+
+def _build_reranker_card(window) -> tuple[QFrame, Callable[[], None] | None]:
+    card, body = _card(
+        "Reranker",
+        "Cross-encoder over the top ~50 search candidates. Off by default.",
+    )
+    body.addWidget(_toggle_row("docgraph.rerank.default", "Always rerank",
+                                "Default rerank=true on /api/search + MCP search. "
+                                "Costs one cross-encoder pass per query."))
+    body.addWidget(_enum_row_strs("docgraph.rerank.model", "Model",
+                                    _DOCGRAPH_RERANK_MODELS,
+                                    "Lazy-loaded on first reranked search."))
     return card, None
