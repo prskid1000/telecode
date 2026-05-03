@@ -179,6 +179,10 @@ def _build_host_card(window) -> tuple[QFrame, Callable[[], None]]:
                               cli="--host"))
     body.addWidget(_number_row("docgraph.host.port", "Bind Port", 1024, 65535, 1, 0,
                                 cli="--port"))
+    body.addWidget(_number_row("docgraph.host.debounce", "Watcher debounce",
+                                50, 5000, 50, 0, "ms",
+                                "Default 500. Only used with watched roots.",
+                                cli="--debounce"))
     body.addWidget(_toggle_row("docgraph.host.gpu", "GPU embeddings",
                                 "Forwards DOCGRAPH_GPU=1.",
                                 cli="--gpu"))
@@ -756,6 +760,10 @@ def _build_llm_card(window) -> tuple[QFrame, Callable[[], None] | None]:
                                 256, 32768, 256, 0, "",
                                 "Default 4096.",
                                 cli="wiki --llm-max-tokens"))
+    body.addWidget(_number_row("docgraph.wiki.depth", "Wiki folder depth",
+                                1, 32, 1, 0, "",
+                                "Levels deep to bucket files. 1 = top-level only, 12 = leaf folders.",
+                                cli="wiki --depth"))
     return card, None
 
 
@@ -1122,4 +1130,7 @@ def _build_embeddings_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     body.addWidget(_number_row("docgraph.index.workers", "Index workers",
                                 0, 64, 1, 0, "", "0 = default.",
                                 cli="--workers"))
+    body.addWidget(_number_row("docgraph.index.embed_batch_size", "Embed batch size",
+                                0, 1024, 16, 0, "", "0 = default (256 CPU / 32 GPU). Lower if GPU saturates.",
+                                cli="--embed-batch-size"))
     return card, None

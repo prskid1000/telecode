@@ -119,6 +119,7 @@ def host_auto_restart() -> bool:  return bool(host_cfg().get("auto_restart", Tru
 def host_host() -> str:           return str(host_cfg().get("host", "127.0.0.1") or "127.0.0.1")
 def host_port() -> int:           return int(host_cfg().get("port", 5500) or 5500)
 def host_gpu() -> bool:           return bool(host_cfg().get("gpu", False))
+def host_debounce() -> int:       return int(host_cfg().get("debounce", 500) or 500)
 
 
 # ── LLM augmentation ────────────────────────────────────────────────────────
@@ -172,8 +173,21 @@ def embeddings_gpu() -> bool:    return bool(embeddings_cfg().get("gpu", False))
 
 # ── Index (CLI subprocess flags) ───────────────────────────────────────────
 
-def index_cfg() -> dict:         return _section("index")
-def index_workers() -> int:      return int(index_cfg().get("workers", 0) or 0)
+def index_cfg() -> dict:             return _section("index")
+def index_workers() -> int:          return int(index_cfg().get("workers", 0) or 0)
+def index_embed_batch_size() -> int:
+    """`docgraph index --embed-batch-size`. 0 = use docgraph's default
+    (256 on CPU / 32 on GPU). Lower it if `--gpu` saturates VRAM."""
+    return int(index_cfg().get("embed_batch_size", 0) or 0)
+
+
+# ── Wiki ────────────────────────────────────────────────────────────────────
+
+def wiki_cfg() -> dict:          return _section("wiki")
+def wiki_depth() -> int:
+    """`docgraph wiki --depth`. Max directory levels to bucket files by;
+    1 = one page per top-level module, 12 = one page per leaf folder."""
+    return int(wiki_cfg().get("depth", 12) or 12)
 
 
 # ── Document indexing (tier 2 + tier 3 — opt-in) ──────────────────────────
