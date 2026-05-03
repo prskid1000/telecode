@@ -755,11 +755,16 @@ class _RootRow(QFrame):
                 # Drop telecode's recorded run history so the pills don't
                 # keep advertising the pre-clear state ("indexed", "wiki Ns ago").
                 try:
-                    from docgraph import index_state, wiki_state
+                    from docgraph import index_state, wiki_state, stats_state
                     index_state.clear(path)
                     wiki_state.clear(path)
+                    stats_state.drop(path)
                 except Exception:
                     pass
+                # Force the next refresh tick to actually fetch — otherwise
+                # the per-row 10s throttle would keep the chip stuck on the
+                # pre-clear render.
+                self._stats_last_fetch = 0.0
             from PySide6.QtCore import QTimer
             from PySide6.QtWidgets import QMessageBox as _MB
             kind = _MB.information if ok else _MB.warning
@@ -853,13 +858,26 @@ class _RootRow(QFrame):
         if snap:
             ents = sum(int(snap.get(k, 0) or 0)
                        for k in ("File", "Module", "Class", "Function", "Variable"))
-            tables = snap.get("tables") or []
-            edges = sum(int(t.get("count", 0) or 0) for t in tables
-                        if isinstance(t, dict) and "->" in str(t.get("name", "")))
+            # Server-side total (preferred). Fall back to summing edges_by_type
+            # for older hosts that don't yet emit `edges`.
+            edges = snap.get("edges")
+            if edges is None:
+                edges = sum(int(v or 0)
+                            for v in (snap.get("edges_by_type") or {}).values())
+            edges = int(edges or 0)
             self._stats_chip.setText(f"{_fmt_count(ents)} ents · {_fmt_count(edges)} edges")
             tip_lines = [f"{path or '(no path)'}", ""]
             for label in ("File", "Module", "Class", "Function", "Variable"):
                 tip_lines.append(f"  {label:<10} {snap.get(label, 0)}")
+            top_edges = sorted(
+                ((k, int(v or 0))
+                 for k, v in (snap.get("edges_by_type") or {}).items()),
+                key=lambda kv: kv[1], reverse=True,
+            )[:6]
+            if top_edges:
+                tip_lines.append("")
+                for k, v in top_edges:
+                    tip_lines.append(f"  {k:<14} {v}")
             self._stats_chip.setToolTip("\n".join(tip_lines))
             muted = "false"
         else:
