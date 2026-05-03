@@ -1023,15 +1023,25 @@ def _build_llm_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     body.addWidget(_number_row("docgraph.llm.max_tokens", "Index Max Tokens",
                                 10, 4096, 50, 0, "",
                                 "Default 150.",
-                                cli="index --llm-max-tokens"))
+                                cli="--llm-max-tokens"))
     body.addWidget(_number_row("docgraph.llm.max_tokens_wiki", "Wiki Max Tokens",
                                 256, 32768, 256, 0, "",
                                 "Default 4096.",
-                                cli="wiki --llm-max-tokens"))
+                                cli="--llm-max-tokens-wiki"))
+    body.addWidget(_line_row("docgraph.llm.api_key", "API Key", "",
+                              "Forwarded as Authorization / x-api-key per "
+                              "format. Leave blank for unauthenticated local "
+                              "servers (LM Studio / llama.cpp / Ollama).",
+                              cli="--llm-api-key"))
+    body.addWidget(_number_row("docgraph.llm.timeout", "Timeout (s)",
+                                5, 600, 5, 0, "s",
+                                "Per-request HTTP timeout. Wiki page generation "
+                                "on big modules can take 30s+ on local LLMs.",
+                                cli="--llm-timeout"))
     body.addWidget(_number_row("docgraph.wiki.depth", "Wiki folder depth",
                                 1, 32, 1, 0, "",
                                 "Levels deep to bucket files. 1 = top-level only, 12 = leaf folders.",
-                                cli="wiki --depth"))
+                                cli="--wiki-depth"))
     return card, None
 
 

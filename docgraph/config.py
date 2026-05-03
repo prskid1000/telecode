@@ -143,6 +143,23 @@ def llm_max_tokens_wiki() -> int:
     return int(llm_cfg().get("max_tokens_wiki", 4096) or 4096)
 
 
+def llm_api_key() -> str:
+    """Optional API key forwarded to the LLM server (Bearer / x-api-key
+    depending on `llm.format`). Empty string = no auth header."""
+    return str(llm_cfg().get("api_key", "") or "")
+
+
+def llm_timeout() -> int:
+    """Per-request HTTP timeout (s). 0 / negative = use docgraph's default
+    of 60. Wiki page generation on big modules can take 30s+ on local LLM
+    servers, so this is exposed."""
+    raw = llm_cfg().get("timeout", 60)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 60
+
+
 def llm_prompt_docstring() -> str:
     """User-supplied override for the docstring template. Forwarded to
     docgraph as DOCGRAPH_LLM_PROMPT_DOCSTRING. Empty = use built-in."""
@@ -185,8 +202,11 @@ def index_embed_batch_size() -> int:
 
 def wiki_cfg() -> dict:          return _section("wiki")
 def wiki_depth() -> int:
-    """`docgraph wiki --depth`. Max directory levels to bucket files by;
-    1 = one page per top-level module, 12 = one page per leaf folder."""
+    """Max directory levels to bucket files by; 1 = one page per top-level
+    module, 12 = one page per leaf folder. Forwarded to the host spawn as
+    `--wiki-depth` so /api/wiki/build picks it up when the request payload
+    omits `depth`. Also forwarded to `docgraph wiki --depth` on subprocess
+    fallback (when the host route is unavailable)."""
     return int(wiki_cfg().get("depth", 12) or 12)
 
 

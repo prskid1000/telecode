@@ -63,6 +63,8 @@
       "format": "openai",
       "max_tokens": 150,
       "max_tokens_wiki": 4096,
+      "api_key": "",
+      "timeout": 60,
       "docstrings": false,
       "wiki": false,
       "prompts": {
