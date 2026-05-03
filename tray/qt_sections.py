@@ -68,12 +68,18 @@ def _card(title: str, sub: str = "") -> tuple[QFrame, QVBoxLayout]:
     head_l.setSpacing(10)
     t = QLabel(title)
     t.setProperty("class", "card_title")
-    head_l.addWidget(t)
+    head_l.addWidget(t, 0, Qt.AlignmentFlag.AlignTop)
     if sub:
         s = QLabel(sub)
         s.setProperty("class", "card_sub")
-        head_l.addWidget(s)
-    head_l.addStretch(1)
+        # Long subtitles (e.g. docgraph's Host description) used to force
+        # the card wider than the viewport, dragging in a horizontal
+        # scrollbar. Wrap so the text flows inside the available header
+        # width and the card never grows past its column.
+        s.setWordWrap(True)
+        head_l.addWidget(s, 1)
+    else:
+        head_l.addStretch(1)
     outer.addWidget(head)
 
     sep = QFrame()
@@ -146,8 +152,9 @@ def _number_row(path: str, label: str,
         ne.setValue(float(minimum))
     ne.valueChanged.connect(lambda v: patch_settings(path, v if decimals > 0 else int(round(v))))
     # Same cap as _line_row — keep the slider track from spanning the
-    # entire window on wide displays.
-    ne.setMaximumWidth(480)
+    # entire window on wide displays, but don't pinch it so tight that
+    # the slider has nowhere to drag.
+    ne.setMaximumWidth(720)
     return _row(row_label(label, help_text, path, cli), _wrap_align(ne, Qt.AlignmentFlag.AlignLeft))
 
 
@@ -2354,11 +2361,12 @@ def _line_row(path: str, label: str, placeholder: str = "",
     le.setPlaceholderText(placeholder)
     le.setText(str(get_path(read_settings(), path, "") or ""))
     le.editingFinished.connect(lambda: patch_settings(path, le.text()))
-    # Cap so the input doesn't stretch across a wide settings window.
-    # Value-style rows (binary paths, hostnames, model names) all fit
-    # comfortably under 480px; longer values still scroll inside the
-    # field. Users get a denser, more scannable form.
-    le.setMaximumWidth(480)
+    # Cap so the input doesn't stretch across a wide settings window,
+    # but stay generous enough that values like model names or URL
+    # endpoints aren't visibly pinched. 720 matches the natural reading
+    # width of a wide value (model paths, full URLs) without making
+    # short values like "127.0.0.1" sit in a sparse row.
+    le.setMaximumWidth(720)
     return _row(row_label(label, help_text, path, cli), _wrap_align(le, Qt.AlignmentFlag.AlignLeft))
 
 
