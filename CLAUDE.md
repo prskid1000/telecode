@@ -173,6 +173,8 @@ Telecode supervises **one** [DocGraph](../.docgraph) subprocess (`docgraph host 
 
 **Auto-start.** `docgraph.host.auto_start: true` → spawned in `main.py:_post_init` after the proxy. **Independent of `host.enabled`** — Auto-start fires even if Enabled is OFF (Enabled is the live-state flag). `_post_shutdown` tears down: bridge → host process.
 
+**Windows hybrid graphics (`_ensure_high_perf_gpu` in `process.py`).** Before each spawn we write `HKCU\Software\Microsoft\DirectX\UserGpuPreferences\<docgraph.exe path> = "GpuPreference=2;"`. Without this, processes started with `CREATE_NO_WINDOW` (which we always use) get the iGPU from DXGI's default adapter enumeration, and DML lands on Intel — slow at best, device-hung under sustained load. Idempotent; skipped if value already correct or off Windows.
+
 **Tray UI.** Cards: Host (start/stop/restart + bind config), Roots (table with per-row Index/Wiki/Clear/Watch + ✕ remove + `+ Add root`), LLM, Embeddings, Reranker. Embeddings + Reranker cards have a "🔄 Restart host" button — those settings only take effect on the next host spawn.
 
 **Logs.** `data/logs/docgraph_host.log` + `data/logs/docgraph_index.log`. Live tail in the global Logs section.

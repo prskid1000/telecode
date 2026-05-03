@@ -49,8 +49,6 @@
       "auto_restart": true,
       "host": "127.0.0.1",
       "port": 5500,
-      "gpu": false,
-      "directml_device_id": -1,
       "debounce": 500
     },
 
