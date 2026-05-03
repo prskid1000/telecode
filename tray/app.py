@@ -196,7 +196,7 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
         port = get_path(settings, "docgraph.host.port", 5500) or 5500
         webbrowser.open(f"http://{host}:{port}")
 
-    open_docgraph_action = QAction("Open Document Index", menu)
+    open_docgraph_action = QAction("Open Index Manager", menu)
     open_docgraph_action.triggered.connect(_open_docgraph_ui)
     open_docgraph_action.setVisible(False)
     menu.addAction(open_docgraph_action)

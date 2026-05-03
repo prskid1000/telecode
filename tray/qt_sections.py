@@ -145,7 +145,10 @@ def _number_row(path: str, label: str,
     except (TypeError, ValueError):
         ne.setValue(float(minimum))
     ne.valueChanged.connect(lambda v: patch_settings(path, v if decimals > 0 else int(round(v))))
-    return _row(row_label(label, help_text, path, cli), ne)
+    # Same cap as _line_row — keep the slider track from spanning the
+    # entire window on wide displays.
+    ne.setMaximumWidth(480)
+    return _row(row_label(label, help_text, path, cli), _wrap_align(ne, Qt.AlignmentFlag.AlignLeft))
 
 
 def _enum_row(path: str, label: str, options: list[tuple[str, Any]],
@@ -2351,7 +2354,12 @@ def _line_row(path: str, label: str, placeholder: str = "",
     le.setPlaceholderText(placeholder)
     le.setText(str(get_path(read_settings(), path, "") or ""))
     le.editingFinished.connect(lambda: patch_settings(path, le.text()))
-    return _row(row_label(label, help_text, path, cli), le)
+    # Cap so the input doesn't stretch across a wide settings window.
+    # Value-style rows (binary paths, hostnames, model names) all fit
+    # comfortably under 480px; longer values still scroll inside the
+    # field. Users get a denser, more scannable form.
+    le.setMaximumWidth(480)
+    return _row(row_label(label, help_text, path, cli), _wrap_align(le, Qt.AlignmentFlag.AlignLeft))
 
 
 def _code_row(path: str, label: str, placeholder: str = "",
