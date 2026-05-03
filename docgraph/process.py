@@ -299,6 +299,29 @@ async def _resolve_slug_from_host(path: str, port: int,
     return None
 
 
+async def fetch_stats_dict(path: str) -> Optional[dict]:
+    """Lightweight host-only stats fetch. Returns the parsed /api/stats
+    payload (entity + edge counts) or None if the host isn't alive / the
+    path isn't registered / the call fails. Used by the tray to paint
+    a live stats badge per row — never spawns a subprocess."""
+    if _HOST is None or not _HOST.alive() or not _HOST.port():
+        return None
+    port = _HOST.port()
+    timeout = aiohttp.ClientTimeout(total=5)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            slug = await _resolve_slug_from_host(path, port, session)
+            if slug is None:
+                return None
+            base = f"http://{dg_cfg.host_host()}:{port}"
+            async with session.get(f"{base}/api/stats?root={slug}") as resp:
+                if resp.status != 200:
+                    return None
+                return await resp.json()
+    except Exception:
+        return None
+
+
 async def fetch_stats(path: str) -> str:
     """Return a human-readable stats blob for `path`. Tries the host's
     /api/stats first; falls back to running `docgraph stats <path>` as
