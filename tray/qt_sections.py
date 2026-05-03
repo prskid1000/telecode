@@ -15,7 +15,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
     QScrollArea, QGridLayout, QComboBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QLineEdit, QSpinBox,
+    QHeaderView, QLineEdit, QSpinBox, QSizePolicy,
 )
 
 from tray.qt_widgets import Toggle, NumberEditor, row_label
@@ -63,23 +63,31 @@ def _card(title: str, sub: str = "") -> tuple[QFrame, QVBoxLayout]:
     outer.setSpacing(0)
 
     head = QWidget()
-    head_l = QHBoxLayout(head)
+    head_l = QVBoxLayout(head)
     head_l.setContentsMargins(18, 14, 18, 14)
-    head_l.setSpacing(10)
+    head_l.setSpacing(4)
+    title_row = QHBoxLayout()
+    title_row.setSpacing(10)
     t = QLabel(title)
     t.setProperty("class", "card_title")
-    head_l.addWidget(t, 0, Qt.AlignmentFlag.AlignTop)
+    title_row.addWidget(t, 0, Qt.AlignmentFlag.AlignVCenter)
+    title_row.addStretch(1)
+    head_l.addLayout(title_row)
     if sub:
         s = QLabel(sub)
         s.setProperty("class", "card_sub")
-        # Long subtitles (e.g. docgraph's Host description) used to force
-        # the card wider than the viewport, dragging in a horizontal
-        # scrollbar. Wrap so the text flows inside the available header
-        # width and the card never grows past its column.
+        # Long subtitles (docgraph's Host / External docs / LLM card all
+        # have multi-sentence descriptions) need the QLabel to be alone
+        # in its own row to actually wrap. Inside an HBoxLayout next to
+        # the title, the QLabel reports a huge single-line sizeHint and
+        # drags the card past the viewport regardless of wordWrap. On its
+        # own row, it expands to row width and wraps cleanly.
         s.setWordWrap(True)
-        head_l.addWidget(s, 1)
-    else:
-        head_l.addStretch(1)
+        s.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        # Cap the natural sizeHint so QScrollArea's widthForWidth handshake
+        # doesn't blow the viewport out before wrap kicks in.
+        s.setMinimumWidth(0)
+        head_l.addWidget(s)
     outer.addWidget(head)
 
     sep = QFrame()
