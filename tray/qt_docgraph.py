@@ -493,14 +493,14 @@ class _RootRow(QFrame):
         self._edit = QLineEdit(path)
         self._edit.setPlaceholderText("/path/to/repo")
         self._edit.editingFinished.connect(self._on_edit_done)
-        # Cap so the trailing widgets (▶ / 📖 / 📊 / 🗑 / 👁 / pills / ✕) stay
-        # visible without horizontal scroll on typical window widths. The
-        # QLineEdit still scrolls internally for longer paths, and the
-        # tooltip exposes the full string on hover.
+        # Edit consumes all horizontal slack — trailing widgets pack
+        # tightly on the right with no gap. Min width keeps trailing
+        # widgets from being pushed off-screen on narrow windows; the
+        # QLineEdit scrolls internally for longer paths, and the tooltip
+        # exposes the full string on hover.
         self._edit.setMinimumWidth(140)
-        self._edit.setMaximumWidth(240)
         self._edit.setToolTip(path or "/path/to/repo")
-        h.addWidget(self._edit, 0)
+        h.addWidget(self._edit, 1)
 
         self._index_btn = QPushButton("▶")
         self._index_btn.setToolTip(
@@ -554,7 +554,6 @@ class _RootRow(QFrame):
             "Restart the host to apply a flipped flag."
         )
         h.addWidget(self._watch)
-        h.addStretch(1)
 
         self._pill = QLabel("…")
         self._pill.setProperty("class", "stat_pill")
