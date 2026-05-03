@@ -508,10 +508,10 @@ async def add_doc_for(path: str, url: str) -> tuple[bool, dict | str]:
                         return False, "docs add cancelled"
                     elif status == "failed":
                         return False, f"Docs add failed: {job.get('error')}"
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            return False, f"host route failed: {exc}"
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        return False, f"host route failed: {exc}"
 
 
 async def remove_doc_for(path: str, url: str) -> tuple[bool, dict | str]:
@@ -1091,7 +1091,7 @@ class HostSupervisor:
             except Exception as exc:
                 self._last_error = str(exc)
                 log.error("docgraph host start failed: %s", exc)
-                raise
+            raise
 
     async def stop(self) -> None:
         async with self._lock:
@@ -1318,23 +1318,23 @@ class HostSupervisor:
             return
         self._restart_task = loop.create_task(self._auto_restart_loop())
 
-    async def _auto_restart_loop(self) -> None:
-        while True:
-            await asyncio.sleep(2.0)
-            proc = self._proc
-            if proc is None:
-                return
-            if proc.poll() is None:
-                continue
-            log.warning("docgraph host: subprocess exited (code %s) — restarting",
-                        proc.returncode)
-            try:
-                async with self._lock:
-                    await self._stop_locked()
-                    await self._start_locked()
-            except Exception as exc:
-                log.error("docgraph host: auto-restart failed: %s", exc)
-                return
+#     async def _auto_restart_loop(self) -> None:
+#         while True:
+#             await asyncio.sleep(2.0)
+#             proc = self._proc
+#             if proc is None:
+#                 return
+#             if proc.poll() is None:
+#                 continue
+#             log.warning("docgraph host: subprocess exited (code %s) — restarting",
+#                         proc.returncode)
+#             try:
+#                 async with self._lock:
+#                     await self._stop_locked()
+#                     await self._start_locked()
+#             except Exception as exc:
+#                 log.error("docgraph host: auto-restart failed: %s", exc)
+#                 return
 
 
 # ── Module singletons ──────────────────────────────────────────────────────
