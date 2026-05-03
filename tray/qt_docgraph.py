@@ -196,10 +196,20 @@ def _build_host_card(window) -> tuple[QFrame, Callable[[], None]]:
     ar.addWidget(start_btn); ar.addWidget(stop_btn); ar.addWidget(restart_btn)
     ar.addStretch(1)
     body.addWidget(_row(row_label("Actions"), actions))
-    # Status pill + log hint omitted — the global Status tile and Logs
-    # section already cover both. No-op refresher kept so the card's
-    # public shape (refresh callable) is unchanged.
-    refresh_status = lambda: None  # noqa: E731
+
+    def refresh_status() -> None:
+        # Gate Start/Stop/Restart on actual liveness so the user can't
+        # double-click Start on an already-running host (or Stop one
+        # that's already dead). Read straight from the supervisor — the
+        # `enabled` setting is just sticky intent, not real state.
+        try:
+            from docgraph.process import status_snapshot
+            alive = bool((status_snapshot().get("host") or {}).get("alive"))
+        except Exception:
+            alive = False
+        start_btn.setEnabled(not alive)
+        stop_btn.setEnabled(alive)
+        restart_btn.setEnabled(alive)
 
     def _on_start():
         async def _go():
@@ -225,6 +235,7 @@ def _build_host_card(window) -> tuple[QFrame, Callable[[], None]]:
     stop_btn.clicked.connect(_on_stop)
     restart_btn.clicked.connect(_on_restart)
 
+    refresh_status()
     return card, refresh_status
 
 
@@ -291,8 +302,8 @@ def _build_roots_card(window) -> tuple[QFrame, Callable[[], None]]:
     il.addWidget(status_lbl, 0); il.addStretch(1)
     body.addWidget(_row(row_label("Index all roots"), idx_w))
 
-    # Build wikis row: 📖 + ✕ cancel + status pill.
-    run_all_wiki_btn = QPushButton("📖 Build wikis")
+    # Build wikis row: ▶ + ✕ cancel + status pill.
+    run_all_wiki_btn = QPushButton("▶ Build wikis")
     run_all_wiki_btn.setProperty("class", "primary")
     run_all_wiki_btn.setToolTip("Build the wiki for every configured root.")
     cancel_wiki_btn = QPushButton("✕")
@@ -480,92 +491,45 @@ class _RootRow(QFrame):
         self.setStyleSheet(
             f"_RootRow {{ background: {BG_ELEV}; border: 1px solid {BORDER}; border-radius: 6px; }}"
         )
-        h = QHBoxLayout(self)
-        h.setContentsMargins(8, 6, 8, 6)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 6, 8, 6)
+        outer.setSpacing(6)
+
+        # ── Line 1: path (75%) + status pills (25%) + remove ✕ ────────
+        line1 = QWidget()
+        h = QHBoxLayout(line1)
+        h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(6)
 
         self._edit = QLineEdit(path)
         self._edit.setPlaceholderText("/path/to/repo")
         self._edit.editingFinished.connect(self._on_edit_done)
-        # Edit consumes all horizontal slack — trailing widgets pack
-        # tightly on the right with no gap. Min width keeps trailing
-        # widgets from being pushed off-screen on narrow windows; the
-        # QLineEdit scrolls internally for longer paths, and the tooltip
-        # exposes the full string on hover.
         self._edit.setMinimumWidth(140)
         self._edit.setToolTip(path or "/path/to/repo")
-        h.addWidget(self._edit, 1)
+        # 3 : 1 split → path is the 75%, the status block is the 25%.
+        h.addWidget(self._edit, 3)
 
-        self._index_btn = QPushButton("▶")
-        self._index_btn.setToolTip(
-            "Index this root.\n"
-            "POST /api/admin/index?root=<slug>  if host is alive,\n"
-            "else falls back to:  docgraph index <path>"
-        )
-        self._index_btn.setFixedWidth(34)
-        self._index_btn.clicked.connect(self._trigger_index)
-        h.addWidget(self._index_btn)
-
-        self._wiki_btn = QPushButton("📖")
-        self._wiki_btn.setToolTip(
-            "Build the wiki for this root.\n"
-            "POST /api/wiki/build?root=<slug>  if host is alive,\n"
-            "else falls back to:  docgraph wiki <path>\n"
-            "Full toggle on = --force (rebuild every page)"
-        )
-        self._wiki_btn.setFixedWidth(34)
-        self._wiki_btn.clicked.connect(self._trigger_wiki)
-        h.addWidget(self._wiki_btn)
-
-        self._stats_btn = QPushButton("📊")
-        self._stats_btn.setToolTip(
-            "Show stats for this root.\n"
-            "GET /api/stats?root=<slug> — entity + edge counts.\n"
-            "Read-only; works while the host is alive (free) or via a brief\n"
-            "`docgraph stats <path>` subprocess if not."
-        )
-        self._stats_btn.setFixedWidth(34)
-        self._stats_btn.clicked.connect(self._trigger_stats)
-        h.addWidget(self._stats_btn)
-
-        self._clear_btn = QPushButton("🗑")
-        self._clear_btn.setToolTip(
-            "Clear this root's index.\n"
-            "POST /api/admin/clear?root=<slug> — wipe the index, cache, and\n"
-            "wiki for this root. Confirmation required. Host stays alive;\n"
-            "the workspace re-opens its read-only handle once the wipe is done."
-        )
-        self._clear_btn.setFixedWidth(34)
-        self._clear_btn.clicked.connect(self._trigger_clear)
-        h.addWidget(self._clear_btn)
-
-        self._watch = Toggle()
-        self._watch.setChecked(bool(watch))
-        self._watch.toggled.connect(self._on_watch_toggled)
-        self._watch.setToolTip(
-            "Watch — auto-reindex on file changes.\n"
-            "Forwards as `docgraph host --watch <path>`. "
-            "Restart the host to apply a flipped flag."
-        )
-        h.addWidget(self._watch)
+        pills_w = QWidget()
+        pl = QHBoxLayout(pills_w)
+        pl.setContentsMargins(0, 0, 0, 0); pl.setSpacing(4)
 
         self._pill = QLabel("…")
         self._pill.setProperty("class", "stat_pill")
         self._pill.setMinimumWidth(0)
-        self._pill.setMaximumWidth(140)
         self._pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._pill.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         self._pill.setToolTip("Index status")
-        h.addWidget(self._pill, 0)
+        pl.addWidget(self._pill, 1)
 
         self._wiki_pill = QLabel("…")
         self._wiki_pill.setProperty("class", "stat_pill")
         self._wiki_pill.setMinimumWidth(0)
-        self._wiki_pill.setMaximumWidth(120)
         self._wiki_pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._wiki_pill.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         self._wiki_pill.setToolTip("Wiki status")
-        h.addWidget(self._wiki_pill, 0)
+        pl.addWidget(self._wiki_pill, 1)
+
+        h.addWidget(pills_w, 1)
 
         rm_btn = QPushButton("✕")
         rm_btn.setFlat(True)
@@ -576,6 +540,71 @@ class _RootRow(QFrame):
         )
         rm_btn.clicked.connect(lambda: self._on_remove(self))
         h.addWidget(rm_btn)
+
+        outer.addWidget(line1)
+
+        # ── Line 2: labeled action buttons + Watch toggle ─────────────
+        line2 = QWidget()
+        bh = QHBoxLayout(line2)
+        bh.setContentsMargins(0, 0, 0, 0)
+        bh.setSpacing(6)
+
+        self._index_btn = QPushButton("▶ Index")
+        self._index_btn.setToolTip(
+            "Index this root.\n"
+            "POST /api/admin/index?root=<slug>  if host is alive,\n"
+            "else falls back to:  docgraph index <path>"
+        )
+        self._index_btn.clicked.connect(self._trigger_index)
+        bh.addWidget(self._index_btn)
+
+        self._wiki_btn = QPushButton("📖 Wiki")
+        self._wiki_btn.setToolTip(
+            "Build the wiki for this root.\n"
+            "POST /api/wiki/build?root=<slug>  if host is alive,\n"
+            "else falls back to:  docgraph wiki <path>\n"
+            "Full toggle on = --force (rebuild every page)"
+        )
+        self._wiki_btn.clicked.connect(self._trigger_wiki)
+        bh.addWidget(self._wiki_btn)
+
+        self._stats_btn = QPushButton("📊 Stats")
+        self._stats_btn.setToolTip(
+            "Show stats for this root.\n"
+            "GET /api/stats?root=<slug> — entity + edge counts.\n"
+            "Read-only; works while the host is alive (free) or via a brief\n"
+            "`docgraph stats <path>` subprocess if not."
+        )
+        self._stats_btn.clicked.connect(self._trigger_stats)
+        bh.addWidget(self._stats_btn)
+
+        self._clear_btn = QPushButton("🗑 Clear")
+        self._clear_btn.setProperty("class", "danger")
+        self._clear_btn.setToolTip(
+            "Clear this root's index.\n"
+            "POST /api/admin/clear?root=<slug> — wipe the index, cache, and\n"
+            "wiki for this root. Confirmation required. Host stays alive;\n"
+            "the workspace re-opens its read-only handle once the wipe is done."
+        )
+        self._clear_btn.clicked.connect(self._trigger_clear)
+        bh.addWidget(self._clear_btn)
+
+        bh.addStretch(1)
+
+        watch_lbl = QLabel("Watch")
+        watch_lbl.setStyleSheet(f"color: {FG_DIM}; font-size: 11.5px;")
+        bh.addWidget(watch_lbl)
+        self._watch = Toggle()
+        self._watch.setChecked(bool(watch))
+        self._watch.toggled.connect(self._on_watch_toggled)
+        self._watch.setToolTip(
+            "Watch — auto-reindex on file changes.\n"
+            "Forwards as `docgraph host --watch <path>`. "
+            "Restart the host to apply a flipped flag."
+        )
+        bh.addWidget(self._watch)
+
+        outer.addWidget(line2)
 
         self.refresh_state()
 
