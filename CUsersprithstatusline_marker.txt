@@ -1,0 +1,6 @@
+Microsoft Windows [Version 10.0.26200.8246]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Users\prith\.telecode>{"session_id":"2c1c1a3e-a4b6-45ff-83af-22889c0e41f2","transcript_path":"C:\\Users\\prith\\.claude\\projects\\C--Users-prith--telecode\\2c1c1a3e-a4b6-45ff-83af-22889c0e41f2.jsonl","cwd":"C:\\Users\\prith\\.telecode","model":{"id":"claude-opus-4-7[1m]","display_name":"Opus 4.7 (1M context)"},"workspace":{"current_dir":"C:\\Users\\prith\\.telecode","project_dir":"C:\\Users\\prith\\.telecode","added_dirs":[]},"version":"2.1.119","output_style":{"name":"default"},"cost":{"total_cost_usd":3.8217612499999993,"total_duration_ms":419058,"total_api_duration_ms":255885,"total_lines_added":108,"total_lines_removed":4},"context_window":{"total_input_tokens":25,"total_output_tokens":13124,"context_window_size":1000000,"current_usage":{"input_tokens":1,"output_tokens":3538,"cache_creation_input_tokens":2027,"cache_read_input_tokens":273884},"used_percentage":28,"remaining_percentage":72},"exceeds_200k_tokens":true,"fast_mode":false,"effort":{"level":"high"},"thinking":{"enabled":true},"rate_limits":{"five_hour":{"used_percentage":8,"resets_at":1777134600},"seven_day":{"used_percentage":25,"resets_at":1777363200}}}
+
+C:\Users\prith\.telecode>
