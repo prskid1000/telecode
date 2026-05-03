@@ -28,6 +28,7 @@ from process import bind_to_lifetime_job, kill_process_tree, sweep_port
 from . import config as dg_cfg
 from . import bridge as dg_bridge
 from . import index_state
+from . import wiki_state
 
 log = logging.getLogger("telecode.docgraph")
 
@@ -136,6 +137,62 @@ async def _index_via_host(path: str, full: bool, port: int) -> tuple[bool, str]:
                 return True, "\n".join(lines) if lines else body[:2000]
         except Exception as exc:
             return False, f"POST /api/admin/index failed: {exc}"
+
+
+async def _wiki_via_host(path: str, force: bool, port: int) -> tuple[bool, str]:
+    """POST /api/wiki/build?root=<slug> on the running host.
+
+    Mirrors `_index_via_host`: resolves the path → slug via /api/roots,
+    POSTs the build request, and returns (ok, summary). The host's wiki
+    builder uses the slot's `cfg.llm_*` (set when the host was started),
+    so the LLM endpoint isn't tunable via this route — only the
+    subprocess fallback can override per-call.
+    """
+    base = f"http://{dg_cfg.host_host()}:{port}"
+    norm = os.path.normpath(path)
+    target = norm.casefold() if sys.platform == "win32" else norm
+    timeout = aiohttp.ClientTimeout(total=1800)  # wiki can be slow per module
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        try:
+            async with session.get(f"{base}/api/roots") as resp:
+                if resp.status != 200:
+                    return False, f"GET /api/roots returned HTTP {resp.status}"
+                roots = await resp.json()
+        except Exception as exc:
+            return False, f"could not reach host at {base}: {exc}"
+        slug: str | None = None
+        for r in roots:
+            r_norm = os.path.normpath(str(r.get("path") or ""))
+            r_target = r_norm.casefold() if sys.platform == "win32" else r_norm
+            if r_target == target:
+                slug = r.get("slug")
+                break
+        if slug is None:
+            return False, (
+                f"path {path} is not a registered root on the host "
+                f"(roots: {[r.get('slug') for r in roots]})"
+            )
+        url = f"{base}/api/wiki/build?root={slug}"
+        try:
+            async with session.post(url, json={"force": force}) as resp:
+                body = await resp.text()
+                if resp.status != 200:
+                    return False, f"POST /api/wiki/build → HTTP {resp.status}: {body[:500]}"
+                try:
+                    payload = json.loads(body)
+                except Exception:
+                    return True, body[:2000]
+                built = payload.get("built", "?")
+                modules = payload.get("modules") or []
+                summary = (
+                    f"\n--- wiki: {built} module page(s) "
+                    f"({'rebuilt' if force else 'resumable'}) ---\n"
+                    + "\n".join(f"  · {m}" for m in modules[:50])
+                    + ("\n  · …" if len(modules) > 50 else "")
+                )
+                return True, summary
+        except Exception as exc:
+            return False, f"POST /api/wiki/build failed: {exc}"
 
 
 # ── Index runner (one-shot subprocess per root) ────────────────────────────
@@ -305,6 +362,169 @@ class IndexRunner:
 
         # Always finalize: persist per-path state, clear current, close log.
         index_state.update(path, status=rc_or_status, was_full=force)
+        self._current_path = None
+        self._current_force = False
+        self._proc = None
+        self._last_finished_at = time.time()
+        if self._log_fp:
+            try:
+                self._log_fp.close()
+            except Exception:
+                pass
+            self._log_fp = None
+
+
+# ── Wiki runner (one-shot per root) ────────────────────────────────────────
+
+class WikiRunner:
+    """Runs `docgraph wiki <path>` (or `POST /api/wiki/build` against the
+    host). Same two-route pattern as `IndexRunner` — host route avoids the
+    Kuzu lock dance, subprocess route lets us pass tunable `--llm-*` flags.
+    """
+
+    def __init__(self) -> None:
+        self._task: Optional[asyncio.Task] = None
+        self._proc: Optional[subprocess.Popen] = None
+        self._log_fp = None
+        self._lock = asyncio.Lock()
+        self._current_path: str | None = None
+        self._current_force: bool = False
+        self._last_status: str = "idle"
+        self._last_finished_at: float = 0.0
+
+    def alive(self) -> bool:
+        return bool(self._task and not self._task.done())
+
+    def current_path(self) -> str | None:
+        return self._current_path
+
+    def status(self) -> dict:
+        return {
+            "alive":             self.alive(),
+            "current_path":      self._current_path,
+            "current_force":     self._current_force,
+            "last_status":       self._last_status,
+            "last_finished_at":  self._last_finished_at,
+            "log_path":          dg_cfg.log_path("wiki"),
+            "per_path":          wiki_state.load(),
+        }
+
+    async def run(self, path: str, force: bool = False) -> None:
+        if not path:
+            raise RuntimeError("path is required")
+        async with self._lock:
+            if self.alive():
+                log.warning("docgraph wiki: already running %s — ignoring %s",
+                            self._current_path, path)
+                return
+            self._task = asyncio.create_task(self._run_one(path, force))
+
+    async def run_all(self, force: bool = False) -> None:
+        async with self._lock:
+            if self.alive():
+                return
+            paths = dg_cfg.root_paths()
+            if not paths:
+                return
+            self._task = asyncio.create_task(self._run_sequence(paths, force))
+
+    async def cancel(self) -> None:
+        async with self._lock:
+            t = self._task
+            if t and not t.done():
+                t.cancel()
+            if self._proc and self._proc.poll() is None:
+                try:
+                    kill_process_tree(self._proc.pid)
+                except Exception:
+                    pass
+
+    async def _run_sequence(self, paths: list[str], force: bool) -> None:
+        for path in paths:
+            await self._run_one_inline(path, force)
+            if self._last_status in ("failed", "cancelled"):
+                return
+
+    async def _run_one(self, path: str, force: bool) -> None:
+        await self._run_one_inline(path, force)
+
+    async def _run_one_inline(self, path: str, force: bool) -> None:
+        self._last_status = "running"
+        self._current_path = path
+        self._current_force = force
+        wiki_state.mark_running(path, was_full=force)
+        self._log_fp = _open_log("wiki")
+        rc_or_status = "failed"
+
+        host_route = False
+        try:
+            if _HOST is not None and _HOST.alive() and _HOST.port():
+                host_route = True
+                self._log_fp.write(
+                    f"\n--- wiki {path} via host /api/wiki/build "
+                    f"({'--force' if force else 'resumable'}) ---\n".encode()
+                )
+                self._log_fp.flush()
+                ok, detail = await _wiki_via_host(path, force, _HOST.port())
+                self._log_fp.write(detail.encode("utf-8", errors="replace") + b"\n")
+                self._log_fp.flush()
+                rc_or_status = "ok" if ok else "failed"
+                self._last_status = "done" if ok else "failed"
+        except asyncio.CancelledError:
+            self._last_status = "cancelled"
+            rc_or_status = "cancelled"
+            host_route = True
+            raise
+        except Exception as exc:
+            log.warning("docgraph wiki %s: host route failed: %s — falling back to subprocess", path, exc)
+            self._log_fp.write(f"\n--- host route failed: {exc} — falling back to subprocess ---\n".encode())
+            self._log_fp.flush()
+            host_route = False
+
+        if not host_route:
+            try:
+                binary = _binary_or_raise()
+                argv = [binary, "wiki", path]
+                if force:
+                    argv.append("--force")
+                if dg_cfg.llm_model():
+                    argv += ["--llm-model", dg_cfg.llm_model(),
+                             "--llm-host", dg_cfg.llm_host(),
+                             "--llm-port", str(dg_cfg.llm_port()),
+                             "--llm-format", dg_cfg.llm_format(),
+                             "--llm-max-tokens", str(dg_cfg.llm_max_tokens_wiki())]
+                env = {
+                    "PYTHONIOENCODING": "utf-8",
+                    "PYTHONUTF8": "1",
+                }
+                self._log_fp.write(
+                    f"\n--- wiki {path} {'(--force)' if force else '(resumable)'} ---\n".encode()
+                )
+                self._log_fp.flush()
+                self._proc = subprocess.Popen(
+                    argv,
+                    stdout=self._log_fp,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                    creationflags=_creation_flags(),
+                    env={**os.environ, **env},
+                )
+                bind_to_lifetime_job(self._proc.pid, proc=self._proc)
+                rc = await asyncio.to_thread(self._proc.wait)
+                rc_or_status = "ok" if rc == 0 else "failed"
+                self._last_status = "done" if rc == 0 else "failed"
+                if rc != 0:
+                    log.warning("docgraph wiki %s: rc=%s", path, rc)
+            except asyncio.CancelledError:
+                self._last_status = "cancelled"
+                rc_or_status = "cancelled"
+                raise
+            except Exception as exc:
+                log.error("docgraph wiki %s: %s", path, exc)
+                self._last_status = "failed"
+                rc_or_status = "failed"
+
+        wiki_state.update(path, status=rc_or_status, was_full=force)
         self._current_path = None
         self._current_force = False
         self._proc = None
@@ -528,6 +748,7 @@ class HostSupervisor:
 # ── Module singletons ──────────────────────────────────────────────────────
 
 _INDEX: IndexRunner | None = None
+_WIKI: WikiRunner | None = None
 _HOST: HostSupervisor | None = None
 
 
@@ -536,6 +757,13 @@ def get_index() -> IndexRunner:
     if _INDEX is None:
         _INDEX = IndexRunner()
     return _INDEX
+
+
+def get_wiki() -> WikiRunner:
+    global _WIKI
+    if _WIKI is None:
+        _WIKI = WikiRunner()
+    return _WIKI
 
 
 def get_host() -> HostSupervisor:
@@ -574,6 +802,11 @@ async def shutdown_all() -> None:
     if _INDEX is not None:
         try:
             await _INDEX.cancel()
+        except Exception:
+            pass
+    if _WIKI is not None:
+        try:
+            await _WIKI.cancel()
         except Exception:
             pass
 
