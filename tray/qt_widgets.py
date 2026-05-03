@@ -8,13 +8,49 @@ from __future__ import annotations
 from typing import Optional
 
 from PySide6.QtCore import (
-    Qt, QRectF, Signal, QPropertyAnimation, QEasingCurve, Property,
+    Qt, QRectF, QSize, Signal, QPropertyAnimation, QEasingCurve, Property,
 )
 from PySide6.QtGui import QPainter, QColor, QBrush
 from PySide6.QtWidgets import (
     QCheckBox, QWidget, QHBoxLayout, QVBoxLayout, QLabel, QLineEdit,
     QSlider, QSizePolicy,
 )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# WrapLabel — word-wrapped QLabel that doesn't push parent width
+# ══════════════════════════════════════════════════════════════════════
+
+class WrapLabel(QLabel):
+    """QLabel with `wordWrap=True` AND a horizontal sizeHint of 0.
+
+    Plain `QLabel.setWordWrap(True)` wraps at runtime but still reports
+    `sizeHint().width()` as the unwrapped single-line width. That width
+    bubbles up through QVBoxLayouts → cards → the QScrollArea content,
+    forcing a horizontal scrollbar even though the visible text wraps
+    fine. Returning 0 from sizeHint().width() + minimumSizeHint().width()
+    breaks that propagation; the label still computes its actual height
+    via heightForWidth() once the layout assigns it a width.
+    """
+
+    def __init__(self, text: str = "", parent: Optional[QWidget] = None) -> None:
+        super().__init__(text, parent)
+        self.setWordWrap(True)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.MinimumExpanding)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, w: int) -> int:
+        return super().heightForWidth(max(1, w))
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(0, super().minimumSizeHint().height())
+
+    def sizeHint(self) -> QSize:
+        w = self.width() if self.width() > 0 else 0
+        h = super().heightForWidth(w) if w > 0 else super().sizeHint().height()
+        return QSize(0, h)
 
 from tray.qt_theme import ACCENT, BG_CARD, FG, FG_DIM, FG_MUTE, BORDER
 
@@ -201,19 +237,15 @@ def row_label(text: str, help_text: str = "", path: str = "",
     lbl.setProperty("class", "row_label")
     v.addWidget(lbl)
     if help_text:
-        hl = QLabel(help_text)
+        hl = WrapLabel(help_text)
         hl.setProperty("class", "row_help")
-        hl.setWordWrap(True)
         v.addWidget(hl)
     # Pack settings-key-path and CLI flag onto the same mono line so the
     # row's vertical footprint doesn't grow when both are present.
     pieces = [s for s in (path, cli) if s]
     if pieces:
-        p = QLabel("  ·  ".join(pieces))
+        p = WrapLabel("  ·  ".join(pieces))
         p.setProperty("class", "key_path")
-        # The label column is fixed at 280px (see _row); long CLI hints
-        # like "docgraph index --llm-max-tokens" get clipped without wrap.
-        p.setWordWrap(True)
         v.addWidget(p)
     w.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
     return w
