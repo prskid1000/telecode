@@ -71,7 +71,70 @@ def _alive(proc: subprocess.Popen | None) -> bool:
     return bool(proc and proc.poll() is None)
 
 
-async def _index_via_host(path: str, full: bool, port: int) -> tuple[bool, str]:
+def _format_progress_line(event: str, payload: dict) -> str:
+    """Format an SSE progress event payload into one human-readable log
+    line. Covers index_progress + wiki_progress shapes."""
+    import datetime as _dt
+    phase = str(payload.get("phase") or "?")
+    cur = int(payload.get("current") or 0)
+    tot = int(payload.get("total") or 0)
+    mod = str(payload.get("module") or "")
+    ts = float(payload.get("ts") or 0.0)
+    ts_str = _dt.datetime.fromtimestamp(ts).strftime("%H:%M:%S") if ts else "--:--:--"
+    if event == "wiki_progress" and mod:
+        return f"[{ts_str}] {phase}: {mod} ({cur}/{tot})"
+    if tot:
+        return f"[{ts_str}] {phase} ({cur}/{tot})"
+    return f"[{ts_str}] {phase}"
+
+
+async def _sse_progress_tee(slug: str, port: int, event_names: tuple[str, ...],
+                             log_fp, session: aiohttp.ClientSession) -> None:
+    """Subscribe to /api/events on the host and write matching events to
+    `log_fp`. Filters by `slug` (events from other roots are ignored) and
+    by event name (`index_progress` / `wiki_progress`). Best-effort — any
+    failure (host went down, SSE timed out, log_fp closed) is swallowed
+    silently; the parent task handles the actual operation result."""
+    if log_fp is None:
+        return
+    base = f"http://{dg_cfg.host_host()}:{port}"
+    try:
+        async with session.get(f"{base}/api/events") as resp:
+            if resp.status != 200:
+                return
+            current_event = "message"
+            async for raw in resp.content:
+                try:
+                    line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                except Exception:
+                    continue
+                if not line:
+                    continue
+                if line.startswith("event:"):
+                    current_event = line[6:].strip()
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                if current_event not in event_names:
+                    continue
+                payload_text = line[5:].strip()
+                try:
+                    payload = json.loads(payload_text)
+                except Exception:
+                    continue
+                if payload.get("repo_slug") != slug:
+                    continue
+                line_out = _format_progress_line(current_event, payload)
+                try:
+                    log_fp.write((line_out + "\n").encode("utf-8", errors="replace"))
+                    log_fp.flush()
+                except Exception:
+                    return
+    except (asyncio.CancelledError, aiohttp.ClientError, Exception):
+        return
+
+
+async def _index_via_host(path: str, full: bool, port: int, log_fp=None) -> tuple[bool, str]:
     """POST /api/admin/index?root=<slug>&full=<bool> on the running host.
 
     Returns (ok, detail_text). Resolves `path` to a slug by hitting
@@ -104,43 +167,58 @@ async def _index_via_host(path: str, full: bool, port: int) -> tuple[bool, str]:
                 f"path {path} is not a registered root on the host "
                 f"(roots: {[r.get('slug') for r in roots]})"
             )
-        # 2) Trigger the index pass.
+        # 2) Trigger the index pass. Tee SSE phase events into the log
+        # in parallel so docgraph_index.log shows the same per-stage status
+        # the CLI prints (rather than just the spawning marker + the final
+        # captured Rich transcript at the end).
+        sse_task = asyncio.create_task(
+            _sse_progress_tee(slug, port, ("index_progress",), log_fp, session)
+        )
         url = f"{base}/api/admin/index?root={slug}"
         try:
-            async with session.post(url, json={"full": full}) as resp:
-                body = await resp.text()
-                if resp.status == 499:
-                    # Server-side cancel landed (telecode hit /api/admin/cancel
-                    # or another caller did). Don't treat as failure.
-                    raise asyncio.CancelledError()
-                if resp.status != 200:
-                    return False, f"POST /api/admin/index → HTTP {resp.status}: {body[:500]}"
-                # The host returns {slug, full, stats, log}. The `log`
-                # field is the captured Rich transcript (progress bar
-                # finals + per-stage timings); surface that into our log
-                # file instead of dumping raw JSON.
-                try:
-                    payload = json.loads(body)
-                except Exception:
-                    return True, body[:2000]
-                lines: list[str] = []
-                cap = payload.get("log") or ""
-                if cap:
-                    lines.append(cap.rstrip())
-                stats = payload.get("stats") or {}
-                if stats:
-                    summary = (
-                        f"\n--- done: {stats.get('files', '?')} files, "
-                        f"{stats.get('changed', '?')} changed, "
-                        f"{stats.get('deleted', '?')} deleted, "
-                        f"{stats.get('entities', '?')} entities, "
-                        f"{stats.get('errors', 0)} errors, "
-                        f"{stats.get('elapsed', 0):.2f}s ---"
-                    )
-                    lines.append(summary)
-                return True, "\n".join(lines) if lines else body[:2000]
-        except Exception as exc:
-            return False, f"POST /api/admin/index failed: {exc}"
+            try:
+                async with session.post(url, json={"full": full}) as resp:
+                    body = await resp.text()
+                    if resp.status == 499:
+                        # Server-side cancel landed (telecode hit /api/admin/cancel
+                        # or another caller did). Don't treat as failure.
+                        raise asyncio.CancelledError()
+                    if resp.status != 200:
+                        return False, f"POST /api/admin/index → HTTP {resp.status}: {body[:500]}"
+                    # The host returns {slug, full, stats, log}. The `log`
+                    # field is the captured Rich transcript (progress bar
+                    # finals + per-stage timings); surface that into our log
+                    # file instead of dumping raw JSON.
+                    try:
+                        payload = json.loads(body)
+                    except Exception:
+                        return True, body[:2000]
+                    lines: list[str] = []
+                    cap = payload.get("log") or ""
+                    if cap:
+                        lines.append(cap.rstrip())
+                    stats = payload.get("stats") or {}
+                    if stats:
+                        summary = (
+                            f"\n--- done: {stats.get('files', '?')} files, "
+                            f"{stats.get('changed', '?')} changed, "
+                            f"{stats.get('deleted', '?')} deleted, "
+                            f"{stats.get('entities', '?')} entities, "
+                            f"{stats.get('errors', 0)} errors, "
+                            f"{stats.get('elapsed', 0):.2f}s ---"
+                        )
+                        lines.append(summary)
+                    return True, "\n".join(lines) if lines else body[:2000]
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                return False, f"POST /api/admin/index failed: {exc}"
+        finally:
+            sse_task.cancel()
+            try:
+                await sse_task
+            except (asyncio.CancelledError, Exception):
+                pass
 
 
 async def _request_host_cancel(path: str) -> None:
@@ -344,7 +422,7 @@ async def remove_doc_for(path: str, url: str) -> tuple[bool, dict | str]:
         return False, f"host route failed: {exc}"
 
 
-async def _wiki_via_host(path: str, force: bool, port: int) -> tuple[bool, str]:
+async def _wiki_via_host(path: str, force: bool, port: int, log_fp=None) -> tuple[bool, str]:
     """POST /api/wiki/build?root=<slug> on the running host.
 
     Mirrors `_index_via_host`: resolves the path → slug via /api/roots,
@@ -377,29 +455,42 @@ async def _wiki_via_host(path: str, force: bool, port: int) -> tuple[bool, str]:
                 f"path {path} is not a registered root on the host "
                 f"(roots: {[r.get('slug') for r in roots]})"
             )
+        # Tee per-module SSE progress so docgraph_wiki.log mirrors CLI status.
+        sse_task = asyncio.create_task(
+            _sse_progress_tee(slug, port, ("wiki_progress",), log_fp, session)
+        )
         url = f"{base}/api/wiki/build?root={slug}"
         try:
-            async with session.post(url, json={"force": force}) as resp:
-                body = await resp.text()
-                if resp.status == 499:
-                    raise asyncio.CancelledError()
-                if resp.status != 200:
-                    return False, f"POST /api/wiki/build → HTTP {resp.status}: {body[:500]}"
-                try:
-                    payload = json.loads(body)
-                except Exception:
-                    return True, body[:2000]
-                built = payload.get("built", "?")
-                modules = payload.get("modules") or []
-                summary = (
-                    f"\n--- wiki: {built} module page(s) "
-                    f"({'rebuilt' if force else 'resumable'}) ---\n"
-                    + "\n".join(f"  · {m}" for m in modules[:50])
-                    + ("\n  · …" if len(modules) > 50 else "")
-                )
-                return True, summary
-        except Exception as exc:
-            return False, f"POST /api/wiki/build failed: {exc}"
+            try:
+                async with session.post(url, json={"force": force}) as resp:
+                    body = await resp.text()
+                    if resp.status == 499:
+                        raise asyncio.CancelledError()
+                    if resp.status != 200:
+                        return False, f"POST /api/wiki/build → HTTP {resp.status}: {body[:500]}"
+                    try:
+                        payload = json.loads(body)
+                    except Exception:
+                        return True, body[:2000]
+                    built = payload.get("built", "?")
+                    modules = payload.get("modules") or []
+                    summary = (
+                        f"\n--- wiki: {built} module page(s) "
+                        f"({'rebuilt' if force else 'resumable'}) ---\n"
+                        + "\n".join(f"  · {m}" for m in modules[:50])
+                        + ("\n  · …" if len(modules) > 50 else "")
+                    )
+                    return True, summary
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                return False, f"POST /api/wiki/build failed: {exc}"
+        finally:
+            sse_task.cancel()
+            try:
+                await sse_task
+            except (asyncio.CancelledError, Exception):
+                pass
 
 
 # ── Index runner (one-shot subprocess per root) ────────────────────────────
@@ -519,7 +610,8 @@ class IndexRunner:
                         f"({'--full' if force else 'incremental'}) ---\n".encode()
                     )
                     self._log_fp.flush()
-                    ok, detail = await _index_via_host(path, force, _HOST.port())
+                    ok, detail = await _index_via_host(path, force, _HOST.port(),
+                                                        log_fp=self._log_fp)
                     self._log_fp.write(detail.encode("utf-8", errors="replace") + b"\n")
                     self._log_fp.flush()
                     rc_or_status = "ok" if ok else "failed"
@@ -705,7 +797,8 @@ class WikiRunner:
                         f"({'--force' if force else 'resumable'}) ---\n".encode()
                     )
                     self._log_fp.flush()
-                    ok, detail = await _wiki_via_host(path, force, _HOST.port())
+                    ok, detail = await _wiki_via_host(path, force, _HOST.port(),
+                                                       log_fp=self._log_fp)
                     self._log_fp.write(detail.encode("utf-8", errors="replace") + b"\n")
                     self._log_fp.flush()
                     rc_or_status = "ok" if ok else "failed"
