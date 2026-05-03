@@ -1389,6 +1389,56 @@ def _build_documents_index_card(window) -> tuple[QFrame, Callable[[], None] | No
 # DocGraph auto-derives the Kuzu schema dim from the chosen model — switching
 # to a different-dim model requires `Clear` + full reindex (existing vectors
 # are wrong-shape under a new dim).
+def _restart_host_row(window, hint: str) -> QWidget:
+    """A compact 'Restart host' button + hint text. Lives inside cards
+    whose settings only take effect on the next host spawn (Embeddings,
+    Reranker). Disabled when the host is already stopped — Stop+Start
+    in the Host card is the cleaner path for that case."""
+    row = QWidget()
+    h = QHBoxLayout(row)
+    h.setContentsMargins(0, 4, 0, 0); h.setSpacing(8)
+    btn = QPushButton("🔄 Restart host")
+    btn.setProperty("class", "ghost")
+    btn.setToolTip(
+        "Stops the running docgraph host and starts a fresh one so the\n"
+        "settings on this card take effect. Equivalent to Host → Restart."
+    )
+    label = QLabel(hint)
+    label.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
+    label.setWordWrap(True)
+
+    def _on_restart():
+        async def _go():
+            from docgraph.process import get_host
+            sup = get_host()
+            try:
+                await sup.stop()
+            except Exception:
+                pass
+            await sup.start()
+        _run(window, _go)
+
+    def _refresh_enabled():
+        try:
+            from docgraph.process import status_snapshot
+            alive = bool((status_snapshot().get("host") or {}).get("alive"))
+        except Exception:
+            alive = False
+        btn.setEnabled(alive)
+        btn.setToolTip(
+            btn.toolTip() if alive else
+            "Host is not running — start it from the Host card first."
+        )
+
+    btn.clicked.connect(_on_restart)
+    h.addWidget(btn)
+    h.addWidget(label, 1)
+    _refresh_enabled()
+    # No periodic refresh wired in; if the host dies between renders the
+    # next click is a no-op (sup.stop swallows, sup.start surfaces the error).
+    return row
+
+
 _DOCGRAPH_EMBED_MODELS: list[tuple[str, str]] = [
     ("Default (BAAI/bge-small-en-v1.5)  ·  384 · 67 MB · fastembed default", ""),
     ("BAAI/bge-base-en-v1.5  ·  768 · 210 MB · BGE family base",
@@ -1426,6 +1476,10 @@ def _build_embeddings_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     body.addWidget(_number_row("docgraph.index.embed_batch_size", "Embed batch size",
                                 0, 1024, 16, 0, "", "0 = default (256 CPU / 32 GPU). Lower if GPU saturates.",
                                 cli="--embed-batch-size"))
+    body.addWidget(_restart_host_row(
+        window,
+        "Embedding model + GPU changes apply on the next host start.",
+    ))
     return card, None
 
 
@@ -1460,4 +1514,13 @@ def _build_reranker_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     body.addWidget(_enum_row_strs("docgraph.rerank.model", "Model",
                                     _DOCGRAPH_RERANK_MODELS,
                                     "Lazy-loaded on first reranked search."))
+    body.addWidget(_toggle_row("docgraph.rerank.gpu", "GPU reranker",
+                                "Forwards DOCGRAPH_RERANK_GPU=1. Independent "
+                                "of embeddings GPU. Needs onnxruntime-gpu/"
+                                "-directml/-silicon. Falls back to CPU on init "
+                                "failure."))
+    body.addWidget(_restart_host_row(
+        window,
+        "Reranker model + GPU changes apply on the next host start.",
+    ))
     return card, None

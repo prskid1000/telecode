@@ -1021,6 +1021,8 @@ class HostSupervisor:
             env["DOCGRAPH_RERANK_MODEL"] = dg_cfg.rerank_model()
         if dg_cfg.rerank_default():
             env["DOCGRAPH_RERANK_DEFAULT"] = "1"
+        if dg_cfg.rerank_gpu():
+            env["DOCGRAPH_RERANK_GPU"] = "1"
         env.update(dg_cfg.prompt_env())
         env.update(dg_cfg.documents_env())
 
