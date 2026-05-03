@@ -1097,6 +1097,16 @@ class HostSupervisor:
             argv.append("--rerank-default")
         if dg_cfg.rerank_gpu():
             argv.append("--rerank-gpu")
+        # Indexer + wiki tunables that affect /api/admin/index and
+        # /api/wiki/build inside the host. These must travel with the host
+        # spawn, not just the fallback subprocess, since the host route is
+        # the primary path now.
+        if dg_cfg.index_workers() > 0:
+            argv += ["--workers", str(dg_cfg.index_workers())]
+        if dg_cfg.index_embed_batch_size() > 0:
+            argv += ["--embed-batch-size", str(dg_cfg.index_embed_batch_size())]
+        if dg_cfg.wiki_depth() and dg_cfg.wiki_depth() != 12:
+            argv += ["--wiki-depth", str(dg_cfg.wiki_depth())]
         # LLM augmentation knobs — only forwarded when a model is configured
         # (setting just the model implies enable, mirroring docgraph's CLI).
         if dg_cfg.llm_model():
@@ -1109,6 +1119,12 @@ class HostSupervisor:
                 argv += ["--llm-format", dg_cfg.llm_format()]
             if dg_cfg.llm_max_tokens():
                 argv += ["--llm-max-tokens", str(dg_cfg.llm_max_tokens())]
+            if dg_cfg.llm_max_tokens_wiki():
+                argv += ["--llm-max-tokens-wiki", str(dg_cfg.llm_max_tokens_wiki())]
+            if dg_cfg.llm_api_key():
+                argv += ["--llm-api-key", dg_cfg.llm_api_key()]
+            if dg_cfg.llm_timeout() > 0:
+                argv += ["--llm-timeout", str(dg_cfg.llm_timeout())]
             argv.append("--llm-docstrings" if dg_cfg.llm_docstrings() else "--no-llm-docstrings")
         argv.append("--llm-wiki" if dg_cfg.llm_wiki() else "--no-llm-wiki")
         # Long-form prompt overrides — write the text to a temp file so we
