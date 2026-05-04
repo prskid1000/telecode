@@ -536,18 +536,17 @@ class _GroupRow(QFrame):
         self._members_layout.setSpacing(4)
         outer.addWidget(self._members_host)
 
-        # ── Add member button ──
-        add_member_btn = QPushButton("+ Add member")
-        add_member_btn.setProperty("class", "secondary")
-        add_member_btn.setMaximumWidth(120)
-        add_member_btn.clicked.connect(self._on_add_member)
-        outer.addWidget(add_member_btn)
-
-        # ── Action buttons (Index, Wiki, Clear) ──
+        # ── Action buttons (Add, Index, Wiki, Clear) ──
         actions_w = QWidget()
         actions_h = QHBoxLayout(actions_w)
         actions_h.setContentsMargins(0, 0, 0, 0)
         actions_h.setSpacing(6)
+
+        add_member_btn = QPushButton("+ Member")
+        add_member_btn.setProperty("class", "secondary")
+        add_member_btn.setMinimumWidth(85)
+        add_member_btn.clicked.connect(self._on_add_member)
+        actions_h.addWidget(add_member_btn)
 
         self._index_btn = QPushButton("▶ Index")
         self._index_btn.setMinimumWidth(85)
