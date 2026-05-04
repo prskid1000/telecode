@@ -1185,9 +1185,13 @@ def _build_docs_card(window) -> tuple[QFrame, Callable[[], None]]:
     add_btn = QPushButton("+ Add")
     add_btn.setProperty("class", "primary")
     add_btn.setMaximumWidth(100)
+    cancel_btn = QPushButton("Cancel")
+    cancel_btn.setProperty("class", "danger")
+    cancel_btn.setMaximumWidth(100)
+    cancel_btn.setEnabled(False)
     add_w = QWidget()
     al = QHBoxLayout(add_w); al.setContentsMargins(0, 0, 0, 0); al.setSpacing(8)
-    al.addWidget(url_edit, 1); al.addWidget(add_btn, 0)
+    al.addWidget(url_edit, 1); al.addWidget(add_btn, 0); al.addWidget(cancel_btn, 0)
     body.addWidget(_row(row_label("Add doc URL"), add_w))
 
     status_lbl = QLabel("")
@@ -1238,6 +1242,7 @@ def _build_docs_card(window) -> tuple[QFrame, Callable[[], None]]:
             if running:
                 progress.setRange(0, 0)
                 progress.setFormat("running…")
+                cancel_btn.setEnabled(True)
             return
 
         status = str(job.get("status") or job.get("state") or "").lower()
@@ -1289,10 +1294,12 @@ def _build_docs_card(window) -> tuple[QFrame, Callable[[], None]]:
         elif running:
             progress.setRange(0, 0)
             progress.setFormat("running…")
+            cancel_btn.setEnabled(True)
         else:
             progress.setRange(0, 100)
             progress.setValue(0)
             progress.setFormat("idle")
+            cancel_btn.setEnabled(False)
 
         if message:
             _set_status(message, "info")
@@ -1307,6 +1314,7 @@ def _build_docs_card(window) -> tuple[QFrame, Callable[[], None]]:
         refresh_btn.setEnabled(not running)
         url_edit.setEnabled(not running)
         add_btn.setEnabled(not running)
+        cancel_btn.setEnabled(running)
 
     def _reload_table() -> None:
         path = _current_root_path()
@@ -1377,6 +1385,24 @@ def _build_docs_card(window) -> tuple[QFrame, Callable[[], None]]:
         _set_add_busy(True)
         _run(window, _go)
 
+    def _cancel_add() -> None:
+        path = _current_root_path()
+        if not path:
+            return
+
+        async def _go_cancel():
+            from docgraph.process import cancel_latest_docs_for
+            ok, payload = await cancel_latest_docs_for(path)
+            from PySide6.QtCore import QTimer
+            def _after():
+                if ok:
+                    _set_status("Cancel requested.", "info")
+                else:
+                    _set_status(str(payload), "err")
+            QTimer.singleShot(0, _after)
+
+        _run(window, _go_cancel)
+
     def _remove(url: str) -> None:
         path = _current_root_path()
         if not url or not path:
@@ -1396,6 +1422,7 @@ def _build_docs_card(window) -> tuple[QFrame, Callable[[], None]]:
         _run(window, _go)
 
     add_btn.clicked.connect(_add)
+    cancel_btn.clicked.connect(_cancel_add)
     url_edit.returnPressed.connect(_add)
     refresh_btn.clicked.connect(_reload_table)
     picker.currentIndexChanged.connect(lambda _i: _reload_table())
