@@ -943,11 +943,16 @@ class IndexRunner:
                     if dg_cfg.embeddings_model():
                         argv += ["--embed-model", dg_cfg.embeddings_model()]
                     if dg_cfg.llm_model():
-                        argv += ["--llm-model", dg_cfg.llm_model(),
-                                 "--llm-host", dg_cfg.llm_host(),
-                                 "--llm-port", str(dg_cfg.llm_port()),
-                                 "--llm-format", dg_cfg.llm_format(),
-                                 "--llm-max-tokens", str(dg_cfg.llm_max_tokens())]
+                        argv += ["--llm-model", dg_cfg.llm_model()]
+                    if dg_cfg.llm_host():
+                        argv += ["--llm-host", dg_cfg.llm_host()]
+                    if dg_cfg.llm_port():
+                        argv += ["--llm-port", str(dg_cfg.llm_port())]
+                    if dg_cfg.llm_format():
+                        argv += ["--llm-format", dg_cfg.llm_format()]
+                    if dg_cfg.llm_max_tokens():
+                        argv += ["--llm-max-tokens", str(dg_cfg.llm_max_tokens())]
+                    argv.append("--llm-docstrings" if dg_cfg.llm_docstrings() else "--no-llm-docstrings")
                     # Long-form prompt overrides go through temp files so we
                     # avoid argv-length / quoting hazards. Files live next
                     # to the host's prompt files for consistency.
@@ -1308,29 +1313,30 @@ class HostSupervisor:
             argv += ["--embed-batch-size", str(dg_cfg.index_embed_batch_size())]
         if dg_cfg.wiki_depth() and dg_cfg.wiki_depth() != 12:
             argv += ["--wiki-depth", str(dg_cfg.wiki_depth())]
-        # LLM augmentation knobs — only forwarded when a model is configured
-        # (setting just the model implies enable, mirroring docgraph's CLI).
+        # LLM augmentation knobs — always forward the host/port/format so they
+        # pick up defaults or overrides even if the model name is empty (the
+        # docgraph host handles the model-name default).
         if dg_cfg.llm_model():
             argv += ["--llm-model", dg_cfg.llm_model()]
-            if dg_cfg.llm_host():
-                argv += ["--llm-host", dg_cfg.llm_host()]
-            if dg_cfg.llm_port():
-                argv += ["--llm-port", str(dg_cfg.llm_port())]
-            if dg_cfg.llm_format():
-                argv += ["--llm-format", dg_cfg.llm_format()]
-            if dg_cfg.llm_max_tokens():
-                argv += ["--llm-max-tokens", str(dg_cfg.llm_max_tokens())]
-            if dg_cfg.llm_max_tokens_wiki():
-                argv += ["--llm-max-tokens-wiki", str(dg_cfg.llm_max_tokens_wiki())]
-            # 0 means "unlimited" upstream — only forward when the user has
-            # explicitly pinned a positive cap.
-            if dg_cfg.llm_max_tokens_chat() > 0:
-                argv += ["--llm-max-tokens-chat", str(dg_cfg.llm_max_tokens_chat())]
-            if dg_cfg.llm_api_key():
-                argv += ["--llm-api-key", dg_cfg.llm_api_key()]
-            if dg_cfg.llm_timeout() > 0:
-                argv += ["--llm-timeout", str(dg_cfg.llm_timeout())]
-            argv.append("--llm-docstrings" if dg_cfg.llm_docstrings() else "--no-llm-docstrings")
+        if dg_cfg.llm_host():
+            argv += ["--llm-host", dg_cfg.llm_host()]
+        if dg_cfg.llm_port():
+            argv += ["--llm-port", str(dg_cfg.llm_port())]
+        if dg_cfg.llm_format():
+            argv += ["--llm-format", dg_cfg.llm_format()]
+        if dg_cfg.llm_max_tokens():
+            argv += ["--llm-max-tokens", str(dg_cfg.llm_max_tokens())]
+        if dg_cfg.llm_max_tokens_wiki():
+            argv += ["--llm-max-tokens-wiki", str(dg_cfg.llm_max_tokens_wiki())]
+        # 0 means "unlimited" upstream — only forward when the user has
+        # explicitly pinned a positive cap.
+        if dg_cfg.llm_max_tokens_chat() > 0:
+            argv += ["--llm-max-tokens-chat", str(dg_cfg.llm_max_tokens_chat())]
+        if dg_cfg.llm_api_key():
+            argv += ["--llm-api-key", dg_cfg.llm_api_key()]
+        if dg_cfg.llm_timeout() > 0:
+            argv += ["--llm-timeout", str(dg_cfg.llm_timeout())]
+        argv.append("--llm-docstrings" if dg_cfg.llm_docstrings() else "--no-llm-docstrings")
         argv.append("--llm-wiki" if dg_cfg.llm_wiki() else "--no-llm-wiki")
         # Long-form prompt overrides — write the text to a temp file so we
         # can pass --llm-prompt-*-file rather than smuggling multi-line
