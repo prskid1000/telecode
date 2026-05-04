@@ -441,7 +441,7 @@ class _GroupRow(QFrame):
         outer.setContentsMargins(8, 6, 8, 6)
         outer.setSpacing(6)
 
-        # ── Group header: name + db_path + remove ──
+        # ── Group header: name + db_path + status pills + remove ──
         header = QWidget()
         hh = QHBoxLayout(header)
         hh.setContentsMargins(0, 0, 0, 0)
@@ -451,14 +451,47 @@ class _GroupRow(QFrame):
         self._name_edit.setPlaceholderText("Group name")
         self._name_edit.editingFinished.connect(self._on_change)
         self._name_edit.setMinimumWidth(100)
-        self._name_edit.setMaximumWidth(180)
+        self._name_edit.setMaximumWidth(150)
         hh.addWidget(self._name_edit)
 
         self._db_edit = QLineEdit(db_path)
         self._db_edit.setPlaceholderText("/path/.docgraph/db.kuzu")
         self._db_edit.editingFinished.connect(self._on_change)
-        self._db_edit.setMinimumWidth(180)
-        hh.addWidget(self._db_edit, 1)
+        self._db_edit.setMinimumWidth(140)
+        hh.addWidget(self._db_edit, 2)
+
+        # Status pills for the group
+        pills_w = QWidget()
+        pl = QHBoxLayout(pills_w)
+        pl.setContentsMargins(0, 0, 0, 0); pl.setSpacing(4)
+
+        self._pill = QLabel("…")
+        self._pill.setProperty("class", "stat_pill")
+        self._pill.setMinimumWidth(0)
+        self._pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._pill.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        self._pill.setToolTip("Index status")
+        pl.addWidget(self._pill, 1)
+
+        self._wiki_pill = QLabel("…")
+        self._wiki_pill.setProperty("class", "stat_pill")
+        self._wiki_pill.setMinimumWidth(0)
+        self._wiki_pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._wiki_pill.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        self._wiki_pill.setToolTip("Wiki status")
+        pl.addWidget(self._wiki_pill, 1)
+
+        self._stats_chip = QLabel("—")
+        self._stats_chip.setProperty("class", "stat_chip")
+        self._stats_chip.setProperty("muted", "true")
+        self._stats_chip.setMinimumWidth(0)
+        self._stats_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._stats_chip.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        self._stats_chip.setToolTip("Live counts (entities · edges). Auto-refreshed.")
+        pl.addWidget(self._stats_chip, 1)
+
+        hh.addWidget(pills_w, 2)
+        self._stats_last_fetch: float = 0.0
 
         rm_btn = QPushButton("✕")
         rm_btn.setFlat(True)
@@ -497,42 +530,50 @@ class _GroupRow(QFrame):
         actions_h.setSpacing(6)
 
         self._index_btn = QPushButton("▶ Index")
+        self._index_btn.setMinimumWidth(85)
         self._index_btn.clicked.connect(self._on_index)
         actions_h.addWidget(self._index_btn)
 
         self._wiki_btn = QPushButton("📋 Wiki")
+        self._wiki_btn.setMinimumWidth(85)
         self._wiki_btn.clicked.connect(self._on_wiki)
         actions_h.addWidget(self._wiki_btn)
 
         self._clear_btn = QPushButton("🗑 Clear")
+        self._clear_btn.setMinimumWidth(85)
         self._clear_btn.setProperty("class", "danger")
         self._clear_btn.clicked.connect(self._on_clear)
         actions_h.addWidget(self._clear_btn)
 
         actions_h.addStretch(1)
 
-        # Status indicator
-        self._status_label = QLabel("")
-        self._status_label.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
-        actions_h.addWidget(self._status_label)
+        # Watch toggle at the bottom of the group
+        watch_lbl = QLabel("Watch")
+        watch_lbl.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+        actions_h.addWidget(watch_lbl)
+        self._watch_toggle = Toggle()
+        self._watch_toggle.toggled.connect(lambda _: self._on_change())
+        actions_h.addWidget(self._watch_toggle)
 
         outer.addWidget(actions_w)
 
-        # ── Watch toggle ──
-        watch_w = QWidget()
-        watch_h = QHBoxLayout(watch_w)
-        watch_h.setContentsMargins(0, 0, 0, 0)
-        watch_h.setSpacing(4)
-        watch_label = QLabel("Watch")
-        watch_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
-        self._watch_toggle = Toggle()
-        watch_h.addWidget(watch_label)
-        watch_h.addWidget(self._watch_toggle)
-        watch_h.addStretch(1)
-        outer.addWidget(watch_w)
-
         self._member_rows: list[_MemberRow] = []
         self._rebuild_members(paths)
+        self.refresh_status()
+
+    def name_text(self) -> str:
+        return self._name_edit.text()
+
+    def db_path_text(self) -> str:
+        return self._db_edit.text()
+
+    def get_paths(self) -> list:
+        out = []
+        for r in self._member_rows:
+            path = r.path_text().strip()
+            if path:
+                out.append({"path": path, "watch": r.watch_state()})
+        return out
 
     def _rebuild_members(self, paths: list) -> None:
         for w in self._member_rows:
@@ -573,18 +614,9 @@ class _GroupRow(QFrame):
         if not name:
             return
         async def _go():
-            from docgraph.process import get_host
-            host = get_host()
-            if not host._conn:
-                return
-            try:
-                self._status_label.setText("indexing…")
-                await host._conn.api(f"/api/admin/index?root={name}")
-                self._status_label.setText("indexed")
-                self._status_label.setStyleSheet(f"color: {OK}; font-size: 10px;")
-            except Exception as e:
-                self._status_label.setText("index failed")
-                self._status_label.setStyleSheet(f"color: {ERR}; font-size: 10px;")
+            from docgraph.process import get_index
+            await get_index().run(name, force=False)
+            self.refresh_status()
         _run(self._window, _go)
 
     def _on_wiki(self) -> None:
@@ -592,18 +624,9 @@ class _GroupRow(QFrame):
         if not name:
             return
         async def _go():
-            from docgraph.process import get_host
-            host = get_host()
-            if not host._conn:
-                return
-            try:
-                self._status_label.setText("building wiki…")
-                await host._conn.api(f"/api/wiki/build?root={name}")
-                self._status_label.setText("wiki built")
-                self._status_label.setStyleSheet(f"color: {OK}; font-size: 10px;")
-            except Exception as e:
-                self._status_label.setText("wiki failed")
-                self._status_label.setStyleSheet(f"color: {ERR}; font-size: 10px;")
+            from docgraph.process import get_wiki
+            await get_wiki().run(name, force=False)
+            self.refresh_status()
         _run(self._window, _go)
 
     def _on_clear(self) -> None:
@@ -614,38 +637,133 @@ class _GroupRow(QFrame):
         reply = QMessageBox.warning(
             self, "Confirm Clear",
             f"Clear all data for group '{name}'? This cannot be undone.",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
         )
-        if reply != QMessageBox.Yes:
+        if reply != QMessageBox.StandardButton.Yes:
             return
         async def _go():
-            from docgraph.process import get_host
-            host = get_host()
-            if not host._conn:
-                return
-            try:
-                self._status_label.setText("clearing…")
-                await host._conn.api(f"/api/admin/clear?root={name}")
-                self._status_label.setText("cleared")
-                self._status_label.setStyleSheet(f"color: {OK}; font-size: 10px;")
-            except Exception as e:
-                self._status_label.setText("clear failed")
-                self._status_label.setStyleSheet(f"color: {ERR}; font-size: 10px;")
+            from docgraph.process import clear_index
+            ok, detail = await clear_index(name)
+            if ok:
+                try:
+                    from docgraph import index_state, wiki_state, stats_state
+                    index_state.clear(name)
+                    wiki_state.clear(name)
+                    stats_state.drop(name)
+                except Exception:
+                    pass
+                self._stats_last_fetch = 0.0
+            self.refresh_status()
         _run(self._window, _go)
 
-    def name_text(self) -> str:
-        return self._name_edit.text()
+    def refresh_status(self) -> None:
+        name = self.name_text().strip()
+        self._refresh_index_pill(name)
+        self._refresh_wiki_pill(name)
+        self._refresh_stats_chip(name)
 
-    def db_path_text(self) -> str:
-        return self._db_edit.text()
+    def _refresh_index_pill(self, name: str) -> None:
+        try:
+            from docgraph import index_state
+            from docgraph.process import get_index
+            s = index_state.get(name) if name else None
+            running_path = get_index().current_path()
+        except Exception:
+            s, running_path = None, None
+        if name and running_path == name:
+            self._pill.setText("running…")
+            self._pill.setStyleSheet(f"color: {WARN};")
+            self._index_btn.setEnabled(False)
+            return
+        self._index_btn.setEnabled(True)
+        if not s:
+            # For groups, checking disk is harder as it's not a single folder.
+            # We'll just show 'not indexed' if no state is found.
+            self._pill.setText("not indexed")
+            self._pill.setStyleSheet(f"color: {FG_MUTE};")
+            return
+        ago = _format_ago(s.get("last_run", 0.0))
+        status = s.get("last_status", "?")
+        full = " · force" if s.get("last_was_full") else ""
+        text = f"{ago} · {status}{full}"
+        self._pill.setStyleSheet(f"color: {OK if status == 'ok' else ERR if status == 'failed' else WARN if status == 'running' else FG_MUTE};")
+        self._pill.setText(text)
 
-    def get_paths(self) -> list:
-        out = []
-        for r in self._member_rows:
-            path = r.path_text().strip()
-            if path:
-                out.append({"path": path, "watch": r.watch_state()})
-        return out
+    def _refresh_wiki_pill(self, name: str) -> None:
+        try:
+            from docgraph import wiki_state
+            from docgraph.process import get_wiki
+            s = wiki_state.get(name) if name else None
+            running_path = get_wiki().current_path()
+        except Exception:
+            s, running_path = None, None
+        if name and running_path == name:
+            self._wiki_pill.setText("wiki running…")
+            self._wiki_pill.setStyleSheet(f"color: {WARN};")
+            self._wiki_btn.setEnabled(False)
+            return
+        self._wiki_btn.setEnabled(True)
+        if not s:
+            self._wiki_pill.setText("no wiki")
+            self._wiki_pill.setStyleSheet(f"color: {FG_MUTE};")
+            return
+        ago = _format_ago(s.get("last_run", 0.0))
+        status = s.get("last_status", "?")
+        full = " · force" if s.get("last_was_full") else ""
+        text = f"wiki {ago} · {status}{full}"
+        self._wiki_pill.setStyleSheet(f"color: {OK if status == 'ok' else ERR if status == 'failed' else WARN if status == 'running' else FG_MUTE};")
+        self._wiki_pill.setText(text)
+
+    def _refresh_stats_chip(self, name: str) -> None:
+        try:
+            from docgraph import stats_state
+            from docgraph.process import get_host
+            host_alive = bool(get_host().alive())
+        except Exception:
+            host_alive = False
+            stats_state = None  # type: ignore
+
+        snap = stats_state.get(name) if (stats_state and name) else None
+        muted = "true"
+        if snap:
+            ents = sum(int(snap.get(k, 0) or 0) for k in ("File", "Module", "Class", "Function", "Variable"))
+            docs = int(snap.get("Doc", 0) or 0)
+            edges = int(snap.get("edges") or 0)
+            text = f"{_fmt_count(ents)} ents · {_fmt_count(edges)} edges"
+            if docs > 0: text += f" · {_fmt_count(docs)} wiki"
+            self._stats_chip.setText(text)
+            muted = "false"
+        else:
+            self._stats_chip.setText("— · —" if host_alive else "host offline")
+            
+        if self._stats_chip.property("muted") != muted:
+            self._stats_chip.setProperty("muted", muted)
+            st = self._stats_chip.style()
+            st.unpolish(self._stats_chip); st.polish(self._stats_chip)
+
+        if not name or not host_alive or stats_state is None:
+            return
+        import time as _time
+        now = _time.time()
+        if now - self._stats_last_fetch < 10.0:
+            return
+        if stats_state.age(name) < 10.0:
+            self._stats_last_fetch = now
+            return
+        if not stats_state.mark_in_flight(name):
+            return
+        self._stats_last_fetch = now
+
+        async def _go():
+            try:
+                from docgraph.process import fetch_stats_dict
+                data = await fetch_stats_dict(name)
+                if data is not None:
+                    stats_state.set(name, data)
+            finally:
+                stats_state.clear_in_flight(name)
+        _run(self._window, _go)
 
 
 class _MemberRow(QFrame):

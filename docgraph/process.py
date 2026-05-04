@@ -1127,14 +1127,13 @@ class HostSupervisor:
                 paths = g.get("paths", [])
                 if not name or not db_path or not paths:
                     continue
-                # Format: --group name <db_path> <path1> [<path2> ...]
-                argv += ["--group", name, db_path]
-                for p in paths:
-                    argv.append(p["path"])
-                # Add watch flags after the group
-                for p in paths:
-                    if p.get("watch"):
-                        argv += ["--watch-group", name, p["path"]]
+                # New format: --group "name=...;db=...;paths=...;watch=..."
+                path_strs = [p["path"] for p in paths]
+                watch_strs = [p["path"] for p in paths if p.get("watch")]
+                spec = f"name={name};db={db_path};paths={','.join(path_strs)}"
+                if watch_strs:
+                    spec += f";watch={','.join(watch_strs)}"
+                argv += ["--group", spec]
         else:
             for r in roots:
                 argv += ["--root", r]
