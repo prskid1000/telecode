@@ -203,6 +203,33 @@ async def _sse_progress_tee(slug: str, port: int, event_names: tuple[str, ...],
         return
 
 
+async def _tail_host_log_to_fp(host_log_path: str, dest_fp, stop_event: asyncio.Event) -> None:
+    """Tail the host `host_log_path` and append new lines into `dest_fp`.
+
+    Designed to run alongside `_sse_progress_tee` so per-run `docgraph_docs.log`
+    contains both structured SSE progress and the host's free-form stdout
+    output. The coroutine polls the source file and copies appended bytes.
+    Cancelling is cooperative via `stop_event.set()`.
+    """
+    try:
+        # Open in binary so we copy bytes verbatim.
+        with open(host_log_path, "rb") as src:
+            # Seek to the end so we only capture new output.
+            src.seek(0, os.SEEK_END)
+            while not stop_event.is_set():
+                chunk = src.read(4096)
+                if chunk:
+                    try:
+                        dest_fp.write(chunk)
+                        dest_fp.flush()
+                    except Exception:
+                        return
+                else:
+                    await asyncio.sleep(0.5)
+    except (asyncio.CancelledError, Exception):
+        return
+
+
 async def _index_via_host(path: str, full: bool, port: int, log_fp=None) -> tuple[bool, str]:
     """POST /api/admin/index?root=<slug>&full=<bool> on the running host.
 
@@ -508,39 +535,66 @@ async def add_doc_for(path: str, url: str,
                     except Exception:
                         log_fp = None
                     if log_fp is not None:
+                        # Subscribe to docs_progress AND index_progress so the
+                        # per-run docs log captures both the structured doc
+                        # progress and the index/embed progress emitted by
+                        # the host. Also mirror wiki progress.
                         sse_task = asyncio.create_task(
-                            _sse_progress_tee(slug, port, ("docs_progress",), log_fp, session,
+                            _sse_progress_tee(slug, port, ("docs_progress", "index_progress", "wiki_progress"), log_fp, session,
                                                path_for_slug=path)
+                        )
+                        # Also mirror the host's stdout into this per-run log
+                        # so free-form embedding/index log lines appear.
+                        stop_event = asyncio.Event()
+                        host_log_path = dg_cfg.log_path("host")
+                        host_tail_task = asyncio.create_task(
+                            _tail_host_log_to_fp(host_log_path, log_fp, stop_event)
                         )
 
                 except Exception:
                     sse_task = None
+                    host_tail_task = None
 
                 if progress_cb:
                     try:
                         progress_cb({"status": "running", "message": "Queued"})
                     except Exception:
                         pass
-            
-            while True:
-                import asyncio
-                await asyncio.sleep(2.0)
-                async with session.get(f"{base}/api/jobs/{job_id}") as resp:
-                    if resp.status != 200:
-                        continue
-                    job = await resp.json()
-                    if progress_cb:
-                        try:
-                            progress_cb(job)
-                        except Exception:
-                            pass
-                    status = job.get("status")
-                    if status == "completed":
-                        return True, job.get("result") or {}
-                    elif status == "cancelled":
-                        return False, "docs add cancelled"
-                    elif status == "failed":
-                        return False, f"Docs add failed: {job.get('error')}"
+
+                # Fetch job once immediately so callers (tray) get an initial
+                # progress snapshot without waiting for the 2s poll interval.
+                try:
+                    async with session.get(f"{base}/api/jobs/{job_id}") as jresp:
+                        if jresp.status == 200:
+                            job_json = await jresp.json()
+                            if progress_cb:
+                                try:
+                                    progress_cb(job_json)
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+
+                try:
+                    while True:
+                        import asyncio
+                        await asyncio.sleep(2.0)
+                        async with session.get(f"{base}/api/jobs/{job_id}") as resp:
+                            if resp.status != 200:
+                                continue
+                            job = await resp.json()
+                            if progress_cb:
+                                try:
+                                    progress_cb(job)
+                                except Exception:
+                                    pass
+                            status = job.get("status")
+                            if status == "completed":
+                                return True, job.get("result") or {}
+                            elif status == "cancelled":
+                                return False, "docs add cancelled"
+                            elif status == "failed":
+                                return False, f"Docs add failed: {job.get('error')}"
                 finally:
                     # Clean up SSE tee and log file
                     try:
@@ -548,6 +602,16 @@ async def add_doc_for(path: str, url: str,
                             sse_task.cancel()
                             try:
                                 await sse_task
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    try:
+                        if host_tail_task is not None:
+                            stop_event.set()
+                            host_tail_task.cancel()
+                            try:
+                                await host_tail_task
                             except Exception:
                                 pass
                     except Exception:
@@ -561,6 +625,57 @@ async def add_doc_for(path: str, url: str,
         raise
     except Exception as exc:
         return False, f"host route failed: {exc}"
+
+
+async def cancel_job(job_id: str) -> tuple[bool, str]:
+    """Request cancellation of a job on the running host via
+    `POST /api/jobs/{job_id}/cancel`. Returns (True, resp_json) on
+    success or (False, message) on failure.
+    """
+    if _HOST is None or not _HOST.alive() or not _HOST.port():
+        return False, "Host is not running."
+    port = _HOST.port()
+    base = f"http://{dg_cfg.host_host()}:{port}"
+    timeout = aiohttp.ClientTimeout(total=10)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(f"{base}/api/jobs/{job_id}/cancel") as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    return False, f"POST /api/jobs/{job_id}/cancel -> HTTP {resp.status}: {body[:200]}"
+                return True, await resp.json()
+    except Exception as exc:
+        return False, str(exc)
+
+
+async def cancel_latest_docs_for(path: str) -> tuple[bool, str]:
+    """Find the latest running/queued `docs_add` job for `path` and request
+    cancellation. Returns (True, msg) if cancel request sent, else (False, msg)."""
+    if _HOST is None or not _HOST.alive() or not _HOST.port():
+        return False, "Host is not running."
+    port = _HOST.port()
+    base = f"http://{dg_cfg.host_host()}:{port}"
+    timeout = aiohttp.ClientTimeout(total=10)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            # gather jobs for this root
+            async with session.get(f"{base}/api/jobs?root={path}") as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    return False, f"GET /api/jobs -> HTTP {resp.status}: {body[:200]}"
+                jobs = await resp.json()
+            # find most recent docs_add job in running/queued state
+            target = None
+            for j in reversed(jobs):
+                if j.get("type") == "docs_add" and j.get("status") in ("running", "queued"):
+                    target = j
+                    break
+            if not target:
+                return False, "No running docs_add job found for this root."
+            job_id = target.get("id")
+            return await cancel_job(job_id)
+    except Exception as exc:
+        return False, str(exc)
 
 
 async def remove_doc_for(path: str, url: str) -> tuple[bool, dict | str]:
