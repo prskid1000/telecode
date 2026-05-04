@@ -273,12 +273,15 @@ def _build_host_card(window) -> tuple[QFrame, Callable[[], None]]:
         # `enabled` setting is just sticky intent, not real state.
         try:
             from docgraph.process import status_snapshot
+            from docgraph.process import get_index, get_wiki
             alive = bool((status_snapshot().get("host") or {}).get("alive"))
+            busy = bool(get_index().status().get("alive") or get_wiki().status().get("alive"))
         except Exception:
             alive = False
-        start_btn.setEnabled(not alive)
-        stop_btn.setEnabled(alive)
-        restart_btn.setEnabled(alive)
+            busy = False
+        start_btn.setEnabled(not alive and not busy)
+        stop_btn.setEnabled(alive and not busy)
+        restart_btn.setEnabled(alive and not busy)
 
     def _on_start():
         async def _go():
@@ -422,9 +425,24 @@ def _build_roots_card(window) -> tuple[QFrame, Callable[[], None]]:
     cancel_wiki_btn.clicked.connect(_on_cancel_wiki)
 
     def refresh():
+        try:
+            from docgraph.process import get_index, get_wiki
+            index_alive = bool(get_index().status().get("alive"))
+            wiki_alive = bool(get_wiki().status().get("alive"))
+        except Exception:
+            index_alive = wiki_alive = False
+
+        busy = index_alive or wiki_alive
+
+        all_force.setEnabled(not busy)
+        run_all_btn.setEnabled(not busy)
+        cancel_btn.setEnabled(index_alive)
+        run_all_wiki_btn.setEnabled(not busy)
+        cancel_wiki_btn.setEnabled(wiki_alive)
+        paths_widget.refresh(busy=busy)
+
         refresh_status()
         refresh_wiki_status()
-        paths_widget.refresh()
 
     return card, refresh
 
@@ -526,6 +544,7 @@ class _RootsTable(QWidget):
         add_btn.setProperty("class", "primary")
         add_btn.setMaximumWidth(140)
         add_btn.clicked.connect(self._on_add)
+        self._add_btn = add_btn
         add_l.addWidget(add_btn)
         add_l.addStretch(1)
         v.addWidget(add_w)
@@ -578,7 +597,7 @@ class _RootsTable(QWidget):
             out.append({"path": path, "watch": r.watch_state()})
         patch_settings("docgraph.roots", out)
 
-    def refresh(self) -> None:
+    def refresh(self, *, busy: bool = False) -> None:
         cur = list(get_path(read_settings(), "docgraph.roots", []) or [])
         cur_norm = [
             {"path": str(e.get("path", "") if isinstance(e, dict) else e),
@@ -590,8 +609,9 @@ class _RootsTable(QWidget):
                     for r in self._row_widgets if r.text().strip()]
         if cur_norm != cur_view:
             self._rebuild()
+        self._add_btn.setEnabled(not busy)
         for r in self._row_widgets:
-            r.refresh_state()
+            r.refresh_state(busy=busy)
 
 
 class _RootRow(QFrame):
@@ -669,6 +689,7 @@ class _RootRow(QFrame):
             f" QPushButton:hover {{ color: #ff6b6b; }}"
         )
         rm_btn.clicked.connect(lambda: self._on_remove(self))
+        self._rm_btn = rm_btn
         h.addWidget(rm_btn)
 
         outer.addWidget(line1)
@@ -833,12 +854,20 @@ class _RootRow(QFrame):
             QTimer.singleShot(0, _show)
         _run(self._window, _go)
 
-    def refresh_state(self) -> None:
+    def refresh_state(self, *, busy: bool = False) -> None:
         path = self.text().strip()
         self._refresh_index_pill(path)
         self._refresh_wiki_pill(path)
         self._refresh_stats_chip(path)
         self._refresh_progress_bars(path)
+
+        enabled = not busy
+        self._edit.setEnabled(enabled)
+        self._index_btn.setEnabled(enabled)
+        self._wiki_btn.setEnabled(enabled)
+        self._clear_btn.setEnabled(enabled)
+        self._watch.setEnabled(enabled)
+        self._rm_btn.setEnabled(enabled)
 
     def _apply_bar_state(self, bar: QProgressBar, state: str) -> None:
         """Flip the bar between 'idle' / 'run' so the QSS picks up the
