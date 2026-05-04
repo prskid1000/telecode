@@ -150,6 +150,19 @@ def _path_already_wiki_built(path: str) -> bool:
         return False
 
 
+def _wiki_page_count(path: str) -> int | None:
+    if not path:
+        return None
+    try:
+        from pathlib import Path as _Path
+        wiki_dir = _Path(path).expanduser() / ".docgraph" / "wiki"
+        if not wiki_dir.exists():
+            return None
+        return sum(1 for p in wiki_dir.rglob("*.md") if p.is_file())
+    except (OSError, ValueError):
+        return None
+
+
 def _format_ago(ts: float | None) -> str:
     import time as _time
     if not ts:
@@ -426,13 +439,22 @@ def _index_status_text() -> tuple[bool, str]:
 def _wiki_status_text() -> tuple[bool, str]:
     try:
         from docgraph.process import get_wiki
+        from docgraph import config as dg_cfg
         s = get_wiki().status()
     except Exception as exc:
         return False, f"err: {exc}"
     if s["alive"]:
         what = "force" if s.get("current_force") else "resumable"
         return True, f"running · {s.get('current_path') or '?'} ({what})"
-    return False, "idle"
+    # Idle: count total wiki docs across all roots.
+    try:
+        total_docs = sum(
+            (_wiki_page_count(p) or 0) for p in dg_cfg.root_paths()
+        )
+        docs_text = f"{_fmt_count(total_docs)} wiki docs" if total_docs > 0 else "idle"
+        return False, docs_text
+    except Exception:
+        return False, "idle"
 
 
 class _RootsTable(QWidget):
@@ -852,7 +874,9 @@ class _RootRow(QFrame):
 
         # Render whatever we have cached.
         snap = stats_state.get(path) if (stats_state and path) else None
+        wiki_pages = _wiki_page_count(path)
         muted = "true"
+        parts: list[str] = []
         if snap:
             ents = sum(int(snap.get(k, 0) or 0)
                        for k in ("File", "Module", "Class", "Function", "Variable"))
@@ -863,7 +887,7 @@ class _RootRow(QFrame):
                 edges = sum(int(v or 0)
                             for v in (snap.get("edges_by_type") or {}).values())
             edges = int(edges or 0)
-            self._stats_chip.setText(f"{_fmt_count(ents)} ents · {_fmt_count(edges)} edges")
+            parts.extend((f"{_fmt_count(ents)} ents", f"{_fmt_count(edges)} edges"))
             tip_lines = [f"{path or '(no path)'}", ""]
             for label in ("File", "Module", "Class", "Function", "Variable"):
                 tip_lines.append(f"  {label:<10} {snap.get(label, 0)}")
@@ -876,15 +900,23 @@ class _RootRow(QFrame):
                 tip_lines.append("")
                 for k, v in top_edges:
                     tip_lines.append(f"  {k:<14} {v}")
+            if wiki_pages is not None:
+                tip_lines.append("")
+                tip_lines.append(f"  wiki pages  {wiki_pages}")
             self._stats_chip.setToolTip("\n".join(tip_lines))
             muted = "false"
         else:
-            self._stats_chip.setText("— · —" if host_alive else "host offline")
+            parts.extend(("—", "—"))
+            if wiki_pages is not None:
+                parts.append(f"{_fmt_count(wiki_pages)} wiki docs")
             self._stats_chip.setToolTip(
                 "Live counts auto-refresh while the host is alive."
                 if host_alive else
                 "Start the docgraph host to see live counts."
             )
+        if wiki_pages is not None and snap:
+            parts.append(f"{_fmt_count(wiki_pages)} wiki docs")
+        self._stats_chip.setText(" · ".join(parts) if parts else ("host offline" if not host_alive else "—"))
         if self._stats_chip.property("muted") != muted:
             self._stats_chip.setProperty("muted", muted)
             st = self._stats_chip.style()
