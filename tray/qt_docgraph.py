@@ -17,6 +17,7 @@ stdout/stderr and the telecode-side wrapper logger both land in
 from __future__ import annotations
 
 import asyncio
+import re
 import logging
 from typing import Callable
 
@@ -171,6 +172,7 @@ def _format_ago(ts: float | None) -> str:
     if delta < 60:    return f"{delta}s ago"
     if delta < 3600:  return f"{delta // 60}m ago"
     if delta < 86400: return f"{delta // 3600}h ago"
+    return f"{delta // 86400}d ago"
     return f"{delta // 86400}d ago"
 
 
@@ -454,8 +456,8 @@ def _index_status_text() -> tuple[bool, str]:
     except Exception as exc:
         return False, f"err: {exc}"
     if s["alive"]:
-        what = "full" if s.get("current_force") else "incremental"
-        return True, f"running · {s.get('current_path') or '?'} ({what})"
+            what = "full" if s.get("current_force") else "incremental"
+            return True, f"running · {s.get('current_path') or '?'} ({what})"
     return False, _index_totals_text()
 
 
@@ -1193,6 +1195,14 @@ def _build_docs_card(window) -> tuple[QFrame, Callable[[], None]]:
     status_lbl.setWordWrap(True)
     body.addWidget(status_lbl)
 
+    progress = QProgressBar()
+    progress.setRange(0, 100)
+    progress.setValue(0)
+    progress.setTextVisible(True)
+    progress.setFormat("idle")
+    progress.setFixedHeight(18)
+    body.addWidget(progress)
+
     from PySide6.QtWidgets import QSizePolicy as _QSP
 
     table = QTableWidget(0, 4)
@@ -1222,6 +1232,81 @@ def _build_docs_card(window) -> tuple[QFrame, Callable[[], None]]:
         color = {"info": FG_MUTE, "ok": OK, "err": ERR}.get(kind, FG_MUTE)
         status_lbl.setStyleSheet(f"color: {color}; font-size: 11px;")
         status_lbl.setText(text)
+
+    def _set_progress_from_job(job: dict | None, *, running: bool) -> None:
+        if not job:
+            if running:
+                progress.setRange(0, 0)
+                progress.setFormat("running…")
+            return
+
+        status = str(job.get("status") or job.get("state") or "").lower()
+        message = (
+            job.get("progress_message")
+            or job.get("message")
+            or job.get("phase")
+            or job.get("title")
+            or ""
+        )
+        log_text = str(job.get("log") or "")
+        if not message and log_text:
+            lines = [line.strip() for line in log_text.splitlines() if line.strip()]
+            if lines:
+                message = lines[-1]
+
+        pct = None
+        raw_progress = job.get("progress")
+        # progress may be a numeric percent, or a dict with current/total/message
+        if isinstance(raw_progress, (int, float)):
+            pct = float(raw_progress)
+            if pct <= 1.0:
+                pct *= 100.0
+        elif isinstance(raw_progress, dict):
+            current = raw_progress.get("current")
+            total = raw_progress.get("total")
+            # accept direct percent as 'progress' key inside dict too
+            pct_inner = raw_progress.get("progress")
+            if isinstance(pct_inner, (int, float)):
+                pct = float(pct_inner)
+                if pct <= 1.0:
+                    pct *= 100.0
+            elif isinstance(current, (int, float)) and isinstance(total, (int, float)) and float(total) > 0:
+                pct = float(current) * 100.0 / float(total)
+            # allow message override from progress dict
+            if not message:
+                message = raw_progress.get("message") or raw_progress.get("phase") or message
+        else:
+            current = job.get("current")
+            total = job.get("total")
+            if isinstance(current, (int, float)) and isinstance(total, (int, float)) and float(total) > 0:
+                pct = float(current) * 100.0 / float(total)
+
+        if pct is not None:
+            pct = max(0.0, min(100.0, pct))
+            progress.setRange(0, 100)
+            progress.setValue(int(round(pct)))
+            progress.setFormat(f"{int(round(pct))}%")
+        elif running:
+            progress.setRange(0, 0)
+            progress.setFormat("running…")
+        else:
+            progress.setRange(0, 100)
+            progress.setValue(0)
+            progress.setFormat("idle")
+
+        if message:
+            _set_status(message, "info")
+        if status in {"completed", "done", "ok", "success"}:
+            progress.setRange(0, 100)
+            progress.setValue(100)
+        elif status in {"failed", "error", "cancelled"}:
+            _set_status(message or status, "err")
+
+    def _set_add_busy(running: bool) -> None:
+        picker.setEnabled(not running)
+        refresh_btn.setEnabled(not running)
+        url_edit.setEnabled(not running)
+        add_btn.setEnabled(not running)
 
     def _reload_table() -> None:
         path = _current_root_path()
@@ -1271,20 +1356,25 @@ def _build_docs_card(window) -> tuple[QFrame, Callable[[], None]]:
 
         async def _go():
             from docgraph.process import add_doc_for
-            ok, payload = await add_doc_for(path, url)
+            ok, payload = await add_doc_for(path, url, progress_cb=_set_progress_from_job)
             from PySide6.QtCore import QTimer
             def _after():
                 if ok:
                     chunks = payload.get("chunks", "?") if isinstance(payload, dict) else "?"
                     title = payload.get("title", "") if isinstance(payload, dict) else ""
                     _set_status(f"Added: {title or url} ({chunks} chunks).", "ok")
+                    _set_progress_from_job({"status": "completed", "progress": 100}, running=False)
                     url_edit.clear()
                     _reload_table()
                 else:
                     _set_status(str(payload), "err")
+                    _set_progress_from_job({"status": "failed"}, running=False)
+                _set_add_busy(False)
             QTimer.singleShot(0, _after)
 
         _set_status(f"Fetching {url} …", "info")
+        _set_progress_from_job({"status": "running"}, running=True)
+        _set_add_busy(True)
         _run(window, _go)
 
     def _remove(url: str) -> None:
@@ -1332,6 +1422,8 @@ def _build_docs_card(window) -> tuple[QFrame, Callable[[], None]]:
                     break
         picker.blockSignals(False)
         _reload_table()
+        if not url_edit.isEnabled():
+            _set_progress_from_job({"status": "running"}, running=True)
 
     refresh()
     return card, refresh

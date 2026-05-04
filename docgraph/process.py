@@ -474,7 +474,8 @@ async def list_docs_for(path: str) -> tuple[bool, list[dict] | str]:
         return False, f"host route failed: {exc}"
 
 
-async def add_doc_for(path: str, url: str) -> tuple[bool, dict | str]:
+async def add_doc_for(path: str, url: str,
+                      progress_cb=None) -> tuple[bool, dict | str]:
     """POST /api/docs/add?root=<slug>. Returns (True, payload) or (False, msg)."""
     if _HOST is None or not _HOST.alive() or not _HOST.port():
         return False, "Host is not running. Start it from the Host card."
@@ -497,6 +498,29 @@ async def add_doc_for(path: str, url: str) -> tuple[bool, dict | str]:
                 job_id = payload.get("job_id")
                 if not job_id:
                     return True, payload
+                # Open a per-run docs log and tee SSE `docs_progress` events
+                # into it so telecode's Logs viewer can show a dedicated file.
+                log_fp = None
+                sse_task = None
+                try:
+                    try:
+                        log_fp = _open_log("docs")
+                    except Exception:
+                        log_fp = None
+                    if log_fp is not None:
+                        sse_task = asyncio.create_task(
+                            _sse_progress_tee(slug, port, ("docs_progress",), log_fp, session,
+                                               path_for_slug=path)
+                        )
+
+                except Exception:
+                    sse_task = None
+
+                if progress_cb:
+                    try:
+                        progress_cb({"status": "running", "message": "Queued"})
+                    except Exception:
+                        pass
             
             while True:
                 import asyncio
@@ -505,6 +529,11 @@ async def add_doc_for(path: str, url: str) -> tuple[bool, dict | str]:
                     if resp.status != 200:
                         continue
                     job = await resp.json()
+                    if progress_cb:
+                        try:
+                            progress_cb(job)
+                        except Exception:
+                            pass
                     status = job.get("status")
                     if status == "completed":
                         return True, job.get("result") or {}
@@ -512,6 +541,22 @@ async def add_doc_for(path: str, url: str) -> tuple[bool, dict | str]:
                         return False, "docs add cancelled"
                     elif status == "failed":
                         return False, f"Docs add failed: {job.get('error')}"
+                finally:
+                    # Clean up SSE tee and log file
+                    try:
+                        if sse_task is not None:
+                            sse_task.cancel()
+                            try:
+                                await sse_task
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    try:
+                        if log_fp is not None:
+                            log_fp.close()
+                    except Exception:
+                        pass
     except asyncio.CancelledError:
         raise
     except Exception as exc:
