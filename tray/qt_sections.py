@@ -1661,7 +1661,7 @@ def _managed(window) -> QWidget:
         group_prefixes = {p for p, c in prefixes.items() if c >= 2}
         seen_groups: set[str] = set()
 
-        # Buffer for the docgraph group — rendered as a 3-column grid below
+        # Buffer for the docgraph group — rendered as a 2-column grid below
         # the group header instead of one tall column. Flushed when the
         # iteration leaves the docgraph block, and again after the loop.
         docgraph_cells: list[tuple[QWidget, QWidget]] = []
@@ -1669,8 +1669,8 @@ def _managed(window) -> QWidget:
         def _flush_docgraph_grid() -> None:
             if not docgraph_cells:
                 return
-            for start in range(0, len(docgraph_cells), 3):
-                chunk = docgraph_cells[start:start + 3]
+            for start in range(0, len(docgraph_cells), 2):
+                chunk = docgraph_cells[start:start + 2]
                 row_w = QWidget()
                 hl = QHBoxLayout(row_w)
                 hl.setContentsMargins(0, 0, 0, 0)
@@ -1684,7 +1684,7 @@ def _managed(window) -> QWidget:
                     cl.addWidget(_wrap_align(tw, Qt.AlignmentFlag.AlignLeft), 0)
                     hl.addWidget(cell, 1)
                 # Pad short final row so cell widths stay consistent
-                for _ in range(3 - len(chunk)):
+                for _ in range(2 - len(chunk)):
                     hl.addWidget(QWidget(), 1)
                 rows_wrap.addWidget(row_w)
             docgraph_cells.clear()
