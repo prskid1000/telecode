@@ -1436,7 +1436,7 @@ class _RootRow(QFrame):
         self._paint_bar(self._wiki_bar, "wiki", wiki_ps, wiki_running, "wiki · idle")
 
     def _refresh_stats_chip(self, path: str) -> None:
-        """Display live entity/edge counts and trigger a background
+        """Display live entity/edge/wiki counts and trigger a background
         refresh when the cached snapshot is older than 10s. Cheap when
         the host is alive (one /api/stats roundtrip), no-op otherwise."""
         try:
@@ -1453,6 +1453,7 @@ class _RootRow(QFrame):
         if snap:
             ents = sum(int(snap.get(k, 0) or 0)
                        for k in ("File", "Module", "Class", "Function", "Variable"))
+            docs = int(snap.get("Doc", 0) or 0)
             # Server-side total (preferred). Fall back to summing edges_by_type
             # for older hosts that don't yet emit `edges`.
             edges = snap.get("edges")
@@ -1460,10 +1461,18 @@ class _RootRow(QFrame):
                 edges = sum(int(v or 0)
                             for v in (snap.get("edges_by_type") or {}).values())
             edges = int(edges or 0)
-            self._stats_chip.setText(f"{_fmt_count(ents)} ents · {_fmt_count(edges)} edges")
+            
+            text = f"{_fmt_count(ents)} ents · {_fmt_count(edges)} edges"
+            if docs > 0:
+                text += f" · {_fmt_count(docs)} wiki"
+            self._stats_chip.setText(text)
+            
             tip_lines = [f"{path or '(no path)'}", ""]
-            for label in ("File", "Module", "Class", "Function", "Variable"):
-                tip_lines.append(f"  {label:<10} {snap.get(label, 0)}")
+            for label in ("File", "Module", "Class", "Function", "Variable", "Doc"):
+                val = snap.get(label, 0)
+                display_label = "Wiki Pages" if label == "Doc" else label
+                tip_lines.append(f"  {display_label:<12} {val}")
+            
             top_edges = sorted(
                 ((k, int(v or 0))
                  for k, v in (snap.get("edges_by_type") or {}).items()),
