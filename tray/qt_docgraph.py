@@ -223,31 +223,32 @@ def _fmt_phase_label(kind: str, phase: str, module: str = "") -> tuple[str, int,
 # ── Host card ────────────────────────────────────────────────────────────
 
 def _build_groups_card(window) -> tuple[QFrame, Callable[[], None]]:
-    """Groups management card — add/edit/remove groups and their member paths.
-
-    Groups are the newer multi-root feature; roots are legacy. When groups
-    are configured, roots are ignored. Each group has a name, db_path, and
-    a list of member paths with watch flags."""
+    """Groups management card — add/edit/remove groups and their member paths."""
     card, body = _card(
         "Groups",
         "Multiple code paths sharing one Kuzu database per group.",
     )
 
-    # Full rebuild toggle
-    body.addWidget(_toggle_row("docgraph.host.full_rebuild", "Full rebuild",
-                                "On = --full / --force. Off = incremental."))
-
     groups_widget = _GroupsTable(window)
     body.addWidget(groups_widget)
 
-        # Global action: Index all groups
+    # Full rebuild toggle (moved below the table per user request)
+    body.addWidget(_toggle_row("docgraph.host.full_rebuild", "Full rebuild",
+                                "On = --full / --force. Off = incremental."))
+
+    # Global actions
+    from tray.qt_sections import _row
+    from tray.qt_widgets import row_label
+
     index_all_btn = QPushButton("▶ Index all")
     index_all_btn.setProperty("class", "primary")
+    index_all_btn.setMinimumWidth(85)
     index_all_btn.clicked.connect(lambda: _index_all_groups(window))
     
     index_all_cancel = QPushButton("✕")
     index_all_cancel.setProperty("class", "danger")
     index_all_cancel.setFixedWidth(28)
+    from docgraph.process import get_index, get_wiki
     index_all_cancel.clicked.connect(lambda: _run(window, lambda: get_index().cancel()))
     
     index_all_status = QLabel("idle")
@@ -258,9 +259,9 @@ def _build_groups_card(window) -> tuple[QFrame, Callable[[], None]]:
     il.addWidget(index_all_btn); il.addWidget(index_all_cancel); il.addWidget(index_all_status, 0); il.addStretch(1)
     body.addWidget(_row(row_label("Index all groups"), idx_w))
 
-    # Global action: Build wikis for all groups
     wiki_all_btn = QPushButton("📋 Build wikis")
     wiki_all_btn.setProperty("class", "primary")
+    wiki_all_btn.setMinimumWidth(85)
     wiki_all_btn.clicked.connect(lambda: _build_all_wikis(window))
     
     wiki_all_cancel = QPushButton("✕")
@@ -278,6 +279,9 @@ def _build_groups_card(window) -> tuple[QFrame, Callable[[], None]]:
 
     def refresh():
         groups_widget.refresh()
+        # Update global status labels if needed
+        from docgraph import index_state, wiki_state
+        # (Status logic omitted for brevity, usually handled by SSE or manual refresh)
 
     return card, refresh
 
@@ -333,18 +337,19 @@ class _GroupsTable(QWidget):
         self._groups_host = QWidget()
         self._groups_layout = QVBoxLayout(self._groups_host)
         self._groups_layout.setContentsMargins(0, 0, 0, 0)
-        self._groups_layout.setSpacing(6)
+        self._groups_layout.setSpacing(8)
         v.addWidget(self._groups_host)
 
-        add_w = QWidget()
-        add_l = QHBoxLayout(add_w)
-        add_l.setContentsMargins(0, 0, 0, 0)
+        # Add group button at the bottom of the table
         add_btn = QPushButton("+ Add group")
         add_btn.setProperty("class", "primary")
-        add_btn.setMaximumWidth(140)
+        add_btn.setMinimumWidth(140)
         add_btn.clicked.connect(self._on_add)
-        add_l.addWidget(add_btn)
-        add_l.addStretch(1)
+        
+        # Center the add button slightly or align with labels
+        add_w = QWidget()
+        al = QHBoxLayout(add_w); al.setContentsMargins(0, 4, 0, 8); al.setSpacing(0)
+        al.addWidget(add_btn); al.addStretch(1)
         v.addWidget(add_w)
 
         self._group_widgets: list[_GroupRow] = []
@@ -650,20 +655,37 @@ class _GroupRow(QFrame):
 
     def _on_index(self) -> None:
         name = self.name_text().strip()
-        if not name:
+        db_path = self.db_path_text().strip()
+        paths = self.get_paths()
+        if not name or not db_path or not paths:
             return
         async def _go():
-            from docgraph.process import get_index
+            from docgraph.process import get_host, get_index
+            host = get_host()
+            if host._conn:
+                # Upsert group state to host first
+                try:
+                    await host._conn.api("/api/groups", method="POST", 
+                                       json={"name": name, "db_path": db_path, "paths": paths})
+                except Exception: pass
             await get_index().run(name, force=False)
             self.refresh_status()
         _run(self._window, _go)
 
     def _on_wiki(self) -> None:
         name = self.name_text().strip()
-        if not name:
+        db_path = self.db_path_text().strip()
+        paths = self.get_paths()
+        if not name or not db_path or not paths:
             return
         async def _go():
-            from docgraph.process import get_wiki
+            from docgraph.process import get_host, get_wiki
+            host = get_host()
+            if host._conn:
+                try:
+                    await host._conn.api("/api/groups", method="POST", 
+                                       json={"name": name, "db_path": db_path, "paths": paths})
+                except Exception: pass
             await get_wiki().run(name, force=False)
             self.refresh_status()
         _run(self._window, _go)
