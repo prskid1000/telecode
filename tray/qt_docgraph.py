@@ -248,11 +248,13 @@ def _build_groups_card(window) -> tuple[QFrame, Callable[[], None]]:
     index_all_label = QLabel("Index all groups")
     index_all_h.addWidget(index_all_label)
     index_all_btn = QPushButton("▶ Index all")
+    index_all_btn.setProperty("class", "primary")
     index_all_btn.clicked.connect(lambda: _index_all_groups(window))
     index_all_h.addWidget(index_all_btn)
     index_all_cancel = QPushButton("✕")
     index_all_cancel.setFlat(True)
-    index_all_cancel.setFixedWidth(24)
+    index_all_cancel.setFixedWidth(28)
+    index_all_cancel.setProperty("class", "danger")
     index_all_cancel.setStyleSheet(
         f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
     )
@@ -271,11 +273,13 @@ def _build_groups_card(window) -> tuple[QFrame, Callable[[], None]]:
     wiki_all_label = QLabel("Build wikis for all groups")
     wiki_all_h.addWidget(wiki_all_label)
     wiki_all_btn = QPushButton("📋 Build wikis")
+    wiki_all_btn.setProperty("class", "primary")
     wiki_all_btn.clicked.connect(lambda: _build_all_wikis(window))
     wiki_all_h.addWidget(wiki_all_btn)
     wiki_all_cancel = QPushButton("✕")
     wiki_all_cancel.setFlat(True)
-    wiki_all_cancel.setFixedWidth(24)
+    wiki_all_cancel.setFixedWidth(28)
+    wiki_all_cancel.setProperty("class", "danger")
     wiki_all_cancel.setStyleSheet(
         f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
     )
@@ -531,15 +535,18 @@ class _GroupRow(QFrame):
 
         self._index_btn = QPushButton("▶ Index")
         self._index_btn.setMinimumWidth(85)
+        self._index_btn.setMinimumWidth(85)
         self._index_btn.clicked.connect(self._on_index)
         actions_h.addWidget(self._index_btn)
 
         self._wiki_btn = QPushButton("📋 Wiki")
         self._wiki_btn.setMinimumWidth(85)
+        self._wiki_btn.setMinimumWidth(85)
         self._wiki_btn.clicked.connect(self._on_wiki)
         actions_h.addWidget(self._wiki_btn)
 
         self._clear_btn = QPushButton("🗑 Clear")
+        self._clear_btn.setMinimumWidth(85)
         self._clear_btn.setMinimumWidth(85)
         self._clear_btn.setProperty("class", "danger")
         self._clear_btn.clicked.connect(self._on_clear)
@@ -556,6 +563,24 @@ class _GroupRow(QFrame):
         actions_h.addWidget(self._watch_toggle)
 
         outer.addWidget(actions_w)
+
+        # ── Line 3: paired progress bars (index left, wiki right) ──────
+        self._line3 = QWidget()
+        l3 = QHBoxLayout(self._line3)
+        l3.setContentsMargins(0, 0, 0, 0); l3.setSpacing(8)
+
+        def _mkbar(kind: str, idle_label: str) -> QProgressBar:
+            bar = QProgressBar()
+            bar.setProperty("kind", kind); bar.setProperty("state", "idle")
+            bar.setRange(0, 100); bar.setValue(0); bar.setTextVisible(True)
+            bar.setFormat(idle_label); bar.setAlignment(Qt.AlignmentFlag.AlignCenter); bar.setFixedHeight(20)
+            return bar
+
+        self._idx_bar = _mkbar("idx", "index · idle")
+        l3.addWidget(self._idx_bar, 1)
+        self._wiki_bar = _mkbar("wiki", "wiki · idle")
+        l3.addWidget(self._wiki_bar, 1)
+        outer.addWidget(self._line3)
 
         self._member_rows: list[_MemberRow] = []
         self._rebuild_members(paths)
@@ -662,6 +687,7 @@ class _GroupRow(QFrame):
         self._refresh_index_pill(name)
         self._refresh_wiki_pill(name)
         self._refresh_stats_chip(name)
+        self._refresh_progress_bars(name)
 
     def _refresh_index_pill(self, name: str) -> None:
         try:
@@ -1218,6 +1244,7 @@ class _RootRow(QFrame):
         bh.setSpacing(6)
 
         self._index_btn = QPushButton("▶ Index")
+        self._index_btn.setMinimumWidth(85)
         self._index_btn.setToolTip(
             "Index this root.\n"
             "POST /api/admin/index?root=<slug>  if host is alive,\n"
@@ -1226,7 +1253,8 @@ class _RootRow(QFrame):
         self._index_btn.clicked.connect(self._trigger_index)
         bh.addWidget(self._index_btn)
 
-        self._wiki_btn = QPushButton("📖 Wiki")
+        self._wiki_btn = QPushButton("📋 Wiki")
+        self._wiki_btn.setMinimumWidth(85)
         self._wiki_btn.setToolTip(
             "Build the wiki for this root.\n"
             "POST /api/wiki/build?root=<slug>  if host is alive,\n"
@@ -1237,6 +1265,7 @@ class _RootRow(QFrame):
         bh.addWidget(self._wiki_btn)
 
         self._clear_btn = QPushButton("🗑 Clear")
+        self._clear_btn.setMinimumWidth(85)
         self._clear_btn.setProperty("class", "danger")
         self._clear_btn.setToolTip(
             "Clear this root's index.\n"
