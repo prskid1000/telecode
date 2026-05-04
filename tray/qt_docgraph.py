@@ -358,6 +358,7 @@ def _build_roots_card(window) -> tuple[QFrame, Callable[[], None]]:
     # Index all row: ▶ + ✕ cancel + status pill.
     run_all_btn = QPushButton("▶ Index all")
     run_all_btn.setProperty("class", "primary")
+    run_all_btn.setStyleSheet("padding: 4px 14px;")
     run_all_btn.setToolTip("Index every configured root.")
     cancel_btn = QPushButton("✕")
     cancel_btn.setProperty("class", "danger")
@@ -374,7 +375,11 @@ def _build_roots_card(window) -> tuple[QFrame, Callable[[], None]]:
     # Build wikis row: ▶ + ✕ cancel + status pill.
     run_all_wiki_btn = QPushButton("▶ Build wikis")
     run_all_wiki_btn.setProperty("class", "primary")
+    run_all_wiki_btn.setStyleSheet("padding: 4px 14px;")
     run_all_wiki_btn.setToolTip("Build the wiki for every configured root.")
+    action_btn_w = max(run_all_btn.sizeHint().width(), run_all_wiki_btn.sizeHint().width())
+    run_all_btn.setFixedWidth(action_btn_w)
+    run_all_wiki_btn.setFixedWidth(action_btn_w)
     cancel_wiki_btn = QPushButton("✕")
     cancel_wiki_btn.setProperty("class", "danger")
     cancel_wiki_btn.setFixedWidth(28)
@@ -433,7 +438,39 @@ def _index_status_text() -> tuple[bool, str]:
     if s["alive"]:
         what = "full" if s.get("current_force") else "incremental"
         return True, f"running · {s.get('current_path') or '?'} ({what})"
-    return False, "idle"
+    return False, _index_totals_text()
+
+
+def _index_totals_text() -> str:
+    """Aggregate cached entity/edge totals across all configured roots."""
+    try:
+        from docgraph import config as dg_cfg
+        from docgraph import stats_state
+    except Exception:
+        return "idle"
+
+    total_ents = 0
+    total_edges = 0
+    seen = False
+
+    for path in dg_cfg.root_paths():
+        snap = stats_state.get(path)
+        if not snap:
+            continue
+        seen = True
+
+        ents = sum(int(snap.get(k, 0) or 0)
+                   for k in ("File", "Module", "Class", "Function", "Variable"))
+        edges = snap.get("edges")
+        if edges is None:
+            edges = sum(int(v or 0) for v in (snap.get("edges_by_type") or {}).values())
+
+        total_ents += int(ents or 0)
+        total_edges += int(edges or 0)
+
+    if not seen:
+        return "idle"
+    return f"{_fmt_count(total_ents)} ents · {_fmt_count(total_edges)} edges"
 
 
 def _wiki_status_text() -> tuple[bool, str]:

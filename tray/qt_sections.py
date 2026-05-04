@@ -1661,9 +1661,8 @@ def _managed(window) -> QWidget:
         group_prefixes = {p for p, c in prefixes.items() if c >= 2}
         seen_groups: set[str] = set()
 
-        # Buffer for the docgraph group — rendered as a 2-column grid below
-        # the group header instead of one tall column. Flushed when the
-        # iteration leaves the docgraph block, and again after the loop.
+        # Buffer for the docgraph group — rendered as a 2-column grid above
+        # the rest of the managed tools instead of one tall column.
         docgraph_cells: list[tuple[QWidget, QWidget]] = []
 
         def _flush_docgraph_grid() -> None:
@@ -1689,7 +1688,60 @@ def _managed(window) -> QWidget:
                 rows_wrap.addWidget(row_w)
             docgraph_cells.clear()
 
-        for t in tools:
+        docgraph_tools = [t for t in tools if t.get("name", "").startswith("docgraph_")]
+        other_tools = [t for t in tools if not t.get("name", "").startswith("docgraph_")]
+
+        def _render_docgraph_group() -> None:
+            if not docgraph_tools:
+                return
+            prefix = "docgraph"
+            seen_groups.add(prefix)
+            hdr_label = QLabel(humanize(prefix))
+            hdr_label.setStyleSheet(
+                f"color: {FG}; font-size: 13px; font-weight: 500; "
+                f"text-transform: uppercase; letter-spacing: 0.06em; "
+                f"padding-top: 4px;"
+            )
+            children = [x.get("name", "") for x in docgraph_tools]
+            any_on = any(bool(x.get("enabled", True)) for x in docgraph_tools)
+            grp_toggle = Toggle()
+            grp_toggle.setChecked(any_on)
+
+            def _grp_toggle(_s: int, names=tuple(children), gw=grp_toggle) -> None:
+                on = gw.isChecked()
+                for cn in names:
+                    cw = toggles.get(cn)
+                    if cw is None:
+                        continue
+                    if cw.isChecked() != on:
+                        cw.setChecked(on)
+
+            grp_toggle.stateChanged.connect(_grp_toggle)
+            group_toggles[prefix] = (grp_toggle, list(children))
+            rows_wrap.addWidget(_row(hdr_label,
+                                      _wrap_align(grp_toggle, Qt.AlignmentFlag.AlignLeft)))
+
+            for t in docgraph_tools:
+                name = t.get("name", "?")
+                enabled = t.get("enabled", True)
+                t_widget = Toggle()
+                t_widget.setChecked(enabled)
+
+                def _toggle(_s: int, n=name, tw=t_widget) -> None:
+                    set_tool("managed_tools", n, tw.isChecked())
+
+                t_widget.stateChanged.connect(_toggle)
+                toggles[name] = t_widget
+
+                tail = name[len(prefix) + 1:] if name.startswith(prefix + "_") else name
+                label_w = row_label(f"  └─ {humanize(tail)}", "", name)
+                docgraph_cells.append((label_w, t_widget))
+
+            _flush_docgraph_grid()
+
+        _render_docgraph_group()
+
+        for t in other_tools:
             name = t.get("name", "?")
             nl = name.lower()
             enabled = t.get("enabled", True)
@@ -1699,9 +1751,6 @@ def _managed(window) -> QWidget:
 
             # Leaving the docgraph block — flush whatever we collected
             # before rendering the next (non-docgraph) row.
-            if prefix != "docgraph" and docgraph_cells:
-                _flush_docgraph_grid()
-
             if in_group and prefix not in seen_groups:
                 seen_groups.add(prefix)
                 hdr_label = QLabel(humanize(prefix))
@@ -1749,21 +1798,14 @@ def _managed(window) -> QWidget:
                 label_text = humanize(name)
 
             label_w = row_label(label_text, "", name)
-            if prefix == "docgraph" and in_group:
-                # Buffered — flushed as a 3-column grid below the header.
-                docgraph_cells.append((label_w, t_widget))
-            else:
-                rows_wrap.addWidget(_row(label_w,
-                                          _wrap_align(t_widget, Qt.AlignmentFlag.AlignLeft)))
+            rows_wrap.addWidget(_row(label_w,
+                                      _wrap_align(t_widget, Qt.AlignmentFlag.AlignLeft)))
 
             if nl == "transcribe":
                 rows_wrap.addWidget(_line_row("mcp_server.stt_url", "  └─ Whisper Endpoint", "http://127.0.0.1:6600"))
                 rows_wrap.addWidget(_enum_row_strs("voice.stt.model", "  └─ Whisper Model", _WHISPER_MODELS))
             elif nl == "speak":
                 rows_wrap.addWidget(_line_row("mcp_server.tts_url", "  └─ Kokoro Endpoint", "http://127.0.0.1:6500"))
-
-        # Flush any docgraph cells left after the last tool.
-        _flush_docgraph_grid()
 
     def refresh() -> None:
         nonlocal last_names
