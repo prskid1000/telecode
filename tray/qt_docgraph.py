@@ -240,55 +240,41 @@ def _build_groups_card(window) -> tuple[QFrame, Callable[[], None]]:
     groups_widget = _GroupsTable(window)
     body.addWidget(groups_widget)
 
-    # Global action: Index all groups
-    index_all_w = QWidget()
-    index_all_h = QHBoxLayout(index_all_w)
-    index_all_h.setContentsMargins(0, 0, 0, 0)
-    index_all_h.setSpacing(6)
-    index_all_label = QLabel("Index all groups")
-    index_all_h.addWidget(index_all_label)
+        # Global action: Index all groups
     index_all_btn = QPushButton("▶ Index all")
     index_all_btn.setProperty("class", "primary")
     index_all_btn.clicked.connect(lambda: _index_all_groups(window))
-    index_all_h.addWidget(index_all_btn)
+    
     index_all_cancel = QPushButton("✕")
-    index_all_cancel.setFlat(True)
-    index_all_cancel.setFixedWidth(28)
     index_all_cancel.setProperty("class", "danger")
-    index_all_cancel.setStyleSheet(
-        f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
-    )
-    index_all_h.addWidget(index_all_cancel)
+    index_all_cancel.setFixedWidth(28)
+    index_all_cancel.clicked.connect(lambda: _run(window, lambda: get_index().cancel()))
+    
     index_all_status = QLabel("idle")
     index_all_status.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
-    index_all_h.addWidget(index_all_status)
-    index_all_h.addStretch(1)
-    body.addWidget(index_all_w)
+    
+    idx_w = QWidget()
+    il = QHBoxLayout(idx_w); il.setContentsMargins(0, 0, 0, 0); il.setSpacing(8)
+    il.addWidget(index_all_btn); il.addWidget(index_all_cancel); il.addWidget(index_all_status, 0); il.addStretch(1)
+    body.addWidget(_row(row_label("Index all groups"), idx_w))
 
     # Global action: Build wikis for all groups
-    wiki_all_w = QWidget()
-    wiki_all_h = QHBoxLayout(wiki_all_w)
-    wiki_all_h.setContentsMargins(0, 0, 0, 0)
-    wiki_all_h.setSpacing(6)
-    wiki_all_label = QLabel("Build wikis for all groups")
-    wiki_all_h.addWidget(wiki_all_label)
     wiki_all_btn = QPushButton("📋 Build wikis")
     wiki_all_btn.setProperty("class", "primary")
     wiki_all_btn.clicked.connect(lambda: _build_all_wikis(window))
-    wiki_all_h.addWidget(wiki_all_btn)
+    
     wiki_all_cancel = QPushButton("✕")
-    wiki_all_cancel.setFlat(True)
-    wiki_all_cancel.setFixedWidth(28)
     wiki_all_cancel.setProperty("class", "danger")
-    wiki_all_cancel.setStyleSheet(
-        f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
-    )
-    wiki_all_h.addWidget(wiki_all_cancel)
-    wiki_all_status = QLabel("idle")
-    wiki_all_status.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
-    wiki_all_h.addWidget(wiki_all_status)
-    wiki_all_h.addStretch(1)
-    body.addWidget(wiki_all_w)
+    wiki_all_cancel.setFixedWidth(28)
+    wiki_all_cancel.clicked.connect(lambda: _run(window, lambda: get_wiki().cancel()))
+    
+    wiki_status_lbl = QLabel("idle")
+    wiki_status_lbl.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+    
+    wiki_w = QWidget()
+    wl = QHBoxLayout(wiki_w); wl.setContentsMargins(0, 0, 0, 0); wl.setSpacing(8)
+    wl.addWidget(wiki_all_btn); wl.addWidget(wiki_all_cancel); wl.addWidget(wiki_status_lbl, 0); wl.addStretch(1)
+    body.addWidget(_row(row_label("Build wikis for all groups"), wiki_w))
 
     def refresh():
         groups_widget.refresh()
@@ -535,18 +521,15 @@ class _GroupRow(QFrame):
 
         self._index_btn = QPushButton("▶ Index")
         self._index_btn.setMinimumWidth(85)
-        self._index_btn.setMinimumWidth(85)
         self._index_btn.clicked.connect(self._on_index)
         actions_h.addWidget(self._index_btn)
 
         self._wiki_btn = QPushButton("📋 Wiki")
         self._wiki_btn.setMinimumWidth(85)
-        self._wiki_btn.setMinimumWidth(85)
         self._wiki_btn.clicked.connect(self._on_wiki)
         actions_h.addWidget(self._wiki_btn)
 
         self._clear_btn = QPushButton("🗑 Clear")
-        self._clear_btn.setMinimumWidth(85)
         self._clear_btn.setMinimumWidth(85)
         self._clear_btn.setProperty("class", "danger")
         self._clear_btn.clicked.connect(self._on_clear)
@@ -578,8 +561,10 @@ class _GroupRow(QFrame):
 
         self._idx_bar = _mkbar("idx", "index · idle")
         l3.addWidget(self._idx_bar, 1)
+
         self._wiki_bar = _mkbar("wiki", "wiki · idle")
         l3.addWidget(self._wiki_bar, 1)
+
         outer.addWidget(self._line3)
 
         self._member_rows: list[_MemberRow] = []
@@ -689,6 +674,43 @@ class _GroupRow(QFrame):
         self._refresh_stats_chip(name)
         self._refresh_progress_bars(name)
 
+    def _apply_bar_state(self, bar: QProgressBar, state: str) -> None:
+        if bar.property("state") == state: return
+        bar.setProperty("state", state)
+        st = bar.style(); st.unpolish(bar); st.polish(bar)
+
+    def _paint_bar(self, bar: QProgressBar, kind: str, ps: dict | None, running: bool, idle_label: str) -> None:
+        if not running:
+            self._apply_bar_state(bar, "idle")
+            bar.setRange(0, 100); bar.setValue(0); bar.setFormat(idle_label)
+            return
+        self._apply_bar_state(bar, "run")
+        phase = (ps or {}).get("phase") or "start"
+        module = (ps or {}).get("module") or ""
+        label, ord_, total_phases = _fmt_phase_label(kind, phase, module)
+        cur = int((ps or {}).get("current") or 0)
+        tot = int((ps or {}).get("total") or 0)
+        if tot > 0:
+            pct = max(0, min(100, int(cur * 100 / tot)))
+            bar.setRange(0, 100); bar.setValue(pct)
+            bar.setFormat(f"[{ord_}/{total_phases}] {label}  ·  {pct}%  ({_fmt_count(cur)}/{_fmt_count(tot)})")
+        else:
+            bar.setRange(0, 0); bar.setFormat(f"[{ord_}/{total_phases}] {label}  ·  …")
+
+    def _refresh_progress_bars(self, name: str) -> None:
+        try:
+            from docgraph import progress_state
+            from docgraph.process import get_index, get_wiki
+            idx_running = bool(name) and get_index().current_path() == name
+            wiki_running = bool(name) and get_wiki().current_path() == name
+            idx_ps = progress_state.get(name, "index") if name else None
+            wiki_ps = progress_state.get(name, "wiki") if name else None
+        except Exception:
+            idx_running = wiki_running = False
+            idx_ps = wiki_ps = None
+        self._paint_bar(self._idx_bar, "index", idx_ps, idx_running, "index · idle")
+        self._paint_bar(self._wiki_bar, "wiki", wiki_ps, wiki_running, "wiki · idle")
+
     def _refresh_index_pill(self, name: str) -> None:
         try:
             from docgraph import index_state
@@ -704,8 +726,6 @@ class _GroupRow(QFrame):
             return
         self._index_btn.setEnabled(True)
         if not s:
-            # For groups, checking disk is harder as it's not a single folder.
-            # We'll just show 'not indexed' if no state is found.
             self._pill.setText("not indexed")
             self._pill.setStyleSheet(f"color: {FG_MUTE};")
             return
