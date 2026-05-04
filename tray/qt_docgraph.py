@@ -373,15 +373,31 @@ class _GroupsTable(QWidget):
 
     def _on_add(self) -> None:
         self._append_group("", "", [])
-        self._commit()
-
+        # We don't call commit yet, let the user fill the name/path first
+        # Mutation happens on editingFinished or manual Save if we had one.
+        # For now, keep the auto-commit on add if name/path were there, but
+        # they are empty.
+        
     def _on_remove(self, row: "_GroupRow") -> None:
+        name = row.name_text().strip()
         try:
             self._group_widgets.remove(row)
         except ValueError:
             pass
         row.setParent(None)
         row.deleteLater()
+        
+        if name:
+            async def _go():
+                from docgraph.process import get_host
+                host = get_host()
+                if host._conn:
+                    try:
+                        await host._conn.api(f"/api/groups/{name}", method="DELETE")
+                    except Exception as e:
+                        log.warning("failed to remove group via API: %s", e)
+            _run(self._window, _go)
+            
         self._commit()
 
     def _commit(self) -> None:
@@ -393,6 +409,20 @@ class _GroupsTable(QWidget):
             if not name or not db_path or not paths:
                 continue
             out.append({"name": name, "db_path": db_path, "paths": paths})
+        
+        # Also notify host of the change if alive
+        async def _go():
+            from docgraph.process import get_host
+            host = get_host()
+            if host._conn:
+                for group_data in out:
+                    try:
+                        # POST /api/groups is an 'upsert'
+                        await host._conn.api("/api/groups", method="POST", json=group_data)
+                    except Exception as e:
+                        log.warning("failed to sync group via API: %s", e)
+        _run(self._window, _go)
+        
         patch_settings("docgraph.groups", out)
 
     def refresh(self) -> None:
