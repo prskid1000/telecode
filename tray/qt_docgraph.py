@@ -186,6 +186,7 @@ def _format_ago(ts: float | None) -> str:
 # get a slot — if they don't fire, the ordinal just skips them.
 
 _INDEX_PHASES: list[tuple[str, str, bool]] = [
+    ("fetch_links",    "fetching links",  False),
     ("start",          "starting",        False),
     ("delete",         "removing stale",  True),
     ("parse",          "parsing files",   True),
@@ -235,6 +236,11 @@ def _fmt_phase_label(kind: str, phase: str, module: str = "") -> tuple[str, int,
         if kind == "wiki" and phase == "module" and module:
             label = f"{label} · {module}"
         return label, i + 1, total
+    # Dynamic BFS-level phases emitted as "fetch:N" (N = depth level).
+    if kind == "index" and phase.startswith("fetch:"):
+        level = phase[6:]
+        fetch_ord = _INDEX_PHASE_INDEX.get("fetch_links", (0, ""))[0] + 1
+        return f"fetching · level {level}", fetch_ord, total
     return phase or "?", 0, total
 
 
