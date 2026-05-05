@@ -230,7 +230,8 @@ async def _tail_host_log_to_fp(host_log_path: str, dest_fp, stop_event: asyncio.
         return
 
 
-async def _index_via_host(path: str, full: bool, port: int, log_fp=None) -> tuple[bool, str]:
+async def _index_via_host(path: str, full: bool, port: int, log_fp=None,
+                          progress_cb=None) -> tuple[bool, str]:
     """POST /api/admin/index?root=<slug>&full=<bool> on the running host.
 
     Returns (ok, detail_text). Resolves `path` to a slug by hitting
@@ -243,6 +244,14 @@ async def _index_via_host(path: str, full: bool, port: int, log_fp=None) -> tupl
     target = norm.casefold() if sys.platform == "win32" else norm
     timeout = aiohttp.ClientTimeout(total=600)  # full reindex can be slow
     async with aiohttp.ClientSession(timeout=timeout) as session:
+        def _emit(job: dict | None) -> None:
+            if progress_cb is None:
+                return
+            try:
+                progress_cb(job)
+            except Exception:
+                pass
+
         # 1) Resolve path -> slug via the host's roots listing.
         try:
             async with session.get(f"{base}/api/roots") as resp:
@@ -283,6 +292,8 @@ async def _index_via_host(path: str, full: bool, port: int, log_fp=None) -> tupl
                     job_id = payload.get("job_id")
                     if not job_id:
                         return False, "No job_id returned"
+
+                    _emit(payload)
                 
                 while True:
                     await asyncio.sleep(2.0)
@@ -290,6 +301,7 @@ async def _index_via_host(path: str, full: bool, port: int, log_fp=None) -> tupl
                         if resp.status != 200:
                             continue
                         job = await resp.json()
+                            _emit(job)
                         status = job.get("status")
                         if status == "completed":
                             stats = job.get("result") or {}
@@ -703,7 +715,8 @@ async def remove_doc_for(path: str, url: str) -> tuple[bool, dict | str]:
         return False, f"host route failed: {exc}"
 
 
-async def _wiki_via_host(path: str, force: bool, port: int, log_fp=None) -> tuple[bool, str]:
+async def _wiki_via_host(path: str, force: bool, port: int, log_fp=None,
+                         progress_cb=None) -> tuple[bool, str]:
     """POST /api/wiki/build?root=<slug> on the running host.
 
     Mirrors `_index_via_host`: resolves the path → slug via /api/roots,
@@ -717,6 +730,14 @@ async def _wiki_via_host(path: str, force: bool, port: int, log_fp=None) -> tupl
     target = norm.casefold() if sys.platform == "win32" else norm
     timeout = aiohttp.ClientTimeout(total=1800)  # wiki can be slow per module
     async with aiohttp.ClientSession(timeout=timeout) as session:
+        def _emit(job: dict | None) -> None:
+            if progress_cb is None:
+                return
+            try:
+                progress_cb(job)
+            except Exception:
+                pass
+
         try:
             async with session.get(f"{base}/api/roots") as resp:
                 if resp.status != 200:
@@ -753,6 +774,8 @@ async def _wiki_via_host(path: str, force: bool, port: int, log_fp=None) -> tupl
                     job_id = payload.get("job_id")
                     if not job_id:
                         return False, "No job_id returned"
+
+                _emit(payload)
                 
                 while True:
                     await asyncio.sleep(2.0)
@@ -760,6 +783,7 @@ async def _wiki_via_host(path: str, force: bool, port: int, log_fp=None) -> tupl
                         if resp.status != 200:
                             continue
                         job = await resp.json()
+                        _emit(job)
                         status = job.get("status")
                         if status == "completed":
                             res = job.get("result") or {}
@@ -889,6 +913,25 @@ class IndexRunner:
         self._log_fp = _open_log("index")
         rc_or_status = "failed"
 
+        def _progress(job: dict | None) -> None:
+            if not job:
+                return
+            status = str(job.get("status") or job.get("state") or "").lower()
+            if status in {"completed", "ok", "success"}:
+                status = "done"
+            if status == "error":
+                status = "failed"
+            try:
+                index_state.update(path, status=status or "running", was_full=force)
+            except Exception:
+                pass
+            if status in {"done", "failed", "cancelled"}:
+                try:
+                    from docgraph import progress_state
+                    progress_state.clear(path, "index")
+                except Exception:
+                    pass
+
         # Two routes:
         # 1. If the host is alive, POST `/api/admin/index` and let it run
         #    in-process (it owns the workspace + writer-lock dance).
@@ -912,7 +955,8 @@ class IndexRunner:
                     )
                     self._log_fp.flush()
                     ok, detail = await _index_via_host(path, force, _HOST.port(),
-                                                        log_fp=self._log_fp)
+                                                        log_fp=self._log_fp,
+                                                        progress_cb=_progress)
                     self._log_fp.write(detail.encode("utf-8", errors="replace") + b"\n")
                     self._log_fp.flush()
                     rc_or_status = "ok" if ok else "failed"
@@ -1112,6 +1156,25 @@ class WikiRunner:
         self._log_fp = _open_log("wiki")
         rc_or_status = "failed"
 
+        def _progress(job: dict | None) -> None:
+            if not job:
+                return
+            status = str(job.get("status") or job.get("state") or "").lower()
+            if status in {"completed", "ok", "success"}:
+                status = "done"
+            if status == "error":
+                status = "failed"
+            try:
+                wiki_state.update(path, status=status or "running", was_full=force)
+            except Exception:
+                pass
+            if status in {"done", "failed", "cancelled"}:
+                try:
+                    from docgraph import progress_state
+                    progress_state.clear(path, "wiki")
+                except Exception:
+                    pass
+
         # Cancellation mirrors IndexRunner: cancel() POSTs /api/admin/cancel
         # first so the host's wiki loop sees the token at the next module
         # boundary; the HTTP 499 reply is mapped to CancelledError.
@@ -1126,7 +1189,8 @@ class WikiRunner:
                     )
                     self._log_fp.flush()
                     ok, detail = await _wiki_via_host(path, force, _HOST.port(),
-                                                       log_fp=self._log_fp)
+                                                       log_fp=self._log_fp,
+                                                       progress_cb=_progress)
                     self._log_fp.write(detail.encode("utf-8", errors="replace") + b"\n")
                     self._log_fp.flush()
                     rc_or_status = "ok" if ok else "failed"
