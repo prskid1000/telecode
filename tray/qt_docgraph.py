@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import re
 import logging
+import time
 from typing import Callable
 
 from PySide6.QtCore import Qt
@@ -203,9 +204,10 @@ _INDEX_PHASES: list[tuple[str, str, bool]] = [
 _INDEX_PHASE_INDEX = {p[0]: (i, p[1]) for i, p in enumerate(_INDEX_PHASES)}
 
 _WIKI_PHASES: list[tuple[str, str, bool]] = [
-    ("start",  "preparing modules", True),
-    ("module", "writing module",    True),
-    ("done",   "done",              True),
+    ("start",                 "preparing modules", True),
+    ("load_external_docs",    "loading external docs", True),
+    ("module",                "writing module",        True),
+    ("done",                  "done",                  True),
 ]
 _WIKI_PHASE_INDEX = {p[0]: (i, p[1]) for i, p in enumerate(_WIKI_PHASES)}
 
@@ -1186,43 +1188,49 @@ def _build_llm_card(window) -> tuple[QFrame, Callable[[], None] | None]:
 # ── External Docs (Cursor @Docs parity) ────────────────────────────────
 
 def _build_docs_card(window) -> tuple[QFrame, Callable[[], None]]:
-    """Per-root external doc ingestion. Adds, lists, and removes Doc nodes
-    via the host's /api/docs/* endpoints. Picks which root to operate on
-    using the same closed-enum resolver the rest of the host uses."""
-    from PySide6.QtWidgets import (
-        QComboBox, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    )
+    """External docs crawling and indexing. Crawls URLs and indexes them
+    for wiki generation. Uses ExternalDocsRunner (separate from per-root doc ingestion)."""
+    from PySide6.QtWidgets import QSizePolicy as _QSP
 
     card, body = _card(
         "External docs",
-        "Cursor @Docs parity. Per-root Doc-node ingestion.",
+        "Crawl and index external documentation URLs for wiki context.",
     )
 
-    picker = QComboBox()
-    picker.setMinimumWidth(0)
-    refresh_btn = QPushButton("Refresh")
-    refresh_btn.setProperty("class", "ghost")
-    refresh_btn.setMaximumWidth(100)
-    picker_w = QWidget()
-    pl = QHBoxLayout(picker_w); pl.setContentsMargins(0, 0, 0, 0); pl.setSpacing(8)
-    pl.addWidget(picker, 1); pl.addWidget(refresh_btn, 0)
-    body.addWidget(_row(row_label("Root"), picker_w))
-
+    # URL input row
     url_edit = QLineEdit()
     url_edit.setPlaceholderText("https://example.com/docs")
     url_edit.setMinimumWidth(0)
-    add_btn = QPushButton("+ Add")
-    add_btn.setProperty("class", "primary")
-    add_btn.setMaximumWidth(100)
+    index_btn = QPushButton("+ Index")
+    index_btn.setProperty("class", "primary")
+    index_btn.setMaximumWidth(100)
     cancel_btn = QPushButton("Cancel")
     cancel_btn.setProperty("class", "danger")
     cancel_btn.setMaximumWidth(100)
     cancel_btn.setEnabled(False)
-    add_w = QWidget()
-    al = QHBoxLayout(add_w); al.setContentsMargins(0, 0, 0, 0); al.setSpacing(8)
-    al.addWidget(url_edit, 1); al.addWidget(add_btn, 0); al.addWidget(cancel_btn, 0)
-    body.addWidget(_row(row_label("Add doc URL"), add_w))
+    url_w = QWidget()
+    ul = QHBoxLayout(url_w); ul.setContentsMargins(0, 0, 0, 0); ul.setSpacing(8)
+    ul.addWidget(url_edit, 1); ul.addWidget(index_btn, 0); ul.addWidget(cancel_btn, 0)
+    body.addWidget(_row(row_label("Start URL"), url_w))
 
+    # Config row: depth + clear cache
+    depth_spin = None
+    from PySide6.QtWidgets import QSpinBox
+    depth_spin = QSpinBox()
+    depth_spin.setMinimum(1); depth_spin.setMaximum(5); depth_spin.setValue(2)
+    depth_spin.setMaximumWidth(60)
+    body.addWidget(_row(row_label("Crawl depth"), depth_spin))
+
+    # Clear cache button
+    clear_btn = QPushButton("Clear cache")
+    clear_btn.setProperty("class", "ghost")
+    clear_btn.setMaximumWidth(100)
+    clear_w = QWidget()
+    cl = QHBoxLayout(clear_w); cl.setContentsMargins(0, 0, 0, 0); cl.setSpacing(0)
+    cl.addStretch(1); cl.addWidget(clear_btn, 0)
+    body.addWidget(clear_w)
+
+    # Status and progress
     status_lbl = QLabel("")
     status_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
     status_lbl.setWordWrap(True)
@@ -1236,252 +1244,181 @@ def _build_docs_card(window) -> tuple[QFrame, Callable[[], None]]:
     progress.setFixedHeight(18)
     body.addWidget(progress)
 
-    from PySide6.QtWidgets import QSizePolicy as _QSP
-
-    table = QTableWidget(0, 4)
-    table.setHorizontalHeaderLabels(["Source", "Title", "Chunks", ""])
-    table.verticalHeader().setVisible(False)
-    table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-    table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-    hdr = table.horizontalHeader()
-    hdr.setMinimumSectionSize(50)
-    hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-    hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-    hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-    hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-    table.setMinimumWidth(0)
-    table.setMinimumHeight(180)
-    table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-    table.setSizePolicy(_QSP.Policy.Expanding, _QSP.Policy.Preferred)
-    body.addWidget(table)
-
-    def _current_root_path() -> str:
-        idx = picker.currentIndex()
-        if idx < 0:
-            return ""
-        return str(picker.itemData(idx) or "")
+    # Cache stats
+    cache_lbl = QLabel("")
+    cache_lbl.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
+    body.addWidget(cache_lbl)
 
     def _set_status(text: str, kind: str = "info") -> None:
         color = {"info": FG_MUTE, "ok": OK, "err": ERR}.get(kind, FG_MUTE)
         status_lbl.setStyleSheet(f"color: {color}; font-size: 11px;")
         status_lbl.setText(text)
 
-    def _set_progress_from_job(job: dict | None, *, running: bool) -> None:
-        if not job:
-            if running:
-                progress.setRange(0, 0)
-                progress.setFormat("running…")
-                cancel_btn.setEnabled(True)
-            return
-
-        status = str(job.get("status") or job.get("state") or "").lower()
-        message = (
-            job.get("progress_message")
-            or job.get("message")
-            or job.get("phase")
-            or job.get("title")
-            or ""
-        )
-        log_text = str(job.get("log") or "")
-        if not message and log_text:
-            lines = [line.strip() for line in log_text.splitlines() if line.strip()]
-            if lines:
-                message = lines[-1]
-
-        pct = None
-        raw_progress = job.get("progress")
-        # progress may be a numeric percent, or a dict with current/total/message
-        if isinstance(raw_progress, (int, float)):
-            pct = float(raw_progress)
-            if pct <= 1.0:
-                pct *= 100.0
-        elif isinstance(raw_progress, dict):
-            current = raw_progress.get("current")
-            total = raw_progress.get("total")
-            # accept direct percent as 'progress' key inside dict too
-            pct_inner = raw_progress.get("progress")
-            if isinstance(pct_inner, (int, float)):
-                pct = float(pct_inner)
-                if pct <= 1.0:
-                    pct *= 100.0
-            elif isinstance(current, (int, float)) and isinstance(total, (int, float)) and float(total) > 0:
-                pct = float(current) * 100.0 / float(total)
-            # allow message override from progress dict
-            if not message:
-                message = raw_progress.get("message") or raw_progress.get("phase") or message
-        else:
-            current = job.get("current")
-            total = job.get("total")
-            if isinstance(current, (int, float)) and isinstance(total, (int, float)) and float(total) > 0:
-                pct = float(current) * 100.0 / float(total)
-
-        if pct is not None:
-            pct = max(0.0, min(100.0, pct))
-            progress.setRange(0, 100)
-            progress.setValue(int(round(pct)))
-            progress.setFormat(f"{int(round(pct))}%")
-        elif running:
-            progress.setRange(0, 0)
-            progress.setFormat("running…")
-            cancel_btn.setEnabled(True)
-        else:
-            progress.setRange(0, 100)
-            progress.setValue(0)
-            progress.setFormat("idle")
-            cancel_btn.setEnabled(False)
-
-        if message:
-            _set_status(message, "info")
-        if status in {"completed", "done", "ok", "success"}:
-            progress.setRange(0, 100)
-            progress.setValue(100)
-        elif status in {"failed", "error", "cancelled"}:
-            _set_status(message or status, "err")
-
-    def _set_add_busy(running: bool) -> None:
-        picker.setEnabled(not running)
-        refresh_btn.setEnabled(not running)
+    def _set_busy(running: bool) -> None:
         url_edit.setEnabled(not running)
-        add_btn.setEnabled(not running)
+        index_btn.setEnabled(not running)
         cancel_btn.setEnabled(running)
+        depth_spin.setEnabled(not running)
+        clear_btn.setEnabled(not running)
 
-    def _reload_table() -> None:
-        path = _current_root_path()
-        table.setRowCount(0)
-        if not path:
-            _set_status("No root configured. Add one in the Roots card.")
-            return
+    def _refresh_cache_stats() -> None:
+        try:
+            from docgraph.external_docs import load_indexed_docs
+            from docgraph.config import Config
+            from pathlib import Path
+            import os
+            cfg = Config(
+                data_dir=Path(os.path.dirname(os.path.dirname(__file__)) or ".") / ".docgraph"
+            )
+            docs = load_indexed_docs(cfg)
+            if docs:
+                cache_lbl.setText(f"Cached: {len(docs)} docs from {len(set(d.url.split('/')[2] for d in docs))} domains")
+                cache_lbl.setStyleSheet(f"color: {OK}; font-size: 10px;")
+            else:
+                cache_lbl.setText("Cache: empty")
+                cache_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 10px;")
+        except Exception as e:
+            log.debug("_refresh_cache_stats: %s", e)
 
-        async def _go():
-            from docgraph.process import list_docs_for
-            ok, payload = await list_docs_for(path)
-            from PySide6.QtCore import QTimer
-            def _fill():
-                if not ok:
-                    _set_status(str(payload), "err")
-                    return
-                rows = payload if isinstance(payload, list) else []
-                table.setRowCount(len(rows))
-                for i, r in enumerate(rows):
-                    src = r.get("source", "")
-                    title = r.get("title", "") or ""
-                    chunks = str(r.get("chunks", 0))
-                    table.setItem(i, 0, QTableWidgetItem(src))
-                    table.setItem(i, 1, QTableWidgetItem(title))
-                    item_n = QTableWidgetItem(chunks)
-                    item_n.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                    table.setItem(i, 2, item_n)
-                    rm = QPushButton("✕")
-                    rm.setFlat(True)
-                    rm.setFixedWidth(28)
-                    rm.setStyleSheet(
-                        f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
-                        f" QPushButton:hover {{ color: #ff6b6b; }}"
-                    )
-                    rm.clicked.connect(lambda _checked, u=src: _remove(u))
-                    table.setCellWidget(i, 3, rm)
-                _set_status(f"{len(rows)} doc source(s) for this root.")
-            QTimer.singleShot(0, _fill)
-
-        _run(window, _go)
-
-    def _add() -> None:
+    def _index() -> None:
         url = url_edit.text().strip()
-        path = _current_root_path()
-        if not url or not path:
+        if not url:
+            _set_status("Enter a URL to crawl.", "err")
             return
+
+        depth = depth_spin.value() if depth_spin else 2
+        _set_busy(True)
+        _set_status(f"Crawling {url} (depth={depth})…", "info")
+        progress.setRange(0, 0)  # Indeterminate
+        progress.setFormat("running…")
 
         async def _go():
-            from docgraph.process import add_doc_for
-            ok, payload = await add_doc_for(path, url, progress_cb=_set_progress_from_job)
-            from PySide6.QtCore import QTimer
-            def _after():
-                if ok:
-                    chunks = payload.get("chunks", "?") if isinstance(payload, dict) else "?"
-                    title = payload.get("title", "") if isinstance(payload, dict) else ""
-                    _set_status(f"Added: {title or url} ({chunks} chunks).", "ok")
-                    _set_progress_from_job({"status": "completed", "progress": 100}, running=False)
-                    url_edit.clear()
-                    _reload_table()
-                else:
-                    _set_status(str(payload), "err")
-                    _set_progress_from_job({"status": "failed"}, running=False)
-                _set_add_busy(False)
-            QTimer.singleShot(0, _after)
+            from docgraph.process import get_external_docs
+            runner = get_external_docs()
 
-        _set_status(f"Fetching {url} …", "info")
-        _set_progress_from_job({"status": "running"}, running=True)
-        _set_add_busy(True)
+            def _progress(phase: str, current: int, total: int, detail: str = "") -> None:
+                from PySide6.QtCore import QTimer
+                def _update():
+                    if phase == "crawl":
+                        progress.setRange(0, max(1, total))
+                        progress.setValue(current)
+                        progress.setFormat(f"{current}/{total}")
+                        if detail:
+                            _set_status(f"Crawling: {detail[:60]}", "info")
+                    elif phase == "save":
+                        progress.setRange(0, 100)
+                        progress.setValue(100)
+                        progress.setFormat("saving…")
+                        _set_status(f"Indexed {current} docs", "ok")
+                    elif phase == "index":
+                        progress.setRange(0, 100)
+                        progress.setValue(100)
+                        progress.setFormat("100%")
+                    elif phase == "done":
+                        progress.setRange(0, 100)
+                        progress.setValue(100)
+                        progress.setFormat("done")
+                        _set_status(f"Success: {current} docs indexed", "ok")
+                QTimer.singleShot(0, _update)
+
+            try:
+                await runner.run([url], max_depth=depth, exclude_patterns=[])
+                # Wait for completion
+                max_wait = 300  # 5 min
+                start = time.time()
+                while runner.alive() and (time.time() - start) < max_wait:
+                    await asyncio.sleep(1.0)
+                
+                from PySide6.QtCore import QTimer
+                def _after():
+                    _set_busy(False)
+                    status = runner.status()
+                    last_status = status.get("last_status", "idle")
+                    doc_count = status.get("last_doc_count", 0)
+                    
+                    if last_status == "done":
+                        _set_status(f"Indexed {doc_count} docs from {url}", "ok")
+                        progress.setRange(0, 100)
+                        progress.setValue(100)
+                        progress.setFormat("100%")
+                        url_edit.clear()
+                        _refresh_cache_stats()
+                    elif last_status == "cancelled":
+                        _set_status("Indexing cancelled.", "err")
+                        progress.setFormat("cancelled")
+                    else:
+                        _set_status(f"Failed: {last_status}", "err")
+                        progress.setFormat("failed")
+                QTimer.singleShot(0, _after)
+            except asyncio.CancelledError:
+                from PySide6.QtCore import QTimer
+                def _after():
+                    _set_busy(False)
+                    _set_status("Cancelled", "err")
+                    progress.setFormat("cancelled")
+                QTimer.singleShot(0, _after)
+            except Exception as e:
+                log.error("external_docs index: %s", e)
+                from PySide6.QtCore import QTimer
+                def _after():
+                    _set_busy(False)
+                    _set_status(f"Error: {e}", "err")
+                    progress.setFormat("error")
+                QTimer.singleShot(0, _after)
+
         _run(window, _go)
 
-    def _cancel_add() -> None:
-        path = _current_root_path()
-        if not path:
-            return
-
-        async def _go_cancel():
-            from docgraph.process import cancel_latest_docs_for
-            ok, payload = await cancel_latest_docs_for(path)
-            from PySide6.QtCore import QTimer
-            def _after():
-                if ok:
-                    _set_status("Cancel requested.", "info")
-                else:
-                    _set_status(str(payload), "err")
-            QTimer.singleShot(0, _after)
-
-        _run(window, _go_cancel)
-
-    def _remove(url: str) -> None:
-        path = _current_root_path()
-        if not url or not path:
-            return
+    def _cancel() -> None:
         async def _go():
-            from docgraph.process import remove_doc_for
-            ok, payload = await remove_doc_for(path, url)
+            from docgraph.process import get_external_docs
+            runner = get_external_docs()
+            await runner.cancel()
             from PySide6.QtCore import QTimer
             def _after():
-                if ok:
-                    n = payload.get("removed_chunks", 0) if isinstance(payload, dict) else 0
-                    _set_status(f"Removed {n} chunks for {url}.", "ok")
-                    _reload_table()
-                else:
-                    _set_status(str(payload), "err")
+                _set_busy(False)
+                _set_status("Cancel requested.", "info")
+                progress.setFormat("cancelled")
             QTimer.singleShot(0, _after)
         _run(window, _go)
 
-    add_btn.clicked.connect(_add)
-    cancel_btn.clicked.connect(_cancel_add)
-    url_edit.returnPressed.connect(_add)
-    refresh_btn.clicked.connect(_reload_table)
-    picker.currentIndexChanged.connect(lambda _i: _reload_table())
+    def _clear_cache() -> None:
+        try:
+            from docgraph.external_docs import clear_external_docs_cache
+            from docgraph.config import Config
+            from pathlib import Path
+            import os
+            cfg = Config(
+                data_dir=Path(os.path.dirname(os.path.dirname(__file__)) or ".") / ".docgraph"
+            )
+            clear_external_docs_cache(cfg)
+            _set_status("Cache cleared.", "ok")
+            _refresh_cache_stats()
+        except Exception as e:
+            _set_status(f"Failed to clear cache: {e}", "err")
+
+    index_btn.clicked.connect(_index)
+    cancel_btn.clicked.connect(_cancel)
+    clear_btn.clicked.connect(_clear_cache)
+    url_edit.returnPressed.connect(_index)
 
     def refresh() -> None:
-        # Repopulate the picker from the current roots list. Preserve
-        # selection by path so the table doesn't blink to a different
-        # root every refresh tick.
-        prev = _current_root_path()
-        picker.blockSignals(True)
-        picker.clear()
-        for entry in (get_path(read_settings(), "docgraph.roots", []) or []):
-            if not isinstance(entry, dict):
-                continue
-            p = str(entry.get("path", "") or "").strip()
-            if not p:
-                continue
-            picker.addItem(p, p)
-        # Restore selection
-        if prev:
-            for i in range(picker.count()):
-                if picker.itemData(i) == prev:
-                    picker.setCurrentIndex(i)
-                    break
-        picker.blockSignals(False)
-        _reload_table()
-        if not url_edit.isEnabled():
-            _set_progress_from_job({"status": "running"}, running=True)
+        _refresh_cache_stats()
+        # Check if external docs runner is running
+        try:
+            from docgraph.process import get_external_docs
+            runner = get_external_docs()
+            status = runner.status()
+            if status.get("alive"):
+                _set_busy(True)
+                progress.setRange(0, 0)
+                progress.setFormat("running…")
+                doc_count = status.get("last_doc_count", 0)
+                _set_status(f"Running: {doc_count} docs found", "info")
+        except Exception:
+            pass
 
-    refresh()
+    import time
+    _refresh_cache_stats()
     return card, refresh
 
 
