@@ -558,6 +558,7 @@ class _RootsTable(QWidget):
         super().__init__()
         self._window = window
         self._force_getter = force_getter or (lambda: False)
+        self._restarting = False
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(6)
@@ -620,6 +621,13 @@ class _RootsTable(QWidget):
         self._commit()
 
     def _commit(self) -> None:
+        old = list(get_path(read_settings(), "docgraph.roots", []) or [])
+        old_paths = {
+            str(e.get("path", "") if isinstance(e, dict) else e)
+            for e in old
+            if (e.get("path", "") if isinstance(e, dict) else e)
+        }
+
         out = []
         for r in self._row_widgets:
             path = r.text().strip()
@@ -628,7 +636,34 @@ class _RootsTable(QWidget):
             out.append({"path": path, "watch": r.watch_state()})
         patch_settings("docgraph.roots", out)
 
+        new_paths = {e["path"] for e in out}
+        if new_paths != old_paths:
+            self._restart_host_if_alive()
+
+    def _restart_host_if_alive(self) -> None:
+        self._restarting = True
+        async def _go():
+            from docgraph.process import get_host, status_snapshot
+            try:
+                alive = bool((status_snapshot().get("host") or {}).get("alive"))
+            except Exception:
+                alive = False
+            if not alive:
+                self._restarting = False
+                return
+            sup = get_host()
+            try:
+                await sup.stop()
+            except Exception:
+                pass
+            try:
+                await sup.start()
+            finally:
+                self._restarting = False
+        _run(self._window, _go)
+
     def refresh(self, *, busy: bool = False) -> None:
+        busy = busy or self._restarting
         cur = list(get_path(read_settings(), "docgraph.roots", []) or [])
         cur_norm = [
             {"path": str(e.get("path", "") if isinstance(e, dict) else e),
