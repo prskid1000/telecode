@@ -17,6 +17,15 @@ New shape (settings.example.json):
       "embeddings": { "model": "", "gpu": false },
       "index":      { "workers": 0 }
     }
+
+Per-root data (stored in <root>/.docgraph/, NOT in settings.json):
+
+    repos.json  — extra local paths indexed into the same graph
+                  [ "/path/to/extra/repo" ]
+
+    links.json  — external URLs crawled and indexed (TTL-based refresh)
+                  [ { "url": "https://…", "depth": 2, "ttl_hours": 24,
+                      "last_fetched": null, "page_count": null } ]
 """
 from __future__ import annotations
 
