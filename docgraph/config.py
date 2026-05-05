@@ -223,61 +223,6 @@ def wiki_depth() -> int:
     return int(wiki_cfg().get("depth", 12) or 12)
 
 
-def wiki_crawl_enabled() -> bool:
-    """Whether to crawl external URLs (docs, websites) and include them
-    in wiki pages. Default False."""
-    return bool(wiki_cfg().get("crawl_enabled", False))
-
-
-def wiki_crawl_max_depth() -> int:
-    """Max crawl depth for website discovery (1-5). Default 2.
-    1 = current page only, 2 = current + linked pages, etc."""
-    return max(1, min(5, int(wiki_cfg().get("crawl_max_depth", 2) or 2)))
-
-
-def wiki_crawl_excluded_patterns() -> list[str]:
-    """URL patterns to exclude from crawling (regex or glob-like patterns).
-    E.g., ["*.pdf", "*/forum/*", "*/search?*"]. Default empty."""
-    patterns = wiki_cfg().get("crawl_excluded_patterns") or []
-    return [str(p) for p in patterns if p]
-
-
-# ── Document indexing (tier 2 + tier 3 — opt-in) ──────────────────────────
-
-_DEFAULT_TEXT_EXTS = ("md", "markdown", "txt", "rst", "csv")
-_DEFAULT_ASSET_EXTS = (
-    "pdf", "xlsx", "xls", "docx", "doc", "ppt", "pptx",
-    "png", "jpg", "jpeg", "gif", "svg", "webp", "ico", "bmp", "tiff",
-    "mp4", "mov", "webm", "avi", "mkv", "mp3", "wav", "flac", "ogg", "m4a",
-    "zip", "tar", "gz", "tgz", "7z", "rar", "bz2", "xz",
-    "parquet", "feather", "arrow", "h5", "hdf5", "pkl", "pickle", "npz", "npy",
-    "ttf", "woff", "woff2", "otf", "eot",
-    "gltf", "glb", "fbx", "obj", "stl", "blend",
-)
-
-
-def documents_cfg() -> dict:     return index_cfg().get("documents") or {}
-
-
-def documents_enabled() -> bool:
-    """Master toggle for the document + asset pass."""
-    return bool(documents_cfg().get("enabled", False))
-
-
-def text_extensions() -> tuple[str, ...]:
-    raw = documents_cfg().get("text_extensions")
-    if isinstance(raw, list) and raw:
-        return tuple(str(e).strip().lstrip(".").lower() for e in raw if str(e).strip())
-    return _DEFAULT_TEXT_EXTS
-
-
-def asset_extensions() -> tuple[str, ...]:
-    raw = documents_cfg().get("asset_extensions")
-    if isinstance(raw, list) and raw:
-        return tuple(str(e).strip().lstrip(".").lower() for e in raw if str(e).strip())
-    return _DEFAULT_ASSET_EXTS
-
-
 # ── Logs ─────────────────────────────────────────────────────────────────────
 
 def log_path(role: str = "host", slug: str | None = None) -> str:

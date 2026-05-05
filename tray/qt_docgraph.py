@@ -35,7 +35,7 @@ from tray.qt_helpers import (
 from tray.qt_theme import FG, FG_DIM, FG_MUTE, BG, BG_CARD, BG_ELEV, BORDER, OK, ERR, WARN
 from tray.qt_sections import (
     _page, _card, _section_header, _row, _toggle_row, _line_row,
-    _list_row, _number_row, _enum_row_strs, _wrap_align,
+    _number_row, _enum_row_strs, _wrap_align,
 )
 
 log = logging.getLogger("telecode.tray.docgraph")
@@ -60,8 +60,6 @@ def build_docgraph_tabs(window) -> QWidget:
     for build in (
         _build_host_card,
         _build_roots_card,
-        _build_docs_card,
-        _build_documents_index_card,
         _build_llm_card,
         _build_prompts_card,
         _build_embeddings_card,
@@ -184,7 +182,7 @@ def _format_ago(ts: float | None) -> str:
 #   - a human label
 #   - whether it's count-driven (else indeterminate)
 # The order defines the "[i/N]" ordinal shown to the user. Phases that
-# are conditional on cfg (llm_augment, embed_chunks, documents) still
+# are conditional on cfg (llm_augment, embed_chunks) still
 # get a slot — if they don't fire, the ordinal just skips them.
 
 _INDEX_PHASES: list[tuple[str, str, bool]] = [
@@ -198,14 +196,12 @@ _INDEX_PHASES: list[tuple[str, str, bool]] = [
     ("symbol_table",   "symbol table",    False),
     ("edges",          "writing edges",   False),
     ("tier4_pagerank", "pagerank",        False),
-    ("documents",      "documents",       False),
     ("done",           "done",            True),
 ]
 _INDEX_PHASE_INDEX = {p[0]: (i, p[1]) for i, p in enumerate(_INDEX_PHASES)}
 
 _WIKI_PHASES: list[tuple[str, str, bool]] = [
     ("start",                 "preparing modules", True),
-    ("load_external_docs",    "loading external docs", True),
     ("module",                "writing module",        True),
     ("done",                  "done",                  True),
 ]
@@ -1185,243 +1181,6 @@ def _build_llm_card(window) -> tuple[QFrame, Callable[[], None] | None]:
 
 # ── Embeddings card ─────────────────────────────────────────────────────
 
-# ── External Docs (Cursor @Docs parity) ────────────────────────────────
-
-def _build_docs_card(window) -> tuple[QFrame, Callable[[], None]]:
-    """External docs crawling and indexing. Crawls URLs and indexes them
-    for wiki generation. Uses ExternalDocsRunner (separate from per-root doc ingestion)."""
-    from PySide6.QtWidgets import QSizePolicy as _QSP
-
-    card, body = _card(
-        "External docs",
-        "Crawl and index external documentation URLs for wiki context.",
-    )
-
-    # URL input row
-    url_edit = QLineEdit()
-    url_edit.setPlaceholderText("https://example.com/docs")
-    url_edit.setMinimumWidth(0)
-    index_btn = QPushButton("+ Index")
-    index_btn.setProperty("class", "primary")
-    index_btn.setMaximumWidth(100)
-    cancel_btn = QPushButton("Cancel")
-    cancel_btn.setProperty("class", "danger")
-    cancel_btn.setMaximumWidth(100)
-    cancel_btn.setEnabled(False)
-    url_w = QWidget()
-    ul = QHBoxLayout(url_w); ul.setContentsMargins(0, 0, 0, 0); ul.setSpacing(8)
-    ul.addWidget(url_edit, 1); ul.addWidget(index_btn, 0); ul.addWidget(cancel_btn, 0)
-    body.addWidget(_row(row_label("Start URL"), url_w))
-
-    # Config row: depth + clear cache
-    depth_spin = None
-    from PySide6.QtWidgets import QSpinBox
-    depth_spin = QSpinBox()
-    depth_spin.setMinimum(1); depth_spin.setMaximum(5); depth_spin.setValue(2)
-    depth_spin.setMaximumWidth(60)
-    body.addWidget(_row(row_label("Crawl depth"), depth_spin))
-
-    # Clear cache button
-    clear_btn = QPushButton("Clear cache")
-    clear_btn.setProperty("class", "ghost")
-    clear_btn.setMaximumWidth(100)
-    clear_w = QWidget()
-    cl = QHBoxLayout(clear_w); cl.setContentsMargins(0, 0, 0, 0); cl.setSpacing(0)
-    cl.addStretch(1); cl.addWidget(clear_btn, 0)
-    body.addWidget(clear_w)
-
-    # Status and progress
-    status_lbl = QLabel("")
-    status_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
-    status_lbl.setWordWrap(True)
-    body.addWidget(status_lbl)
-
-    progress = QProgressBar()
-    progress.setRange(0, 100)
-    progress.setValue(0)
-    progress.setTextVisible(True)
-    progress.setFormat("idle")
-    progress.setFixedHeight(18)
-    body.addWidget(progress)
-
-    # Cache stats
-    cache_lbl = QLabel("")
-    cache_lbl.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
-    body.addWidget(cache_lbl)
-
-    def _set_status(text: str, kind: str = "info") -> None:
-        color = {"info": FG_MUTE, "ok": OK, "err": ERR}.get(kind, FG_MUTE)
-        status_lbl.setStyleSheet(f"color: {color}; font-size: 11px;")
-        status_lbl.setText(text)
-
-    def _set_busy(running: bool) -> None:
-        url_edit.setEnabled(not running)
-        index_btn.setEnabled(not running)
-        cancel_btn.setEnabled(running)
-        depth_spin.setEnabled(not running)
-        clear_btn.setEnabled(not running)
-
-    def _refresh_cache_stats() -> None:
-        try:
-            from docgraph.external_docs import load_indexed_docs
-            from docgraph.config import Config
-            from pathlib import Path
-            import os
-            cfg = Config(
-                data_dir=Path(os.path.dirname(os.path.dirname(__file__)) or ".") / ".docgraph"
-            )
-            docs = load_indexed_docs(cfg)
-            if docs:
-                cache_lbl.setText(f"Cached: {len(docs)} docs from {len(set(d.url.split('/')[2] for d in docs))} domains")
-                cache_lbl.setStyleSheet(f"color: {OK}; font-size: 10px;")
-            else:
-                cache_lbl.setText("Cache: empty")
-                cache_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 10px;")
-        except Exception as e:
-            log.debug("_refresh_cache_stats: %s", e)
-
-    def _index() -> None:
-        url = url_edit.text().strip()
-        if not url:
-            _set_status("Enter a URL to crawl.", "err")
-            return
-
-        depth = depth_spin.value() if depth_spin else 2
-        _set_busy(True)
-        _set_status(f"Crawling {url} (depth={depth})…", "info")
-        progress.setRange(0, 0)  # Indeterminate
-        progress.setFormat("running…")
-
-        async def _go():
-            from docgraph.process import get_external_docs
-            runner = get_external_docs()
-
-            def _progress(phase: str, current: int, total: int, detail: str = "") -> None:
-                from PySide6.QtCore import QTimer
-                def _update():
-                    if phase == "crawl":
-                        progress.setRange(0, max(1, total))
-                        progress.setValue(current)
-                        progress.setFormat(f"{current}/{total}")
-                        if detail:
-                            _set_status(f"Crawling: {detail[:60]}", "info")
-                    elif phase == "save":
-                        progress.setRange(0, 100)
-                        progress.setValue(100)
-                        progress.setFormat("saving…")
-                        _set_status(f"Indexed {current} docs", "ok")
-                    elif phase == "index":
-                        progress.setRange(0, 100)
-                        progress.setValue(100)
-                        progress.setFormat("100%")
-                    elif phase == "done":
-                        progress.setRange(0, 100)
-                        progress.setValue(100)
-                        progress.setFormat("done")
-                        _set_status(f"Success: {current} docs indexed", "ok")
-                QTimer.singleShot(0, _update)
-
-            try:
-                await runner.run([url], max_depth=depth, exclude_patterns=[])
-                # Wait for completion
-                max_wait = 300  # 5 min
-                start = time.time()
-                while runner.alive() and (time.time() - start) < max_wait:
-                    await asyncio.sleep(1.0)
-                
-                from PySide6.QtCore import QTimer
-                def _after():
-                    _set_busy(False)
-                    status = runner.status()
-                    last_status = status.get("last_status", "idle")
-                    doc_count = status.get("last_doc_count", 0)
-                    
-                    if last_status == "done":
-                        _set_status(f"Indexed {doc_count} docs from {url}", "ok")
-                        progress.setRange(0, 100)
-                        progress.setValue(100)
-                        progress.setFormat("100%")
-                        url_edit.clear()
-                        _refresh_cache_stats()
-                    elif last_status == "cancelled":
-                        _set_status("Indexing cancelled.", "err")
-                        progress.setFormat("cancelled")
-                    else:
-                        _set_status(f"Failed: {last_status}", "err")
-                        progress.setFormat("failed")
-                QTimer.singleShot(0, _after)
-            except asyncio.CancelledError:
-                from PySide6.QtCore import QTimer
-                def _after():
-                    _set_busy(False)
-                    _set_status("Cancelled", "err")
-                    progress.setFormat("cancelled")
-                QTimer.singleShot(0, _after)
-            except Exception as e:
-                log.error("external_docs index: %s", e)
-                from PySide6.QtCore import QTimer
-                def _after():
-                    _set_busy(False)
-                    _set_status(f"Error: {e}", "err")
-                    progress.setFormat("error")
-                QTimer.singleShot(0, _after)
-
-        _run(window, _go)
-
-    def _cancel() -> None:
-        async def _go():
-            from docgraph.process import get_external_docs
-            runner = get_external_docs()
-            await runner.cancel()
-            from PySide6.QtCore import QTimer
-            def _after():
-                _set_busy(False)
-                _set_status("Cancel requested.", "info")
-                progress.setFormat("cancelled")
-            QTimer.singleShot(0, _after)
-        _run(window, _go)
-
-    def _clear_cache() -> None:
-        try:
-            from docgraph.external_docs import clear_external_docs_cache
-            from docgraph.config import Config
-            from pathlib import Path
-            import os
-            cfg = Config(
-                data_dir=Path(os.path.dirname(os.path.dirname(__file__)) or ".") / ".docgraph"
-            )
-            clear_external_docs_cache(cfg)
-            _set_status("Cache cleared.", "ok")
-            _refresh_cache_stats()
-        except Exception as e:
-            _set_status(f"Failed to clear cache: {e}", "err")
-
-    index_btn.clicked.connect(_index)
-    cancel_btn.clicked.connect(_cancel)
-    clear_btn.clicked.connect(_clear_cache)
-    url_edit.returnPressed.connect(_index)
-
-    def refresh() -> None:
-        _refresh_cache_stats()
-        # Check if external docs runner is running
-        try:
-            from docgraph.process import get_external_docs
-            runner = get_external_docs()
-            status = runner.status()
-            if status.get("alive"):
-                _set_busy(True)
-                progress.setRange(0, 0)
-                progress.setFormat("running…")
-                doc_count = status.get("last_doc_count", 0)
-                _set_status(f"Running: {doc_count} docs found", "info")
-        except Exception:
-            pass
-
-    import time
-    _refresh_cache_stats()
-    return card, refresh
-
-
 # ── LLM prompt overrides ───────────────────────────────────────────────
 
 _DOCSTRING_PROMPT_DEFAULT = (
@@ -1533,53 +1292,6 @@ def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
         height=140,
     )
     body.addWidget(er); body.addWidget(ar)
-    return card, None
-
-
-# ── Document indexing (tier 2 + 3) ─────────────────────────────────────
-
-_DOC_DEFAULT_TEXT_EXTS = ("md", "markdown", "txt", "rst", "csv")
-_DOC_DEFAULT_ASSET_EXTS = (
-    "pdf", "xlsx", "xls", "docx", "doc", "ppt", "pptx",
-    "png", "jpg", "jpeg", "gif", "svg", "webp", "ico", "bmp", "tiff",
-    "mp4", "mov", "webm", "avi", "mkv", "mp3", "wav", "flac", "ogg", "m4a",
-    "zip", "tar", "gz", "tgz", "7z", "rar", "bz2", "xz",
-    "parquet", "feather", "arrow", "h5", "hdf5", "pkl", "pickle", "npz", "npy",
-    "ttf", "woff", "woff2", "otf", "eot",
-    "gltf", "glb", "fbx", "obj", "stl", "blend",
-)
-
-
-def _build_documents_index_card(window) -> tuple[QFrame, Callable[[], None] | None]:
-    """Settings for `docgraph index --documents`. Off by default. When
-    enabled, the indexer adds:
-      - Text-tier Doc nodes from .md/.txt/.rst/small CSVs.
-      - Asset nodes for media / large / binary files.
-      - REFERENCES_ edges from any code or doc that mentions an Asset
-        path in a quoted string literal or markdown link.
-    """
-    card, body = _card(
-        "Document indexing",
-        "Tier-2 (text docs) + tier-3 (binary assets). Off by default.",
-    )
-
-    body.addWidget(_toggle_row(
-        "docgraph.index.documents.enabled", "Enabled",
-        "Master switch.",
-        cli="--documents",
-    ))
-    body.addWidget(_list_row(
-        "docgraph.index.documents.text_extensions",
-        "Text extensions",
-        "Empty = defaults: " + ", ".join(_DOC_DEFAULT_TEXT_EXTS),
-        placeholder="md",
-    ))
-    body.addWidget(_list_row(
-        "docgraph.index.documents.asset_extensions",
-        "Asset extensions",
-        "Registered as Asset nodes. Empty = built-in defaults.",
-        placeholder="pdf",
-    ))
     return card, None
 
 

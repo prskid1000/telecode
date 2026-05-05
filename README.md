@@ -645,7 +645,6 @@ Array of `{path, watch}` entries. Each `path` is registered with the host as `--
 | `llm.{model, host, port, format, max_tokens, max_tokens_wiki, prompts.{docstring, wiki}}` | Optional LLM-augmented docstrings + wiki. Setting `llm.model` is enough to enable. Passed to `docgraph host` / `index` / `wiki` as `--llm-*` flags; long-form prompt overrides materialized to `data/runtime/*.txt` and passed via `--llm-prompt-{docstring,wiki}-file`. |
 | `embeddings.{model, gpu}` | Embedding model + GPU opt-in, shared by both the index runner and the host. Passed as `--embed-model` / `--gpu`. |
 | `rerank.{default, model, gpu}` | Cross-encoder reranker config. `default=true` flips `/api/search` and MCP search to rerank by default. `gpu=true` runs the reranker on GPU independently from `embeddings.gpu`. |
-| `index.documents.{enabled, text_extensions, asset_extensions}` | Tier-2 / tier-3 document + asset pass for `docgraph index` (off by default). |
 | `wiki.depth` | Max directory depth for wiki page bucketing. |
 
 **No environment variables.** Every config knob in `settings.docgraph.*` is forwarded to docgraph as a CLI flag. The only env vars on docgraph subprocess spawns are `PYTHONIOENCODING=utf-8` + `PYTHONUTF8=1` (govern Python stdio encoding; no CLI equivalent).

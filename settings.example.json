@@ -87,19 +87,11 @@
 
     "index": {
       "workers": 0,
-      "embed_batch_size": 0,
-      "documents": {
-        "enabled": false,
-        "text_extensions": [],
-        "asset_extensions": []
-      }
+      "embed_batch_size": 0
     },
 
     "wiki": {
-      "depth": 12,
-      "crawl_enabled": false,
-      "crawl_max_depth": 2,
-      "crawl_excluded_patterns": []
+      "depth": 12
     }
   },
 

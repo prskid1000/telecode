@@ -71,7 +71,7 @@ Heartbeat scheduler (off by default, settings.heartbeat.enabled=true):
 | `tray/qt_window.py` | `SettingsWindow` — frameless `QMainWindow` with sidebar + `QStackedWidget`. Per-section refresh on a 1s `QTimer`. |
 | `tray/qt_sections.py` | Builders for Status / llama / Models / Proxy / MCP / Managed / **DocGraph** / Tools / Telegram / Voice / Computer / Sessions / Requests / Logs / Raw. |
 | `tray/qt_docgraph.py` | DocGraph settings panel (Host / Roots / LLM / Embeddings / Reranker cards). Per-row stats chip + progress bars. Restart-host buttons inside cards whose settings need a host respawn. |
-| `docgraph/config.py` | Accessors over `settings.docgraph.*` — `host_*`, `roots()` / `root_paths_to_watch()`, `llm_*`, `embeddings_*`, `rerank_*`, `index_workers`, `documents_*`. |
+| `docgraph/config.py` | Accessors over `settings.docgraph.*` — `host_*`, `roots()` / `root_paths_to_watch()`, `llm_*`, `embeddings_*`, `rerank_*`, `index_workers`. |
 | `docgraph/process.py` | One `HostSupervisor` (single `docgraph host --root … [--watch …] --port <N>` child). `IndexRunner` POSTs `/api/admin/index?root=<slug>` when the host is alive; subprocess fallback when down. **All config goes through CLI flags** — no `DOCGRAPH_*` env vars. Long-form prompt overrides written to `data/runtime/*.txt` and passed via `--llm-prompt-*-file`. |
 | `docgraph/bridge.py` | MCP-client → managed_tools registration. `bridge_host(host, port)` opens a streamable-HTTP session against `/mcp`, calls `list_tools()`, registers each as `docgraph_<tool>` (no per-root prefix — agents pass `root=<slug>` per call). |
 | `docgraph/{stats,index,wiki,progress}_state.py` | TTL'd in-memory caches for the tray. `stats_state` dedups parallel fetches via in-flight set. |
@@ -152,7 +152,7 @@ Telecode supervises **one** [DocGraph](../.docgraph) subprocess (`docgraph host 
 
 | Concept | Shape |
 |---|---|
-| Long-running supervisor | `HostSupervisor` (only one). Spawns `docgraph host --host <h> --port <p> --root <p1> --root <p2> [--watch <pX>] …` plus every applicable config flag (`--gpu`, `--embed-model`, `--rerank-*`, `--llm-*`, `--documents`, …). |
+| Long-running supervisor | `HostSupervisor` (only one). Spawns `docgraph host --host <h> --port <p> --root <p1> --root <p2> [--watch <pX>] …` plus every applicable config flag (`--gpu`, `--embed-model`, `--rerank-*`, `--llm-*`, …). |
 | One-shot index | `IndexRunner`. **Two routes:** (a) host alive → POSTs `http://h:p/api/admin/index?root=<slug>&full=<bool>`, lets the host run the pass in-process via the workspace's writer-lock dance, writes the response's captured `log` into `docgraph_index.log`; (b) host down → spawns `docgraph index <path>` with all CLI flags. The host route is preferred — Kuzu's writer lock is exclusive vs. any other connection on the same DB file. |
 | Stdio MCP for editors | Not telecode-managed. Editors launch `docgraph mcp <path> --transport stdio`, which probes the running host and proxies through it. |
 
@@ -166,7 +166,7 @@ Telecode supervises **one** [DocGraph](../.docgraph) subprocess (`docgraph host 
 - `llm.{model, host, port, format, max_tokens, max_tokens_wiki, prompts.{docstring, wiki}}`.
 - `embeddings.{model, gpu}`.
 - `rerank.{default, model, gpu}`.
-- `index.{workers, embed_batch_size, documents.{enabled, text_extensions, asset_extensions}}`.
+- `index.{workers, embed_batch_size}`.
 - `wiki.depth`.
 
 **MCP bridge** (`docgraph/bridge.py`). On `HostSupervisor` start, after `/api/roots` is reachable: open `streamablehttp_client("http://<h>:<port>/mcp")`, `await session.list_tools()`, register each in `proxy.managed_tools._REGISTRY` as `docgraph_<tool>`. Handler closure opens a transient session per invocation. The closed-enum `root` argument scopes calls to a specific repo.
