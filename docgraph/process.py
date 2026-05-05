@@ -206,9 +206,9 @@ async def _sse_progress_tee(slug: str, port: int, event_names: tuple[str, ...],
 async def _tail_host_log_to_fp(host_log_path: str, dest_fp, stop_event: asyncio.Event) -> None:
     """Tail the host `host_log_path` and append new lines into `dest_fp`.
 
-    Designed to run alongside `_sse_progress_tee` so per-run `docgraph_docs.log`
-    contains both structured SSE progress and the host's free-form stdout
-    output. The coroutine polls the source file and copies appended bytes.
+    Designed to run alongside `_sse_progress_tee` so per-run logs contain
+    both structured SSE progress and the host's free-form stdout output.
+    The coroutine polls the source file and copies appended bytes.
     Cancelling is cooperative via `stop_event.set()`.
     """
     try:
@@ -490,155 +490,6 @@ async def clear_index(path: str) -> tuple[bool, str]:
     return False, proc.stdout or f"docgraph clear exited with rc={proc.returncode}"
 
 
-async def list_docs_for(path: str) -> tuple[bool, list[dict] | str]:
-    """GET /api/docs/list?root=<slug>. Returns (True, [rows]) or (False, msg).
-    No subprocess fallback — listing requires the host to be alive (so we
-    don't pay a Kuzu-open cost for a read-only call)."""
-    if _HOST is None or not _HOST.alive() or not _HOST.port():
-        return False, "Host is not running. Start it from the Host card."
-    port = _HOST.port()
-    timeout = aiohttp.ClientTimeout(total=15)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            slug = await _resolve_slug_from_host(path, port, session)
-            if slug is None:
-                return False, f"path {path} is not a registered root on the host."
-            base = f"http://{dg_cfg.host_host()}:{port}"
-            async with session.get(f"{base}/api/docs/list?root={slug}") as resp:
-                if resp.status != 200:
-                    body = await resp.text()
-                    return False, f"GET /api/docs/list → HTTP {resp.status}: {body[:200]}"
-                return True, await resp.json()
-    except Exception as exc:
-        return False, f"host route failed: {exc}"
-
-
-async def add_doc_for(path: str, url: str,
-                      progress_cb=None) -> tuple[bool, dict | str]:
-    """POST /api/docs/add?root=<slug>. Returns (True, payload) or (False, msg)."""
-    if _HOST is None or not _HOST.alive() or not _HOST.port():
-        return False, "Host is not running. Start it from the Host card."
-    port = _HOST.port()
-    # URL fetch + chunk + embed can take a while for large pages.
-    timeout = aiohttp.ClientTimeout(total=300)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            slug = await _resolve_slug_from_host(path, port, session)
-            if slug is None:
-                return False, f"path {path} is not a registered root on the host."
-            base = f"http://{dg_cfg.host_host()}:{port}"
-            async with session.post(f"{base}/api/docs/add?root={slug}",
-                                     json={"url": url}) as resp:
-                body = await resp.text()
-                if resp.status != 200:
-                    return False, f"POST /api/docs/add -> HTTP {resp.status}: {body[:300]}"
-                import json
-                payload = json.loads(body)
-                job_id = payload.get("job_id")
-                if not job_id:
-                    return True, payload
-                # Open a per-run docs log and tee SSE `docs_progress` events
-                # into it so telecode's Logs viewer can show a dedicated file.
-                log_fp = None
-                sse_task = None
-                try:
-                    try:
-                        log_fp = _open_log("docs")
-                    except Exception:
-                        log_fp = None
-                    if log_fp is not None:
-                        # Subscribe to docs_progress AND index_progress so the
-                        # per-run docs log captures both the structured doc
-                        # progress and the index/embed progress emitted by
-                        # the host. Also mirror wiki progress.
-                        sse_task = asyncio.create_task(
-                            _sse_progress_tee(slug, port, ("docs_progress", "index_progress", "wiki_progress"), log_fp, session,
-                                               path_for_slug=path)
-                        )
-                        # Also mirror the host's stdout into this per-run log
-                        # so free-form embedding/index log lines appear.
-                        stop_event = asyncio.Event()
-                        host_log_path = dg_cfg.log_path("host")
-                        host_tail_task = asyncio.create_task(
-                            _tail_host_log_to_fp(host_log_path, log_fp, stop_event)
-                        )
-
-                except Exception:
-                    sse_task = None
-                    host_tail_task = None
-
-                if progress_cb:
-                    try:
-                        progress_cb({"status": "running", "message": "Queued"})
-                    except Exception:
-                        pass
-
-                # Fetch job once immediately so callers (tray) get an initial
-                # progress snapshot without waiting for the 2s poll interval.
-                try:
-                    async with session.get(f"{base}/api/jobs/{job_id}") as jresp:
-                        if jresp.status == 200:
-                            job_json = await jresp.json()
-                            if progress_cb:
-                                try:
-                                    progress_cb(job_json)
-                                except Exception:
-                                    pass
-                except Exception:
-                    pass
-
-                try:
-                    while True:
-                        import asyncio
-                        await asyncio.sleep(2.0)
-                        async with session.get(f"{base}/api/jobs/{job_id}") as resp:
-                            if resp.status != 200:
-                                continue
-                            job = await resp.json()
-                            if progress_cb:
-                                try:
-                                    progress_cb(job)
-                                except Exception:
-                                    pass
-                            status = job.get("status")
-                            if status == "completed":
-                                return True, job.get("result") or {}
-                            elif status == "cancelled":
-                                return False, "docs add cancelled"
-                            elif status == "failed":
-                                return False, f"Docs add failed: {job.get('error')}"
-                finally:
-                    # Clean up SSE tee and log file
-                    try:
-                        if sse_task is not None:
-                            sse_task.cancel()
-                            try:
-                                await sse_task
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
-                    try:
-                        if host_tail_task is not None:
-                            stop_event.set()
-                            host_tail_task.cancel()
-                            try:
-                                await host_tail_task
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
-                    try:
-                        if log_fp is not None:
-                            log_fp.close()
-                    except Exception:
-                        pass
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        return False, f"host route failed: {exc}"
-
-
 async def cancel_job(job_id: str) -> tuple[bool, str]:
     """Request cancellation of a job on the running host via
     `POST /api/jobs/{job_id}/cancel`. Returns (True, resp_json) on
@@ -658,61 +509,6 @@ async def cancel_job(job_id: str) -> tuple[bool, str]:
                 return True, await resp.json()
     except Exception as exc:
         return False, str(exc)
-
-
-async def cancel_latest_docs_for(path: str) -> tuple[bool, str]:
-    """Find the latest running/queued `docs_add` job for `path` and request
-    cancellation. Returns (True, msg) if cancel request sent, else (False, msg)."""
-    if _HOST is None or not _HOST.alive() or not _HOST.port():
-        return False, "Host is not running."
-    port = _HOST.port()
-    base = f"http://{dg_cfg.host_host()}:{port}"
-    timeout = aiohttp.ClientTimeout(total=10)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            # gather jobs for this root
-            async with session.get(f"{base}/api/jobs?root={path}") as resp:
-                if resp.status != 200:
-                    body = await resp.text()
-                    return False, f"GET /api/jobs -> HTTP {resp.status}: {body[:200]}"
-                jobs = await resp.json()
-            # find most recent docs_add job in running/queued state
-            target = None
-            for j in reversed(jobs):
-                if j.get("type") == "docs_add" and j.get("status") in ("running", "queued"):
-                    target = j
-                    break
-            if not target:
-                return False, "No running docs_add job found for this root."
-            job_id = target.get("id")
-            return await cancel_job(job_id)
-    except Exception as exc:
-        return False, str(exc)
-
-
-async def remove_doc_for(path: str, url: str) -> tuple[bool, dict | str]:
-    """POST /api/docs/remove?root=<slug>."""
-    if _HOST is None or not _HOST.alive() or not _HOST.port():
-        return False, "Host is not running."
-    port = _HOST.port()
-    timeout = aiohttp.ClientTimeout(total=30)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            slug = await _resolve_slug_from_host(path, port, session)
-            if slug is None:
-                return False, f"path {path} is not a registered root."
-            base = f"http://{dg_cfg.host_host()}:{port}"
-            async with session.post(f"{base}/api/docs/remove?root={slug}",
-                                     json={"url": url}) as resp:
-                body = await resp.text()
-                if resp.status != 200:
-                    return False, f"POST /api/docs/remove → HTTP {resp.status}: {body[:300]}"
-                try:
-                    return True, json.loads(body)
-                except Exception:
-                    return True, {"raw": body[:1000]}
-    except Exception as exc:
-        return False, f"host route failed: {exc}"
 
 
 async def _wiki_via_host(path: str, force: bool, port: int, log_fp=None,
@@ -1014,14 +810,6 @@ class IndexRunner:
                             argv += ["--llm-prompt-docstring-file", tmp_path]
                         except Exception as exc:
                             log.warning("docgraph index: failed to materialize docstring prompt: %s", exc)
-                    if dg_cfg.documents_enabled():
-                        argv.append("--documents")
-                    text_exts = dg_cfg.text_extensions()
-                    if text_exts and tuple(text_exts) != dg_cfg._DEFAULT_TEXT_EXTS:
-                        argv += ["--text-exts", ",".join(text_exts)]
-                    asset_exts = dg_cfg.asset_extensions()
-                    if asset_exts and tuple(asset_exts) != dg_cfg._DEFAULT_ASSET_EXTS:
-                        argv += ["--asset-exts", ",".join(asset_exts)]
                     # Only PYTHONIOENCODING / PYTHONUTF8 stay as env — they
                     # govern Python stdio encoding and have no CLI equivalent.
                     env = {
@@ -1278,138 +1066,6 @@ class WikiRunner:
                 self._log_fp = None
 
 
-# ── External docs runner (crawl & index URLs) ─────────────────────────────
-
-class ExternalDocsRunner:
-    """Crawls and indexes external documentation URLs. Unlike Index/Wiki which
-    are per-path, external docs are global — crawl once, cache, reuse.
-    """
-
-    def __init__(self) -> None:
-        self._task: Optional[asyncio.Task] = None
-        self._log_fp = None
-        self._lock = asyncio.Lock()
-        self._last_status: str = "idle"
-        self._last_finished_at: float = 0.0
-        self._last_doc_count: int = 0
-
-    def alive(self) -> bool:
-        return bool(self._task and not self._task.done())
-
-    def status(self) -> dict:
-        return {
-            "alive":             self.alive(),
-            "last_status":       self._last_status,
-            "last_finished_at":  self._last_finished_at,
-            "last_doc_count":    self._last_doc_count,
-            "log_path":          dg_cfg.log_path("external_docs"),
-        }
-
-    async def run(self, start_urls: list[str], max_depth: int = 2,
-                  exclude_patterns: list[str] | None = None) -> None:
-        async with self._lock:
-            if self.alive():
-                log.warning("docgraph external_docs: already running")
-                return
-            self._task = asyncio.create_task(
-                self._run_inline(start_urls, max_depth, exclude_patterns)
-            )
-
-    async def cancel(self) -> None:
-        async with self._lock:
-            t = self._task
-        if t and not t.done():
-            t.cancel()
-
-    async def _run_inline(self, start_urls: list[str], max_depth: int,
-                          exclude_patterns: list[str] | None) -> None:
-        self._last_status = "running"
-        self._last_doc_count = 0
-        self._log_fp = _open_log("external_docs")
-        rc_or_status = "failed"
-
-        try:
-            from docgraph.external_docs import (
-                crawl_and_index_external_docs,
-                save_indexed_docs,
-            )
-
-            def _progress(phase: str, current: int, total: int,
-                         detail: str = "") -> None:
-                line = f"[{phase}] {current}/{total}"
-                if detail:
-                    line += f" — {detail}"
-                if self._log_fp:
-                    try:
-                        self._log_fp.write(f"{line}\n".encode())
-                        self._log_fp.flush()
-                    except Exception:
-                        pass
-
-            _progress("start", 0, len(start_urls))
-
-            # Run the async crawl
-            docs = await asyncio.wait_for(
-                crawl_and_index_external_docs(
-                    start_urls,
-                    max_depth=max_depth,
-                    exclude_patterns=exclude_patterns or [],
-                    progress_cb=_progress,
-                ),
-                timeout=300,  # 5 min max
-            )
-
-            if docs:
-                _progress("save", len(docs), len(docs))
-                # Save to cache
-                try:
-                    # Get the config from the docgraph module
-                    from docgraph.config import Config
-                    from pathlib import Path
-                    import os
-
-                    cfg = Config(
-                        data_dir=Path(os.path.dirname(dg_cfg.log_path("index")) or ".docgraph")
-                    )
-                    save_indexed_docs(cfg, docs)
-                    self._last_doc_count = len(docs)
-                    rc_or_status = "ok"
-                    self._last_status = "done"
-                except Exception as e:
-                    log.error("external_docs: failed to save indexed docs: %s", e)
-                    self._last_status = "failed"
-                    rc_or_status = "failed"
-            else:
-                log.warning("external_docs: no docs crawled")
-                self._last_status = "done"
-                rc_or_status = "ok"
-
-            _progress("done", len(docs), len(docs))
-
-        except asyncio.TimeoutError:
-            self._last_status = "failed"
-            rc_or_status = "failed"
-            log.error("external_docs: crawl timeout")
-        except asyncio.CancelledError:
-            self._last_status = "cancelled"
-            rc_or_status = "cancelled"
-            log.info("external_docs: cancelled")
-            raise
-        except Exception as exc:
-            log.error("external_docs: %s", exc)
-            self._last_status = "failed"
-            rc_or_status = "failed"
-        finally:
-            self._task = None
-            self._last_finished_at = time.time()
-            if self._log_fp:
-                try:
-                    self._log_fp.close()
-                except Exception:
-                    pass
-                self._log_fp = None
-
-
 # ── Host (the unified docgraph server) ─────────────────────────────────────
 
 class HostSupervisor:
@@ -1556,18 +1212,6 @@ class HostSupervisor:
                 argv += [f"--llm-prompt-{kind}-file", tmp_path]
             except Exception as exc:
                 log.warning("docgraph host: failed to materialize %s prompt: %s", kind, exc)
-        # Document + asset indexing — the master toggle plus optional
-        # extension overrides. Empty strings would still flip --documents
-        # on via the implies-rule, so only emit when they actually differ.
-        if dg_cfg.documents_enabled():
-            argv.append("--documents")
-        text_exts = dg_cfg.text_extensions()
-        if text_exts and tuple(text_exts) != dg_cfg._DEFAULT_TEXT_EXTS:
-            argv += ["--text-exts", ",".join(text_exts)]
-        asset_exts = dg_cfg.asset_extensions()
-        if asset_exts and tuple(asset_exts) != dg_cfg._DEFAULT_ASSET_EXTS:
-            argv += ["--asset-exts", ",".join(asset_exts)]
-
         self._port = port
         self._log_fp = _open_log(self.role)
         try:
@@ -1712,7 +1356,6 @@ class HostSupervisor:
 
 _INDEX: IndexRunner | None = None
 _WIKI: WikiRunner | None = None
-_EXTERNAL_DOCS: ExternalDocsRunner | None = None
 _HOST: HostSupervisor | None = None
 
 
@@ -1728,13 +1371,6 @@ def get_wiki() -> WikiRunner:
     if _WIKI is None:
         _WIKI = WikiRunner()
     return _WIKI
-
-
-def get_external_docs() -> ExternalDocsRunner:
-    global _EXTERNAL_DOCS
-    if _EXTERNAL_DOCS is None:
-        _EXTERNAL_DOCS = ExternalDocsRunner()
-    return _EXTERNAL_DOCS
 
 
 def get_host() -> HostSupervisor:

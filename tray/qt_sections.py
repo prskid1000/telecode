@@ -2091,8 +2091,6 @@ def _logs(window) -> QWidget:
         "docgraph.log",        "docgraph.log.prev",
         "docgraph_index.log",  "docgraph_index.log.prev",
         "docgraph_wiki.log",   "docgraph_wiki.log.prev",
-        "docgraph_docs.log",   "docgraph_docs.log.prev",
-        "docgraph_assets.log", "docgraph_assets.log.prev",
         "docgraph_watch.log",  "docgraph_watch.log.prev",
         "docgraph_serve.log",  "docgraph_serve.log.prev",
         "docgraph_daemon.log", "docgraph_daemon.log.prev",
