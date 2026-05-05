@@ -143,18 +143,27 @@ def _format_progress_line(event: str, payload: dict) -> str:
 
 async def _sse_progress_tee(slug: str, port: int, event_names: tuple[str, ...],
                              log_fp, session: aiohttp.ClientSession,
-                             path_for_slug: str = "") -> None:
+                             path_for_slug: str = "",
+                             ready_event: asyncio.Event | None = None) -> None:
     """Subscribe to /api/events on the host and write matching events to
     `log_fp`. Filters by `slug` (events from other roots are ignored) and
     by event name (`index_progress` / `wiki_progress`). Best-effort — any
     failure (host went down, SSE timed out, log_fp closed) is swallowed
-    silently; the parent task handles the actual operation result."""
+    silently; the parent task handles the actual operation result.
+
+    Signals `ready_event` once the server's `: ready` sentinel is received
+    so callers can wait until the subscription is active before starting the
+    operation (avoids missing the first events due to a race)."""
     if log_fp is None:
+        if ready_event is not None:
+            ready_event.set()
         return
     base = f"http://{dg_cfg.host_host()}:{port}"
     try:
         async with session.get(f"{base}/api/events") as resp:
             if resp.status != 200:
+                if ready_event is not None:
+                    ready_event.set()
                 return
             current_event = "message"
             async for raw in resp.content:
@@ -163,6 +172,12 @@ async def _sse_progress_tee(slug: str, port: int, event_names: tuple[str, ...],
                 except Exception:
                     continue
                 if not line:
+                    continue
+                # ": ready" sentinel — subscription is active, unblock caller.
+                if line.startswith(":"):
+                    if ready_event is not None:
+                        ready_event.set()
+                        ready_event = None
                     continue
                 if line.startswith("event:"):
                     current_event = line[6:].strip()
@@ -276,10 +291,15 @@ async def _index_via_host(path: str, full: bool, port: int, log_fp=None,
         # in parallel so docgraph_index.log shows the same per-stage status
         # the CLI prints (rather than just the spawning marker + the final
         # captured Rich transcript at the end).
+        sse_ready = asyncio.Event()
         sse_task = asyncio.create_task(
             _sse_progress_tee(slug, port, ("index_progress",), log_fp, session,
-                               path_for_slug=path)
+                               path_for_slug=path, ready_event=sse_ready)
         )
+        try:
+            await asyncio.wait_for(sse_ready.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            pass
         url = f"{base}/api/admin/index?root={slug}"
         try:
             try:
@@ -554,11 +574,15 @@ async def _wiki_via_host(path: str, force: bool, port: int, log_fp=None,
                 f"(roots: {[r.get('slug') for r in roots]})"
             )
         # Tee per-module SSE progress so docgraph_wiki.log mirrors CLI status.
+        sse_ready = asyncio.Event()
         sse_task = asyncio.create_task(
             _sse_progress_tee(slug, port, ("wiki_progress",), log_fp, session,
-                               path_for_slug=path)
+                               path_for_slug=path, ready_event=sse_ready)
         )
-        
+        try:
+            await asyncio.wait_for(sse_ready.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            pass
         url = f"{base}/api/wiki/build?root={slug}"
         try:
             try:
@@ -1218,6 +1242,9 @@ class HostSupervisor:
             sweep_port(self._port, ("docgraph",))
         except Exception:
             pass
+        # Log the full argv so prompt flags and other tunables are inspectable
+        # in docgraph_host.log without needing Process Hacker.
+        log.info("docgraph host argv: %s", " ".join(str(a) for a in argv))
         self._proc = self._spawn(argv, extra_env=None)
         self._started_at = time.time()
         try:
