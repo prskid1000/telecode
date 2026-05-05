@@ -1554,7 +1554,7 @@ class _LinksSection(QWidget):
     def _on_add(self) -> None:
         self._append_row({"url": "", "depth": 1, "ttl_hours": 24.0,
                           "last_fetched": None, "page_count": None})
-        self._commit()
+        # Don't commit — save happens via editingFinished once the user fills in the URL.
 
     def _on_remove(self, row: "_LinkRow") -> None:
         try:
