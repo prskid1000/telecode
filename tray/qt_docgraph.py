@@ -209,6 +209,12 @@ _WIKI_PHASES: list[tuple[str, str, bool]] = [
 ]
 _WIKI_PHASE_INDEX = {p[0]: (i, p[1]) for i, p in enumerate(_WIKI_PHASES)}
 
+_TERMINAL_JOB_STATUSES = {"done", "failed", "cancelled", "ok", "success"}
+
+
+def _is_terminal_job_status(status: object) -> bool:
+    return str(status or "").lower() in _TERMINAL_JOB_STATUSES
+
 
 def _fmt_count(n: int) -> str:
     """Compact integer formatter — 173553 → '173.5k', 1234567 → '1.23M'."""
@@ -429,8 +435,15 @@ def _build_roots_card(window) -> tuple[QFrame, Callable[[], None]]:
     def refresh():
         try:
             from docgraph.process import get_index, get_wiki
-            index_alive = bool(get_index().status().get("alive"))
-            wiki_alive = bool(get_wiki().status().get("alive"))
+            from docgraph import index_state, wiki_state
+            index_status = get_index().status()
+            wiki_status = get_wiki().status()
+            index_path = str(index_status.get("current_path") or "")
+            wiki_path = str(wiki_status.get("current_path") or "")
+            index_live = index_state.get(index_path) if index_path else None
+            wiki_live = wiki_state.get(wiki_path) if wiki_path else None
+            index_alive = bool(index_status.get("alive")) and not _is_terminal_job_status((index_live or {}).get("last_status"))
+            wiki_alive = bool(wiki_status.get("alive")) and not _is_terminal_job_status((wiki_live or {}).get("last_status"))
         except Exception:
             index_alive = wiki_alive = False
 
@@ -452,12 +465,18 @@ def _build_roots_card(window) -> tuple[QFrame, Callable[[], None]]:
 def _index_status_text() -> tuple[bool, str]:
     try:
         from docgraph.process import get_index
+        from docgraph import index_state
         s = get_index().status()
     except Exception as exc:
         return False, f"err: {exc}"
+    live = index_state.get(str(s.get("current_path") or "")) if s.get("current_path") else None
+    live_status = str((live or {}).get("last_status") or "").lower()
+    if live_status in _TERMINAL_JOB_STATUSES:
+        what = "full" if s.get("current_force") else "incremental"
+        return True, f"{live_status} · {s.get('current_path') or '?'} ({what})"
     if s["alive"]:
-            what = "full" if s.get("current_force") else "incremental"
-            return True, f"running · {s.get('current_path') or '?'} ({what})"
+        what = "full" if s.get("current_force") else "incremental"
+        return True, f"running · {s.get('current_path') or '?'} ({what})"
     return False, _index_totals_text()
 
 
@@ -497,9 +516,15 @@ def _wiki_status_text() -> tuple[bool, str]:
     try:
         from docgraph.process import get_wiki
         from docgraph import config as dg_cfg
+        from docgraph import wiki_state
         s = get_wiki().status()
     except Exception as exc:
         return False, f"err: {exc}"
+    live = wiki_state.get(str(s.get("current_path") or "")) if s.get("current_path") else None
+    live_status = str((live or {}).get("last_status") or "").lower()
+    if live_status in _TERMINAL_JOB_STATUSES:
+        what = "force" if s.get("current_force") else "resumable"
+        return True, f"{live_status} · {s.get('current_path') or '?'} ({what})"
     if s["alive"]:
         what = "force" if s.get("current_force") else "resumable"
         return True, f"running · {s.get('current_path') or '?'} ({what})"
@@ -915,10 +940,12 @@ class _RootRow(QFrame):
     def _refresh_progress_bars(self, path: str) -> None:
         """Paint the live SSE progress into the per-row QProgressBars."""
         try:
-            from docgraph import progress_state
+            from docgraph import progress_state, index_state, wiki_state
             from docgraph.process import get_index, get_wiki
-            idx_running = bool(path) and get_index().current_path() == path
-            wiki_running = bool(path) and get_wiki().current_path() == path
+            idx_status = str((index_state.get(path) or {}).get("last_status") or "").lower() if path else ""
+            wiki_status = str((wiki_state.get(path) or {}).get("last_status") or "").lower() if path else ""
+            idx_running = bool(path) and get_index().current_path() == path and idx_status not in _TERMINAL_JOB_STATUSES
+            wiki_running = bool(path) and get_wiki().current_path() == path and wiki_status not in _TERMINAL_JOB_STATUSES
             idx_ps = progress_state.get(path, "index") if path else None
             wiki_ps = progress_state.get(path, "wiki") if path else None
         except Exception:
@@ -1025,7 +1052,8 @@ class _RootRow(QFrame):
             running_path = get_index().current_path()
         except Exception:
             s, running_path = None, None
-        if path and running_path == path:
+        status = str((s or {}).get("last_status") or "").lower()
+        if path and running_path == path and status not in _TERMINAL_JOB_STATUSES:
             self._pill.setText("running…")
             self._pill.setStyleSheet(f"color: {WARN};")
             self._index_btn.setEnabled(False)
@@ -1062,7 +1090,8 @@ class _RootRow(QFrame):
             running_path = get_wiki().current_path()
         except Exception:
             s, running_path = None, None
-        if path and running_path == path:
+        status = str((s or {}).get("last_status") or "").lower()
+        if path and running_path == path and status not in _TERMINAL_JOB_STATUSES:
             self._wiki_pill.setText("wiki running…")
             self._wiki_pill.setStyleSheet(f"color: {WARN};")
             self._wiki_btn.setEnabled(False)
