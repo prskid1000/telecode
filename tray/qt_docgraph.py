@@ -1390,18 +1390,16 @@ class _LinkRow(QWidget):
         self._url = QLineEdit(str(entry.get("url", "")))
         self._url.setPlaceholderText("https://example.com/docs")
         self._url.editingFinished.connect(self._on_change)
-        h.addWidget(self._url, 3)
+        h.addWidget(self._url, 2)
 
-        depth_box = QComboBox()
-        for d in range(1, 6):
-            depth_box.addItem(str(d))
-        depth_box.setCurrentIndex(max(0, min(4, int(entry.get("depth", 1)) - 1)))
-        depth_box.setToolTip("Crawl depth: 1 = seed page only, 5 = follow links 5 levels deep (same domain)")
-        depth_box.setFixedWidth(46)
-        depth_box.currentIndexChanged.connect(lambda _: self._on_change())
-        self._depth = depth_box
+        depth_edit = QLineEdit(str(max(1, min(5, int(entry.get("depth", 1))))))
+        depth_edit.setFixedWidth(28)
+        depth_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        depth_edit.setToolTip("Crawl depth 1–5 (1 = seed page only, 5 = follow links 5 levels deep)")
+        depth_edit.editingFinished.connect(self._on_depth_changed)
+        self._depth = depth_edit
         h.addWidget(QLabel("depth"))
-        h.addWidget(depth_box)
+        h.addWidget(depth_edit)
 
         ttl_box = QComboBox()
         for label, _ in _TTL_OPTIONS:
@@ -1431,10 +1429,22 @@ class _LinkRow(QWidget):
         rm.clicked.connect(lambda: self._on_remove(self))
         h.addWidget(rm)
 
+    def _on_depth_changed(self) -> None:
+        try:
+            v = max(1, min(5, int(self._depth.text())))
+        except ValueError:
+            v = 1
+        self._depth.setText(str(v))
+        self._on_change()
+
     def to_dict(self) -> dict:
+        try:
+            depth = max(1, min(5, int(self._depth.text())))
+        except ValueError:
+            depth = 1
         return {
             "url": self._url.text().strip(),
-            "depth": self._depth.currentIndex() + 1,
+            "depth": depth,
             "ttl_hours": _TTL_OPTIONS[self._ttl.currentIndex()][1],
             "last_fetched": None,
             "page_count": None,
