@@ -96,7 +96,10 @@
     },
 
     "wiki": {
-      "depth": 12
+      "depth": 12,
+      "crawl_enabled": false,
+      "crawl_max_depth": 2,
+      "crawl_excluded_patterns": []
     }
   },
 

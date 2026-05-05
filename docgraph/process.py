@@ -301,7 +301,7 @@ async def _index_via_host(path: str, full: bool, port: int, log_fp=None,
                         if resp.status != 200:
                             continue
                         job = await resp.json()
-                            _emit(job)
+                        _emit(job)
                         status = job.get("status")
                         if status == "completed":
                             stats = job.get("result") or {}
@@ -762,6 +762,7 @@ async def _wiki_via_host(path: str, force: bool, port: int, log_fp=None,
             _sse_progress_tee(slug, port, ("wiki_progress",), log_fp, session,
                                path_for_slug=path)
         )
+        
         url = f"{base}/api/wiki/build?root={slug}"
         try:
             try:
@@ -1277,6 +1278,138 @@ class WikiRunner:
                 self._log_fp = None
 
 
+# ── External docs runner (crawl & index URLs) ─────────────────────────────
+
+class ExternalDocsRunner:
+    """Crawls and indexes external documentation URLs. Unlike Index/Wiki which
+    are per-path, external docs are global — crawl once, cache, reuse.
+    """
+
+    def __init__(self) -> None:
+        self._task: Optional[asyncio.Task] = None
+        self._log_fp = None
+        self._lock = asyncio.Lock()
+        self._last_status: str = "idle"
+        self._last_finished_at: float = 0.0
+        self._last_doc_count: int = 0
+
+    def alive(self) -> bool:
+        return bool(self._task and not self._task.done())
+
+    def status(self) -> dict:
+        return {
+            "alive":             self.alive(),
+            "last_status":       self._last_status,
+            "last_finished_at":  self._last_finished_at,
+            "last_doc_count":    self._last_doc_count,
+            "log_path":          dg_cfg.log_path("external_docs"),
+        }
+
+    async def run(self, start_urls: list[str], max_depth: int = 2,
+                  exclude_patterns: list[str] | None = None) -> None:
+        async with self._lock:
+            if self.alive():
+                log.warning("docgraph external_docs: already running")
+                return
+            self._task = asyncio.create_task(
+                self._run_inline(start_urls, max_depth, exclude_patterns)
+            )
+
+    async def cancel(self) -> None:
+        async with self._lock:
+            t = self._task
+        if t and not t.done():
+            t.cancel()
+
+    async def _run_inline(self, start_urls: list[str], max_depth: int,
+                          exclude_patterns: list[str] | None) -> None:
+        self._last_status = "running"
+        self._last_doc_count = 0
+        self._log_fp = _open_log("external_docs")
+        rc_or_status = "failed"
+
+        try:
+            from docgraph.external_docs import (
+                crawl_and_index_external_docs,
+                save_indexed_docs,
+            )
+
+            def _progress(phase: str, current: int, total: int,
+                         detail: str = "") -> None:
+                line = f"[{phase}] {current}/{total}"
+                if detail:
+                    line += f" — {detail}"
+                if self._log_fp:
+                    try:
+                        self._log_fp.write(f"{line}\n".encode())
+                        self._log_fp.flush()
+                    except Exception:
+                        pass
+
+            _progress("start", 0, len(start_urls))
+
+            # Run the async crawl
+            docs = await asyncio.wait_for(
+                crawl_and_index_external_docs(
+                    start_urls,
+                    max_depth=max_depth,
+                    exclude_patterns=exclude_patterns or [],
+                    progress_cb=_progress,
+                ),
+                timeout=300,  # 5 min max
+            )
+
+            if docs:
+                _progress("save", len(docs), len(docs))
+                # Save to cache
+                try:
+                    # Get the config from the docgraph module
+                    from docgraph.config import Config
+                    from pathlib import Path
+                    import os
+
+                    cfg = Config(
+                        data_dir=Path(os.path.dirname(dg_cfg.log_path("index")) or ".docgraph")
+                    )
+                    save_indexed_docs(cfg, docs)
+                    self._last_doc_count = len(docs)
+                    rc_or_status = "ok"
+                    self._last_status = "done"
+                except Exception as e:
+                    log.error("external_docs: failed to save indexed docs: %s", e)
+                    self._last_status = "failed"
+                    rc_or_status = "failed"
+            else:
+                log.warning("external_docs: no docs crawled")
+                self._last_status = "done"
+                rc_or_status = "ok"
+
+            _progress("done", len(docs), len(docs))
+
+        except asyncio.TimeoutError:
+            self._last_status = "failed"
+            rc_or_status = "failed"
+            log.error("external_docs: crawl timeout")
+        except asyncio.CancelledError:
+            self._last_status = "cancelled"
+            rc_or_status = "cancelled"
+            log.info("external_docs: cancelled")
+            raise
+        except Exception as exc:
+            log.error("external_docs: %s", exc)
+            self._last_status = "failed"
+            rc_or_status = "failed"
+        finally:
+            self._task = None
+            self._last_finished_at = time.time()
+            if self._log_fp:
+                try:
+                    self._log_fp.close()
+                except Exception:
+                    pass
+                self._log_fp = None
+
+
 # ── Host (the unified docgraph server) ─────────────────────────────────────
 
 class HostSupervisor:
@@ -1579,6 +1712,7 @@ class HostSupervisor:
 
 _INDEX: IndexRunner | None = None
 _WIKI: WikiRunner | None = None
+_EXTERNAL_DOCS: ExternalDocsRunner | None = None
 _HOST: HostSupervisor | None = None
 
 
@@ -1594,6 +1728,13 @@ def get_wiki() -> WikiRunner:
     if _WIKI is None:
         _WIKI = WikiRunner()
     return _WIKI
+
+
+def get_external_docs() -> ExternalDocsRunner:
+    global _EXTERNAL_DOCS
+    if _EXTERNAL_DOCS is None:
+        _EXTERNAL_DOCS = ExternalDocsRunner()
+    return _EXTERNAL_DOCS
 
 
 def get_host() -> HostSupervisor:

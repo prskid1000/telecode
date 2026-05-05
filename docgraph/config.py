@@ -223,6 +223,25 @@ def wiki_depth() -> int:
     return int(wiki_cfg().get("depth", 12) or 12)
 
 
+def wiki_crawl_enabled() -> bool:
+    """Whether to crawl external URLs (docs, websites) and include them
+    in wiki pages. Default False."""
+    return bool(wiki_cfg().get("crawl_enabled", False))
+
+
+def wiki_crawl_max_depth() -> int:
+    """Max crawl depth for website discovery (1-5). Default 2.
+    1 = current page only, 2 = current + linked pages, etc."""
+    return max(1, min(5, int(wiki_cfg().get("crawl_max_depth", 2) or 2)))
+
+
+def wiki_crawl_excluded_patterns() -> list[str]:
+    """URL patterns to exclude from crawling (regex or glob-like patterns).
+    E.g., ["*.pdf", "*/forum/*", "*/search?*"]. Default empty."""
+    patterns = wiki_cfg().get("crawl_excluded_patterns") or []
+    return [str(p) for p in patterns if p]
+
+
 # ── Document indexing (tier 2 + tier 3 — opt-in) ──────────────────────────
 
 _DEFAULT_TEXT_EXTS = ("md", "markdown", "txt", "rst", "csv")
