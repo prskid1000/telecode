@@ -25,7 +25,7 @@ from typing import Callable
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit, QProgressBar, QSpinBox, QComboBox,
+    QLineEdit, QProgressBar, QComboBox,
 )
 
 from tray.qt_widgets import row_label, Toggle, WrapLabel
@@ -1392,12 +1392,13 @@ class _LinkRow(QWidget):
         self._url.editingFinished.connect(self._on_change)
         h.addWidget(self._url, 3)
 
-        depth_box = QSpinBox()
-        depth_box.setRange(1, 5)
-        depth_box.setValue(int(entry.get("depth", 1)))
+        depth_box = QComboBox()
+        for d in range(1, 6):
+            depth_box.addItem(str(d))
+        depth_box.setCurrentIndex(max(0, min(4, int(entry.get("depth", 1)) - 1)))
         depth_box.setToolTip("Crawl depth: 1 = seed page only, 5 = follow links 5 levels deep (same domain)")
-        depth_box.setFixedWidth(52)
-        depth_box.valueChanged.connect(lambda _: self._on_change())
+        depth_box.setFixedWidth(46)
+        depth_box.currentIndexChanged.connect(lambda _: self._on_change())
         self._depth = depth_box
         h.addWidget(QLabel("depth"))
         h.addWidget(depth_box)
@@ -1433,7 +1434,7 @@ class _LinkRow(QWidget):
     def to_dict(self) -> dict:
         return {
             "url": self._url.text().strip(),
-            "depth": self._depth.value(),
+            "depth": self._depth.currentIndex() + 1,
             "ttl_hours": _TTL_OPTIONS[self._ttl.currentIndex()][1],
             "last_fetched": None,
             "page_count": None,
