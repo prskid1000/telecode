@@ -162,12 +162,16 @@ Telecode supervises **one** [DocGraph](../.docgraph) subprocess (`docgraph host 
 
 **Settings shape** (`settings.docgraph.*`):
 - `binary`, `host.{enabled, auto_start, auto_restart, host, port, gpu, debounce}`.
-- `roots: [{path, watch}, ...]`. Flipping `watch` requires a host restart.
-- `llm.{model, host, port, format, max_tokens, max_tokens_wiki, prompts.{docstring, wiki}}`.
+- `roots: [{path, watch}, ...]`. Adding/removing a root auto-restarts the host (tray `_RootsTable._commit` detects path-set changes). Flipping `watch` also needs a restart.
+- `llm.{model, host, port, format, max_tokens, max_tokens_wiki, max_tokens_chat, api_key, timeout, docstrings, wiki, prompts.{docstring, wiki}}`.
 - `embeddings.{model, gpu}`.
 - `rerank.{default, model, gpu}`.
 - `index.{workers, embed_batch_size}`.
 - `wiki.depth`.
+
+**Per-root config files** (not in `settings.json`):
+- `<root>/.docgraph/repos.json` — extra sibling paths indexed into the same graph. Editable via tray "Extra local paths" panel. `_wire_extra_paths` reads `.gitignore` etc. from within each extra path.
+- `<root>/.docgraph/links.json` — external URLs to crawl: `[{url, depth, max_pages, ttl_hours, last_fetched, page_count}]`. `depth=0` = seed only; `depth=1` = seed + direct links. `max_pages=0` = unlimited. Editable via tray "External links" panel.
 
 **MCP bridge** (`docgraph/bridge.py`). On `HostSupervisor` start, after `/api/roots` is reachable: open `streamablehttp_client("http://<h>:<port>/mcp")`, `await session.list_tools()`, register each in `proxy.managed_tools._REGISTRY` as `docgraph_<tool>`. Handler closure opens a transient session per invocation. The closed-enum `root` argument scopes calls to a specific repo.
 
@@ -175,7 +179,9 @@ Telecode supervises **one** [DocGraph](../.docgraph) subprocess (`docgraph host 
 
 **Windows hybrid graphics (`_ensure_high_perf_gpu` in `process.py`).** Before each spawn we write `HKCU\Software\Microsoft\DirectX\UserGpuPreferences\<docgraph.exe path> = "GpuPreference=2;"`. Without this, processes started with `CREATE_NO_WINDOW` (which we always use) get the iGPU from DXGI's default adapter enumeration, and DML lands on Intel — slow at best, device-hung under sustained load. Idempotent; skipped if value already correct or off Windows.
 
-**Tray UI.** Cards: Host (start/stop/restart + bind config), Roots (table with per-row Index/Wiki/Clear/Watch + ✕ remove + `+ Add root`), LLM, Embeddings, Reranker. Embeddings + Reranker cards have a "🔄 Restart host" button — those settings only take effect on the next host spawn.
+**Tray UI.** Cards: Host (start/stop/restart + bind config), Roots (table with per-row Index/Wiki/Clear/Watch + ✕ remove + `+ Add root`), LLM, Embeddings, Reranker. Embeddings + Reranker cards have a "🔄 Restart host" button — those settings only take effect on the next host spawn. Each root row has two collapsible panels:
+- **Extra local paths** — reads/writes `<root>/.docgraph/repos.json`; paths are indexed into the same graph.
+- **External links** — reads/writes `<root>/.docgraph/links.json`; each link has URL, Depth (0–N), Max pages (0 = unlimited), and TTL fields. Progress shown in the index bar as `[1/12] fetching · level N · done/total`. All row buttons (Index, Wiki, Clear, Watch, ✕, + Add root) are disabled while a host restart is in progress (`_RootsTable._restarting`).
 
 **Logs.** `data/logs/docgraph_host.log` + `data/logs/docgraph_index.log`. Live tail in the global Logs section.
 
