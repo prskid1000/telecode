@@ -56,6 +56,10 @@
       { "path": "", "watch": false }
     ],
 
+    "_roots_note": "Extra per-root config lives in <root>/.docgraph/ — not in settings.json.",
+    "_repos_note": "Extra local paths to index into the same graph: <root>/.docgraph/repos.json  [ \"/path/to/extra\" ]",
+    "_links_note": "External URLs to crawl and index: <root>/.docgraph/links.json  [ { \"url\": \"https://…\", \"depth\": 2, \"ttl_hours\": 24 } ]",
+
     "llm": {
       "model": "",
       "host": "localhost",

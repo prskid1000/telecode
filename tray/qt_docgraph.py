@@ -1385,10 +1385,10 @@ class _LinkRow(QWidget):
         self._url.editingFinished.connect(self._on_change)
         h.addWidget(self._url, 2)
 
-        depth_edit = QLineEdit(str(max(1, min(5, int(entry.get("depth", 1))))))
+        depth_edit = QLineEdit(str(max(1, int(entry.get("depth", 1)))))
         depth_edit.setFixedWidth(56)
         depth_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        depth_edit.setToolTip("Crawl depth 1–5 (1 = seed page only, 5 = follow links 5 levels deep)")
+        depth_edit.setToolTip("Crawl depth (1 = seed page only, higher = follow more link levels; same domain)")
         depth_edit.editingFinished.connect(self._on_depth_changed)
         self._depth = depth_edit
         h.addWidget(QLabel("Depth"))
@@ -1420,7 +1420,7 @@ class _LinkRow(QWidget):
 
     def _on_depth_changed(self) -> None:
         try:
-            v = max(1, min(5, int(self._depth.text())))
+            v = max(1, int(self._depth.text()))
         except ValueError:
             v = 1
         self._depth.setText(str(v))
@@ -1436,7 +1436,7 @@ class _LinkRow(QWidget):
 
     def to_dict(self) -> dict:
         try:
-            depth = max(1, min(5, int(self._depth.text())))
+            depth = max(1, int(self._depth.text()))
         except ValueError:
             depth = 1
         try:
