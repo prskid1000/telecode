@@ -223,6 +223,63 @@ def wiki_depth() -> int:
     return int(wiki_cfg().get("depth", 12) or 12)
 
 
+# ── External links (per-root .docgraph/links.json) ────────────────────────────
+
+def root_links(path: str) -> list[dict]:
+    """Return the external links configured for `path`. Reads .docgraph/links.json.
+    Each entry: {url, depth, ttl_hours, last_fetched, page_count}."""
+    from pathlib import Path as _Path
+    import json as _json
+    p = _Path(path).expanduser() / ".docgraph" / "links.json"
+    if not p.exists():
+        return []
+    try:
+        raw = _json.loads(p.read_text(encoding="utf-8"))
+        return [e for e in raw if isinstance(e, dict) and e.get("url")]
+    except Exception:
+        return []
+
+
+def save_root_links(path: str, links: list[dict]) -> None:
+    """Write external links for `path` to .docgraph/links.json."""
+    from pathlib import Path as _Path
+    import json as _json
+    data_dir = _Path(path).expanduser() / ".docgraph"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / "links.json").write_text(
+        _json.dumps(links, indent=2),
+        encoding="utf-8",
+    )
+
+
+# ── Extra local paths (per-root .docgraph/repos.json) ────────────────────────
+
+def root_extra_paths(path: str) -> list[str]:
+    """Return the extra local paths configured for `path`. Reads .docgraph/repos.json."""
+    from pathlib import Path as _Path
+    import json as _json
+    p = _Path(path).expanduser() / ".docgraph" / "repos.json"
+    if not p.exists():
+        return []
+    try:
+        raw = _json.loads(p.read_text(encoding="utf-8"))
+        return [e for e in raw if isinstance(e, str) and e.strip()]
+    except Exception:
+        return []
+
+
+def save_root_extra_paths(path: str, paths: list[str]) -> None:
+    """Write extra local paths for `path` to .docgraph/repos.json."""
+    from pathlib import Path as _Path
+    import json as _json
+    data_dir = _Path(path).expanduser() / ".docgraph"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / "repos.json").write_text(
+        _json.dumps(paths, indent=2),
+        encoding="utf-8",
+    )
+
+
 # ── Logs ─────────────────────────────────────────────────────────────────────
 
 def log_path(role: str = "host", slug: str | None = None) -> str:

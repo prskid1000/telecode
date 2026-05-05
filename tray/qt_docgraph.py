@@ -25,7 +25,7 @@ from typing import Callable
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit, QProgressBar,
+    QLineEdit, QProgressBar, QSpinBox, QComboBox,
 )
 
 from tray.qt_widgets import row_label, Toggle, WrapLabel
@@ -800,6 +800,18 @@ class _RootRow(QFrame):
 
         outer.addWidget(self._line3)
 
+        # ── Line 4: collapsible extra-paths section ───────────────────
+        self._extra_paths_section = _ExtraPathsSection(
+            path, self._window, on_commit=self._on_change
+        )
+        outer.addWidget(self._extra_paths_section)
+
+        # ── Line 5: collapsible external-links section ────────────────
+        self._links_section = _LinksSection(
+            path, self._window, on_commit=self._on_change
+        )
+        outer.addWidget(self._links_section)
+
         self.refresh_state()
 
     def text(self) -> str:
@@ -885,6 +897,10 @@ class _RootRow(QFrame):
         self._refresh_wiki_pill(path)
         self._refresh_stats_chip(path)
         self._refresh_progress_bars(path)
+        self._extra_paths_section.set_path(path)
+        self._extra_paths_section.refresh()
+        self._links_section.set_path(path)
+        self._links_section.refresh()
 
         enabled = not busy
         self._edit.setEnabled(enabled)
@@ -893,6 +909,8 @@ class _RootRow(QFrame):
         self._clear_btn.setEnabled(enabled)
         self._watch.setEnabled(enabled)
         self._rm_btn.setEnabled(enabled)
+        self._extra_paths_section.setEnabled(enabled)
+        self._links_section.setEnabled(enabled)
 
     def _apply_bar_state(self, bar: QProgressBar, state: str) -> None:
         """Flip the bar between 'idle' / 'run' so the QSS picks up the
@@ -1119,6 +1137,483 @@ class _RootRow(QFrame):
         self._wiki_pill.setText(text)
 
 
+# ── External-links section ───────────────────────────────────────────────
+
+_TTL_OPTIONS: list[tuple[str, float]] = [
+    ("1h",  1.0),
+    ("6h",  6.0),
+    ("24h", 24.0),
+    ("7d",  168.0),
+    ("30d", 720.0),
+]
+
+
+def _link_status_text(entry: dict) -> str:
+    """Return a human-readable staleness label for a link entry dict."""
+    lf = entry.get("last_fetched")
+    ttl = float(entry.get("ttl_hours", 24.0))
+    pc = entry.get("page_count")
+    pages = f" · {pc}p" if pc else ""
+    if lf is None:
+        return "never fetched"
+    delta = max(0, int(time.time() - float(lf)))
+    if delta < 60:
+        age = f"{delta}s ago"
+    elif delta < 3600:
+        age = f"{delta // 60}m ago"
+    else:
+        age = f"{delta // 3600}h ago"
+    stale = " (stale)" if (time.time() - float(lf)) > ttl * 3600 else ""
+    return f"{age}{pages}{stale}"
+
+
+class _ExtraPathRow(QWidget):
+    """One extra-path row: path QLineEdit + exists indicator + remove button."""
+
+    def __init__(self, path_str: str, on_change: Callable[[], None],
+                 on_remove: Callable[["_ExtraPathRow"], None]) -> None:
+        super().__init__()
+        self._on_change = on_change
+        self._on_remove = on_remove
+
+        h = QHBoxLayout(self)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(6)
+
+        self._path_edit = QLineEdit(path_str)
+        self._path_edit.setPlaceholderText("/path/to/extra/repo")
+        self._path_edit.editingFinished.connect(self._on_edit)
+        h.addWidget(self._path_edit, 1)
+
+        self._status = QLabel("")
+        self._status.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
+        self._status.setMinimumWidth(60)
+        h.addWidget(self._status)
+        self._update_status()
+
+        rm = QPushButton("✕")
+        rm.setFlat(True)
+        rm.setFixedWidth(24)
+        rm.setStyleSheet(
+            f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
+            f" QPushButton:hover {{ color: #ff6b6b; }}"
+        )
+        rm.clicked.connect(lambda: self._on_remove(self))
+        h.addWidget(rm)
+
+    def _on_edit(self) -> None:
+        self._update_status()
+        self._on_change()
+
+    def _update_status(self) -> None:
+        from pathlib import Path as _P
+        p = self._path_edit.text().strip()
+        if not p:
+            self._status.setText("")
+            return
+        exists = _P(p).expanduser().exists()
+        self._status.setText("exists" if exists else "not found")
+        self._status.setStyleSheet(
+            f"color: {OK}; font-size: 11px;" if exists
+            else f"color: {WARN}; font-size: 11px;"
+        )
+
+    def path(self) -> str:
+        return self._path_edit.text().strip()
+
+
+class _ExtraPathsSection(QWidget):
+    """Collapsible extra local paths panel for one root row.
+
+    Reads/writes <root>/.docgraph/repos.json directly. Paths listed here
+    are indexed and wiki-fied into the same root's graph without copying
+    their content — uses docgraph's Config.extra_roots at index time.
+    """
+
+    def __init__(self, path: str, window,
+                 on_commit: Callable[[], None]) -> None:
+        super().__init__()
+        self._path = path
+        self._window = window
+        self._on_commit = on_commit
+        self._expanded = False
+        self._mtime: float = 0.0
+        self._row_widgets: list[_ExtraPathRow] = []
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 2, 0, 0)
+        outer.setSpacing(4)
+
+        hdr = QWidget()
+        hl = QHBoxLayout(hdr)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(4)
+        self._toggle_btn = QPushButton("▶ Extra local paths")
+        self._toggle_btn.setFlat(True)
+        self._toggle_btn.setStyleSheet(
+            f"QPushButton {{ color: {FG_DIM}; font-size: 11px; border: none; "
+            f"background: transparent; text-align: left; padding: 0; }}"
+            f" QPushButton:hover {{ color: {FG}; }}"
+        )
+        self._toggle_btn.clicked.connect(self._toggle)
+        hl.addWidget(self._toggle_btn)
+        self._summary_lbl = QLabel("")
+        self._summary_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
+        hl.addWidget(self._summary_lbl)
+        hl.addStretch(1)
+        outer.addWidget(hdr)
+
+        self._body = QWidget()
+        bl = QVBoxLayout(self._body)
+        bl.setContentsMargins(12, 0, 0, 0)
+        bl.setSpacing(4)
+
+        self._rows_host = QWidget()
+        self._rows_layout = QVBoxLayout(self._rows_host)
+        self._rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._rows_layout.setSpacing(4)
+        bl.addWidget(self._rows_host)
+
+        add_btn = QPushButton("+ Add path")
+        add_btn.setProperty("class", "ghost")
+        add_btn.setMaximumWidth(110)
+        add_btn.clicked.connect(self._on_add)
+        bl.addWidget(add_btn)
+
+        self._body.setVisible(False)
+        outer.addWidget(self._body)
+
+        self.refresh()
+
+    def set_path(self, path: str) -> None:
+        if path != self._path:
+            self._path = path
+            self._mtime = 0.0
+
+    def _repos_path(self):
+        from pathlib import Path as _P
+        if not self._path:
+            return None
+        return _P(self._path).expanduser() / ".docgraph" / "repos.json"
+
+    def _read_paths(self) -> list[str]:
+        from docgraph.config import root_extra_paths
+        return root_extra_paths(self._path) if self._path else []
+
+    def _write_paths(self, paths: list[str]) -> None:
+        from docgraph.config import save_root_extra_paths
+        if self._path:
+            save_root_extra_paths(self._path, paths)
+
+    def _toggle(self) -> None:
+        self._expanded = not self._expanded
+        self._body.setVisible(self._expanded)
+        self._toggle_btn.setText(
+            "▼ Extra local paths" if self._expanded else "▶ Extra local paths"
+        )
+        if self._expanded:
+            self._rebuild()
+
+    def _rebuild(self) -> None:
+        for w in self._row_widgets:
+            w.setParent(None)
+            w.deleteLater()
+        self._row_widgets.clear()
+        for p in self._read_paths():
+            self._append_row(p)
+
+    def _append_row(self, path_str: str) -> None:
+        row = _ExtraPathRow(path_str, on_change=self._commit, on_remove=self._on_remove)
+        self._rows_layout.addWidget(row)
+        self._row_widgets.append(row)
+
+    def _on_add(self) -> None:
+        self._append_row("")
+        self._commit()
+
+    def _on_remove(self, row: "_ExtraPathRow") -> None:
+        try:
+            self._row_widgets.remove(row)
+        except ValueError:
+            pass
+        row.setParent(None)
+        row.deleteLater()
+        self._commit()
+
+    def _commit(self) -> None:
+        paths = [r.path() for r in self._row_widgets if r.path()]
+        self._write_paths(paths)
+        self._mtime = 0.0
+        self._update_header(paths)
+        self._on_commit()
+
+    def _update_header(self, paths: list[str]) -> None:
+        n = len(paths)
+        self._summary_lbl.setText(f"({n})" if n else "")
+
+    def refresh(self) -> None:
+        p = self._repos_path()
+        if p is None:
+            self._update_header([])
+            return
+        try:
+            mtime = p.stat().st_mtime if p.exists() else 0.0
+        except OSError:
+            mtime = 0.0
+
+        paths = self._read_paths()
+        self._update_header(paths)
+
+        if not self._expanded:
+            return
+
+        if mtime != self._mtime:
+            self._mtime = mtime
+            if len(paths) != len(self._row_widgets):
+                self._rebuild()
+
+
+class _LinkRow(QWidget):
+    """One external-link row: URL · depth · TTL · status · remove."""
+
+    def __init__(self, entry: dict, on_change: Callable[[], None],
+                 on_remove: Callable[["_LinkRow"], None]) -> None:
+        super().__init__()
+        self._on_change = on_change
+        self._on_remove = on_remove
+
+        h = QHBoxLayout(self)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(6)
+
+        self._url = QLineEdit(str(entry.get("url", "")))
+        self._url.setPlaceholderText("https://example.com/docs")
+        self._url.editingFinished.connect(self._on_change)
+        h.addWidget(self._url, 3)
+
+        depth_box = QSpinBox()
+        depth_box.setRange(1, 5)
+        depth_box.setValue(int(entry.get("depth", 1)))
+        depth_box.setToolTip("Crawl depth: 1 = seed page only, 5 = follow links 5 levels deep (same domain)")
+        depth_box.setFixedWidth(52)
+        depth_box.valueChanged.connect(lambda _: self._on_change())
+        self._depth = depth_box
+        h.addWidget(QLabel("depth"))
+        h.addWidget(depth_box)
+
+        ttl_box = QComboBox()
+        for label, _ in _TTL_OPTIONS:
+            ttl_box.addItem(label)
+        cur_ttl = float(entry.get("ttl_hours", 24.0))
+        best = min(range(len(_TTL_OPTIONS)), key=lambda i: abs(_TTL_OPTIONS[i][1] - cur_ttl))
+        ttl_box.setCurrentIndex(best)
+        ttl_box.setToolTip("Hours before the URL is considered stale and re-fetched")
+        ttl_box.setFixedWidth(60)
+        ttl_box.currentIndexChanged.connect(lambda _: self._on_change())
+        self._ttl = ttl_box
+        h.addWidget(QLabel("TTL"))
+        h.addWidget(ttl_box)
+
+        self._status = QLabel(_link_status_text(entry))
+        self._status.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
+        self._status.setMinimumWidth(90)
+        h.addWidget(self._status, 1)
+
+        rm = QPushButton("✕")
+        rm.setFlat(True)
+        rm.setFixedWidth(24)
+        rm.setStyleSheet(
+            f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
+            f" QPushButton:hover {{ color: #ff6b6b; }}"
+        )
+        rm.clicked.connect(lambda: self._on_remove(self))
+        h.addWidget(rm)
+
+    def to_dict(self) -> dict:
+        return {
+            "url": self._url.text().strip(),
+            "depth": self._depth.value(),
+            "ttl_hours": _TTL_OPTIONS[self._ttl.currentIndex()][1],
+            "last_fetched": None,
+            "page_count": None,
+        }
+
+    def update_status(self, entry: dict) -> None:
+        self._status.setText(_link_status_text(entry))
+
+
+class _LinksSection(QWidget):
+    """Collapsible external-links panel for one root row.
+
+    Reads/writes <root>/.docgraph/links.json directly; does NOT touch
+    settings.json so the links config lives with the repo data.
+    """
+
+    def __init__(self, path: str, window,
+                 on_commit: Callable[[], None]) -> None:
+        super().__init__()
+        self._path = path
+        self._window = window
+        self._on_commit = on_commit
+        self._expanded = False
+        self._mtime: float = 0.0          # last .docgraph/links.json mtime
+        self._row_widgets: list[_LinkRow] = []
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 2, 0, 0)
+        outer.setSpacing(4)
+
+        # Header row (always visible)
+        hdr = QWidget()
+        hl = QHBoxLayout(hdr)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(4)
+        self._toggle_btn = QPushButton("▶ External links")
+        self._toggle_btn.setFlat(True)
+        self._toggle_btn.setStyleSheet(
+            f"QPushButton {{ color: {FG_DIM}; font-size: 11px; border: none; "
+            f"background: transparent; text-align: left; padding: 0; }}"
+            f" QPushButton:hover {{ color: {FG}; }}"
+        )
+        self._toggle_btn.clicked.connect(self._toggle)
+        hl.addWidget(self._toggle_btn)
+        self._summary_lbl = QLabel("")
+        self._summary_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
+        hl.addWidget(self._summary_lbl)
+        hl.addStretch(1)
+        outer.addWidget(hdr)
+
+        # Collapsible body
+        self._body = QWidget()
+        bl = QVBoxLayout(self._body)
+        bl.setContentsMargins(12, 0, 0, 0)
+        bl.setSpacing(4)
+
+        self._rows_host = QWidget()
+        self._rows_layout = QVBoxLayout(self._rows_host)
+        self._rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._rows_layout.setSpacing(4)
+        bl.addWidget(self._rows_host)
+
+        add_btn = QPushButton("+ Add link")
+        add_btn.setProperty("class", "ghost")
+        add_btn.setMaximumWidth(110)
+        add_btn.clicked.connect(self._on_add)
+        bl.addWidget(add_btn)
+
+        self._body.setVisible(False)
+        outer.addWidget(self._body)
+
+        self.refresh()
+
+    def set_path(self, path: str) -> None:
+        if path != self._path:
+            self._path = path
+            self._mtime = 0.0
+
+    def _links_path(self):
+        from pathlib import Path as _P
+        if not self._path:
+            return None
+        p = _P(self._path).expanduser() / ".docgraph" / "links.json"
+        return p
+
+    def _read_links(self) -> list[dict]:
+        from docgraph.config import root_links
+        return root_links(self._path) if self._path else []
+
+    def _write_links(self, links: list[dict]) -> None:
+        from docgraph.config import save_root_links
+        if self._path:
+            save_root_links(self._path, links)
+
+    def _toggle(self) -> None:
+        self._expanded = not self._expanded
+        self._body.setVisible(self._expanded)
+        self._toggle_btn.setText(
+            "▼ External links" if self._expanded else "▶ External links"
+        )
+        if self._expanded:
+            self._rebuild()
+
+    def _rebuild(self) -> None:
+        for w in self._row_widgets:
+            w.setParent(None)
+            w.deleteLater()
+        self._row_widgets.clear()
+        links = self._read_links()
+        for entry in links:
+            self._append_row(entry)
+
+    def _append_row(self, entry: dict) -> None:
+        row = _LinkRow(entry, on_change=self._commit, on_remove=self._on_remove)
+        self._rows_layout.addWidget(row)
+        self._row_widgets.append(row)
+
+    def _on_add(self) -> None:
+        self._append_row({"url": "", "depth": 1, "ttl_hours": 24.0,
+                          "last_fetched": None, "page_count": None})
+        self._commit()
+
+    def _on_remove(self, row: "_LinkRow") -> None:
+        try:
+            self._row_widgets.remove(row)
+        except ValueError:
+            pass
+        row.setParent(None)
+        row.deleteLater()
+        self._commit()
+
+    def _commit(self) -> None:
+        links = [r.to_dict() for r in self._row_widgets if r.to_dict()["url"]]
+        self._write_links(links)
+        self._mtime = 0.0  # force header refresh
+        self._update_header(links)
+
+    def _update_header(self, links: list[dict]) -> None:
+        n = len(links)
+        stale = sum(
+            1 for lk in links
+            if lk.get("last_fetched") is None
+            or (time.time() - float(lk["last_fetched"])) > float(lk.get("ttl_hours", 24)) * 3600
+        )
+        parts = [f"{n}"] if n else []
+        if stale:
+            parts.append(f"{stale} stale")
+        self._summary_lbl.setText(f"({', '.join(parts)})" if parts else "")
+        self._summary_lbl.setStyleSheet(
+            f"color: {WARN}; font-size: 11px;" if stale
+            else f"color: {FG_MUTE}; font-size: 11px;"
+        )
+
+    def refresh(self) -> None:
+        """Refresh header summary; if expanded, also update status labels."""
+        p = self._links_path()
+        if p is None:
+            self._update_header([])
+            return
+        try:
+            mtime = p.stat().st_mtime if p.exists() else 0.0
+        except OSError:
+            mtime = 0.0
+
+        links = self._read_links()
+        self._update_header(links)
+
+        if not self._expanded:
+            return
+
+        # If the file changed under us, rebuild the rows.
+        if mtime != self._mtime:
+            self._mtime = mtime
+            # Only full-rebuild if row count changed; otherwise just update status.
+            if len(links) != len(self._row_widgets):
+                self._rebuild()
+                return
+        for row, entry in zip(self._row_widgets, links):
+            row.update_status(entry)
+
+
 # ── LLM card ─────────────────────────────────────────────────────────────
 
 def _build_llm_card(window) -> tuple[QFrame, Callable[[], None] | None]:
@@ -1183,23 +1678,6 @@ def _build_llm_card(window) -> tuple[QFrame, Callable[[], None] | None]:
 
 # ── LLM prompt overrides ───────────────────────────────────────────────
 
-_DOCSTRING_PROMPT_DEFAULT = (
-    "Write a single-sentence docstring (under 25 words) for this {kind} "
-    "named `{name}` in {language}. Describe its purpose, not its implementation. "
-    "Return only the sentence — no quotes, no markdown, no preamble.\n\n"
-    "```{language}\n{body}\n```"
-)
-
-_WIKI_PROMPT_DEFAULT = (
-    "Write a Markdown page with these sections:\n"
-    "1. **Summary** — 2-3 sentences on the module's purpose.\n"
-    "2. **Key entities** — bulleted list of the most important classes/functions and what each is for.\n"
-    "3. **How it's used** — who imports it, in plain language.\n"
-    "Total length: 200-300 words. No code blocks. Do not list every file. "
-    "Only state what the facts support."
-)
-
-
 def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     """Two text editors that override docgraph's built-in LLM prompts.
 
@@ -1217,7 +1695,7 @@ def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
         "Docstring template MUST keep {kind} / {name} / {language} / {body}.",
     )
 
-    def _editor(setting_path: str, default: str, label: str, help_text: str,
+    def _editor(setting_path: str, label: str, help_text: str,
                 cli_flag: str, height: int) -> tuple[QWidget, QWidget]:
         """Returns (editor_row, actions_row) — both fully shaped via `_row()`."""
         te = QPlainTextEdit()
@@ -1234,8 +1712,6 @@ def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
 
         save_btn = QPushButton("Save")
         save_btn.setProperty("class", "primary")
-        reset_btn = QPushButton("Reset to default")
-        reset_btn.setProperty("class", "ghost")
         clear_btn = QPushButton("Clear (use built-in)")
         clear_btn.setProperty("class", "ghost")
         info_lbl = QLabel("")
@@ -1244,28 +1720,25 @@ def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
 
         actions = QWidget()
         ar = QHBoxLayout(actions); ar.setContentsMargins(0, 0, 0, 0); ar.setSpacing(8)
-        ar.addWidget(save_btn); ar.addWidget(reset_btn); ar.addWidget(clear_btn)
+        ar.addWidget(save_btn); ar.addWidget(clear_btn)
         ar.addWidget(info_lbl, 1)
+
+        def _show_info(msg: str) -> None:
+            from PySide6.QtCore import QTimer
+            info_lbl.setStyleSheet(f"color: {OK}; font-size: 11px;")
+            info_lbl.setText(msg)
+            QTimer.singleShot(4000, lambda: info_lbl.setText(""))
 
         def _save():
             patch_settings(setting_path, te.toPlainText())
-            info_lbl.setStyleSheet(f"color: {OK}; font-size: 11px;")
-            info_lbl.setText("Saved. Restart the host to apply.")
-
-        def _reset():
-            te.setPlainText(default)
-            patch_settings(setting_path, default)
-            info_lbl.setStyleSheet(f"color: {OK}; font-size: 11px;")
-            info_lbl.setText("Reset to default. Restart the host to apply.")
+            _show_info("Saved. Restart the host to apply.")
 
         def _clear():
             te.setPlainText("")
             patch_settings(setting_path, "")
-            info_lbl.setStyleSheet(f"color: {OK}; font-size: 11px;")
-            info_lbl.setText("Cleared. docgraph will use its built-in default. Restart the host.")
+            _show_info("Cleared. docgraph will use its built-in default. Restart the host.")
 
         save_btn.clicked.connect(_save)
-        reset_btn.clicked.connect(_reset)
         clear_btn.clicked.connect(_clear)
 
         editor_row = _row(row_label(label, help_text, setting_path, cli=cli_flag), te)
@@ -1274,7 +1747,6 @@ def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
 
     er, ar = _editor(
         "docgraph.llm.prompts.docstring",
-        _DOCSTRING_PROMPT_DEFAULT,
         "Docstring template",
         "Used by `docgraph index --llm-docstrings`.",
         "--llm-prompt-docstring-file",
@@ -1285,7 +1757,6 @@ def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     body.addWidget(_section_header("Wiki"))
     er, ar = _editor(
         "docgraph.llm.prompts.wiki",
-        _WIKI_PROMPT_DEFAULT,
         "Wiki output-format tail",
         "Used by `docgraph wiki`. Replaces the trailing output-format block.",
         "--llm-prompt-wiki-file",
