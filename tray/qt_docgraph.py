@@ -25,7 +25,7 @@ from typing import Callable
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit, QProgressBar, QComboBox,
+    QLineEdit, QProgressBar,
 )
 
 from tray.qt_widgets import row_label, Toggle, WrapLabel
@@ -1139,13 +1139,6 @@ class _RootRow(QFrame):
 
 # ── External-links section ───────────────────────────────────────────────
 
-_TTL_OPTIONS: list[tuple[str, float]] = [
-    ("1h",  1.0),
-    ("6h",  6.0),
-    ("24h", 24.0),
-    ("7d",  168.0),
-    ("30d", 720.0),
-]
 
 
 def _link_status_text(entry: dict) -> str:
@@ -1398,26 +1391,22 @@ class _LinkRow(QWidget):
         depth_edit.setToolTip("Crawl depth 1–5 (1 = seed page only, 5 = follow links 5 levels deep)")
         depth_edit.editingFinished.connect(self._on_depth_changed)
         self._depth = depth_edit
-        h.addWidget(QLabel("depth"))
+        h.addWidget(QLabel("Depth"))
         h.addWidget(depth_edit)
 
-        ttl_box = QComboBox()
-        for label, _ in _TTL_OPTIONS:
-            ttl_box.addItem(label)
-        cur_ttl = float(entry.get("ttl_hours", 24.0))
-        best = min(range(len(_TTL_OPTIONS)), key=lambda i: abs(_TTL_OPTIONS[i][1] - cur_ttl))
-        ttl_box.setCurrentIndex(best)
-        ttl_box.setToolTip("Hours before the URL is considered stale and re-fetched")
-        ttl_box.setFixedWidth(60)
-        ttl_box.currentIndexChanged.connect(lambda _: self._on_change())
-        self._ttl = ttl_box
-        h.addWidget(QLabel("TTL"))
-        h.addWidget(ttl_box)
+        ttl_edit = QLineEdit(str(int(float(entry.get("ttl_hours", 24)))))
+        ttl_edit.setFixedWidth(38)
+        ttl_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ttl_edit.setToolTip("Hours before the URL is considered stale and re-fetched")
+        ttl_edit.editingFinished.connect(self._on_ttl_changed)
+        self._ttl = ttl_edit
+        h.addWidget(QLabel("TTL h"))
+        h.addWidget(ttl_edit)
 
         self._status = QLabel(_link_status_text(entry))
-        self._status.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
-        self._status.setMinimumWidth(90)
-        h.addWidget(self._status, 1)
+        self._status.setStyleSheet(f"color: {FG_MUTE}; font-size: 10px;")
+        self._status.setMaximumWidth(80)
+        h.addWidget(self._status)
 
         rm = QPushButton("✕")
         rm.setFlat(True)
@@ -1437,15 +1426,27 @@ class _LinkRow(QWidget):
         self._depth.setText(str(v))
         self._on_change()
 
+    def _on_ttl_changed(self) -> None:
+        try:
+            v = max(1, int(float(self._ttl.text())))
+        except ValueError:
+            v = 24
+        self._ttl.setText(str(v))
+        self._on_change()
+
     def to_dict(self) -> dict:
         try:
             depth = max(1, min(5, int(self._depth.text())))
         except ValueError:
             depth = 1
+        try:
+            ttl_hours = max(1, int(float(self._ttl.text())))
+        except ValueError:
+            ttl_hours = 24
         return {
             "url": self._url.text().strip(),
             "depth": depth,
-            "ttl_hours": _TTL_OPTIONS[self._ttl.currentIndex()][1],
+            "ttl_hours": float(ttl_hours),
             "last_fetched": None,
             "page_count": None,
         }
