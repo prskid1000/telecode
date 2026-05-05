@@ -1329,7 +1329,9 @@ class _ExtraPathsSection(QWidget):
 
     def _on_add(self) -> None:
         self._append_row("")
-        self._commit()
+        # Don't commit — nothing to save until the user fills in the path.
+        # Committing here writes an empty repos.json, causing refresh() to
+        # see a stale mtime and rebuild away the new empty row.
 
     def _on_remove(self, row: "_ExtraPathRow") -> None:
         try:
@@ -1345,7 +1347,6 @@ class _ExtraPathsSection(QWidget):
         self._write_paths(paths)
         self._mtime = 0.0
         self._update_header(paths)
-        self._on_commit()
 
     def _update_header(self, paths: list[str]) -> None:
         n = len(paths)
