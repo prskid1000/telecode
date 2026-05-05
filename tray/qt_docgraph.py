@@ -1385,17 +1385,26 @@ class _LinkRow(QWidget):
         self._url.editingFinished.connect(self._on_change)
         h.addWidget(self._url, 2)
 
-        depth_edit = QLineEdit(str(max(1, int(entry.get("depth", 1)))))
-        depth_edit.setFixedWidth(56)
+        depth_edit = QLineEdit(str(max(0, int(entry.get("depth", 1)))))
+        depth_edit.setFixedWidth(40)
         depth_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        depth_edit.setToolTip("Crawl depth (1 = seed page only, higher = follow more link levels; same domain)")
+        depth_edit.setToolTip("Crawl depth (0 = seed page only, 1 = seed + its direct links, ...)")
         depth_edit.editingFinished.connect(self._on_depth_changed)
         self._depth = depth_edit
         h.addWidget(QLabel("Depth"))
         h.addWidget(depth_edit)
 
+        mp_edit = QLineEdit(str(max(0, int(entry.get("max_pages", 0)))))
+        mp_edit.setFixedWidth(46)
+        mp_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mp_edit.setToolTip("Max pages to fetch (0 = unlimited). Use this to cap crawls at a site that has many links.")
+        mp_edit.editingFinished.connect(self._on_max_pages_changed)
+        self._max_pages = mp_edit
+        h.addWidget(QLabel("Max"))
+        h.addWidget(mp_edit)
+
         ttl_edit = QLineEdit(str(int(float(entry.get("ttl_hours", 24)))))
-        ttl_edit.setFixedWidth(76)
+        ttl_edit.setFixedWidth(46)
         ttl_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ttl_edit.setToolTip("Hours before the URL is considered stale and re-fetched")
         ttl_edit.editingFinished.connect(self._on_ttl_changed)
@@ -1420,10 +1429,18 @@ class _LinkRow(QWidget):
 
     def _on_depth_changed(self) -> None:
         try:
-            v = max(1, int(self._depth.text()))
+            v = max(0, int(self._depth.text()))
         except ValueError:
-            v = 1
+            v = 0
         self._depth.setText(str(v))
+        self._on_change()
+
+    def _on_max_pages_changed(self) -> None:
+        try:
+            v = max(0, int(self._max_pages.text()))
+        except ValueError:
+            v = 0
+        self._max_pages.setText(str(v))
         self._on_change()
 
     def _on_ttl_changed(self) -> None:
@@ -1436,9 +1453,13 @@ class _LinkRow(QWidget):
 
     def to_dict(self) -> dict:
         try:
-            depth = max(1, int(self._depth.text()))
+            depth = max(0, int(self._depth.text()))
         except ValueError:
-            depth = 1
+            depth = 0
+        try:
+            max_pages = max(0, int(self._max_pages.text()))
+        except ValueError:
+            max_pages = 0
         try:
             ttl_hours = max(1, int(float(self._ttl.text())))
         except ValueError:
@@ -1446,6 +1467,7 @@ class _LinkRow(QWidget):
         return {
             "url": self._url.text().strip(),
             "depth": depth,
+            "max_pages": max_pages,
             "ttl_hours": float(ttl_hours),
             "last_fetched": None,
             "page_count": None,
