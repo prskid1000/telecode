@@ -1386,7 +1386,7 @@ class _LinkRow(QWidget):
         h.addWidget(self._url, 2)
 
         depth_edit = QLineEdit(str(max(1, min(5, int(entry.get("depth", 1))))))
-        depth_edit.setFixedWidth(28)
+        depth_edit.setFixedWidth(56)
         depth_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         depth_edit.setToolTip("Crawl depth 1–5 (1 = seed page only, 5 = follow links 5 levels deep)")
         depth_edit.editingFinished.connect(self._on_depth_changed)
@@ -1395,12 +1395,12 @@ class _LinkRow(QWidget):
         h.addWidget(depth_edit)
 
         ttl_edit = QLineEdit(str(int(float(entry.get("ttl_hours", 24)))))
-        ttl_edit.setFixedWidth(38)
+        ttl_edit.setFixedWidth(76)
         ttl_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ttl_edit.setToolTip("Hours before the URL is considered stale and re-fetched")
         ttl_edit.editingFinished.connect(self._on_ttl_changed)
         self._ttl = ttl_edit
-        h.addWidget(QLabel("TTL h"))
+        h.addWidget(QLabel("TTL"))
         h.addWidget(ttl_edit)
 
         self._status = QLabel(_link_status_text(entry))
