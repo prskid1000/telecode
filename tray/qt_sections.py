@@ -1510,65 +1510,144 @@ def _proxy_profiles_card() -> QFrame:
             return _row(row_label(label, hlp), host)
 
         def _managed_checklist(field: str, label: str, hlp: str) -> QWidget:
-            """2-column checkbox grid built from the live managed_tools registry."""
-            from PySide6.QtWidgets import QCheckBox
-            from PySide6.QtGui import QPalette, QColor
+            """Styled inject_managed selector matching the Managed Tools layout.
+
+            Groups tools by prefix (docgraph_* gets a DOCGRAPH header with
+            └─ Humanized labels + muted key below). Other tools render as flat
+            rows. Two-column layout using Toggle widgets, exactly like the
+            Managed section.
+            """
+            from collections import Counter
             from proxy import managed_tools as _mt
 
-            # live registry — populated by MCP bridge and docgraph bridge
             available = sorted(_mt._REGISTRY.keys())
             current_set = set(prof.get(field, []) or [])
-            # include tools already saved in THIS profile not yet in live registry
-            # (e.g. docgraph_* when bridge is offline)
             extras = sorted(current_set - set(available))
             all_names = available + extras
 
-            checks: dict[str, "QCheckBox"] = {}
+            toggles_map: dict[str, Toggle] = {}
 
-            def _commit_checks():
-                selected = [n for n in all_names if checks.get(n) and checks[n].isChecked()]
+            def _commit():
+                selected = [n for n in all_names if toggles_map.get(n) and toggles_map[n].isChecked()]
                 _patch(field, selected)
 
-            # Build palette once for all checkboxes — bypasses stylesheet cascade
-            _fg = QColor(FG)
-            _bg = QColor(BG_ELEV)
-            cb_palette = QPalette()
-            cb_palette.setColor(QPalette.ColorRole.WindowText, _fg)
-            cb_palette.setColor(QPalette.ColorRole.Window, _bg)
-            cb_palette.setColor(QPalette.ColorRole.Base, _bg)
-            cb_palette.setColor(QPalette.ColorRole.Text, _fg)
-            cb_palette.setColor(QPalette.ColorRole.ButtonText, _fg)
+            # Detect prefixes used ≥2 times → render as a group
+            prefix_counts: Counter = Counter()
+            for n in all_names:
+                if "_" in n:
+                    prefix_counts[n.split("_", 1)[0]] += 1
+            group_prefixes = {p for p, c in prefix_counts.items() if c >= 2}
 
-            COLS = 2
             inner = QWidget()
-            inner.setAutoFillBackground(True)
-            inner_pal = QPalette()
-            inner_pal.setColor(QPalette.ColorRole.Window, _bg)
-            inner.setPalette(inner_pal)
+            vl = QVBoxLayout(inner)
+            vl.setContentsMargins(10, 8, 10, 8)
+            vl.setSpacing(2)
 
-            grid = QGridLayout(inner)
-            grid.setContentsMargins(10, 8, 10, 8)
-            grid.setSpacing(4)
-            grid.setHorizontalSpacing(14)
+            def _make_cell(name: str, display: str, key_hint: str) -> QWidget:
+                """One (label-stack | toggle) cell."""
+                t = Toggle()
+                t.setChecked(name in current_set)
+                toggles_map[name] = t
 
-            for i, name in enumerate(all_names):
-                cb = QCheckBox(name)
-                cb.setPalette(cb_palette)
-                cb.setChecked(name in current_set)
-                cb.stateChanged.connect(lambda _: _commit_checks())
-                checks[name] = cb
-                grid.addWidget(cb, i // COLS, i % COLS)
+                def _on(_s: int, _n=name, _t=t):
+                    _commit()
+
+                t.stateChanged.connect(_on)
+
+                lbl = QLabel(display)
+                lbl.setStyleSheet(f"color: {FG}; font-size: 12px;")
+                sub = QLabel(key_hint)
+                sub.setStyleSheet(f"color: {FG_MUTE}; font-size: 10px;")
+
+                lstack = QWidget()
+                ll = QVBoxLayout(lstack)
+                ll.setContentsMargins(0, 0, 0, 0)
+                ll.setSpacing(0)
+                ll.addWidget(lbl)
+                ll.addWidget(sub)
+
+                cell = QWidget()
+                cl = QHBoxLayout(cell)
+                cl.setContentsMargins(0, 2, 0, 2)
+                cl.setSpacing(6)
+                cl.addWidget(lstack, 1)
+                cl.addWidget(_wrap_align(t, Qt.AlignmentFlag.AlignLeft), 0)
+                return cell
+
+            def _flush_pair_row(pair: list) -> None:
+                row_w = QWidget()
+                hl = QHBoxLayout(row_w)
+                hl.setContentsMargins(0, 0, 0, 0)
+                hl.setSpacing(14)
+                for cell in pair:
+                    hl.addWidget(cell, 1)
+                if len(pair) < 2:
+                    hl.addWidget(QWidget(), 1)
+                vl.addWidget(row_w)
+
+            seen_groups: set[str] = set()
+
+            # --- grouped pass: render each group as 2-col rows ---
+            for prefix in sorted(group_prefixes):
+                group_names = [n for n in all_names if n.startswith(prefix + "_")]
+                if not group_names:
+                    continue
+                seen_groups.add(prefix)
+
+                # group header + master toggle
+                hdr = QLabel(humanize(prefix).upper())
+                hdr.setStyleSheet(
+                    f"color: {FG}; font-size: 12px; font-weight: 600;"
+                    f" letter-spacing: 0.06em; padding-top: 6px;"
+                )
+                grp_t = Toggle()
+                grp_t.setChecked(any(n in current_set for n in group_names))
+
+                def _grp_on(_s: int, names=tuple(group_names), gt=grp_t):
+                    on = gt.isChecked()
+                    for cn in names:
+                        tw = toggles_map.get(cn)
+                        if tw and tw.isChecked() != on:
+                            tw.setChecked(on)
+
+                grp_t.stateChanged.connect(_grp_on)
+                hdr_row = QWidget()
+                hrl = QHBoxLayout(hdr_row)
+                hrl.setContentsMargins(0, 0, 0, 0)
+                hrl.addWidget(hdr, 1)
+                hrl.addWidget(_wrap_align(grp_t, Qt.AlignmentFlag.AlignLeft), 0)
+                vl.addWidget(hdr_row)
+
+                # child rows in pairs
+                pair: list = []
+                for name in group_names:
+                    tail = name[len(prefix) + 1:] if name.startswith(prefix + "_") else name
+                    cell = _make_cell(name, f"  └─ {humanize(tail)}", name)
+                    pair.append(cell)
+                    if len(pair) == 2:
+                        _flush_pair_row(pair)
+                        pair = []
+                if pair:
+                    _flush_pair_row(pair)
+
+            # --- flat tools (no group) ---
+            flat_names = [n for n in all_names
+                          if n.split("_", 1)[0] not in group_prefixes or "_" not in n]
+            pair = []
+            for name in flat_names:
+                cell = _make_cell(name, humanize(name), name)
+                pair.append(cell)
+                if len(pair) == 2:
+                    _flush_pair_row(pair)
+                    pair = []
+            if pair:
+                _flush_pair_row(pair)
 
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
             scroll.setFrameShape(QFrame.Shape.NoFrame)
-            scroll.viewport().setAutoFillBackground(True)
-            vp_pal = QPalette()
-            vp_pal.setColor(QPalette.ColorRole.Window, _bg)
-            scroll.viewport().setPalette(vp_pal)
             scroll.setWidget(inner)
-            rows = max(1, (len(all_names) + COLS - 1) // COLS)
-            scroll.setFixedHeight(min(320, max(60, rows * 28 + 20)))
+            scroll.setFixedHeight(min(380, max(80, inner.sizeHint().height() + 20)))
             scroll.setStyleSheet(
                 f"QScrollArea {{ background: {BG_ELEV}; border: 1px solid {BORDER};"
                 f" border-radius: 6px; }}"
