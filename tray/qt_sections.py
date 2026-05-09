@@ -1523,6 +1523,7 @@ def _proxy_profiles_card() -> QFrame:
 
             available = sorted(_mt._REGISTRY.keys())
             current_set = set(prof.get(field, []) or [])
+            # include tools already saved in THIS profile not yet in live registry
             extras = sorted(current_set - set(available))
             all_names = available + extras
 
