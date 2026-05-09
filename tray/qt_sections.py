@@ -1551,8 +1551,12 @@ def _proxy_profiles_card() -> QFrame:
 
             def _make_cell(name: str, display: str, key_hint: str) -> QWidget:
                 """One (label-stack | toggle) cell."""
+                from proxy.runtime_state import is_managed_enabled
+                globally_on = is_managed_enabled(name)
+
                 t = Toggle()
                 t.setChecked(name in current_set)
+                t.setEnabled(globally_on)   # greyed-out when disabled in Managed section
                 toggles_map[name] = t
 
                 def _on(_s: int, _n=name, _t=t):
@@ -1560,8 +1564,9 @@ def _proxy_profiles_card() -> QFrame:
 
                 t.stateChanged.connect(_on)
 
+                fg = FG if globally_on else FG_MUTE
                 lbl = QLabel(display)
-                lbl.setStyleSheet(f"color: {FG}; font-size: 12px;")
+                lbl.setStyleSheet(f"color: {fg}; font-size: 12px;")
                 sub = QLabel(key_hint)
                 sub.setStyleSheet(f"color: {FG_MUTE}; font-size: 10px;")
 
@@ -1601,13 +1606,17 @@ def _proxy_profiles_card() -> QFrame:
                 seen_groups.add(prefix)
 
                 # group header + master toggle
+                from proxy.runtime_state import is_managed_enabled as _ime
+                any_globally_on = any(_ime(n) for n in group_names)
                 hdr = QLabel(humanize(prefix).upper())
                 hdr.setStyleSheet(
-                    f"color: {FG}; font-size: 12px; font-weight: 600;"
+                    f"color: {FG if any_globally_on else FG_MUTE};"
+                    f" font-size: 12px; font-weight: 600;"
                     f" letter-spacing: 0.06em; padding-top: 6px;"
                 )
                 grp_t = Toggle()
                 grp_t.setChecked(any(n in current_set for n in group_names))
+                grp_t.setEnabled(any_globally_on)
 
                 def _grp_on(_s: int, names=tuple(group_names), gt=grp_t):
                     on = gt.isChecked()
