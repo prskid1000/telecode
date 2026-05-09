@@ -1510,15 +1510,16 @@ def _proxy_profiles_card() -> QFrame:
             return _row(row_label(label, hlp), host)
 
         def _managed_checklist(field: str, label: str, hlp: str) -> QWidget:
-            """3-column checkbox grid built from the live managed_tools registry."""
+            """2-column checkbox grid built from the live managed_tools registry."""
             from PySide6.QtWidgets import QCheckBox
+            from PySide6.QtGui import QPalette, QColor
             from proxy import managed_tools as _mt
 
             # live registry — populated by MCP bridge and docgraph bridge
             available = sorted(_mt._REGISTRY.keys())
             current_set = set(prof.get(field, []) or [])
-            # include any tools already saved in THIS profile that aren't in
-            # the live registry yet (e.g. docgraph_* when bridge is offline)
+            # include tools already saved in THIS profile not yet in live registry
+            # (e.g. docgraph_* when bridge is offline)
             extras = sorted(current_set - set(available))
             all_names = available + extras
 
@@ -1528,16 +1529,31 @@ def _proxy_profiles_card() -> QFrame:
                 selected = [n for n in all_names if checks.get(n) and checks[n].isChecked()]
                 _patch(field, selected)
 
+            # Build palette once for all checkboxes — bypasses stylesheet cascade
+            _fg = QColor(FG)
+            _bg = QColor(BG_ELEV)
+            cb_palette = QPalette()
+            cb_palette.setColor(QPalette.ColorRole.WindowText, _fg)
+            cb_palette.setColor(QPalette.ColorRole.Window, _bg)
+            cb_palette.setColor(QPalette.ColorRole.Base, _bg)
+            cb_palette.setColor(QPalette.ColorRole.Text, _fg)
+            cb_palette.setColor(QPalette.ColorRole.ButtonText, _fg)
+
             COLS = 2
             inner = QWidget()
+            inner.setAutoFillBackground(True)
+            inner_pal = QPalette()
+            inner_pal.setColor(QPalette.ColorRole.Window, _bg)
+            inner.setPalette(inner_pal)
+
             grid = QGridLayout(inner)
             grid.setContentsMargins(10, 8, 10, 8)
-            grid.setSpacing(2)
+            grid.setSpacing(4)
             grid.setHorizontalSpacing(14)
 
             for i, name in enumerate(all_names):
                 cb = QCheckBox(name)
-                cb.setStyleSheet(f"color: {FG};")
+                cb.setPalette(cb_palette)
                 cb.setChecked(name in current_set)
                 cb.stateChanged.connect(lambda _: _commit_checks())
                 checks[name] = cb
@@ -1546,9 +1562,13 @@ def _proxy_profiles_card() -> QFrame:
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
             scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.viewport().setAutoFillBackground(True)
+            vp_pal = QPalette()
+            vp_pal.setColor(QPalette.ColorRole.Window, _bg)
+            scroll.viewport().setPalette(vp_pal)
             scroll.setWidget(inner)
             rows = max(1, (len(all_names) + COLS - 1) // COLS)
-            scroll.setFixedHeight(min(320, max(60, rows * 26 + 20)))
+            scroll.setFixedHeight(min(320, max(60, rows * 28 + 20)))
             scroll.setStyleSheet(
                 f"QScrollArea {{ background: {BG_ELEV}; border: 1px solid {BORDER};"
                 f" border-radius: 6px; }}"
