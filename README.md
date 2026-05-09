@@ -114,7 +114,7 @@ in one process.
     ⬡/⬢ Llama ▸ status + Auto Start + Load / Unload / Restart
     ⬡/⬢ Proxy ▸ status + Enabled + Debug Dumps
     ⬡/⬢ MCP   ▸ status + Enabled
-    ⬢   Bot   ▸ sessions / group / allowed users
+    ⬡/⬢ Bot   ▸ Start / Stop / Restart polling
     ─
     Open Settings Window   (default left-click)
     ─
@@ -122,8 +122,8 @@ in one process.
     ```
 - **Left-click** the tray icon → toggle a frameless dark-themed
   **settings window** with:
-  - Sidebar: Status / llama.cpp / Proxy / MCP / Managed / Telegram /
-    Voice / Computer / Sessions / **Requests** / **Logs**
+  - Sidebar: Status / llama.cpp / Models / Proxy / MCP / Managed / DocGraph / Tools / Telegram /
+    Voice / Computer / Sessions / Requests / Logs / Raw
   - **Requests** — live list of recent proxy round-trips (status-colored)
     with a foldable JSON tree inspector on the right.
   - **Logs** — built-in tailing viewer with syntax highlighting for
@@ -407,6 +407,8 @@ All options live in `settings.json`. See [`settings.example.json`](settings.exam
 | `bot_token` | Token from @BotFather |
 | `group_id` | Forum supergroup ID (starts with `-100`) |
 | `allowed_user_ids` | List of Telegram user IDs allowed to use the bot. Empty = open to all |
+| `auto_start` | Start Telegram polling automatically at launch (default `false` — lets Telecode boot offline) |
+| `auto_restart` | Re-start polling if the updater stops unexpectedly (default `true`) |
 
 ### `paths` — state storage
 
@@ -424,6 +426,7 @@ All options live in `settings.json`. See [`settings.example.json`](settings.exam
 | `idle_timeout_sec` | Auto-stop a session after N idle seconds (`0` = off) |
 | `idle_sec` | PTY idle-flush threshold — seconds of silence before emitting buffered output (default `2.0`). Per-tool override: `tools.<key>.streaming.idle_sec` |
 | `max_wait_sec` | PTY max-wait flush — upper bound on how long to buffer a continuous stream (default `5.0`). Per-tool override: `tools.<key>.streaming.max_wait_sec` |
+| `dump_raw_pty` | Write raw PTY bytes to `data/logs/pty_<cmd>_<ts>.bin` + `.txt` for diagnosing missing-output issues. Restart after toggling. |
 
 Short-output shells like `shell` or `powershell` can use tighter values (e.g. `0.5` / `2.5`) so output appears promptly; TUIs like Claude Code benefit from the defaults so spinners/status lines don't spam.
 
@@ -501,6 +504,7 @@ Sits between Claude Code (or any Anthropic-API client) and LM Studio / Ollama / 
 | `ping_interval` | Seconds between `event: ping` heartbeats sent to the client during long streams (default `10`). `: keepalive` SSE comments still go out every 2s. |
 | `max_roundtrips` | Max intercept round-trips per request before giving up (default `15`). Each ToolSearch / managed tool / auto-load / unloaded-guard consumes one. |
 | `tool_search` | Split incoming tools into core (always forwarded) + deferred (searchable via ToolSearch) |
+| `sort_tools` | Sort `body.tools` alphabetically before forwarding — stabilises the prompt prefix for cache-friendliness |
 | `strip_reminders` | Drop `<system-reminder>` blocks from messages |
 | `auto_load_tools` | Auto-load a deferred tool's schema the first time the model calls it blindly |
 | `lift_tool_result_images` | Lift images out of array-form `tool_result` content — LM Studio workaround |

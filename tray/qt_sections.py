@@ -1509,8 +1509,50 @@ def _proxy_profiles_card() -> QFrame:
 
             return _row(row_label(label, hlp), host)
 
-        form_layout.addWidget(_list_editor("inject_managed", "Inject Managed",
-                                            "Managed tool names to inject for this client."))
+        def _managed_checklist(field: str, label: str, hlp: str) -> QWidget:
+            """3-column checkbox grid built from the live managed_tools registry."""
+            from PySide6.QtWidgets import QCheckBox
+            from proxy import managed_tools as _mt
+
+            available = sorted(_mt._REGISTRY.keys())
+            current_set = set(prof.get(field, []) or [])
+            custom = sorted(current_set - set(available))
+            all_names = available + custom
+
+            checks: dict[str, "QCheckBox"] = {}
+
+            def _commit_checks():
+                selected = [n for n in all_names if checks.get(n) and checks[n].isChecked()]
+                _patch(field, selected)
+
+            COLS = 3
+            inner = QWidget()
+            grid = QGridLayout(inner)
+            grid.setContentsMargins(10, 8, 10, 8)
+            grid.setSpacing(2)
+            grid.setHorizontalSpacing(14)
+
+            for i, name in enumerate(all_names):
+                cb = QCheckBox(name)
+                cb.setChecked(name in current_set)
+                cb.stateChanged.connect(lambda _: _commit_checks())
+                checks[name] = cb
+                grid.addWidget(cb, i // COLS, i % COLS)
+
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setWidget(inner)
+            rows = max(1, (len(all_names) + COLS - 1) // COLS)
+            scroll.setFixedHeight(min(230, max(60, rows * 26 + 20)))
+            scroll.setStyleSheet(
+                f"QScrollArea {{ background: {BG_ELEV}; border: 1px solid {BORDER};"
+                f" border-radius: 6px; }}"
+            )
+            return _row(row_label(label, hlp), scroll)
+
+        form_layout.addWidget(_managed_checklist("inject_managed", "Inject Managed",
+                                                  "Managed tools to inject for this client."))
         form_layout.addWidget(_list_editor("core_tools", "Core Tools (override)",
                                             "Override the global proxy.core_tools for this client. Empty = inherit."))
         form_layout.addWidget(_list_editor("strip_tool_names", "Strip Tool Names",
@@ -2019,6 +2061,25 @@ def _telegram(window) -> QWidget:
     cb.addWidget(_number_row("capture.image_interval", "Image Interval", 1, 300, 1, 0, "s"))
     cb.addWidget(_number_row("capture.video_interval", "Video Chunk",    10, 600, 10, 0, "s"))
     layout.addWidget(cap_card)
+
+    hb_card, hb = _card("Heartbeat Scheduler",
+                         "heartbeat.* — periodic agent job firing from HEARTBEAT.md entries")
+    hb.addWidget(_toggle_row("heartbeat.enabled", "Enabled",
+                              "Run the heartbeat tick loop. When off, no HEARTBEAT.md entries fire."))
+    hb.addWidget(_number_row("heartbeat.tick_seconds", "Tick Interval",
+                              10, 3600, 10, 0, "s",
+                              "How often the scheduler checks each agent's HEARTBEAT.md for due entries."))
+    hb.addWidget(_number_row("heartbeat.ephemeral_ttl_seconds", "Ephemeral TTL",
+                              60, 86400, 60, 0, "s",
+                              "Seconds after which fired ephemeral entries are auto-deleted."))
+    hb.addWidget(_number_row("heartbeat.max_concurrent_fires", "Max Concurrent",
+                              1, 20, 1, 0, "",
+                              "Maximum heartbeat entries allowed to fire simultaneously per tick."))
+    hb.addWidget(_number_row("heartbeat.min_fire_gap_seconds", "Min Fire Gap",
+                              0, 3600, 10, 0, "s",
+                              "Minimum seconds between consecutive fires of the same heartbeat entry."))
+    layout.addWidget(hb_card)
+
     layout.addStretch(1)
     return scroll
 

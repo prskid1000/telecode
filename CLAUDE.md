@@ -51,7 +51,8 @@ Heartbeat scheduler (off by default, settings.heartbeat.enabled=true):
 |---|---|
 | `settings.json` | Only config source. |
 | `config.py` | Read/write accessors (always functions for hot-reload). `store_path` / `logs_dir` resolve relative to the `settings.json` directory. |
-| `main.py` | App startup, handlers, `set_my_commands`. No background STT poll. |
+| `main.py` | App startup, handlers. Runs `asyncio.run(_async_main())` — no `run_polling()`. Telegram is optional: `telegram.auto_start: false` lets the process boot offline. |
+| `bot/supervisor.py` | `BotSupervisor` — mirrors `HostSupervisor`; owns `app.start()` / `updater.start_polling()` / `updater.stop()` / `app.stop()` lifecycle + optional auto-restart loop. Singleton via `get_supervisor()` / `set_supervisor()`. |
 | `store.py` | Topics JSON. |
 | `sessions/terminal.py` | PTY + pyte + snapshot diff + timers. |
 | `sessions/screen.py` | Image capture, video recording, window enumeration. |
@@ -139,10 +140,12 @@ If a tracked subprocess refuses to die: check `tasklist /FI "IMAGENAME eq llama-
 
 Qt tray + settings window in a daemon thread inside the bot process. No separate tray process, no webview, no PyInstaller bundle.
 
-- `main.py:_post_init` → `tray.app.start_tray_in_thread(app, loop)`.
+- `main.py` → `tray.app.start_tray_in_thread(app, loop)`.
 - Sync actions run on the tray thread; async use `asyncio.run_coroutine_threadsafe(coro, bot_loop)`.
-- Quit → `app.stop_running()` on the loop → `run_polling` returns → clean exit.
+- Quit → `app.bot_data["_request_stop"]()` sets `_STOP_EVENT` on the asyncio loop → clean shutdown sequence.
 - Right-click submenus refreshed every 2s; toggles persist via `patch_settings` (atomic write + `config.reload()`). Managed/MCP-tool toggles → `data/runtime-overrides.json`; last-active llama model → `data/llama-state.json`.
+- **Telegram section** includes a Bot Control card (Start / Stop / Restart `BotSupervisor`, status pill, auto_start / auto_restart toggles) plus Paths / Streaming / Capture / **Heartbeat Scheduler** cards.
+- **Proxy → Client Profiles**: `inject_managed` rendered as a 3-column checkbox grid built from the live `managed_tools._REGISTRY` — no free-text entry needed. `core_tools` and `strip_tool_names` remain free-text lists.
 
 ---
 
@@ -280,8 +283,10 @@ FastMCP streamable HTTP, port 1236. Drop-in `tools/` / `resources/` / `prompts/`
 
 | Symptom | What to check |
 |---|---|
+| Bot won't start (offline boot) | `telegram.auto_start: false` means the bot doesn't poll at launch — start manually from the tray Telegram section or set `auto_start: true`. |
 | Bot silent | Token, group id, bot admin, Topics on. Also `data/logs/telecode.log.prev`. |
-| Bot stops after a while | `data/logs/telecode.log.prev` — crash handlers route exceptions there. |
+| Bot stops after a while | `data/logs/telecode.log.prev` — crash handlers route exceptions there. Set `telegram.auto_restart: true` to re-start automatically. |
+| Heartbeat not firing | `heartbeat.enabled` must be `true`; check `data/logs/telecode.log` for scheduler start message. |
 | "No session for thread" | `/new` again; store may be missing mapping. |
 | CLI exits at once | Missing API key, wrong `startup_cmd`, binary not on PATH. |
 | Stuck on prompt | `/key enter` or `/key y`. |

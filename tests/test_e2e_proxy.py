@@ -847,6 +847,407 @@ async def t_supervisor_ensure_same_model_fast(supervisor) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════
+# DocGraph MCP (direct calls to host + proxy injection check)
+# ══════════════════════════════════════════════════════════════════════
+
+_DG_ROOT_SLUG: str | None = None  # set by t_docgraph_list_roots
+
+
+def _dg_url() -> str:
+    from docgraph import config as dg_cfg
+    return f"http://{dg_cfg.host_host()}:{dg_cfg.host_port()}/mcp"
+
+
+async def _dg_call(tool_name: str, args: dict, timeout_sec: float = 30.0) -> tuple[bool, str]:
+    """Call a docgraph MCP tool. Returns (ok, text_output)."""
+    try:
+        from contextlib import AsyncExitStack
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamablehttp_client
+
+        async def _inner():
+            stack = AsyncExitStack()
+            transport = await stack.enter_async_context(streamablehttp_client(_dg_url()))
+            read, write, *_ = transport
+            sess = await stack.enter_async_context(ClientSession(read, write))
+            await sess.initialize()
+            try:
+                result = await sess.call_tool(tool_name, args)
+                blocks = getattr(result, "content", None) or []
+                parts = []
+                for b in blocks:
+                    text = getattr(b, "text", None)
+                    if text is not None:
+                        parts.append(text)
+                    else:
+                        parts.append(str(b))
+                return "\n".join(parts)
+            finally:
+                await stack.aclose()
+
+        text = await asyncio.wait_for(_inner(), timeout=timeout_sec)
+        return True, text
+    except asyncio.TimeoutError:
+        return False, f"timeout after {timeout_sec}s"
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+
+
+async def t_docgraph_host_reachable() -> bool:
+    """Probe /api/roots — fail early if host is down. Returns True if alive."""
+    name = "docgraph: host reachable"
+    from docgraph import config as dg_cfg
+    url = f"http://{dg_cfg.host_host()}:{dg_cfg.host_port()}/api/roots"
+    try:
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout) as s:
+            async with s.get(url) as r:
+                if r.status == 200:
+                    body = await r.json()
+                    roots = body if isinstance(body, list) else body.get("roots", [])
+                    RES.ok(name + f"  (port {dg_cfg.host_port()}, {len(roots)} root(s))")
+                    return True
+                text = await r.text()
+                RES.fail(name, f"HTTP {r.status}: {text[:120]}")
+                return False
+    except Exception as exc:
+        RES.fail(name, f"connection refused ({dg_cfg.host_port()}): {exc}")
+        return False
+
+
+async def t_docgraph_list_tools() -> None:
+    name = "docgraph: list_tools → expected 15 tools"
+    try:
+        from contextlib import AsyncExitStack
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamablehttp_client
+
+        stack = AsyncExitStack()
+        transport = await stack.enter_async_context(streamablehttp_client(_dg_url()))
+        read, write, *_ = transport
+        sess = await stack.enter_async_context(ClientSession(read, write))
+        await sess.initialize()
+        try:
+            listed = await asyncio.wait_for(sess.list_tools(), timeout=10)
+            tools = getattr(listed, "tools", listed)
+            names = {getattr(t, "name", None) or t.get("name", "") for t in tools}
+        finally:
+            await stack.aclose()
+    except Exception as exc:
+        RES.fail(name, f"{type(exc).__name__}: {exc}"); return
+
+    expected = {
+        "list_roots", "search", "definition", "references", "call_graph",
+        "file_map", "neighborhood", "explore", "impact_of", "test_impact",
+        "git_changes", "git_blame", "git_recent", "rules_for", "cypher",
+    }
+    missing = expected - names
+    if missing:
+        RES.fail(name, f"missing: {sorted(missing)[:5]}  (got: {sorted(names)[:5]})"); return
+    RES.ok(name + f"  ({len(names)} tools)")
+
+
+async def t_docgraph_list_roots() -> None:
+    global _DG_ROOT_SLUG
+    name = "docgraph: list_roots → slug + path fields"
+    ok, text = await _dg_call("list_roots", {})
+    if not ok:
+        RES.fail(name, text); return
+    if not text.strip():
+        RES.fail(name, "empty response"); return
+
+    # Response may be JSON or markdown; try to parse the slug out of it.
+    slug = None
+    try:
+        data = json.loads(text)
+        if isinstance(data, list) and data:
+            first = data[0]
+            slug = (first.get("slug") or first.get("id") or first.get("name")
+                    if isinstance(first, dict) else None)
+        elif isinstance(data, dict):
+            roots = data.get("roots") or data.get("data") or []
+            if roots:
+                slug = roots[0].get("slug") or roots[0].get("id")
+    except (json.JSONDecodeError, AttributeError):
+        pass
+
+    if slug is None:
+        # Fallback: compute from config
+        from docgraph.config import slug_for_path, root_paths
+        paths = root_paths()
+        if paths:
+            slug = slug_for_path(paths[0])
+
+    if slug is None:
+        RES.fail(name, f"could not extract slug; raw={text[:200]}"); return
+
+    _DG_ROOT_SLUG = slug
+    # Verify at least one configured root path appears in the response
+    from docgraph.config import root_paths
+    paths = root_paths()
+    has_root = any(
+        p.replace("\\", "/").split("/")[-1].lower() in text.lower()
+        for p in paths
+    ) if paths else True
+    if not has_root:
+        RES.fail(name, f"none of {paths} mentioned in response: {text[:200]}"); return
+    RES.ok(name + f"  (slug={slug!r}, {len(paths)} configured root(s))")
+
+
+async def t_docgraph_search() -> None:
+    name = "docgraph: search('config') → non-empty structured results"
+    if not _DG_ROOT_SLUG:
+        RES.fail(name, "no root slug — list_roots must succeed first"); return
+    ok, text = await _dg_call("search", {"query": "config", "root": _DG_ROOT_SLUG})
+    if not ok:
+        RES.fail(name, text); return
+    if not text.strip():
+        RES.fail(name, "empty results"); return
+    if len(text) < 20:
+        RES.fail(name, f"suspiciously short: {text!r}"); return
+    # Results should mention files, symbols, or scores
+    has_content = any(
+        kw in text.lower()
+        for kw in ("file", "name", ".py", "path", "score", "symbol", "result", "line", "def ", "class ")
+    )
+    if not has_content:
+        RES.fail(name, f"no recognizable result fields: {text[:300]}"); return
+    RES.ok(name + f"  ({len(text.splitlines())} lines)")
+
+
+async def t_docgraph_definition() -> None:
+    name = "docgraph: definition('config') → file + location"
+    if not _DG_ROOT_SLUG:
+        RES.fail(name, "no root slug"); return
+    # Try a symbol that's likely in any Python project
+    ok, text = await _dg_call("definition", {"name": "config", "root": _DG_ROOT_SLUG})
+    if not ok:
+        RES.fail(name, text); return
+    if not text.strip():
+        RES.fail(name, "empty response"); return
+    has_location = any(
+        kw in text.lower()
+        for kw in ("line", "file", ".py", "path", "defined", "module", "location", "source")
+    )
+    if not has_location:
+        RES.fail(name, f"no location info: {text[:300]}"); return
+    RES.ok(name + f"  ({len(text)} chars)")
+
+
+async def t_docgraph_references() -> None:
+    name = "docgraph: references('config') → callers/usages"
+    if not _DG_ROOT_SLUG:
+        RES.fail(name, "no root slug"); return
+    ok, text = await _dg_call("references", {"name": "config", "root": _DG_ROOT_SLUG})
+    if not ok:
+        RES.fail(name, text); return
+    if not text.strip():
+        RES.fail(name, "empty response"); return
+    RES.ok(name + f"  ({len(text)} chars)")
+
+
+async def t_docgraph_call_graph() -> None:
+    name = "docgraph: call_graph('config') → callers/callees"
+    if not _DG_ROOT_SLUG:
+        RES.fail(name, "no root slug"); return
+    ok, text = await _dg_call("call_graph", {"name": "config", "root": _DG_ROOT_SLUG})
+    if not ok:
+        RES.fail(name, text); return
+    if not text.strip():
+        RES.fail(name, "empty response"); return
+    RES.ok(name + f"  ({len(text)} chars)")
+
+
+async def t_docgraph_file_map() -> None:
+    name = "docgraph: file_map → directory tree"
+    if not _DG_ROOT_SLUG:
+        RES.fail(name, "no root slug"); return
+    ok, text = await _dg_call("file_map", {"root": _DG_ROOT_SLUG})
+    if not ok:
+        RES.fail(name, text); return
+    if not text.strip():
+        RES.fail(name, "empty response"); return
+    # Should look like a tree or JSON with file paths
+    has_files = any(
+        kw in text
+        for kw in (".py", ".json", ".md", "/", "\\", "file", "dir")
+    )
+    if not has_files:
+        RES.fail(name, f"no file paths in tree: {text[:200]}"); return
+    RES.ok(name + f"  ({len(text.splitlines())} lines)")
+
+
+async def t_docgraph_neighborhood() -> None:
+    name = "docgraph: neighborhood('config') → related symbols"
+    if not _DG_ROOT_SLUG:
+        RES.fail(name, "no root slug"); return
+    ok, text = await _dg_call("neighborhood", {"name": "config", "root": _DG_ROOT_SLUG})
+    if not ok:
+        RES.fail(name, text); return
+    if not text.strip():
+        RES.fail(name, "empty response"); return
+    RES.ok(name + f"  ({len(text)} chars)")
+
+
+async def t_docgraph_explore() -> None:
+    name = "docgraph: explore → codebase overview"
+    if not _DG_ROOT_SLUG:
+        RES.fail(name, "no root slug"); return
+    ok, text = await _dg_call("explore", {"root": _DG_ROOT_SLUG}, timeout_sec=45)
+    if not ok:
+        RES.fail(name, text); return
+    if not text.strip():
+        RES.fail(name, "empty response"); return
+    if len(text) < 30:
+        RES.fail(name, f"suspiciously short: {text!r}"); return
+    RES.ok(name + f"  ({len(text)} chars)")
+
+
+async def t_docgraph_impact_of() -> None:
+    name = "docgraph: impact_of('config.py') → downstream dependents"
+    if not _DG_ROOT_SLUG:
+        RES.fail(name, "no root slug"); return
+    ok, text = await _dg_call("impact_of", {"file": "config.py", "root": _DG_ROOT_SLUG})
+    if not ok:
+        RES.fail(name, text); return
+    if not text.strip():
+        RES.fail(name, "empty response"); return
+    RES.ok(name + f"  ({len(text)} chars)")
+
+
+async def t_docgraph_test_impact() -> None:
+    name = "docgraph: test_impact('config.py') → affected tests"
+    if not _DG_ROOT_SLUG:
+        RES.fail(name, "no root slug"); return
+    ok, text = await _dg_call("test_impact", {"file": "config.py", "root": _DG_ROOT_SLUG})
+    if not ok:
+        RES.fail(name, text); return
+    # test_impact may return empty if no tests found — that's a valid result
+    RES.ok(name + f"  ({len(text)} chars)")
+
+
+async def t_docgraph_git_recent() -> None:
+    name = "docgraph: git_recent → commits with hash + message"
+    if not _DG_ROOT_SLUG:
+        RES.fail(name, "no root slug"); return
+    ok, text = await _dg_call("git_recent", {"root": _DG_ROOT_SLUG})
+    if not ok:
+        RES.fail(name, text); return
+    if not text.strip():
+        RES.fail(name, "empty response — no git history?"); return
+    # Expect at least one commit hash (7+ hex chars) or commit-like fields
+    import re
+    has_hash = bool(re.search(r'\b[0-9a-f]{7,40}\b', text))
+    has_commit_fields = any(
+        kw in text.lower()
+        for kw in ("hash", "message", "commit", "author", "date", "sha")
+    )
+    if not has_hash and not has_commit_fields:
+        RES.fail(name, f"no commit data found: {text[:200]}"); return
+    lines = text.splitlines()
+    RES.ok(name + f"  ({len(lines)} lines, has_hash={has_hash})")
+
+
+async def t_docgraph_git_blame() -> None:
+    name = "docgraph: git_blame('config.py') → line-level authorship"
+    if not _DG_ROOT_SLUG:
+        RES.fail(name, "no root slug"); return
+    ok, text = await _dg_call("git_blame", {"file": "config.py", "root": _DG_ROOT_SLUG})
+    if not ok:
+        RES.fail(name, text); return
+    if not text.strip():
+        RES.fail(name, "empty response"); return
+    # Blame output should have author or line number references
+    has_blame = any(
+        kw in text.lower()
+        for kw in ("author", "line", "commit", "date", "hash", "sha", "^")
+    )
+    if not has_blame:
+        RES.fail(name, f"no blame fields: {text[:200]}"); return
+    RES.ok(name + f"  ({len(text.splitlines())} lines)")
+
+
+async def t_docgraph_git_changes() -> None:
+    name = "docgraph: git_changes → recent file modifications"
+    if not _DG_ROOT_SLUG:
+        RES.fail(name, "no root slug"); return
+    ok, text = await _dg_call("git_changes", {"root": _DG_ROOT_SLUG})
+    if not ok:
+        RES.fail(name, text); return
+    if not text.strip():
+        # Some repos have no staged/unstaged changes — not an error
+        RES.ok(name + "  (no pending changes)")
+        return
+    RES.ok(name + f"  ({len(text.splitlines())} lines)")
+
+
+async def t_docgraph_rules_for() -> None:
+    name = "docgraph: rules_for('config.py') → coding rules"
+    if not _DG_ROOT_SLUG:
+        RES.fail(name, "no root slug"); return
+    ok, text = await _dg_call("rules_for", {"file": "config.py", "root": _DG_ROOT_SLUG})
+    if not ok:
+        RES.fail(name, text); return
+    # rules_for may return empty if no rules configured — valid
+    RES.ok(name + f"  ({len(text)} chars)")
+
+
+async def t_docgraph_cypher() -> None:
+    name = "docgraph: cypher (MATCH n RETURN count) → node count > 0"
+    if not _DG_ROOT_SLUG:
+        RES.fail(name, "no root slug"); return
+    query = "MATCH (n) RETURN count(n) AS total"
+    ok, text = await _dg_call("cypher", {"query": query, "root": _DG_ROOT_SLUG})
+    if not ok:
+        RES.fail(name, text); return
+    if not text.strip():
+        RES.fail(name, "empty response"); return
+    import re
+    # Response should contain a number
+    nums = re.findall(r'\d+', text)
+    if not nums:
+        RES.fail(name, f"no numeric result: {text[:200]}"); return
+    total = int(nums[0])
+    if total == 0:
+        RES.fail(name, f"graph has 0 nodes — not indexed? raw={text[:100]}"); return
+    RES.ok(name + f"  (total={total} nodes)")
+
+
+async def t_docgraph_tools_in_managed_registry() -> None:
+    name = "docgraph: tools registered in managed_tools registry"
+    from proxy import managed_tools
+    reg = managed_tools._REGISTRY
+    dg_tools = [k for k in reg if k.startswith("docgraph_")]
+    expected_subset = ["docgraph_search", "docgraph_list_roots", "docgraph_definition",
+                       "docgraph_git_recent", "docgraph_cypher"]
+    missing = [t for t in expected_subset if t not in reg]
+    if missing:
+        RES.fail(name, f"not in registry: {missing}  (bridge ran? host alive?)"); return
+    RES.ok(name + f"  ({len(dg_tools)} docgraph_* tools)")
+
+
+async def t_docgraph_tools_in_cc_profile_config() -> None:
+    name = "docgraph: inject_managed in claude-code profile"
+    import config as app_config
+    profiles = app_config.get_nested("proxy.client_profiles", []) or []
+    cc = next((p for p in profiles if p.get("name") == "claude-code"), None)
+    if cc is None:
+        RES.fail(name, "no claude-code profile found"); return
+    inject = set(cc.get("inject_managed", []))
+    expected = {
+        "docgraph_search", "docgraph_list_roots", "docgraph_definition",
+        "docgraph_references", "docgraph_call_graph", "docgraph_file_map",
+        "docgraph_neighborhood", "docgraph_explore", "docgraph_impact_of",
+        "docgraph_test_impact", "docgraph_git_changes", "docgraph_git_blame",
+        "docgraph_git_recent", "docgraph_rules_for", "docgraph_cypher",
+    }
+    missing = expected - inject
+    if missing:
+        RES.fail(name, f"not in inject_managed: {sorted(missing)[:5]}"); return
+    RES.ok(name + f"  ({len(inject)} managed tools in profile, all 15 docgraph tools present)")
+
+
+# ══════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════
 
@@ -928,6 +1329,30 @@ async def main() -> int:
         await t_supervisor_ensure_same_model_fast(supervisor)
         await t_supervisor_unload_load(supervisor)
         await t_supervisor_restart(supervisor)
+
+    print("\n── DocGraph MCP ──")
+    dg_alive = await t_docgraph_host_reachable()
+    if dg_alive:
+        await t_docgraph_list_tools()
+        await t_docgraph_list_roots()      # sets _DG_ROOT_SLUG
+        await t_docgraph_search()
+        await t_docgraph_definition()
+        await t_docgraph_references()
+        await t_docgraph_call_graph()
+        await t_docgraph_file_map()
+        await t_docgraph_neighborhood()
+        await t_docgraph_explore()
+        await t_docgraph_impact_of()
+        await t_docgraph_test_impact()
+        await t_docgraph_git_recent()
+        await t_docgraph_git_blame()
+        await t_docgraph_git_changes()
+        await t_docgraph_rules_for()
+        await t_docgraph_cypher()
+    else:
+        print("  SKIP  DocGraph tool tests (host not reachable)")
+    await t_docgraph_tools_in_managed_registry()
+    await t_docgraph_tools_in_cc_profile_config()
 
     code = RES.summary()
 

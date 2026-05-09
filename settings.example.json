@@ -2,7 +2,9 @@
   "telegram": {
     "bot_token": "YOUR_BOT_TOKEN",
     "group_id": -100YOUR_GROUP_ID,
-    "allowed_user_ids": []
+    "allowed_user_ids": [],
+    "auto_start": false,
+    "auto_restart": true
   },
 
   "paths": {
@@ -15,7 +17,8 @@
     "max_message_length": 3800,
     "idle_timeout_sec": 1800,
     "idle_sec": 2.0,
-    "max_wait_sec": 5.0
+    "max_wait_sec": 5.0,
+    "dump_raw_pty": false
   },
 
   "voice": {
@@ -29,6 +32,14 @@
   "capture": {
     "image_interval": 15,
     "video_interval": 60
+  },
+
+  "heartbeat": {
+    "enabled": false,
+    "tick_seconds": 60,
+    "ephemeral_ttl_seconds": 3600,
+    "max_concurrent_fires": 2,
+    "min_fire_gap_seconds": 60
   },
 
   "mcp_server": {
@@ -222,6 +233,7 @@
       "stop": [],
       "context_overflow": "truncate_middle",
       "disable_thinking": false,
+      "drop_prior_thinking": true,
 
       "reasoning": {
         "enabled": true,
@@ -256,6 +268,7 @@
     "tool_search": false,
     "strip_reminders": false,
     "auto_load_tools": false,
+    "sort_tools": false,
     "location": "",
     "max_roundtrips": 15,
     "ping_interval": 10,
