@@ -111,6 +111,8 @@ def telegram_group_id() -> int:      return int(_raw["telegram"]["group_id"])
 def allowed_user_ids()  -> set[int]:
     ids = _raw["telegram"].get("allowed_user_ids", [])
     return set(ids) if ids else set()
+def telegram_auto_start()   -> bool: return bool(_raw["telegram"].get("auto_start",   True))
+def telegram_auto_restart() -> bool: return bool(_raw["telegram"].get("auto_restart", True))
 
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
