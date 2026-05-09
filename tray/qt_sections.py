@@ -1532,9 +1532,8 @@ def _proxy_profiles_card() -> QFrame:
                 selected = [n for n in all_names if checks.get(n) and checks[n].isChecked()]
                 _patch(field, selected)
 
-            COLS = 3
+            COLS = 2
             inner = QWidget()
-            inner.setStyleSheet(f"QCheckBox {{ color: {FG}; background: transparent; }}")
             grid = QGridLayout(inner)
             grid.setContentsMargins(10, 8, 10, 8)
             grid.setSpacing(2)
@@ -1542,6 +1541,7 @@ def _proxy_profiles_card() -> QFrame:
 
             for i, name in enumerate(all_names):
                 cb = QCheckBox(name)
+                cb.setStyleSheet(f"color: {FG};")
                 cb.setChecked(name in current_set)
                 cb.stateChanged.connect(lambda _: _commit_checks())
                 checks[name] = cb
@@ -1552,7 +1552,7 @@ def _proxy_profiles_card() -> QFrame:
             scroll.setFrameShape(QFrame.Shape.NoFrame)
             scroll.setWidget(inner)
             rows = max(1, (len(all_names) + COLS - 1) // COLS)
-            scroll.setFixedHeight(min(230, max(60, rows * 26 + 20)))
+            scroll.setFixedHeight(min(320, max(60, rows * 26 + 20)))
             scroll.setStyleSheet(
                 f"QScrollArea {{ background: {BG_ELEV}; border: 1px solid {BORDER};"
                 f" border-radius: 6px; }}"
