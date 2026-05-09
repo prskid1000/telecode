@@ -1519,6 +1519,7 @@ def _proxy_profiles_card() -> QFrame:
             """
             from collections import Counter
             from proxy import managed_tools as _mt
+            from PySide6.QtGui import QPalette, QColor
 
             available = sorted(_mt._REGISTRY.keys())
             current_set = set(prof.get(field, []) or [])
@@ -1538,7 +1539,11 @@ def _proxy_profiles_card() -> QFrame:
                     prefix_counts[n.split("_", 1)[0]] += 1
             group_prefixes = {p for p, c in prefix_counts.items() if c >= 2}
 
+            _bg_color = QColor(BG_ELEV)
             inner = QWidget()
+            inner.setAutoFillBackground(True)
+            _ip = QPalette(); _ip.setColor(QPalette.ColorRole.Window, _bg_color)
+            inner.setPalette(_ip)
             vl = QVBoxLayout(inner)
             vl.setContentsMargins(10, 8, 10, 8)
             vl.setSpacing(2)
@@ -1646,8 +1651,23 @@ def _proxy_profiles_card() -> QFrame:
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
             scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.viewport().setAutoFillBackground(True)
+            _vp = QPalette(); _vp.setColor(QPalette.ColorRole.Window, _bg_color)
+            scroll.viewport().setPalette(_vp)
             scroll.setWidget(inner)
-            scroll.setFixedHeight(min(380, max(80, inner.sizeHint().height() + 20)))
+            # height: header rows + child pair rows + flat pair rows, ~44px each
+            n_groups = len(group_prefixes)
+            n_group_children = sum(
+                -(-len([n for n in all_names if n.startswith(p + "_")]) // 2)
+                for p in group_prefixes
+            )
+            flat_names_count = len(all_names) - sum(
+                len([n for n in all_names if n.startswith(p + "_")])
+                for p in group_prefixes
+            )
+            n_flat_rows = -(-(flat_names_count) // 2)
+            est_h = (n_groups + n_group_children + n_flat_rows) * 44 + 20
+            scroll.setFixedHeight(min(400, max(80, est_h)))
             scroll.setStyleSheet(
                 f"QScrollArea {{ background: {BG_ELEV}; border: 1px solid {BORDER};"
                 f" border-radius: 6px; }}"
