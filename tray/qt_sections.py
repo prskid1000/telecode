@@ -1514,10 +1514,17 @@ def _proxy_profiles_card() -> QFrame:
             from PySide6.QtWidgets import QCheckBox
             from proxy import managed_tools as _mt
 
-            available = sorted(_mt._REGISTRY.keys())
+            # live registry (only populated after bridge connects)
+            available = set(_mt._REGISTRY.keys())
+            # also collect any tool names already used across all profiles so
+            # docgraph_* names are visible even when the bridge isn't connected yet
+            for _p in _profiles():
+                for _t in (_p.get(field) or []):
+                    if isinstance(_t, str) and _t:
+                        available.add(_t)
+            available_sorted = sorted(available)
             current_set = set(prof.get(field, []) or [])
-            custom = sorted(current_set - set(available))
-            all_names = available + custom
+            all_names = available_sorted
 
             checks: dict[str, "QCheckBox"] = {}
 
@@ -1527,6 +1534,7 @@ def _proxy_profiles_card() -> QFrame:
 
             COLS = 3
             inner = QWidget()
+            inner.setStyleSheet(f"color: {FG};")
             grid = QGridLayout(inner)
             grid.setContentsMargins(10, 8, 10, 8)
             grid.setSpacing(2)
