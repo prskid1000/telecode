@@ -1759,6 +1759,29 @@ def _proxy_profiles_card() -> QFrame:
     add_btn.clicked.connect(_on_add)
     rm_btn.clicked.connect(_on_remove)
     _refresh_picker()
+
+    # Rebuild the form when managed-tool enabled states change (e.g. user
+    # toggles a tool in the Managed Tools section while this profile is open).
+    def _managed_state_key() -> frozenset:
+        from proxy import managed_tools as _mt
+        from proxy.runtime_state import is_managed_enabled
+        return frozenset((n, is_managed_enabled(n)) for n in _mt._REGISTRY)
+
+    _last_mgt: list[frozenset] = [_managed_state_key()]
+
+    def _tick_managed():
+        cur = _managed_state_key()
+        if cur != _last_mgt[0]:
+            _last_mgt[0] = cur
+            idx = picker.currentData()
+            if idx is not None:
+                _build_form(int(idx))
+
+    _mgt_timer = QTimer(card)
+    _mgt_timer.setInterval(1000)
+    _mgt_timer.timeout.connect(_tick_managed)
+    _mgt_timer.start()
+
     return card
 
 
