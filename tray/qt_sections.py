@@ -1534,7 +1534,7 @@ def _proxy_profiles_card() -> QFrame:
 
             COLS = 3
             inner = QWidget()
-            inner.setStyleSheet(f"color: {FG};")
+            inner.setStyleSheet(f"QCheckBox {{ color: {FG}; background: transparent; }}")
             grid = QGridLayout(inner)
             grid.setContentsMargins(10, 8, 10, 8)
             grid.setSpacing(2)
