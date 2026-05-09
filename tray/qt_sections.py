@@ -1514,17 +1514,13 @@ def _proxy_profiles_card() -> QFrame:
             from PySide6.QtWidgets import QCheckBox
             from proxy import managed_tools as _mt
 
-            # live registry (only populated after bridge connects)
-            available = set(_mt._REGISTRY.keys())
-            # also collect any tool names already used across all profiles so
-            # docgraph_* names are visible even when the bridge isn't connected yet
-            for _p in _profiles():
-                for _t in (_p.get(field) or []):
-                    if isinstance(_t, str) and _t:
-                        available.add(_t)
-            available_sorted = sorted(available)
+            # live registry — populated by MCP bridge and docgraph bridge
+            available = sorted(_mt._REGISTRY.keys())
             current_set = set(prof.get(field, []) or [])
-            all_names = available_sorted
+            # include any tools already saved in THIS profile that aren't in
+            # the live registry yet (e.g. docgraph_* when bridge is offline)
+            extras = sorted(current_set - set(available))
+            all_names = available + extras
 
             checks: dict[str, "QCheckBox"] = {}
 
