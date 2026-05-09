@@ -250,17 +250,18 @@ def _status(window) -> QWidget:
 
     grid_card, grid_body = _card("Status", "Live state, updated every second")
     grid = QGridLayout()
-    grid.setHorizontalSpacing(14)
-    grid.setVerticalSpacing(14)
+    grid.setHorizontalSpacing(16)
+    grid.setVerticalSpacing(16)
     grid_body.addLayout(grid)
 
-    # 5 tiles in a responsive 3-col grid: llama | proxy | docgraph / mcp | sessions | (empty)
+    # 6 tiles in a 3-col grid: llama | proxy | docgraph / mcp | sessions | telegram
     specs = [
         ("llama",    "llama.cpp"),
         ("proxy",    "Proxy"),
         ("docgraph", "DocGraph"),
         ("mcp",      "MCP"),
         ("sessions", "Sessions"),
+        ("telegram", "Telegram"),
     ]
     tiles: dict[str, _StatusTile] = {}
     for i, (key, label) in enumerate(specs):
@@ -268,7 +269,6 @@ def _status(window) -> QWidget:
         tiles[key] = tile
         grid.addWidget(tile, i // 3, i % 3)
 
-    # Stretch the empty trailing column to keep tiles equal width.
     for c in range(3):
         grid.setColumnStretch(c, 1)
 
@@ -282,6 +282,7 @@ def _status(window) -> QWidget:
         _refresh_docgraph(tiles["docgraph"], st.get("docgraph", {}))
         _refresh_mcp(tiles["mcp"], st.get("mcp", {}))
         _refresh_sessions(tiles["sessions"], st.get("sessions", []))
+        _refresh_telegram(tiles["telegram"])
 
     scroll.refresh = refresh  # type: ignore[attr-defined]
     refresh()
@@ -291,64 +292,98 @@ def _status(window) -> QWidget:
 # ── Status tile widget ────────────────────────────────────────────────────
 
 class _StatusTile(QFrame):
-    """One status card. Top color stripe + title + big value + sub text +
+    """One status card. Left accent bar + title + status dot + big value + sub text +
     a slot for an optional visualization (progress bar / chip strip / dots)."""
+
+    _STATE_COLORS = {"ok": OK, "warn": WARN, "err": ERR, "mute": FG_MUTE}
 
     def __init__(self, title: str) -> None:
         super().__init__()
-        self.setStyleSheet(
-            f"_StatusTile {{ background: {BG_CARD}; border: 1px solid {BORDER}; "
-            f"border-radius: 8px; }}"
+        self._state = "mute"
+        self._apply_card_style()
+
+        # Horizontal root: left bar | content
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # Left accent bar (replaces top stripe — more modern dashboard feel)
+        self._bar = QFrame()
+        self._bar.setFixedWidth(4)
+        self._bar.setStyleSheet(
+            f"background: {FG_MUTE}; border-top-left-radius: 8px; border-bottom-left-radius: 8px;"
         )
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
+        root.addWidget(self._bar)
 
-        # Top accent stripe (4px)
-        self._stripe = QFrame()
-        self._stripe.setFixedHeight(3)
-        self._stripe.setStyleSheet(f"background: {FG_MUTE}; border-top-left-radius: 8px; border-top-right-radius: 8px;")
-        outer.addWidget(self._stripe)
-
-        # Body padding
+        # Content
         body_w = QWidget()
         body = QVBoxLayout(body_w)
-        body.setContentsMargins(14, 12, 14, 12)
-        body.setSpacing(4)
-        outer.addWidget(body_w)
+        body.setContentsMargins(14, 14, 16, 14)
+        body.setSpacing(6)
+        root.addWidget(body_w, 1)
 
-        self._title = QLabel(title)
+        # Header row: TITLE · · · ● dot
+        hdr = QHBoxLayout()
+        hdr.setContentsMargins(0, 0, 0, 0)
+        hdr.setSpacing(0)
+        self._title = QLabel(title.upper())
         self._title.setStyleSheet(
-            f"color: {FG_MUTE}; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;"
+            f"color: {FG_MUTE}; font-size: 10px; letter-spacing: 1.5px; font-weight: 500;"
         )
-        body.addWidget(self._title)
+        self._dot = QLabel("●")
+        self._dot.setStyleSheet(f"color: {FG_MUTE}; font-size: 9px;")
+        hdr.addWidget(self._title)
+        hdr.addStretch(1)
+        hdr.addWidget(self._dot)
+        body.addLayout(hdr)
 
+        # Value — larger and bolder
         self._value = QLabel("—")
-        self._value.setStyleSheet(f"color: {FG}; font-size: 18px; font-weight: 500;")
+        self._value.setStyleSheet(f"color: {FG}; font-size: 22px; font-weight: 600;")
         body.addWidget(self._value)
 
         self._sub = QLabel("")
-        self._sub.setStyleSheet(f"color: {FG_DIM}; font-size: 12px;")
+        self._sub.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
         self._sub.setWordWrap(True)
         body.addWidget(self._sub)
 
         # Visualization slot — populated by per-section refreshers.
         self._viz_host = QWidget()
         viz_layout = QVBoxLayout(self._viz_host)
-        viz_layout.setContentsMargins(0, 6, 0, 0)
+        viz_layout.setContentsMargins(0, 4, 0, 0)
         viz_layout.setSpacing(4)
         body.addWidget(self._viz_host)
 
         body.addStretch(1)
 
-    def set_state(self, state: str) -> None:
-        """state ∈ {'ok','warn','err','mute'} — drives the top stripe color."""
-        color = {"ok": OK, "warn": WARN, "err": ERR, "mute": FG_MUTE}.get(state, FG_MUTE)
-        self._stripe.setStyleSheet(
-            f"background: {color}; border-top-left-radius: 8px; border-top-right-radius: 8px;"
+    def _apply_card_style(self) -> None:
+        # ok → solid green border; warn → orange; err → red; mute → dark grey
+        _BORDERS = {
+            "ok":   "rgba(86, 224, 194, 0.55)",   # OK  #56e0c2 at ~55%
+            "warn": "rgba(245, 165, 36,  0.50)",   # WARN
+            "err":  "rgba(255, 110, 110, 0.50)",   # ERR
+            "mute": BORDER,
+        }
+        border = _BORDERS.get(self._state, BORDER)
+        self.setStyleSheet(
+            f"_StatusTile {{ background: {BG_CARD}; border: 1px solid {border}; "
+            f"border-radius: 8px; }}"
         )
 
+    def set_state(self, state: str) -> None:
+        """state ∈ {'ok','warn','err','mute'} — drives bar + dot + card border."""
+        self._state = state
+        color = self._STATE_COLORS.get(state, FG_MUTE)
+        self._bar.setStyleSheet(
+            f"background: {color}; border-top-left-radius: 8px; border-bottom-left-radius: 8px;"
+        )
+        self._dot.setStyleSheet(f"color: {color}; font-size: 9px;")
+        self._apply_card_style()
+
     def set_value(self, text: str) -> None:
+        # Strip leading ●/○ — state is now shown via bar + dot
+        if text and text[0] in "●○":
+            text = text[1:].lstrip()
         self._value.setText(text)
 
     def set_sub(self, text: str) -> None:
@@ -549,6 +584,29 @@ def _refresh_docgraph(tile: _StatusTile, dg: dict) -> None:
 
     # Sub line already says "<N> roots · <M> watching · <K> tools bridged"
     # — a 1-dot strip on top is just visual noise.
+    tile.set_viz(None)
+
+
+def _refresh_telegram(tile: "_StatusTile") -> None:
+    try:
+        from bot.supervisor import status_snapshot
+        snap = status_snapshot()
+    except Exception:
+        snap = {}
+    alive = bool(snap.get("alive"))
+    err   = snap.get("last_error") or ""
+    if alive:
+        tile.set_state("ok")
+        tile.set_value("Polling")
+        tile.set_sub("Receiving updates")
+    elif err:
+        tile.set_state("err")
+        tile.set_value("Error")
+        tile.set_sub(err[:80])
+    else:
+        tile.set_state("mute")
+        tile.set_value("Stopped")
+        tile.set_sub("Start via tray or settings")
     tile.set_viz(None)
 
 
@@ -1844,6 +1902,89 @@ def _managed(window) -> QWidget:
 def _telegram(window) -> QWidget:
     scroll, _, layout = _page()
 
+    # ── Live controls card ────────────────────────────────────────────
+    from tray.qt_docgraph import _status_pill, _run  # reuse same helpers
+    from tray.qt_theme import OK, ERR, FG_MUTE
+
+    ctrl_card, cb = _card("Bot Control", "Start · Stop · Restart the Telegram polling loop")
+
+    cb.addWidget(_toggle_row("telegram.auto_start",
+                              "Auto-start",
+                              "Start the bot automatically when Telecode launches."))
+    cb.addWidget(_toggle_row("telegram.auto_restart",
+                              "Auto-restart",
+                              "Re-start polling if the updater stops unexpectedly."))
+
+    actions_w = QWidget()
+    ar = QHBoxLayout(actions_w)
+    ar.setContentsMargins(0, 0, 0, 0); ar.setSpacing(8)
+    start_btn   = QPushButton("▶ Start"); start_btn.setProperty("class", "primary")
+    stop_btn    = QPushButton("Stop");    stop_btn.setProperty("class", "danger")
+    restart_btn = QPushButton("Restart")
+    ar.addWidget(start_btn); ar.addWidget(stop_btn); ar.addWidget(restart_btn)
+    ar.addStretch(1)
+    cb.addWidget(_row(row_label("Actions"), actions_w))
+
+    def _bot_status_text() -> tuple[bool, str]:
+        try:
+            from bot.supervisor import status_snapshot
+            s = status_snapshot()
+        except Exception as exc:
+            return False, f"err: {exc}"
+        if s.get("alive"):
+            return True, "polling"
+        err = s.get("last_error")
+        if err:
+            return False, f"error: {err[:60]}"
+        return False, "stopped"
+
+    status_pill, refresh_pill = _status_pill(_bot_status_text)
+    cb.addWidget(_row(row_label("Status"), status_pill))
+
+    def _refresh_ctrl() -> None:
+        try:
+            from bot.supervisor import status_snapshot
+            s = status_snapshot()
+            alive = bool(s.get("alive"))
+            busy  = bool(s.get("busy"))
+        except Exception:
+            alive = busy = False
+        start_btn.setEnabled(not alive and not busy)
+        stop_btn.setEnabled(alive and not busy)
+        restart_btn.setEnabled(alive and not busy)
+        refresh_pill()
+
+    def _on_start():
+        async def _go():
+            from bot.supervisor import get_supervisor
+            sup = get_supervisor()
+            if sup:
+                await sup.start()
+        _run(window, _go)
+
+    def _on_stop():
+        async def _go():
+            from bot.supervisor import get_supervisor
+            sup = get_supervisor()
+            if sup:
+                await sup.stop()
+        _run(window, _go)
+
+    def _on_restart():
+        async def _go():
+            from bot.supervisor import get_supervisor
+            sup = get_supervisor()
+            if sup:
+                await sup.restart()
+        _run(window, _go)
+
+    start_btn.clicked.connect(_on_start)
+    stop_btn.clicked.connect(_on_stop)
+    restart_btn.clicked.connect(_on_restart)
+    _refresh_ctrl()
+    layout.addWidget(ctrl_card)
+
+    # ── Credentials / access card ─────────────────────────────────────
     bot_card, bb = _card("Telegram Bot", "telegram.* — token + group + access")
     bb.addWidget(_password_row("telegram.bot_token", "Bot Token", "123456:ABC-DEF...",
                                 "From @BotFather. Restart required after change."))
@@ -1854,6 +1995,8 @@ def _telegram(window) -> QWidget:
                                 "Whitelist of Telegram user ids. Empty = anyone in the group.",
                                 "one user_id per line"))
     layout.addWidget(bot_card)
+
+    scroll.refresh = _refresh_ctrl  # type: ignore[attr-defined]
 
     paths_card, pb = _card("Paths", "paths.* — file locations (relative paths anchor to settings.json directory)")
     pb.addWidget(_line_row("paths.store_path", "Store Path", "./data/telecode.json",

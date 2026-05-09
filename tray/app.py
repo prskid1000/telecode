@@ -160,12 +160,45 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
 
     # ── Bot submenu ──────────────────────────────────────────────────
     bot_menu = menu.addMenu("⬢ Bot")
-    bot_sessions = QAction("Sessions: 0 / 0", bot_menu); bot_sessions.setEnabled(False)
-    bot_group    = QAction("Group: —",        bot_menu); bot_group.setEnabled(False)
+    bot_status   = QAction("Status: —",        bot_menu); bot_status.setEnabled(False)
+    bot_sessions = QAction("Sessions: 0 / 0",  bot_menu); bot_sessions.setEnabled(False)
+    bot_group    = QAction("Group: —",         bot_menu); bot_group.setEnabled(False)
     bot_users    = QAction("Allowed Users: 0", bot_menu); bot_users.setEnabled(False)
+    bot_menu.addAction(bot_status)
     bot_menu.addAction(bot_sessions)
     bot_menu.addAction(bot_group)
     bot_menu.addAction(bot_users)
+    bot_menu.addSeparator()
+    bot_start_action   = QAction("▶ Start Bot",  bot_menu)
+    bot_stop_action    = QAction("Stop Bot",           bot_menu)
+    bot_restart_action = QAction("Restart Bot",        bot_menu)
+    def _bot_start():
+        async def _do():
+            from bot.supervisor import get_supervisor
+            sup = get_supervisor()
+            if sup:
+                await sup.start()
+        _sched(_do)
+    def _bot_stop():
+        async def _do():
+            from bot.supervisor import get_supervisor
+            sup = get_supervisor()
+            if sup:
+                await sup.stop()
+        _sched(_do)
+    def _bot_restart():
+        async def _do():
+            from bot.supervisor import get_supervisor
+            sup = get_supervisor()
+            if sup:
+                await sup.restart()
+        _sched(_do)
+    bot_start_action.triggered.connect(_bot_start)
+    bot_stop_action.triggered.connect(_bot_stop)
+    bot_restart_action.triggered.connect(_bot_restart)
+    bot_menu.addAction(bot_start_action)
+    bot_menu.addAction(bot_stop_action)
+    bot_menu.addAction(bot_restart_action)
 
     menu.addSeparator()
 
@@ -206,12 +239,13 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
     quit_action = QAction("Quit Telecode", menu)
     def _quit():
         log.info("tray: quit requested")
-        # Ask PTB to stop — this returns run_polling on the main thread,
-        # which triggers _post_shutdown (stops proxy + supervisor + funnels).
+        # Signal the async main loop to shut down via the stored stop hook.
         try:
-            schedule(bot_loop, bot_app.stop_running())
+            stop_fn = bot_app.bot_data.get("_request_stop")
+            if stop_fn:
+                schedule(bot_loop, stop_fn())
         except Exception as exc:
-            log.warning("stop_running: %s", exc)
+            log.warning("request_stop: %s", exc)
         # Tear down Qt on this thread
         tray.hide()
         app.quit()
@@ -297,8 +331,27 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
         mcp_enabled.blockSignals(False)
 
         # ── Bot ──────────────────────────────────────────────────────
+        try:
+            from bot.supervisor import status_snapshot as _bot_snap
+            bot_snap = _bot_snap()
+        except Exception:
+            bot_snap = {}
+        bot_alive = bool(bot_snap.get("alive"))
+        bot_busy  = bool(bot_snap.get("busy"))
+        bot_err   = bot_snap.get("last_error") or ""
+        if bot_alive:
+            bot_menu.setTitle("⬢ Bot: polling")
+            bot_status.setText("Status: polling")
+        elif bot_err:
+            bot_menu.setTitle("⬡ Bot: error")
+            bot_status.setText(f"Status: error — {bot_err[:60]}")
+        else:
+            bot_menu.setTitle("⬡ Bot: stopped")
+            bot_status.setText("Status: stopped")
+        bot_start_action.setEnabled(not bot_alive and not bot_busy)
+        bot_stop_action.setEnabled(bot_alive and not bot_busy)
+        bot_restart_action.setEnabled(bot_alive and not bot_busy)
         alive = sum(1 for s in sessions if s.get("alive"))
-        bot_menu.setTitle(f"⬢ Bot: {alive} / {len(sessions)}")
         bot_sessions.setText(f"Sessions: {alive} / {len(sessions)}")
         group_id = get_path(settings, "telegram.group_id", "—")
         bot_group.setText(f"Group: {group_id}")

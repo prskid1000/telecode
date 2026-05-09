@@ -19,9 +19,8 @@ from bot.handlers import (
     cmd_settings, cmd_key,
     handle_callback, handle_text, handle_voice_msg, handle_document,
     handle_forum_topic_closed, normalize_mention,
-    BOT_COMMANDS,
 )
-from bot.rate import set_session_manager, topic_check_loop
+from bot.rate import set_session_manager
 from proxy.server import start_proxy_background
 from mcp_server.server import start_mcp_background
 from llamacpp import config as llama_cfg
@@ -232,63 +231,66 @@ async def _preload_one(supervisor, model: str, log) -> None:
         log.error("llama.cpp: preload '%s' failed: %s", model, exc)
 
 
-async def _post_init(app) -> None:
+_STOP_EVENT: asyncio.Event | None = None
+
+
+async def request_stop() -> None:
+    """Signal the main loop to begin shutdown. Called from the tray quit action."""
+    if _STOP_EVENT is not None:
+        _STOP_EVENT.set()
+
+
+async def _async_main(token: str) -> None:
+    global _STOP_EVENT
     log = logging.getLogger("telecode.main")
+    _STOP_EVENT = asyncio.Event()
     _install_asyncio_exception_handler(log)
+
     os.makedirs(os.path.dirname(config.store_path()) or ".", exist_ok=True)
     log.info("Store path: %s", config.store_path())
 
-    warnings = config.validate()
-    for w in warnings:
+    for w in config.validate():
         log.warning(w)
 
-    try:
-        await app.bot.set_my_commands(BOT_COMMANDS)
-        log.info("Registered %d commands with Telegram", len(BOT_COMMANDS))
-    except Exception as exc:
-        log.error("set_my_commands failed: %s", exc, exc_info=True)
+    # Build Application — lifecycle managed manually so the bot is optional.
+    app = Application.builder().token(token).build()
+    await app.initialize()
 
-    # Background topic-liveness sweep: Telegram emits no service message
-    # on forum-topic DELETION (only on close), so without an active probe
-    # our sessions linger until the user runs /start. topic_check_loop
-    # runs `full_cleanup_all` every 60 s, one sendMessage+delete per live
-    # session per tick. Cheap enough for a personal bot.
-    mgr = app.bot_data.get("session_manager")
-    if mgr is not None:
-        app.bot_data["_topic_check_task"] = asyncio.ensure_future(
-            topic_check_loop(app.bot, mgr, interval_sec=60)
-        )
+    mgr = SessionManager()
+    app.bot_data["session_manager"] = mgr
+    set_session_manager(mgr)
 
-    # Voice: no startup probe + no background poll. The first incoming voice
-    # message hits the STT endpoint directly; voice.health state is driven by
-    # those real requests (record_success / record_failure inside
-    # voice.stt.transcribe). If the endpoint is down at boot we don't know
-    # and don't care until a user actually sends audio.
+    # Store stop hook so tray can signal shutdown without importing main.
+    app.bot_data["_request_stop"] = request_stop
+
+    # Register handlers (active regardless of whether polling is running).
+    app.add_handler(MessageHandler(filters.TEXT, normalize_mention), group=-1)
+    app.add_handler(CommandHandler("start",    cmd_start))
+    app.add_handler(CommandHandler("help",     cmd_help))
+    app.add_handler(CommandHandler("new",      cmd_new))
+    app.add_handler(CommandHandler("stop",     cmd_stop))
+    app.add_handler(CommandHandler("settings", cmd_settings))
+    app.add_handler(CommandHandler("key",      cmd_key))
+    app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_handler(MessageHandler(filters.StatusUpdate.FORUM_TOPIC_CLOSED, handle_forum_topic_closed))
+    app.add_handler(MessageHandler(filters.Document.ALL,           handle_document))
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO,  handle_voice_msg))
+    app.add_handler(MessageHandler(filters.TEXT, handle_text))
+
+    # BotSupervisor — manages optional start/stop/restart of Telegram polling.
+    from bot.supervisor import BotSupervisor, set_supervisor
+    bot_sup = BotSupervisor(app, mgr)
+    set_supervisor(bot_sup)
+    app.bot_data["_bot_supervisor"] = bot_sup
+
     vs = voice_status()
-    log.info(
-        "Voice: STT=%s (lazy — health tracked from real transcribe calls)",
-        "configured" if vs.stt_configured else "disabled",
-    )
+    log.info("Voice: STT=%s (lazy)", "configured" if vs.stt_configured else "disabled")
 
-    # llama-server is LAZY by default — the proxy's first request triggers
-    # `supervisor.ensure_model()` which spawns llama-server then. This means:
-    #   - telecode boots in seconds, not minutes
-    #   - VRAM stays free until you actually use a local model
-    #   - the idle-unload watcher (llamacpp.idle_unload_sec, default 300s)
-    #     stops the server again after inactivity so VRAM gets released
-    #
-    # Eager paths (only if the user opts in):
-    #   - `llamacpp.auto_start: true`         → load default_model now
-    #   - per-model `preload: true`           → load that model now
     if llama_cfg.enabled():
         try:
             supervisor = await get_supervisor()
             app.bot_data["_llama_supervisor"] = supervisor
             preload = list(llama_cfg.preload_models())
-            # Eager-load only if explicitly asked. The "remembered" last-active
-            # model is just used as the implicit default when a request omits
-            # `model` — never auto-loaded on startup. Lazy mode is the default
-            # so VRAM stays free until something actually needs the LLM.
             if llama_cfg.auto_start():
                 from llamacpp import state as llama_state
                 remembered = llama_state.last_active_model()
@@ -299,7 +301,6 @@ async def _post_init(app) -> None:
                     preload.insert(0, llama_cfg.default_model())
             preload = list(dict.fromkeys(p for p in preload if p))
             for model in preload:
-                # spawn in background so a slow load doesn't block the bot
                 asyncio.ensure_future(_preload_one(supervisor, model, log))
             if not preload:
                 log.info("llama.cpp: lazy mode — model loads on first request")
@@ -313,9 +314,6 @@ async def _post_init(app) -> None:
     except Exception as exc:
         log.error("Proxy startup failed: %s", exc, exc_info=True)
 
-    # System tray UI — runs on a daemon thread inside this process.
-    # Menu clicks use run_coroutine_threadsafe() onto the bot's loop for
-    # async calls; sync stuff (settings patches) runs directly.
     try:
         loop = asyncio.get_running_loop()
         app.bot_data["_tray_thread"] = start_tray_in_thread(app, loop)
@@ -336,8 +334,6 @@ async def _post_init(app) -> None:
     except Exception as exc:
         log.error("Tailscale funnel startup failed: %s", exc, exc_info=True)
 
-    # Heartbeat scheduler — fires HB jobs on cron schedule. Reads HEARTBEAT.md
-    # from each agent's storage and reconciles HB Jobs in the sidebar each tick.
     try:
         if config.heartbeat_enabled():
             from services.heartbeat.scheduler import start_scheduler
@@ -345,47 +341,59 @@ async def _post_init(app) -> None:
     except Exception as exc:
         log.error("Heartbeat scheduler startup failed: %s", exc, exc_info=True)
 
-    # DocGraph host — bring up the single host child if Enabled + Auto-start.
-    # Bridge registration happens inside HostSupervisor.start() once /api/roots
-    # is reachable.
     try:
         from docgraph.process import autostart_all as docgraph_autostart
         await docgraph_autostart()
     except Exception as exc:
         log.error("DocGraph auto-start failed: %s", exc, exc_info=True)
 
+    # Auto-start Telegram bot only when configured and (presumably) online.
+    if config.telegram_auto_start():
+        try:
+            await bot_sup.start()
+        except Exception as exc:
+            log.error("Telegram bot auto-start failed (no internet?): %s", exc)
+    else:
+        log.info("Telegram bot: auto_start=false — start manually via tray")
 
-async def _post_shutdown(app) -> None:
-    # DocGraph supervisors — close MCP bridges + kill subprocesses + free ports
-    # before the proxy tears down (managed_tools._REGISTRY entries removed first).
+    log.info("Telecode running. Stop via tray or Ctrl+C.")
+    try:
+        await _STOP_EVENT.wait()
+    except (asyncio.CancelledError, Exception):
+        pass
+
+    log.info("Shutdown signal received.")
+
+    # ── Shutdown (mirrors old _post_shutdown) ─────────────────────────
     try:
         from docgraph.process import shutdown_all as docgraph_shutdown
         await docgraph_shutdown()
     except Exception:
         pass
 
-    # Heartbeat scheduler — stop before the task queue's executors die so
-    # in-flight tracking can settle.
     try:
         from services.heartbeat.scheduler import stop_scheduler
         await stop_scheduler()
     except Exception:
         pass
 
-    # Tray is a daemon thread — dies with the interpreter; no explicit stop.
-
-    # Stop proxy first (so no new requests land on a dying llama-server)
     runner = app.bot_data.get("_proxy_runner")
     if runner:
-        await runner.cleanup()
+        try:
+            await runner.cleanup()
+        except Exception:
+            pass
 
-    # Stop llama-server AFTER the proxy — the supervisor owns the process.
+    try:
+        await bot_sup.stop()
+    except Exception:
+        pass
+
     try:
         await shutdown_supervisor()
     except Exception:
         pass
 
-    # Stop Tailscale Funnel subprocesses — terminate then wait (with kill fallback).
     for proc in app.bot_data.get("_tailscale_funnels", []):
         try:
             proc.terminate()
@@ -397,14 +405,10 @@ async def _post_shutdown(app) -> None:
         except Exception:
             pass
 
-    for key in ("_probe_task", "_stale_check_task", "_topic_check_task"):
-        task = app.bot_data.get(key)
-        if task and not task.done():
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+    try:
+        await app.shutdown()
+    except Exception as exc:
+        log.error("Application shutdown error: %s", exc)
 
 
 def main() -> None:
@@ -412,9 +416,6 @@ def main() -> None:
     log = logging.getLogger("telecode.main")
     _install_crash_handlers(log)
 
-    # Single-instance guard: named mutex on Windows, flock on Unix. Bails
-    # out before we try to bind the proxy / MCP ports (which would also
-    # fail, but noisily).
     from single_instance import acquire as _acquire_instance
     if not _acquire_instance():
         log.warning("Another telecode instance is already running — exiting")
@@ -427,46 +428,11 @@ def main() -> None:
         sys.exit(1)
 
     log.info("Starting Telecode")
-
-    app = (Application.builder().token(token)
-           .post_init(_post_init)
-           .post_shutdown(_post_shutdown)
-           .build())
-    mgr = SessionManager()
-    app.bot_data["session_manager"] = mgr
-    set_session_manager(mgr)
-
-    # Pre-handler in group -1: strips `/cmd@botname` -> `/cmd` on every
-    # incoming message so all downstream handlers (CommandHandler, handle_text,
-    # forwarded-to-CLI text) see a normalized form.
-    app.add_handler(MessageHandler(filters.TEXT, normalize_mention), group=-1)
-
-    app.add_handler(CommandHandler("start",    cmd_start))
-    app.add_handler(CommandHandler("help",     cmd_help))
-    app.add_handler(CommandHandler("new",      cmd_new))
-    app.add_handler(CommandHandler("stop",     cmd_stop))
-    app.add_handler(CommandHandler("settings", cmd_settings))
-
-    app.add_handler(CommandHandler("key", cmd_key))
-
-    app.add_handler(CallbackQueryHandler(handle_callback))
-
-    app.add_handler(MessageHandler(filters.StatusUpdate.FORUM_TOPIC_CLOSED, handle_forum_topic_closed))
-    app.add_handler(MessageHandler(filters.Document.ALL,           handle_document))
-    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO,  handle_voice_msg))
-    # Register AFTER all CommandHandlers so in group 0 they match their own
-    # commands first and run; anything they don't claim (plain text, unknown
-    # /foo like CC's /resume /clear /compact /model) falls through to here.
-    app.add_handler(MessageHandler(filters.TEXT, handle_text))
-
-    log.info("Bot running. Ctrl+C to stop.")
     try:
-        app.run_polling(drop_pending_updates=True)
+        asyncio.run(_async_main(token))
     except KeyboardInterrupt:
         log.info("Bot stopped by user.")
     except Exception as exc:
-        # Capture any crash that bubbles out of the polling loop so pythonw
-        # doesn't silently eat the traceback.
         log.critical("Bot crashed: %s", exc, exc_info=exc)
         raise
 
