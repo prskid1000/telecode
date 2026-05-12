@@ -8,8 +8,11 @@ Sections call helpers for settings patch + async dispatch.
 """
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Callable
+
+log = logging.getLogger("telecode.tray.qt_sections")
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
@@ -1848,10 +1851,9 @@ def _mcp(window) -> QWidget:
 
             nl = name.lower()
             if nl == "stt":
-                tw.addWidget(_line_row("mcp_server.stt_url", "  └─ Whisper Endpoint", "http://127.0.0.1:6600"))
-                tw.addWidget(_enum_row_strs("voice.stt.model", "  └─ Whisper Model", _WHISPER_MODELS))
+                tw.addWidget(_line_row("mcp_server.stt_url", "  └─ Endpoint", "http://127.0.0.1:6600"))
             elif nl == "tts":
-                tw.addWidget(_line_row("mcp_server.tts_url", "  └─ Kokoro Endpoint", "http://127.0.0.1:6500"))
+                tw.addWidget(_line_row("mcp_server.tts_url", "  └─ Endpoint", "http://127.0.0.1:6600"))
 
     def refresh() -> None:
         # For now, just sync toggles with runtime_state
@@ -2058,10 +2060,9 @@ def _managed(window) -> QWidget:
                                       _wrap_align(t_widget, Qt.AlignmentFlag.AlignLeft)))
 
             if nl == "transcribe":
-                rows_wrap.addWidget(_line_row("mcp_server.stt_url", "  └─ Whisper Endpoint", "http://127.0.0.1:6600"))
-                rows_wrap.addWidget(_enum_row_strs("voice.stt.model", "  └─ Whisper Model", _WHISPER_MODELS))
+                rows_wrap.addWidget(_line_row("mcp_server.stt_url", "  └─ Endpoint", "http://127.0.0.1:6600"))
             elif nl == "speak":
-                rows_wrap.addWidget(_line_row("mcp_server.tts_url", "  └─ Kokoro Endpoint", "http://127.0.0.1:6500"))
+                rows_wrap.addWidget(_line_row("mcp_server.tts_url", "  └─ Endpoint", "http://127.0.0.1:6600"))
 
     def refresh() -> None:
         nonlocal last_names
@@ -2240,87 +2241,136 @@ def _telegram(window) -> QWidget:
     return scroll
 
 
-_WHISPER_MODELS = [
-    ("Tiny (fastest)", "tiny"),
-    ("Base", "base"),
-    ("Small (default)", "small"),
-    ("Medium", "medium"),
-    ("Large v3 (best)", "large-v3"),
-    ("Turbo", "distil-large-v3"),
-    ("OpenAI (whisper-1)", "whisper-1"),
-]
-
-
-def _voice(window) -> QWidget:
+def _audio(window) -> QWidget:
+    """Unified STT + TTS section. Both talk to the same VoxType server
+    (or any OpenAI-compatible STT/TTS endpoint) via different routes
+    on a shared base URL — single port, two cards."""
     from voice.health import get_status as _voice_status
 
     scroll, _, layout = _page()
-    card, body = _card("Voice")
-    body.addWidget(_toggle_row("voice.stt.enabled", "STT Enabled",
-                                "Auto-transcribe voice messages via a local Whisper endpoint."))
 
-    # Live health pill — state is updated by real voice.stt.transcribe()
-    # calls (no probe). Refreshed by the window's 1s tick.
-    pill = QLabel("⚪ untested")
-    pill.setProperty("class", "stat_pill")
-    body.addWidget(_row(row_label("Health",
-                                    "Reflects the outcome of the most recent transcribe request. "
-                                    "No background probing — status only changes when a voice message is processed."),
-                         _wrap_align(pill, Qt.AlignmentFlag.AlignLeft)))
+    # ── STT card ────────────────────────────────────────────────────
+    stt_card, stt_body = _card("STT",
+                                "Speech-to-text via OpenAI /v1/audio/transcriptions")
+    stt_body.addWidget(_toggle_row("voice.stt.enabled", "Enabled",
+                                    "Auto-transcribe voice messages."))
 
-    body.addWidget(_line_row("voice.stt.base_url", "Endpoint", "http://localhost:6600/v1"))
-    body.addWidget(_enum_row_strs("voice.stt.model", "Model", _WHISPER_MODELS))
+    stt_pill = QLabel("⚪ untested")
+    stt_pill.setProperty("class", "stat_pill")
+    stt_body.addWidget(_row(row_label("Health",
+                                        "Reflects the outcome of the most recent transcribe request. "
+                                        "No background probing — status only changes when a voice message is processed."),
+                             _wrap_align(stt_pill, Qt.AlignmentFlag.AlignLeft)))
 
-    # Test button
-    from voice.stt import transcribe, HELLO_WORLD_AUDIO
-    test_btn = QPushButton("Run Test")
-    test_btn.setFixedWidth(80)
-    test_btn.setProperty("class", "ghost")
+    stt_body.addWidget(_line_row("voice.stt.base_url", "Endpoint",
+                                   "http://127.0.0.1:6600/v1"))
+    stt_body.addWidget(_line_row("voice.stt.model", "Model",
+                                   "whisper-1",
+                                   "Sent as the `model` form field. The actual model is "
+                                   "decided by the STT server (VoxType reads its own setting)."))
 
-    def run_test() -> None:
-        test_btn.setEnabled(False)
-        test_btn.setText("Testing...")
+    # STT Test button
+    from voice.stt import transcribe as _stt_transcribe, HELLO_WORLD_AUDIO
+    stt_test_btn = QPushButton("Run Test")
+    stt_test_btn.setFixedWidth(80)
+    stt_test_btn.setProperty("class", "ghost")
+
+    def _run_stt_test() -> None:
+        stt_test_btn.setEnabled(False)
+        stt_test_btn.setText("Testing...")
 
         async def _run() -> None:
             try:
-                # Use a .wav filename since we provided a WAV header.
-                # Use a shorter timeout (5s) for the UI test button.
-                await transcribe(HELLO_WORLD_AUDIO, filename="test.wav", timeout=5.0)
+                await _stt_transcribe(HELLO_WORLD_AUDIO, filename="test.wav", timeout=5.0)
                 refresh()
             except Exception as e:
-                print(f"STT Test Error: {e}")
+                log.warning("STT test failed: %s", e)
             finally:
-                test_btn.setEnabled(True)
-                test_btn.setText("Run Test")
+                stt_test_btn.setEnabled(True)
+                stt_test_btn.setText("Run Test")
 
         schedule(window.bot_loop, _run())
 
-    test_btn.clicked.connect(run_test)
+    stt_test_btn.clicked.connect(_run_stt_test)
+    stt_body.addWidget(_row(row_label("Test",
+                                        "Send a sample 'Hello World' audio to verify the endpoint."),
+                             _wrap_align(stt_test_btn, Qt.AlignmentFlag.AlignLeft)))
 
-    body.addWidget(_row(row_label("Test", "Send a sample 'Hello World' audio to verify the endpoint."),
-                        _wrap_align(test_btn, Qt.AlignmentFlag.AlignLeft)))
+    layout.addWidget(stt_card)
 
-    import config as _cfg
-    def refresh() -> None:
-        vs = _voice_status()
-        print(f"DEBUG: Voice refresh, vs={vs}")
-        if not vs.stt_configured:
+    # ── TTS card ────────────────────────────────────────────────────
+    tts_card, tts_body = _card("TTS",
+                                "Text-to-speech via OpenAI /v1/audio/speech")
+    tts_body.addWidget(_toggle_row("voice.tts.enabled", "Enabled",
+                                    "Allow telecode to synthesise audio via the TTS endpoint."))
+
+    tts_pill = QLabel("⚪ untested")
+    tts_pill.setProperty("class", "stat_pill")
+    tts_body.addWidget(_row(row_label("Health",
+                                        "Updated by real /v1/audio/speech calls. No background probing."),
+                             _wrap_align(tts_pill, Qt.AlignmentFlag.AlignLeft)))
+
+    tts_body.addWidget(_line_row("voice.tts.base_url", "Endpoint",
+                                   "http://127.0.0.1:6600/v1"))
+    tts_body.addWidget(_line_row("voice.tts.voice", "Voice (optional)",
+                                   "",
+                                   "Sent as the `voice` field. Piper voices ignore this — the "
+                                   "model file IS the voice. Leave blank unless your TTS "
+                                   "server expects a voice identifier."))
+
+    # TTS Test button — synthesizes a short phrase and stores the WAV.
+    from voice.tts import synthesize as _tts_synthesize, HELLO_WORLD_TEXT
+    tts_test_btn = QPushButton("Run Test")
+    tts_test_btn.setFixedWidth(80)
+    tts_test_btn.setProperty("class", "ghost")
+
+    def _run_tts_test() -> None:
+        tts_test_btn.setEnabled(False)
+        tts_test_btn.setText("Testing...")
+
+        async def _run() -> None:
+            try:
+                await _tts_synthesize(HELLO_WORLD_TEXT, timeout=10.0)
+                refresh()
+            except Exception as e:
+                log.warning("TTS test failed: %s", e)
+            finally:
+                tts_test_btn.setEnabled(True)
+                tts_test_btn.setText("Run Test")
+
+        schedule(window.bot_loop, _run())
+
+    tts_test_btn.clicked.connect(_run_tts_test)
+    tts_body.addWidget(_row(row_label("Test",
+                                        "Synthesise a short phrase to verify the endpoint."),
+                             _wrap_align(tts_test_btn, Qt.AlignmentFlag.AlignLeft)))
+
+    layout.addWidget(tts_card)
+
+    def _paint_pill(pill: QLabel, configured: bool, last_checked: bool,
+                     reachable: bool) -> None:
+        if not configured:
             pill.setText("⚫ disabled")
             pill.setProperty("class", "stat_pill")
-        elif not vs.stt_last_checked:
+        elif not last_checked:
             pill.setText("⚪ untested")
             pill.setProperty("class", "stat_pill")
-        elif vs.stt_reachable:
+        elif reachable:
             pill.setText("🟢 reachable")
             pill.setProperty("class", "stat_pill stat_pill_ok")
         else:
             pill.setText("🔴 last call failed")
             pill.setProperty("class", "stat_pill stat_pill_err")
         pill.style().unpolish(pill); pill.style().polish(pill)
+
+    def refresh() -> None:
+        vs = _voice_status()
+        _paint_pill(stt_pill, vs.stt_configured, vs.stt_last_checked, vs.stt_reachable)
+        _paint_pill(tts_pill, vs.tts_configured, vs.tts_last_checked, vs.tts_reachable)
+
     scroll.refresh = refresh  # type: ignore[attr-defined]
     refresh()
 
-    layout.addWidget(card)
     layout.addStretch(1)
     return scroll
 
@@ -4256,7 +4306,7 @@ _BUILDERS: dict[str, Callable[[Any], QWidget]] = {
     "docgraph": _docgraph,
     "tools":    _tools,
     "telegram": _telegram,
-    "voice":    _voice,
+    "audio":    _audio,
     "computer": _computer,
     "sessions": _sessions,
     "requests": _requests,

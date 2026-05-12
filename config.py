@@ -167,6 +167,16 @@ def stt_base_url() -> str:  return _raw["voice"]["stt"]["base_url"]
 def stt_model()    -> str:  return _raw["voice"]["stt"]["model"]
 
 
+# ── TTS ───────────────────────────────────────────────────────────────────────
+def tts_enabled()  -> bool:
+    return bool(((_raw.get("voice") or {}).get("tts") or {}).get("enabled", False))
+def tts_base_url() -> str:
+    return str(((_raw.get("voice") or {}).get("tts") or {}).get(
+        "base_url", "http://127.0.0.1:6600/v1"))
+def tts_voice()    -> str:
+    return str(((_raw.get("voice") or {}).get("tts") or {}).get("voice", ""))
+
+
 # ── Capture intervals ────────────────────────────────────────────────────────
 def image_interval() -> float:
     """Seconds between image capture sends."""
@@ -234,7 +244,7 @@ def computer_max_history() -> int:
 def mcp_server_enabled() -> bool: return bool(get_nested("mcp_server.enabled", False))
 def mcp_server_host()    -> str:  return get_nested("mcp_server.host", "127.0.0.1")
 def mcp_server_port()    -> int:  return int(get_nested("mcp_server.port", 1236))
-def mcp_server_tts_url() -> str:  return get_nested("mcp_server.tts_url", "http://127.0.0.1:6500")
+def mcp_server_tts_url() -> str:  return get_nested("mcp_server.tts_url", "http://127.0.0.1:6600")
 def mcp_server_stt_url() -> str:  return get_nested("mcp_server.stt_url", "http://127.0.0.1:6600")
 
 
