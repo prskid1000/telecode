@@ -51,12 +51,59 @@ def _save(data: dict[str, Any]) -> None:
         f.write("\n")
 
 
+# Standard effort presets that mirror Claude Code (Anthropic 4.6+) and
+# OpenAI Responses API. Auto-seeded into reasoning_effort_map on load so
+# clients sending `low`/`medium`/`high`/`max`/`adaptive`/`minimal`/`none`
+# always hit a real entry. Users can edit values freely but the tray
+# blocks deletion of these keys.
+STANDARD_EFFORT_KEYS: tuple[str, ...] = (
+    "none", "minimal", "low", "medium", "high", "max", "adaptive",
+)
+
+_STANDARD_EFFORT_DEFAULTS: dict[str, dict[str, Any]] = {
+    "none":     {"thinking_budget_tokens": 0},
+    "minimal":  {"thinking_budget_tokens": 0},
+    "low":      {"thinking_budget_tokens": 1024},
+    "medium":   {"thinking_budget_tokens": 4096},
+    "high":     {"thinking_budget_tokens": 16384},
+    "max":      {"thinking_budget_tokens": 0},
+    "adaptive": {"thinking_budget_tokens": 16384},
+}
+
+
+def _ensure_standard_effort_map(data: dict[str, Any]) -> bool:
+    """Seed any missing STANDARD_EFFORT_KEYS into the reasoning_effort_map.
+
+    Returns True if the settings dict was mutated (caller should persist).
+    Existing entries are never overwritten — only missing keys are filled.
+    """
+    inf = data.get("llamacpp", {}).get("inference")
+    if not isinstance(inf, dict):
+        return False
+    mapping = inf.get("reasoning_effort_map")
+    if mapping is None:
+        mapping = {}
+        inf["reasoning_effort_map"] = mapping
+    if not isinstance(mapping, dict):
+        return False
+    changed = False
+    for k in STANDARD_EFFORT_KEYS:
+        if k not in mapping:
+            mapping[k] = dict(_STANDARD_EFFORT_DEFAULTS[k])
+            changed = True
+    return changed
+
+
 _raw: dict[str, Any] = _load()
+if _ensure_standard_effort_map(_raw):
+    _save(_raw)
 
 
 def reload() -> None:
     global _raw
     _raw = _load()
+    if _ensure_standard_effort_map(_raw):
+        _save(_raw)
 
 
 def save() -> None:
