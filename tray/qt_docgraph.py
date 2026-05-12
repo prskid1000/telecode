@@ -22,7 +22,7 @@ import logging
 import time
 from typing import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QFrame, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QProgressBar,
@@ -1901,23 +1901,75 @@ def _restart_host_row(window) -> QWidget:
     return row
 
 
-_DOCGRAPH_EMBED_MODELS: list[tuple[str, str]] = [
-    ("Default (BAAI/bge-small-en-v1.5)  ·  384 · 67 MB · fastembed default", ""),
-    ("BAAI/bge-base-en-v1.5  ·  768 · 210 MB · BGE family base",
-     "BAAI/bge-base-en-v1.5"),
-    ("BAAI/bge-large-en-v1.5  ·  1024 · 1.2 GB · full-size BGE",
-     "BAAI/bge-large-en-v1.5"),
-    ("mxbai-embed-large-v1  ·  1024 · 640 MB · MTEB-top through 2024-25",
-     "mixedbread-ai/mxbai-embed-large-v1"),
-    ("jina-embeddings-v3  ·  1024 · 2.3 GB · ~100 langs · 2026 frontier",
-     "jinaai/jina-embeddings-v3"),
-    ("intfloat/multilingual-e5-large  ·  1024 · 2.2 GB · ~100 langs · best multilingual",
-     "intfloat/multilingual-e5-large"),
-    ("jina-embeddings-v2-base-code  ·  768 · 640 MB · 30+ prog langs · 8K ctx",
-     "jinaai/jina-embeddings-v2-base-code"),
-    ("all-MiniLM-L6-v2  ·  384 · 90 MB · most-downloaded sentence-transformer",
-     "sentence-transformers/all-MiniLM-L6-v2"),
-]
+def _hf_model_row(window, path: str, label: str, default_model: str,
+                  help_text: str = "", cli: str = "") -> QWidget:
+    """Free-text HuggingFace model-ID row with an optional existence check.
+
+    Saves on editingFinished (Enter / focus-out). The Check button fires an
+    async HEAD request to huggingface.co/api/models/<id> and updates a status
+    pill inline. Empty field = use the docgraph built-in default (shown as
+    placeholder).
+    """
+    outer = QWidget()
+    h = QHBoxLayout(outer)
+    h.setContentsMargins(0, 0, 0, 0)
+    h.setSpacing(6)
+
+    le = QLineEdit()
+    le.setPlaceholderText(f"{default_model}  (default)")
+    le.setText(str(get_path(read_settings(), path, "") or ""))
+    le.setMaximumWidth(400)
+
+    check_btn = QPushButton("Check")
+    check_btn.setProperty("class", "ghost")
+    check_btn.setFixedWidth(58)
+
+    status_lbl = QLabel("")
+    status_lbl.setMinimumWidth(86)
+    status_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
+
+    le.editingFinished.connect(lambda: patch_settings(path, le.text()))
+    le.textChanged.connect(lambda: (
+        status_lbl.setText(""),
+        status_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;"),
+    ))
+
+    async def _do_check():
+        model_id = (le.text().strip() or default_model).strip("/")
+        status_lbl.setText("checking…")
+        status_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
+        try:
+            import aiohttp
+            url = f"https://huggingface.co/api/models/{model_id}"
+            async with aiohttp.ClientSession() as sess:
+                async with sess.head(url, timeout=aiohttp.ClientTimeout(total=8),
+                                     allow_redirects=True) as resp:
+                    if resp.status == 200:
+                        status_lbl.setText("✓ found")
+                        status_lbl.setStyleSheet(f"color: {OK}; font-size: 11px;")
+                    elif resp.status == 404:
+                        status_lbl.setText("✗ not found")
+                        status_lbl.setStyleSheet(f"color: {ERR}; font-size: 11px;")
+                    else:
+                        status_lbl.setText(f"? {resp.status}")
+                        status_lbl.setStyleSheet(f"color: {WARN}; font-size: 11px;")
+        except Exception:
+            status_lbl.setText("error")
+            status_lbl.setStyleSheet(f"color: {ERR}; font-size: 11px;")
+
+    check_btn.clicked.connect(lambda: _run(window, _do_check))
+
+    h.addWidget(le, 1)
+    h.addWidget(check_btn)
+    h.addWidget(status_lbl)
+    h.addStretch(0)
+
+    return _row(row_label(label, help_text, path, cli), outer)
+
+
+# Default model IDs for placeholder text (= docgraph built-in defaults when field is empty).
+_DEFAULT_EMBED_MODEL = "BAAI/bge-small-en-v1.5"
+_DEFAULT_RERANK_MODEL = "jinaai/jina-reranker-v1-tiny-en"
 
 
 def _build_embeddings_card(window) -> tuple[QFrame, Callable[[], None] | None]:
@@ -1925,10 +1977,12 @@ def _build_embeddings_card(window) -> tuple[QFrame, Callable[[], None] | None]:
         "Embeddings",
         "Shared by index runs + host process.",
     )
-    body.addWidget(_enum_row_strs("docgraph.embeddings.model", "Model",
-                                    _DOCGRAPH_EMBED_MODELS,
-                                    "Schema dim auto-aligns to model. "
-                                    "Switching model = Clear + reindex."))
+    body.addWidget(_hf_model_row(window, "docgraph.embeddings.model", "Model",
+                                 _DEFAULT_EMBED_MODEL,
+                                 "HuggingFace model ID (fastembed-compatible). "
+                                 "Schema dim auto-aligns to model. "
+                                 "Switching to a different-dim model = Clear + reindex.",
+                                 cli="--embed-model"))
     body.addWidget(_toggle_row("docgraph.embeddings.gpu", "GPU embeddings",
                                 "Needs onnxruntime-gpu/-directml/-silicon. "
                                 "Forwarded to both the host process and any "
@@ -1947,26 +2001,6 @@ def _build_embeddings_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     return card, None
 
 
-# fastembed cross-encoder rerankers (verified against
-# TextCrossEncoder.list_supported_models()). Cross-encoders run query+doc
-# pairs through one model — much more accurate than the bi-encoder embedding
-# search but only viable on the top ~50 candidates. Loaded lazily on first
-# use; never paid if rerank stays off.
-_DOCGRAPH_RERANK_MODELS: list[tuple[str, str]] = [
-    ("Default (jinaai/jina-reranker-v1-tiny-en)  ·  130 MB · English · 8K ctx", ""),
-    ("jinaai/jina-reranker-v1-turbo-en  ·  150 MB · English · 8K ctx",
-     "jinaai/jina-reranker-v1-turbo-en"),
-    ("jinaai/jina-reranker-v2-base-multilingual  ·  1.1 GB · ~100 langs",
-     "jinaai/jina-reranker-v2-base-multilingual"),
-    ("BAAI/bge-reranker-base  ·  1.0 GB · English · MTEB strong",
-     "BAAI/bge-reranker-base"),
-    ("Xenova/ms-marco-MiniLM-L-12-v2  ·  120 MB · English · classic ms-marco",
-     "Xenova/ms-marco-MiniLM-L-12-v2"),
-    ("Xenova/ms-marco-MiniLM-L-6-v2  ·  80 MB · English · smallest",
-     "Xenova/ms-marco-MiniLM-L-6-v2"),
-]
-
-
 def _build_reranker_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     card, body = _card(
         "Reranker",
@@ -1975,9 +2009,11 @@ def _build_reranker_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     body.addWidget(_toggle_row("docgraph.rerank.default", "Always rerank",
                                 "Default rerank=true on /api/search + MCP search. "
                                 "Costs one cross-encoder pass per query."))
-    body.addWidget(_enum_row_strs("docgraph.rerank.model", "Model",
-                                    _DOCGRAPH_RERANK_MODELS,
-                                    "Lazy-loaded on first reranked search."))
+    body.addWidget(_hf_model_row(window, "docgraph.rerank.model", "Model",
+                                 _DEFAULT_RERANK_MODEL,
+                                 "HuggingFace model ID (fastembed cross-encoder). "
+                                 "Lazy-loaded on first reranked search.",
+                                 cli="--rerank-model"))
     body.addWidget(_toggle_row("docgraph.rerank.gpu", "GPU reranker",
                                 "Cross-encoder on GPU. Independent of "
                                 "embeddings GPU. Needs onnxruntime-gpu/"

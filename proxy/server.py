@@ -453,13 +453,21 @@ def _apply_tool_transforms(
                     "input_schema": fn.get("parameters", {"type": "object"}),
                 })
 
+        # Managed tools go through the same core/deferred split as client tools.
+        # If a managed tool's name is in core_names it stays core; otherwise it
+        # lands in deferred so ToolSearch can load it on demand.
+        for oa, anth in zip(managed_oa, inject_schemas):
+            if _fn_name(oa) in core_names:
+                core_tools_out.append(oa)
+            else:
+                deferred.append(anth)  # already Anthropic shape, ready for BM25
+
         # Inject ToolSearch meta-tool whenever we have deferred tools
         if deferred:
             from proxy.tool_registry import TOOL_SEARCH_TOOL
             core_tools_out.insert(0, _anth_to_openai_tool(TOOL_SEARCH_TOOL))
 
-        # Managed tools are always core-visible
-        tools = managed_oa + core_tools_out
+        tools = core_tools_out
     else:
         tools = managed_oa + tools
 
