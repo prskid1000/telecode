@@ -2263,12 +2263,10 @@ def _audio(window) -> QWidget:
                              _wrap_align(stt_pill, Qt.AlignmentFlag.AlignLeft)))
 
     stt_body.addWidget(_line_row("voice.stt.base_url", "Endpoint",
-                                   "http://127.0.0.1:6600/v1"))
-    stt_body.addWidget(_line_row("voice.stt.model", "Model",
-                                   "onnx-community/whisper-base-ONNX",
-                                   "Sent as the `model` form field. VoxType ignores this and "
-                                   "uses its own configured engine model; the default mirrors "
-                                   "VoxType's built-in STT (`whisper-base-ONNX`)."))
+                                   "http://127.0.0.1:6600/v1",
+                                   "Host + port of the STT server (VoxType by default). "
+                                   "VoxType picks the STT model from its own settings — "
+                                   "telecode only addresses the endpoint."))
 
     # STT Test button
     from voice.stt import transcribe as _stt_transcribe, HELLO_WORLD_AUDIO
@@ -2312,13 +2310,10 @@ def _audio(window) -> QWidget:
                              _wrap_align(tts_pill, Qt.AlignmentFlag.AlignLeft)))
 
     tts_body.addWidget(_line_row("voice.tts.base_url", "Endpoint",
-                                   "http://127.0.0.1:6600/v1"))
-    tts_body.addWidget(_line_row("voice.tts.voice", "Voice (optional)",
-                                   "0",
-                                   "Sent as the `voice` field. VoxType's Kokoro engine parses "
-                                   "this as a speaker integer (0–52 for the default "
-                                   "`kokoro-multi-lang-v1_0`). Leave blank to use the engine's "
-                                   "configured `tts_speaker`."))
+                                   "http://127.0.0.1:6600/v1",
+                                   "Host + port of the TTS server (VoxType by default). "
+                                   "VoxType picks the TTS model + voice from its own "
+                                   "settings — telecode only addresses the endpoint."))
 
     # TTS Test button — synthesizes a short phrase and stores the WAV.
     from voice.tts import synthesize as _tts_synthesize, HELLO_WORLD_TEXT

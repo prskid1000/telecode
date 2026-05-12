@@ -24,13 +24,11 @@
   "voice": {
     "stt": {
       "enabled": false,
-      "base_url": "http://127.0.0.1:6600/v1",
-      "model": "onnx-community/whisper-base-ONNX"
+      "base_url": "http://127.0.0.1:6600/v1"
     },
     "tts": {
       "enabled": false,
-      "base_url": "http://127.0.0.1:6600/v1",
-      "voice": "0"
+      "base_url": "http://127.0.0.1:6600/v1"
     }
   },
 

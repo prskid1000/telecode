@@ -26,24 +26,23 @@ def _tts_url() -> str:
 @mcp_app.tool()
 async def speak(
     text: str,
-    voice: str = "",
     output_path: str = "",
 ) -> str:
-    """Generate speech audio from text via a Piper/ONNX TTS endpoint.
+    """Generate speech audio from text via the configured TTS endpoint.
 
     Args:
         text: The text to speak.
-        voice: Optional voice identifier. Piper's model file IS the voice,
-            so this is usually ignored — left in for OpenAI-API compatibility.
         output_path: Optional file path for the output WAV. If empty, saves to a temp file.
 
     Returns:
         Absolute path to the generated audio file.
+
+    Note: the TTS server (VoxType) picks the model + voice from its own
+    settings — this tool only addresses the endpoint by host + port.
     """
     base = _tts_url().rstrip("/")
     url = f"{base}/v1/audio/speech"
-    payload: dict = {"model": "csukuangfj/kokoro-multi-lang-v1_0", "input": text}
-    payload["voice"] = voice if voice else "0"
+    payload: dict = {"input": text}
 
     async with aiohttp.ClientSession() as session:
         async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=60)) as resp:
