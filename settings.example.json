@@ -24,8 +24,13 @@
   "voice": {
     "stt": {
       "enabled": false,
-      "base_url": "http://localhost:6600/v1",
+      "base_url": "http://127.0.0.1:6600/v1",
       "model": "whisper-1"
+    },
+    "tts": {
+      "enabled": false,
+      "base_url": "http://127.0.0.1:6600/v1",
+      "voice": ""
     }
   },
 
@@ -47,7 +52,7 @@
     "host": "127.0.0.1",
     "port": 1236,
     "cors_origins": [],
-    "tts_url": "http://127.0.0.1:6500",
+    "tts_url": "http://127.0.0.1:6600",
     "stt_url": "http://127.0.0.1:6600"
   },
 

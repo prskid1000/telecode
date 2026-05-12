@@ -1,4 +1,9 @@
-"""Speech-to-text tool via Whisper STT."""
+"""Speech-to-text tool via OpenAI-compatible /v1/audio/transcriptions.
+
+Points at any whisper-compatible server (VoxType's embedded server,
+faster-whisper-server, OpenAI itself, etc.). URL is read at request
+time so settings changes take effect without restarting telecode.
+"""
 from __future__ import annotations
 
 import os
@@ -8,11 +13,15 @@ import aiohttp
 
 from mcp_server.app import mcp_app
 
-try:
-    import config as _cfg
-    _STT_URL = _cfg.get_nested("mcp_server.stt_url", "http://127.0.0.1:6600")
-except Exception:
-    _STT_URL = os.environ.get("WHISPER_URL", "http://127.0.0.1:6600")
+
+def _stt_url() -> str:
+    """Read the configured endpoint at request time (not import time)."""
+    try:
+        import config as _cfg
+        return _cfg.get_nested("mcp_server.stt_url", "http://127.0.0.1:6600")
+    except Exception:
+        return os.environ.get("WHISPER_URL", "http://127.0.0.1:6600")
+
 
 _CT_MAP = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".ogg": "audio/ogg",
            ".webm": "audio/webm", ".flac": "audio/flac", ".m4a": "audio/mp4"}
@@ -70,10 +79,11 @@ async def transcribe(
     form.add_field("language", language)
     form.add_field("response_format", "json")
 
+    base = _stt_url().rstrip("/")
     async with aiohttp.ClientSession() as session:
-        async with session.post(f"{_STT_URL}/v1/audio/transcriptions", data=form, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+        async with session.post(f"{base}/v1/audio/transcriptions", data=form, timeout=aiohttp.ClientTimeout(total=60)) as resp:
             if resp.status != 200:
                 body = await resp.text()
-                return f"Error: Whisper STT returned HTTP {resp.status}: {body[:200]}"
+                return f"Error: STT server returned HTTP {resp.status}: {body[:200]}"
             result = await resp.json()
             return result.get("text", "").strip() or "(empty transcription)"

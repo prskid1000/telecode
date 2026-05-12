@@ -273,7 +273,7 @@ The registry auto-creates a `GenericCLIBackend` for any key that isn't a special
 
 ## MCP server (`mcp_server/`)
 
-FastMCP streamable HTTP, port 1236. Drop-in `tools/` / `resources/` / `prompts/` auto-discovered via `pkgutil.iter_modules`. Built-ins: `speak` (Kokoro TTS), `transcribe` (Whisper STT), `web_search` (Brave). For local models routed through the proxy these are injected via `managed_tools.py` — no MCP connection needed; the MCP server is for external clients or Claude Code against the real Anthropic API.
+FastMCP streamable HTTP, port 1236. Drop-in `tools/` / `resources/` / `prompts/` auto-discovered via `pkgutil.iter_modules`. Built-ins: `speak` (OpenAI `/v1/audio/speech` client), `transcribe` (OpenAI `/v1/audio/transcriptions` client), `web_search` (Brave). Both audio tools point at VoxType's embedded server (port 6600) by default, but can be repointed at any OpenAI-compatible endpoint via `mcp_server.stt_url` / `mcp_server.tts_url`. For local models routed through the proxy these are injected via `managed_tools.py` — no MCP connection needed.
 
 `claude mcp add telecode --transport streamable-http --url http://127.0.0.1:1236/mcp`
 
@@ -304,7 +304,7 @@ FastMCP streamable HTTP, port 1236. Drop-in `tools/` / `resources/` / `prompts/`
 | ToolSearch not triggered | Model may not call it; check upstream reachable; with `proxy.debug` on, inspect `data/logs/proxy_full_*.json`. |
 | Tools missing after search | Try `re:` prefix; check `MAX_SEARCH_RESULTS`. |
 | MCP server not starting | `mcp_server.enabled: true`; port 1236 free. |
-| MCP speak/transcribe fails | Kokoro TTS on `:6500` / Whisper STT on `:6600` must be running. |
+| MCP speak/transcribe fails | VoxType's embedded server on `:6600` must be running (or repoint `mcp_server.stt_url` / `mcp_server.tts_url` at any OpenAI-compatible STT/TTS endpoint). |
 | DocGraph host won't start | `data/logs/docgraph_host.log`. Verify `docgraph.binary`. |
 | DocGraph host can't bind port | Another process holds `docgraph.host.port`. The supervisor sweeps before bind. |
 | DocGraph index Kuzu lock error | `docgraph index` subprocess and host both opened the same DB. The IndexRunner is supposed to route through `/api/admin/index` when the host is alive — check `docgraph_index.log` for "host route failed". |

@@ -454,8 +454,8 @@ Activation is lazy: the first voice message hits the endpoint directly; health s
 | `enabled` | Start the MCP server |
 | `host` | Listen address (default `127.0.0.1`) |
 | `port` | Listen port (default `1236`) |
-| `tts_url` | Kokoro TTS base URL for the `speak` tool (default `http://127.0.0.1:6500`) |
-| `stt_url` | Whisper STT base URL for the `transcribe` tool (default `http://127.0.0.1:6600`) |
+| `tts_url` | TTS base URL — OpenAI `/v1/audio/speech` compatible (default `http://127.0.0.1:6600`, served by VoxType's embedded server) |
+| `stt_url` | STT base URL — OpenAI `/v1/audio/transcriptions` compatible (default `http://127.0.0.1:6600`, same VoxType server) |
 | `cors_origins` | CORS allowed origins — empty = disabled |
 
 Ships with `speak`, `transcribe`, `web_search`. Add new tools by dropping a `.py` file under `mcp_server/tools/`.
@@ -814,8 +814,8 @@ mcp_server/app.py (FastMCP + Starlette + CORS middleware)
     │
     ▼
 mcp_server/tools/*.py   (auto-discovered via pkgutil)
-    ├── tts.py         → Kokoro TTS (speak)
-    ├── stt.py         → Whisper STT (transcribe)
+    ├── tts.py         → OpenAI /v1/audio/speech client (speak)
+    ├── stt.py         → OpenAI /v1/audio/transcriptions client (transcribe)
     └── web_search.py  → Brave scraper (same backend as proxy's WebSearch)
 
 mcp_server/resources/  ← drop-in auto-discover (empty by default)
@@ -875,8 +875,8 @@ mcp_server/            Streamable-HTTP MCP server (port 1236)
   app.py               FastMCP instance + CORS wrapper
   server.py            Background thread launcher
   tools/               Drop-in tool modules (auto-discovered)
-    tts.py             speak — Kokoro TTS
-    stt.py             transcribe — Whisper STT
+    tts.py             speak — POST /v1/audio/speech (VoxType :6600 by default)
+    stt.py             transcribe — POST /v1/audio/transcriptions (VoxType :6600 by default)
     web_search.py      web_search — Brave scraper
     code_execution.py  code_execution — sandboxed Python subprocess
   resources/           Drop-in resource modules (auto-discovered)
