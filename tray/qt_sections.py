@@ -2265,9 +2265,10 @@ def _audio(window) -> QWidget:
     stt_body.addWidget(_line_row("voice.stt.base_url", "Endpoint",
                                    "http://127.0.0.1:6600/v1"))
     stt_body.addWidget(_line_row("voice.stt.model", "Model",
-                                   "whisper-1",
-                                   "Sent as the `model` form field. The actual model is "
-                                   "decided by the STT server (VoxType reads its own setting)."))
+                                   "onnx-community/whisper-base-ONNX",
+                                   "Sent as the `model` form field. VoxType ignores this and "
+                                   "uses its own configured engine model; the default mirrors "
+                                   "VoxType's built-in STT (`whisper-base-ONNX`)."))
 
     # STT Test button
     from voice.stt import transcribe as _stt_transcribe, HELLO_WORLD_AUDIO
@@ -2313,10 +2314,11 @@ def _audio(window) -> QWidget:
     tts_body.addWidget(_line_row("voice.tts.base_url", "Endpoint",
                                    "http://127.0.0.1:6600/v1"))
     tts_body.addWidget(_line_row("voice.tts.voice", "Voice (optional)",
-                                   "",
-                                   "Sent as the `voice` field. Piper voices ignore this — the "
-                                   "model file IS the voice. Leave blank unless your TTS "
-                                   "server expects a voice identifier."))
+                                   "0",
+                                   "Sent as the `voice` field. VoxType's Kokoro engine parses "
+                                   "this as a speaker integer (0–52 for the default "
+                                   "`kokoro-multi-lang-v1_0`). Leave blank to use the engine's "
+                                   "configured `tts_speaker`."))
 
     # TTS Test button — synthesizes a short phrase and stores the WAV.
     from voice.tts import synthesize as _tts_synthesize, HELLO_WORLD_TEXT

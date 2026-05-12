@@ -42,9 +42,8 @@ async def speak(
     """
     base = _tts_url().rstrip("/")
     url = f"{base}/v1/audio/speech"
-    payload: dict = {"model": "tts-1", "input": text}
-    if voice:
-        payload["voice"] = voice
+    payload: dict = {"model": "csukuangfj/kokoro-multi-lang-v1_0", "input": text}
+    payload["voice"] = voice if voice else "0"
 
     async with aiohttp.ClientSession() as session:
         async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=60)) as resp:

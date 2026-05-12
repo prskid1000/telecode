@@ -75,7 +75,7 @@ async def transcribe(
 
     form = aiohttp.FormData()
     form.add_field("file", audio_bytes, filename=filename, content_type=content_type)
-    form.add_field("model", "whisper-1")
+    form.add_field("model", "onnx-community/whisper-base-ONNX")
     form.add_field("language", language)
     form.add_field("response_format", "json")
 
