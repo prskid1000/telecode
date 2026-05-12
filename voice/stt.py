@@ -46,7 +46,7 @@ async def transcribe(audio_bytes: bytes, filename: str = "voice.ogg", timeout: f
     try:
         form = aiohttp.FormData()
         form.add_field("file", io.BytesIO(audio_bytes), filename=filename, content_type=ct)
-        form.add_field("model", config.stt_model())
+        # No `model` field — VoxType picks the STT model from its own settings.
         async with aiohttp.ClientSession() as s:
             async with s.post(url, data=form, timeout=aiohttp.ClientTimeout(total=timeout)) as r:
                 if r.status != 200:

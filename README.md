@@ -430,13 +430,16 @@ All options live in `settings.json`. See [`settings.example.json`](settings.exam
 
 Short-output shells like `shell` or `powershell` can use tighter values (e.g. `0.5` / `2.5`) so output appears promptly; TUIs like Claude Code benefit from the defaults so spinners/status lines don't spam.
 
-### `voice.stt` — transcribe Telegram voice messages
+### `voice.stt` / `voice.tts` — speech endpoints (served by VoxType by default)
 
 | Key | Description |
 |---|---|
-| `enabled` | Turn on voice-to-text |
-| `base_url` | OpenAI-compatible STT endpoint (e.g. `http://localhost:6600/v1`) |
-| `model` | STT model name (e.g. `whisper-1`) |
+| `voice.stt.enabled` / `voice.tts.enabled` | Turn STT / TTS integration on |
+| `voice.stt.base_url` / `voice.tts.base_url` | OpenAI-compatible endpoint (default `http://127.0.0.1:6600/v1`) |
+
+Only `base_url` — telecode addresses the endpoint by host + port; the
+server (VoxType) decides which STT/TTS model + voice to use. No `model`
+or `voice` keys.
 
 Activation is lazy: the first voice message hits the endpoint directly; health state is driven by the outcome of that real request (and subsequent ones). No startup probe, no 60s poll loop.
 

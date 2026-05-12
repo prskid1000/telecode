@@ -16,28 +16,21 @@ from voice import health as _health
 log = logging.getLogger("telecode.voice.tts")
 
 
-async def synthesize(text: str, voice: str = "", timeout: float = 30.0) -> bytes | None:
+async def synthesize(text: str, timeout: float = 30.0) -> bytes | None:
     """POST `text` to the configured TTS endpoint and return WAV bytes.
 
     Returns None on any failure. Updates the shared voice.health status
     so the Audio settings pill flips reachable/unreachable on every call.
+
+    No `model` / `voice` fields — VoxType controls both via its own
+    settings. Telecode only addresses the endpoint by host + port.
     """
     try:
         base = config.tts_base_url().rstrip("/")
     except Exception:
         base = "http://127.0.0.1:6600/v1"
     url = f"{base}/audio/speech"
-    # Pull voice default from config (default "0" = first Kokoro speaker)
-    if not voice:
-        try:
-            voice = config.tts_voice() or "0"
-        except Exception:
-            voice = "0"
-    payload: dict = {
-        "model": "csukuangfj/kokoro-multi-lang-v1_0",
-        "input": text,
-        "voice": voice,
-    }
+    payload: dict = {"input": text}
     try:
         async with aiohttp.ClientSession() as s:
             async with s.post(url, json=payload,

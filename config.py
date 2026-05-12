@@ -162,19 +162,18 @@ def tool_stream_max_wait_sec(key: str) -> float:
 
 
 # ── STT ───────────────────────────────────────────────────────────────────────
+# Only the connection target. VoxType controls which STT model is loaded.
 def stt_enabled()  -> bool: return bool(_raw["voice"]["stt"]["enabled"])
 def stt_base_url() -> str:  return _raw["voice"]["stt"]["base_url"]
-def stt_model()    -> str:  return _raw["voice"]["stt"]["model"]
 
 
 # ── TTS ───────────────────────────────────────────────────────────────────────
+# Only the connection target. VoxType controls which TTS model + voice is used.
 def tts_enabled()  -> bool:
     return bool(((_raw.get("voice") or {}).get("tts") or {}).get("enabled", False))
 def tts_base_url() -> str:
     return str(((_raw.get("voice") or {}).get("tts") or {}).get(
         "base_url", "http://127.0.0.1:6600/v1"))
-def tts_voice()    -> str:
-    return str(((_raw.get("voice") or {}).get("tts") or {}).get("voice", ""))
 
 
 # ── Capture intervals ────────────────────────────────────────────────────────
