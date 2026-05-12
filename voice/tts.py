@@ -27,9 +27,17 @@ async def synthesize(text: str, voice: str = "", timeout: float = 30.0) -> bytes
     except Exception:
         base = "http://127.0.0.1:6600/v1"
     url = f"{base}/audio/speech"
-    payload: dict = {"model": "tts-1", "input": text}
-    if voice:
-        payload["voice"] = voice
+    # Pull voice default from config (default "0" = first Kokoro speaker)
+    if not voice:
+        try:
+            voice = config.tts_voice() or "0"
+        except Exception:
+            voice = "0"
+    payload: dict = {
+        "model": "csukuangfj/kokoro-multi-lang-v1_0",
+        "input": text,
+        "voice": voice,
+    }
     try:
         async with aiohttp.ClientSession() as s:
             async with s.post(url, json=payload,
