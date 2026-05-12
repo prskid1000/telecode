@@ -853,15 +853,6 @@ def _llama(window) -> QWidget:
 
     # Reasoning card
     rcard, rbody = _card("Reasoning")
-    # "Use reasoning" is INVERSE of disable_thinking
-    use_t = Toggle()
-    use_t.setChecked(not bool(get_path(read_settings(), "llamacpp.inference.disable_thinking", False)))
-    def _on_use(_s: int) -> None:
-        patch_settings("llamacpp.inference.disable_thinking", not use_t.isChecked())
-    use_t.stateChanged.connect(_on_use)
-    rbody.addWidget(_row(row_label("Use Reasoning",
-                                    "Off → inject chat_template_kwargs.enable_thinking=false (Qwen3.5)."),
-                          _wrap_align(use_t, Qt.AlignmentFlag.AlignLeft)))
     rbody.addWidget(_toggle_row("llamacpp.inference.reasoning.enabled",
                                  "Parse <think> Blocks",
                                  "Split <think>…</think> out of the text stream."))
@@ -893,120 +884,101 @@ def _llama(window) -> QWidget:
     ab.setSpacing(8)
     add_key_edit = QLineEdit()
     add_key_edit.setPlaceholderText("preset key (e.g. ultra)")
-    add_key_edit.setMaximumWidth(200)
-    add_preset_btn = QPushButton("+ Add Preset")
+    add_key_edit.setMinimumWidth(360)
+    add_preset_btn = QPushButton("+ Add")
     add_preset_btn.setProperty("class", "primary")
-    ab.addWidget(add_key_edit)
+    add_preset_btn.setMaximumWidth(80)
+    ab.addWidget(add_key_edit, 1)
     ab.addWidget(add_preset_btn)
     ab.addStretch(1)
     map_body.addWidget(add_bar)
 
-    _ENABLE_OPTIONS = [("(default)", None), ("on", True), ("off", False)]
+    from config import STANDARD_EFFORT_KEYS as _STD_EFFORT_KEYS
 
     def _build_effort_row(key: str, data: dict) -> QWidget:
         ek = key.replace(".", r"\.")
         base = f"llamacpp.inference.reasoning_effort_map.{ek}"
+        is_standard = key.lower() in _STD_EFFORT_KEYS
 
         row = QFrame()
         row.setStyleSheet(
             f"QFrame {{ background: {_BG_ELEV_MAP}; border: 1px solid {BORDER};"
             f" border-radius: 6px; }}"
         )
-        outer = QVBoxLayout(row)
-        outer.setContentsMargins(10, 8, 10, 10)
-        outer.setSpacing(6)
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(10, 6, 10, 6)
+        rl.setSpacing(10)
 
-        head_w = QWidget()
-        head_l = QHBoxLayout(head_w)
-        head_l.setContentsMargins(0, 0, 0, 0)
-        head_l.setSpacing(8)
-        chev = QPushButton("▶")
-        chev.setFlat(True)
-        chev.setCursor(Qt.CursorShape.PointingHandCursor)
-        chev.setFixedWidth(22)
-        chev.setStyleSheet(
-            f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent;"
-            f" padding: 0; font-size: 11px; }}"
-            f" QPushButton:hover {{ color: {FG}; }}"
-        )
-        head = QLabel(f"<b style='color:{FG}'>{key}</b>")
-        head.setTextFormat(Qt.TextFormat.RichText)
-        head.setCursor(Qt.CursorShape.PointingHandCursor)
-        rm_btn = QPushButton("Remove")
-        rm_btn.setProperty("class", "danger")
-        rm_btn.setMaximumWidth(90)
-        head_l.addWidget(chev)
-        head_l.addWidget(head, 1)
-        head_l.addWidget(rm_btn)
-        outer.addWidget(head_w)
+        # Name column — QLabel for standard keys, QLineEdit for custom (renamable)
+        if is_standard:
+            label_html = (
+                f"<b style='color:{FG}'>{key}</b>"
+                f" <span style='color:{FG_MUTE}; font-weight:normal; font-size:10.5px;'>· standard</span>"
+            )
+            head = QLabel(label_html)
+            head.setTextFormat(Qt.TextFormat.RichText)
+            head.setMinimumWidth(140)
+        else:
+            head = QLineEdit(key)
+            head.setMinimumWidth(140)
+            head.setMaximumWidth(180)
+            head.setStyleSheet(
+                f"QLineEdit {{ background: transparent; border: 1px solid transparent;"
+                f" color: {FG}; font-weight: bold; padding: 2px 4px; }}"
+                f" QLineEdit:focus {{ border: 1px solid {BORDER}; background: {BG_ELEV}; }}"
+            )
+            head.setToolTip("Custom preset — edit name to rename. Standard keys (none/minimal/low/medium/high/max/adaptive) cannot be renamed.")
 
-        body = QWidget()
-        body.setStyleSheet("QWidget { background: transparent; border: none; }")
-        rl = QGridLayout(body)
-        rl.setContentsMargins(0, 0, 0, 0)
-        rl.setHorizontalSpacing(10)
-        rl.setVerticalSpacing(6)
-        outer.addWidget(body)
+            def _commit_rename(old=key, e=head):
+                new = e.text().strip()
+                if not new or new == old:
+                    e.setText(old)
+                    return
+                if new.lower() in _STD_EFFORT_KEYS:
+                    _QMessageBox.warning(content, "Reserved",
+                                         f"'{new}' is a standard key — choose a different name.")
+                    e.setText(old)
+                    return
+                if not re.match(r"^[A-Za-z0-9_-]+$", new):
+                    _QMessageBox.warning(content, "Invalid Key",
+                                         "Use letters, digits, underscore, or dash only.")
+                    e.setText(old)
+                    return
+                existing = get_path(read_settings(), "llamacpp.inference.reasoning_effort_map", {}) or {}
+                if new in existing:
+                    _QMessageBox.warning(content, "Exists",
+                                         f"Preset '{new}' already exists.")
+                    e.setText(old)
+                    return
+                cur_data = existing.get(old, {})
+                old_ek = old.replace(".", r"\.")
+                new_ek = new.replace(".", r"\.")
+                remove_path(f"llamacpp.inference.reasoning_effort_map.{old_ek}")
+                patch_settings(f"llamacpp.inference.reasoning_effort_map.{new_ek}", cur_data)
+                _refresh_effort_map()
+            head.editingFinished.connect(_commit_rename)
 
-        # thinking_budget_tokens
-        tbt_lbl = QLabel("Budget Tokens"); tbt_lbl.setStyleSheet(f"color: {FG_DIM};")
+        # Budget Tokens — the only knob, inline on the same row
+        tbt_lbl = QLabel("Budget"); tbt_lbl.setStyleSheet(f"color: {FG_DIM};")
         tbt = NumberEditor(0, 262144, 256, 0, "tok")
         tbt.setValue(float(data.get("thinking_budget_tokens", 0) or 0))
         tbt.valueChanged.connect(
             lambda v, b=base: patch_settings(f"{b}.thinking_budget_tokens", int(v))
         )
-        rl.addWidget(tbt_lbl, 0, 0)
-        rl.addWidget(tbt, 0, 1)
 
-        # reasoning_effort (string; empty = field omitted)
-        re_lbl = QLabel("Effort"); re_lbl.setStyleSheet(f"color: {FG_DIM};")
-        re_edit = QLineEdit()
-        re_edit.setText(str(data.get("reasoning_effort", "") or ""))
-        re_edit.setPlaceholderText("low / medium / high (blank = omit)")
-        def _commit_effort(b=base, e=re_edit):
-            val = e.text().strip()
-            if val:
-                patch_settings(f"{b}.reasoning_effort", val)
-            else:
-                remove_path(f"{b}.reasoning_effort")
-        re_edit.editingFinished.connect(_commit_effort)
-        rl.addWidget(re_lbl, 1, 0)
-        rl.addWidget(re_edit, 1, 1)
+        rm_btn = QPushButton("Remove")
+        rm_btn.setProperty("class", "danger")
+        rm_btn.setMaximumWidth(90)
+        if is_standard:
+            rm_btn.setEnabled(False)
+            rm_btn.setToolTip("Standard Claude Code / OpenAI effort key — cannot be deleted. Edit Budget inline.")
 
-        # enable_thinking — tri-state (default / on / off)
-        et_lbl = QLabel("Enable Thinking"); et_lbl.setStyleSheet(f"color: {FG_DIM};")
-        et_combo = QComboBox()
-        for disp, _val in _ENABLE_OPTIONS:
-            et_combo.addItem(disp)
-        cur = data.get("enable_thinking", None)
-        if "enable_thinking" not in data:
-            et_combo.setCurrentIndex(0)
-        elif bool(cur):
-            et_combo.setCurrentIndex(1)
-        else:
-            et_combo.setCurrentIndex(2)
+        rl.addWidget(head)
+        rl.addWidget(tbt_lbl)
+        rl.addWidget(tbt, 1)
+        rl.addWidget(rm_btn)
 
-        def _commit_enable(_i, b=base, c=et_combo):
-            disp, val = _ENABLE_OPTIONS[c.currentIndex()]
-            if val is None:
-                remove_path(f"{b}.enable_thinking")
-            else:
-                patch_settings(f"{b}.enable_thinking", bool(val))
-        et_combo.currentIndexChanged.connect(_commit_enable)
-        rl.addWidget(et_lbl, 2, 0)
-        rl.addWidget(et_combo, 2, 1)
-        rl.setColumnStretch(1, 1)
-
-        body.setVisible(False)
-
-        def _toggle(_=None, b=body, c=chev):
-            new_state = not b.isVisible()
-            b.setVisible(new_state)
-            c.setText("▼" if new_state else "▶")
-        chev.clicked.connect(_toggle)
-        head.mousePressEvent = lambda ev, t=_toggle: t()
-
-        def _on_remove(b=base, k=key):
+        def _on_remove(_checked=False, b=base, k=key):
             if _QMessageBox.question(content, "Remove Preset",
                                       f"Delete reasoning effort preset '{k}'?") \
                     != _QMessageBox.StandardButton.Yes:
@@ -3131,9 +3103,15 @@ def _models(window) -> QWidget:
                                            "--reasoning-budget. -1 = unlimited, 0 = disable thinking."))
         form_layout.addWidget(_number_row(f"{p}.reasoning_budget_message","Reasoning Budget (per message)", -1, 1048576, 256, 0, "tok",
                                            "--reasoning-budget-message. Per-turn cap."))
-        form_layout.addWidget(_line_row(f"{p}.reasoning_format",          "Reasoning Format",
-                                         "deepseek / none",
-                                         "--reasoning-format: how the server tags think blocks."))
+        form_layout.addWidget(_enum_row_strs(f"{p}.reasoning_format", "Reasoning Format",
+                                              [("(model default)", ""),
+                                               ("none — keep <think> inline", "none"),
+                                               ("deepseek — split into reasoning_content", "deepseek"),
+                                               ("deepseek-legacy — both", "deepseek-legacy"),
+                                               ("auto", "auto")],
+                                              "--reasoning-format: how the server tags think blocks. "
+                                              "Telecode parses <think> in the proxy — pick 'none' if this "
+                                              "model is consumed via the proxy."))
 
     def _refresh_picker(preserve_key: str | None = None):
         picker.blockSignals(True)

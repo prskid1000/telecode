@@ -286,34 +286,23 @@ def _apply_effort_entry(
 ) -> str:
     """Apply one reasoning_effort_map entry to the outgoing body.
 
-    Recognized keys (everything else ignored — forward-compatible):
-      enable_thinking        bool  → chat_template_kwargs.enable_thinking
+    Recognized keys:
       thinking_budget_tokens int   → body.thinking_budget_tokens (llama.cpp
                                       enforces this server-side; 0 = unlimited)
-      reasoning_effort       str   → chat_template_kwargs.reasoning_effort
-                                      (for models whose chat template uses it)
       max_tokens             int   → body.max_tokens (hard cap on total output)
       system_nudge           str   → returned — caller prepends to system
-                                      (legacy fallback; prefer the numeric knobs)
+
+    Template-specific knobs (Qwen's `enable_thinking`, GPT-OSS's
+    `reasoning_effort`) live on the per-model `chat_template_kwargs` config,
+    not here — this map is the universal effort layer.
 
     Returns the system_nudge (may be "") so the caller can handle prompt-level
     injection in its own flow.
     """
-    # chat_template_kwargs layer
-    ct_patch: dict[str, Any] = {}
-    if "enable_thinking" in entry:
-        ct_patch["enable_thinking"] = bool(entry["enable_thinking"])
-    if "reasoning_effort" in entry and entry["reasoning_effort"]:
-        ct_patch["reasoning_effort"] = str(entry["reasoning_effort"])
-    _merge_chat_template_kwargs(out_body, ct_patch)
-
-    # Native llama.cpp thinking budget (hard server-side cap)
     if "thinking_budget_tokens" in entry:
         out_body["thinking_budget_tokens"] = int(entry["thinking_budget_tokens"])
 
-    # Optional overall token cap
     if "max_tokens" in entry and entry["max_tokens"] is not None:
-        # Respect a tighter cap — but don't grow a caller-supplied cap.
         cur = out_body.get("max_tokens")
         new = int(entry["max_tokens"])
         if cur is None or new < cur:
@@ -332,31 +321,6 @@ def _apply_model_chat_template_kwargs(body: dict[str, Any],
     cfg = defaults.get("chat_template_kwargs")
     if isinstance(cfg, dict) and cfg:
         _merge_chat_template_kwargs(body, cfg)
-
-
-def _apply_thinking_off(body: dict[str, Any],
-                         defaults: dict[str, Any] | None = None) -> None:
-    """Hard-disable reasoning on this request by resolving the model's
-    `reasoning_effort_map["none"]` entry — that's where family-specific
-    off-switches live (Qwen: `enable_thinking=false`; other templates:
-    whatever kwarg they read).
-
-    If no such map entry exists the proxy logs a warning and does
-    nothing — there's no universal "turn reasoning off" knob, and
-    guessing would either be a no-op for the wrong family or silently
-    break a different one. Configure `reasoning_effort_map.none` in
-    settings.json to declare your model's off-switch."""
-    entry = _resolve_reasoning_effort("none", defaults or {})
-    if entry:
-        _apply_effort_entry(entry, body)
-        return
-    import logging as _logging
-    _logging.getLogger("telecode.proxy").warning(
-        "_apply_thinking_off: no reasoning_effort_map['none'] entry for "
-        "this model — master disable_thinking switch is a no-op. Add an "
-        "entry like {'enable_thinking': false} for Qwen, or whatever kwarg "
-        "your template reads."
-    )
 
 
 def _resolve_reasoning_effort(
@@ -498,7 +462,7 @@ def anthropic_request_to_internal(
         else:
             effort = "medium"
     elif tt == "adaptive":
-        effort = "high"
+        effort = "adaptive"
     elif tt == "disabled":
         effort = "none"
 
@@ -540,10 +504,6 @@ def anthropic_request_to_internal(
     # effort resolution can still override individual keys.
     _apply_model_chat_template_kwargs(out, defaults)
     nudge = _apply_effort_entry(entry, out)
-    # Master "Use reasoning" switch (settings.json llamacpp.inference.disable_thinking)
-    # — only applies if the client didn't explicitly send `thinking` already.
-    if not thinking_param and bool(defaults.get("disable_thinking", False)):
-        _apply_thinking_off(out, defaults)
     # direct budget from client overrides whatever the map said
     if direct_budget is not None:
         out["thinking_budget_tokens"] = direct_budget
@@ -672,10 +632,6 @@ def openai_request_to_internal(
     entry = _resolve_reasoning_effort(effort, defaults)
     _apply_model_chat_template_kwargs(body, defaults)
     sys_nudge = _apply_effort_entry(entry, body)
-    # Master "Use reasoning" switch from settings.json — only fires when the
-    # client didn't explicitly send a reasoning_effort.
-    if effort is None and bool(defaults.get("disable_thinking", False)):
-        _apply_thinking_off(body, defaults)
 
     messages = body.get("messages") or []
     if sys_nudge:

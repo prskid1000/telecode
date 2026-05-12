@@ -235,7 +235,6 @@
       "max_tokens": null,
       "stop": [],
       "context_overflow": "truncate_middle",
-      "disable_thinking": false,
       "drop_prior_thinking": true,
 
       "reasoning": {
@@ -246,13 +245,14 @@
       },
 
       "reasoning_effort_map": {
-        "none":    {"enable_thinking": false, "thinking_budget_tokens": 0},
-        "minimal": {"enable_thinking": false, "thinking_budget_tokens": 0},
-        "low":     {"thinking_budget_tokens": 1024,  "reasoning_effort": "low"},
-        "medium":  {"thinking_budget_tokens": 4096,  "reasoning_effort": "medium"},
-        "high":    {"thinking_budget_tokens": 16384, "reasoning_effort": "high"},
-        "xhigh":   {"thinking_budget_tokens": 65536, "reasoning_effort": "high"},
-        "max":     {"thinking_budget_tokens": 0,     "reasoning_effort": "high"}
+        "none":     {"thinking_budget_tokens": 0},
+        "minimal":  {"thinking_budget_tokens": 0},
+        "low":      {"thinking_budget_tokens": 1024},
+        "medium":   {"thinking_budget_tokens": 4096},
+        "high":     {"thinking_budget_tokens": 16384},
+        "xhigh":    {"thinking_budget_tokens": 65536},
+        "max":      {"thinking_budget_tokens": 0},
+        "adaptive": {"thinking_budget_tokens": 16384}
       },
 
       "structured_output": { "enabled": false, "schema": null, "grammar": null }
