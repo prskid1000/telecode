@@ -268,6 +268,20 @@ def _build_host_card(window) -> tuple[QFrame, Callable[[], None]]:
                                 "Default 500. Only used with watched roots.",
                                 cli="--debounce"))
 
+    # Endpoints — derived from {Bind Host}:{Bind Port}. Updated by
+    # refresh_status() so editing the host/port fields shows the new
+    # URLs immediately, without waiting for a Restart.
+    endpoints_lbl = QLabel("")
+    endpoints_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+    endpoints_lbl.setOpenExternalLinks(True)
+    endpoints_lbl.setStyleSheet(
+        f"color: {OK}; font-size: 11.5px; font-family: 'JetBrains Mono', Consolas, monospace;"
+    )
+    endpoints_lbl.setWordWrap(True)
+    body.addWidget(_row(row_label("Endpoints",
+        "REST API / MCP streamable-HTTP. Telecode bridges the MCP "
+        "endpoint into the proxy as `docgraph_*` tools."), endpoints_lbl))
+
     actions = QWidget()
     ar = QHBoxLayout(actions)
     ar.setContentsMargins(0, 0, 0, 0); ar.setSpacing(8)
@@ -294,6 +308,21 @@ def _build_host_card(window) -> tuple[QFrame, Callable[[], None]]:
         start_btn.setEnabled(not alive and not busy)
         stop_btn.setEnabled(alive and not busy)
         restart_btn.setEnabled(alive and not busy)
+
+        # Endpoints (recomputed every refresh — host/port edits land in
+        # settings.json on focus-out, so the next 1 s tick shows them).
+        try:
+            from docgraph import config as _dg_cfg
+            h = (_dg_cfg.host_host() or "127.0.0.1").strip() or "127.0.0.1"
+            p = int(_dg_cfg.host_port() or 5500)
+        except Exception:
+            h, p = "127.0.0.1", 5500
+        base = f"http://{h}:{p}"
+        endpoints_lbl.setText(
+            f"<a style='color:{OK}' href='{base}/api/roots'>{base}/api/</a>"
+            f" &nbsp;·&nbsp; "
+            f"<span style='color:{OK}'><b>{base}/mcp/</b></span>"
+        )
 
     def _on_start():
         async def _go():
