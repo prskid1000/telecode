@@ -61,7 +61,8 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("kv_offload",       ("--kv-offload", "--no-kv-offload"),   "bool_pair"),
     ("kv_unified",       ("--kv-unified", "--no-kv-unified"),   "bool_pair"),
     ("cache_prompt",     ("--cache-prompt", "--no-cache-prompt"), "bool_pair"),
-    ("clear_idle",       ("--clear-idle", "--no-clear-idle"),   "bool_pair"),
+    # renamed from --clear-idle/--no-clear-idle in upstream commit 9d49acb
+    ("cache_idle_slots", ("--cache-idle-slots", "--no-cache-idle-slots"), "bool_pair"),
     ("cache_ram",                  "--cache-ram",                 "value_nz"),
     ("defrag_thold",               "--defrag-thold",              "value_nz"),
     ("ctx_checkpoints",            "--ctx-checkpoints",           "value_nz"),

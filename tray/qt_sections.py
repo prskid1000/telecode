@@ -18,7 +18,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
     QScrollArea, QGridLayout, QComboBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QLineEdit, QSpinBox, QSizePolicy,
+    QHeaderView, QLineEdit, QSpinBox, QSizePolicy, QProgressBar, QMessageBox,
 )
 
 from tray.qt_widgets import Toggle, NumberEditor, WrapLabel, row_label
@@ -617,6 +617,296 @@ def _refresh_telegram(tile: "_StatusTile") -> None:
 # llama.cpp
 # ══════════════════════════════════════════════════════════════════════
 
+def _llama_updater_card(window) -> QWidget:
+    """Updater card — check GitHub releases + overlay new binaries.
+
+    Variant: auto-detected on first open (saved to llamacpp.update.variant)
+    with a dropdown for manual override. "Check for Updates" pulls the
+    latest release info; "Update Now" downloads the matched zip and
+    overlays it onto the directory containing llamacpp.binary, backing
+    up any overwritten files into a per-install .bak-<ts>/ folder.
+    """
+    from PySide6.QtCore import QObject, Signal as _Signal
+    from llamacpp import updater as upd
+
+    class _UpdBridge(QObject):
+        status = _Signal(str, float)        # message, ratio (0..1)
+        check_done = _Signal(dict)          # {ok, tag, build, asset_name, error}
+        install_done = _Signal(dict)        # {ok, asset, files_installed, files_replaced, backup, error}
+
+    bridge = _UpdBridge()
+
+    card, body = _card("Updater",
+                       "Pull pre-built binaries from ggml-org/llama.cpp releases and overlay them on the install folder")
+
+    # ── Variant row (auto-detect + dropdown) ──────────────────────────
+    variant_box = QComboBox()
+    variants = upd.variants_for_platform()
+    variant_box.addItem("Auto-detect (recommended)", "")
+    for key, label in variants:
+        variant_box.addItem(label, key)
+
+    saved_variant = str(get_path(read_settings(), "llamacpp.update.variant", "") or "")
+    if saved_variant:
+        for i in range(variant_box.count()):
+            if variant_box.itemData(i) == saved_variant:
+                variant_box.setCurrentIndex(i)
+                break
+
+    def _resolved_variant() -> str:
+        chosen = variant_box.currentData() or ""
+        return chosen if chosen else upd.detect_variant()
+
+    auto_hint = QLabel("")
+    auto_hint.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px; padding-top: 2px;")
+
+    def _refresh_auto_hint() -> None:
+        detected = upd.detect_variant()
+        label = next((lbl for k, lbl in variants if k == detected), detected)
+        auto_hint.setText(f"Auto-detect → {label}")
+    _refresh_auto_hint()
+
+    variant_col = QWidget()
+    vc = QVBoxLayout(variant_col)
+    vc.setContentsMargins(0, 0, 0, 0)
+    vc.setSpacing(2)
+    vc.addWidget(variant_box)
+    vc.addWidget(auto_hint)
+
+    def _on_variant_changed(_i: int) -> None:
+        patch_settings("llamacpp.update.variant", variant_box.currentData() or "")
+    variant_box.currentIndexChanged.connect(_on_variant_changed)
+
+    body.addWidget(_row(row_label("Variant",
+                                   "Which release zip to pull. Auto-detect probes nvidia-smi / GPU "
+                                   "and falls back to Vulkan."),
+                        variant_col))
+
+    # ── Version rows ──────────────────────────────────────────────────
+    cur_label = QLabel("—")
+    cur_label.setStyleSheet(f"color: {FG}; font-family: 'JetBrains Mono', Consolas, monospace;")
+    body.addWidget(_row(row_label("Installed",
+                                   "Build number reported by `llama-server --version`."),
+                        cur_label))
+
+    latest_label = QLabel("—")
+    latest_label.setStyleSheet(f"color: {FG}; font-family: 'JetBrains Mono', Consolas, monospace;")
+    body.addWidget(_row(row_label("Latest available",
+                                   "Run \"Check for Updates\" to fetch the latest release tag."),
+                        latest_label))
+
+    asset_label = QLabel("—")
+    asset_label.setStyleSheet(f"color: {FG_MUTE}; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 11px;")
+    body.addWidget(_row(row_label("Matched asset",
+                                   "Asset name that will be downloaded for the chosen variant."),
+                        asset_label))
+
+    install_dir_label = QLabel(str(upd.install_dir()))
+    install_dir_label.setStyleSheet(f"color: {FG_MUTE}; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 11px;")
+    install_dir_label.setWordWrap(True)
+    body.addWidget(_row(row_label("Install folder",
+                                   "Directory holding llamacpp.binary — this is where the new files land."),
+                        install_dir_label))
+
+    # ── Actions + progress ───────────────────────────────────────────
+    check_btn = QPushButton("Check for Updates")
+    update_btn = QPushButton("Update Now")
+    update_btn.setProperty("class", "primary")
+    update_btn.setEnabled(False)
+
+    status_lbl = QLabel("")
+    status_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11.5px;")
+
+    progress = QProgressBar()
+    progress.setRange(0, 100)
+    progress.setValue(0)
+    progress.setTextVisible(False)
+    progress.setFixedHeight(6)
+    progress.hide()
+
+    actions = QWidget()
+    al = QHBoxLayout(actions)
+    al.setContentsMargins(0, 0, 0, 0)
+    al.setSpacing(8)
+    al.addWidget(check_btn)
+    al.addWidget(update_btn)
+    al.addStretch(1)
+    body.addWidget(actions)
+    body.addWidget(status_lbl)
+    body.addWidget(progress)
+
+    # State shared with the action handlers (last-seen check result).
+    _state: dict[str, Any] = {"release": None, "asset": None, "latest_build": None,
+                              "companions": [], "variant_key": ""}
+
+    # ── Status / signal handling ─────────────────────────────────────
+    def _on_status(msg: str, ratio: float) -> None:
+        status_lbl.setText(msg)
+        if ratio > 0.0:
+            progress.show()
+            progress.setValue(max(0, min(100, int(ratio * 100))))
+    bridge.status.connect(_on_status)
+
+    def _refresh_installed() -> None:
+        v = upd.installed_version()
+        if v:
+            cur_label.setText(f"b{v}")
+        else:
+            cur_label.setText("(unknown — run `llama-server --version` to check)")
+        install_dir_label.setText(str(upd.install_dir()))
+
+    def _on_check_done(res: dict) -> None:
+        check_btn.setEnabled(True)
+        if not res.get("ok"):
+            latest_label.setText("—")
+            asset_label.setText("—")
+            update_btn.setEnabled(False)
+            status_lbl.setText(f"Check failed: {res.get('error') or 'unknown error'}")
+            return
+        tag = res.get("tag") or ""
+        build = res.get("build") or ""
+        latest_label.setText(f"b{build}  ({tag})" if build else tag)
+        asset_name = res.get("asset_name") or ""
+        companions = res.get("companions") or []
+        if asset_name:
+            display = asset_name
+            if companions:
+                display += "\n  + " + "\n  + ".join(companions)
+            asset_label.setText(display)
+            update_btn.setEnabled(True)
+            cur = upd.installed_version()
+            if cur and build and cur == build and not companions:
+                status_lbl.setText("Already on the latest build.")
+            else:
+                msg = "New build available." if cur != build else ""
+                if companions:
+                    msg = (msg + " " if msg else "") + f"Will also fetch {len(companions)} companion zip(s)."
+                status_lbl.setText(msg)
+        else:
+            asset_label.setText("(no asset matches this variant)")
+            update_btn.setEnabled(False)
+            status_lbl.setText("No matching asset for the selected variant.")
+    bridge.check_done.connect(_on_check_done)
+
+    def _on_install_done(res: dict) -> None:
+        check_btn.setEnabled(True)
+        update_btn.setEnabled(True)
+        if not res.get("ok"):
+            status_lbl.setText(f"Update failed: {res.get('error') or 'unknown error'}")
+            return
+        msg = (f"Installed {res.get('asset')} → {res.get('files_installed', 0)} files "
+               f"({res.get('files_replaced', 0)} replaced)")
+        if res.get("backup"):
+            msg += f" · backup: {res['backup']}"
+        status_lbl.setText(msg)
+        progress.setValue(100)
+        _refresh_installed()
+    bridge.install_done.connect(_on_install_done)
+
+    # ── Button handlers ──────────────────────────────────────────────
+    def _on_check() -> None:
+        check_btn.setEnabled(False)
+        update_btn.setEnabled(False)
+        progress.hide()
+        progress.setValue(0)
+        status_lbl.setText("Fetching latest release info…")
+        variant_key = _resolved_variant()
+
+        async def _do() -> None:
+            try:
+                release = await upd.fetch_latest_release()
+                tag = str(release.get("tag_name") or "")
+                build = upd.build_from_tag(tag) or ""
+                asset = upd.pick_asset(release, variant_key)
+                companions: list[dict] = []
+                # CUDA variants: pair with the cudart zip unless our system
+                # already has a cudart64_<major>.dll whose file version is
+                # >= the version the asset was built against. NVIDIA only
+                # guarantees forward compatibility (newer cudart hosts older
+                # binaries), so an asset built on 13.1 won't run on a
+                # 13.0-only system.
+                cuda_major = upd.cuda_major_of_variant(variant_key)
+                if cuda_major is not None and asset is not None:
+                    if not upd.cudart_satisfies(asset.get("name", "")):
+                        cudart = upd.pick_cudart_asset(release, variant_key)
+                        if cudart:
+                            companions.append(cudart)
+                _state["release"] = release
+                _state["asset"] = asset
+                _state["latest_build"] = build
+                _state["companions"] = companions
+                _state["variant_key"] = variant_key
+                bridge.check_done.emit({
+                    "ok": True,
+                    "tag": tag,
+                    "build": build,
+                    "asset_name": (asset or {}).get("name", ""),
+                    "companions": [c.get("name", "") for c in companions],
+                })
+            except Exception as exc:
+                log.exception("llama.cpp updater: check failed")
+                bridge.check_done.emit({"ok": False, "error": str(exc)})
+        schedule(window.bot_loop, _do())
+    check_btn.clicked.connect(_on_check)
+
+    def _on_update() -> None:
+        asset = _state.get("asset")
+        if not asset:
+            status_lbl.setText("Run \"Check for Updates\" first.")
+            return
+        cur = upd.installed_version()
+        latest = _state.get("latest_build") or ""
+        companions = _state.get("companions") or []
+        total_size = (int(asset.get("size") or 0)
+                      + sum(int(c.get("size") or 0) for c in companions))
+        lines = [
+            f"Download {asset.get('name')}",
+            f"  size: ~{(int(asset.get('size') or 0)) / 1_048_576:.1f} MiB",
+        ]
+        for c in companions:
+            lines.append(f"+ {c.get('name')} (~{(int(c.get('size') or 0)) / 1_048_576:.1f} MiB)")
+        lines.append("")
+        lines.append(f"Total: ~{total_size / 1_048_576:.1f} MiB")
+        lines.append(f"Installs into: {upd.install_dir()}")
+        lines.append(f"Installed: b{cur or '?'} → latest: b{latest or '?'}")
+        lines.append("")
+        lines.append("The running llama-server will be stopped; existing files "
+                     "will be backed up under .bak-<timestamp>/ inside the install folder.")
+        info = "\n".join(lines)
+        resp = QMessageBox.question(card, "Update llama.cpp", info,
+                                    QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+                                    QMessageBox.StandardButton.Ok)
+        if resp != QMessageBox.StandardButton.Ok:
+            return
+
+        check_btn.setEnabled(False)
+        update_btn.setEnabled(False)
+        progress.show()
+        progress.setValue(0)
+        status_lbl.setText("Starting update…")
+
+        def _progress(msg: str, ratio: float) -> None:
+            # Called from the bot loop — funnel to the Qt thread via signal.
+            bridge.status.emit(msg, ratio)
+
+        async def _do() -> None:
+            try:
+                res = await upd.download_and_install(
+                    asset,
+                    companions=companions,
+                    progress=_progress,
+                )
+                bridge.install_done.emit(res)
+            except Exception as exc:
+                log.exception("llama.cpp updater: install failed")
+                bridge.install_done.emit({"ok": False, "error": str(exc)})
+        schedule(window.bot_loop, _do())
+    update_btn.clicked.connect(_on_update)
+
+    _refresh_installed()
+    return card
+
+
 def _llama(window) -> QWidget:
     scroll, content, layout = _page()
 
@@ -711,6 +1001,9 @@ def _llama(window) -> QWidget:
 
     layout.addWidget(master)
 
+    # ── Updater ──────────────────────────────────────────────────────
+    layout.addWidget(_llama_updater_card(window))
+
     # Server (binary + binding)
     srv_card, srv_body = _card("Server", "llamacpp.* — binary + binding (restart required)")
     srv_body.addWidget(_line_row("llamacpp.binary", "Binary Path", "llama-server",
@@ -773,8 +1066,9 @@ def _llama(window) -> QWidget:
                                       "--kv-unified / --no-kv-unified: single KV buffer shared across all slots."))
     cache_body.addWidget(_toggle_row("llamacpp.cache_prompt",   "Cache Prompt",
                                       "--cache-prompt / --no-cache-prompt: reuse KV across requests with shared prefixes."))
-    cache_body.addWidget(_toggle_row("llamacpp.clear_idle",     "Clear Idle Slots",
-                                      "--clear-idle / --no-clear-idle: save and clear idle slots when a new task arrives."))
+    cache_body.addWidget(_toggle_row("llamacpp.cache_idle_slots", "Cache Idle Slots",
+                                      "--cache-idle-slots / --no-cache-idle-slots: save and clear idle slots when a new task arrives. "
+                                      "(Renamed from --clear-idle in upstream b9145.)"))
     cache_body.addWidget(_number_row("llamacpp.cache_ram",      "Cache RAM Ceiling", 0, 524288, 128, 0, "MiB",
                                       "-cram, --cache-ram: maximum host-memory cache size. 0 = unset."))
     cache_body.addWidget(_toggle_row("llamacpp.swa_full",       "SWA Full Cache",
