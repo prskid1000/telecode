@@ -19,6 +19,8 @@ per-request knobs handled by the translator when constructing
 """
 from __future__ import annotations
 
+from typing import Optional
+
 import config as app_config
 from llamacpp import config as cfg
 
@@ -43,9 +45,21 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("parallel",         "--parallel",        "value"),
     ("cont_batching",    "--cont-batching",   "flag"),
 
+    # Scheduler / OS scheduling
+    ("cpu_strict",       "--cpu-strict",       "value"),
+    ("cpu_strict_batch", "--cpu-strict-batch", "value"),
+    ("prio",             "--prio",             "value"),
+    ("prio_batch",       "--prio-batch",       "value"),
+    ("poll",             "--poll",             "value"),
+    ("poll_batch",       "--poll-batch",       "value"),
+    ("threads_http",     "--threads-http",     "value_nz"),
+
     # Memory policy
     ("mlock",            "--mlock",           "flag"),
     ("no_mmap",          "--no-mmap",         "flag"),
+    ("no_host",          "--no-host",         "flag"),
+    ("repack",           ("--repack", "--no-repack"),           "bool_pair"),
+    ("op_offload",       ("--op-offload", "--no-op-offload"),   "bool_pair"),
 
     # Hardware layout
     ("main_gpu",         "--main-gpu",        "value"),
@@ -63,21 +77,53 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("cache_prompt",     ("--cache-prompt", "--no-cache-prompt"), "bool_pair"),
     # renamed from --clear-idle/--no-clear-idle in upstream commit 9d49acb
     ("cache_idle_slots", ("--cache-idle-slots", "--no-cache-idle-slots"), "bool_pair"),
+    ("context_shift",    ("--context-shift", "--no-context-shift"), "bool_pair"),
+    ("warmup",           ("--warmup", "--no-warmup"),             "bool_pair"),
     ("cache_ram",                  "--cache-ram",                 "value_nz"),
     ("defrag_thold",               "--defrag-thold",              "value_nz"),
     ("ctx_checkpoints",            "--ctx-checkpoints",           "value_nz"),
     ("checkpoint_every_n_tokens",  "--checkpoint-every-n-tokens", "value_nz"),
     ("swa_full",                   "--swa-full",                  "flag"),
     ("slot_save_path",             "--slot-save-path",            "path"),
+    ("sleep_idle_seconds",         "--sleep-idle-seconds",        "value_nz"),
 
-    # Speculative decoding algorithm (server-wide choice)
+    # Speculative decoding algorithm (server-wide choice).
+    # The per-ngram size/min-hits knobs are dispatched in _emit_spec_ngram()
+    # because each spec_type takes its own per-mode flag now.
     ("spec_type",                "--spec-type",            "value"),
-    ("spec_ngram_size_n",        "--spec-ngram-size-n",    "value_nz"),
-    ("spec_ngram_size_m",        "--spec-ngram-size-m",    "value_nz"),
-    ("spec_ngram_min_hits",      "--spec-ngram-min-hits",  "value_nz"),
     ("threads_draft",            "--threads-draft",        "value_nz"),
     ("threads_batch_draft",      "--threads-batch-draft",  "value_nz"),
 ]
+
+
+# spec_type → (size-n flag, size-m flag, min-hits flag). None entries are no-op.
+# Upstream replaced the single --spec-ngram-* flags with per-mode variants;
+# ngram-mod has only n-match (the "lookup length" knob), no size-m / min-hits.
+_NGRAM_FLAG_MAP: dict[str, tuple[Optional[str], Optional[str], Optional[str]]] = {
+    "ngram-simple":  ("--spec-ngram-simple-size-n",  "--spec-ngram-simple-size-m",  "--spec-ngram-simple-min-hits"),
+    "ngram-map-k":   ("--spec-ngram-map-k-size-n",   "--spec-ngram-map-k-size-m",   "--spec-ngram-map-k-min-hits"),
+    "ngram-map-k4v": ("--spec-ngram-map-k4v-size-n", "--spec-ngram-map-k4v-size-m", "--spec-ngram-map-k4v-min-hits"),
+    "ngram-mod":     ("--spec-ngram-mod-n-match",    None,                          None),
+}
+
+
+def _emit_spec_ngram(argv: list[str], gcfg: dict) -> None:
+    """Translate the historical `spec_ngram_size_n/_m/_min_hits` keys to the
+    per-spec-type flags llama-server now requires (b9145+)."""
+    st = str(gcfg.get("spec_type", "") or "").strip()
+    mapping = _NGRAM_FLAG_MAP.get(st)
+    if not mapping:
+        return
+    n_flag, m_flag, h_flag = mapping
+    for key, flag in (("spec_ngram_size_n", n_flag),
+                      ("spec_ngram_size_m", m_flag),
+                      ("spec_ngram_min_hits", h_flag)):
+        if flag is None:
+            continue
+        val = gcfg.get(key)
+        if val in (None, "", 0, "0"):
+            continue
+        argv += [flag, str(val)]
 
 
 # Per-model flags read from llamacpp.models.<m>.*
@@ -111,16 +157,18 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     # Vision
     ("mmproj",        "--mmproj",          "path"),
 
-    # Draft model (paired with main model)
+    # Draft model (paired with main model). Upstream b9145 dropped
+    # --draft-max/--draft-min/--ctx-size-draft; the replacements are the
+    # --spec-draft-* family. --draft-p-min is still accepted as an alias of
+    # --spec-draft-p-min.
     ("draft_model",         "--model-draft",        "path"),
-    ("ctx_size_draft",      "--ctx-size-draft",     "value_nz"),
     ("n_gpu_layers_draft",  "--n-gpu-layers-draft", "value_nz"),
     ("cache_type_k_draft",  "--cache-type-k-draft", "value"),
     ("cache_type_v_draft",  "--cache-type-v-draft", "value"),
     ("device_draft",        "--device-draft",       "value"),
-    ("draft_n",       "--draft-max",       "value"),
-    ("draft_n_min",   "--draft-min",       "value"),
-    ("draft_p_min",   "--draft-p-min",     "value"),
+    ("draft_n",       "--spec-draft-n-max", "value"),
+    ("draft_n_min",   "--spec-draft-n-min", "value"),
+    ("draft_p_min",   "--spec-draft-p-min", "value"),
 
     # N-gram lookup cache (only active when spec_type=ngram-cache; server
     # does not implement save, so dynamic file is never written — load only)
@@ -222,6 +270,7 @@ def build_argv(model_name: str) -> list[str]:
     # Server-wide flags (top-level llamacpp.*)
     for k, flag, kind in _GLOBAL_FLAG_SPECS:
         _emit_flag(argv, gcfg, k, flag, kind)
+    _emit_spec_ngram(argv, gcfg)
 
     # Per-model flags
     for k, flag, kind in _MODEL_FLAG_SPECS:

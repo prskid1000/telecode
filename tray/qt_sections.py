@@ -1055,6 +1055,30 @@ def _llama(window) -> QWidget:
                                       "--seed: -1 = random."))
     spawn_body.addWidget(_number_row("llamacpp.keep",           "Keep Tokens",       0, 8192, 32, 0, "tok",
                                       "--keep: tokens from prompt always kept when truncating."))
+
+    spawn_body.addWidget(_section_header("Scheduling"))
+    spawn_body.addWidget(_number_row("llamacpp.cpu_strict",       "CPU Strict",        0, 1, 1, 0, "",
+                                      "--cpu-strict <0|1>: pin threads strictly to selected cores (default 0)."))
+    spawn_body.addWidget(_number_row("llamacpp.cpu_strict_batch", "CPU Strict (batch)",0, 1, 1, 0, "",
+                                      "--cpu-strict-batch: same as --cpu-strict but for prompt-processing threads."))
+    spawn_body.addWidget(_number_row("llamacpp.prio",             "Priority",         -1, 3, 1, 0, "",
+                                      "--prio: process/thread priority. -1=low, 0=normal, 1=medium, 2=high, 3=realtime."))
+    spawn_body.addWidget(_number_row("llamacpp.prio_batch",       "Priority (batch)", -1, 3, 1, 0, "",
+                                      "--prio-batch: priority for prompt-processing threads."))
+    spawn_body.addWidget(_number_row("llamacpp.poll",             "Polling",           0, 100, 5, 0, "",
+                                      "--poll <0..100>: polling intensity when waiting for work. 0=no polling, 50=default."))
+    spawn_body.addWidget(_number_row("llamacpp.poll_batch",       "Polling (batch)",   0, 100, 5, 0, "",
+                                      "--poll-batch: polling for the batch pool."))
+    spawn_body.addWidget(_number_row("llamacpp.threads_http",     "HTTP Threads",      0, 128, 1, 0, "",
+                                      "--threads-http: HTTP request worker threads. 0 = unset (server default)."))
+
+    spawn_body.addWidget(_section_header("Memory / Offload"))
+    spawn_body.addWidget(_toggle_row("llamacpp.no_host",          "No Host Buffer",
+                                      "--no-host: skip host (CPU) buffer allocations so secondary buffers can be used. Advanced."))
+    spawn_body.addWidget(_toggle_row("llamacpp.repack",           "Weight Repack",
+                                      "--repack / --no-repack: pack weights for faster CPU kernels (default enabled)."))
+    spawn_body.addWidget(_toggle_row("llamacpp.op_offload",       "Op Offload",
+                                      "--op-offload / --no-op-offload: offload host tensor ops to device (default enabled)."))
     layout.addWidget(spawn_card)
 
     # Caching policy card — server-wide
@@ -1069,6 +1093,13 @@ def _llama(window) -> QWidget:
     cache_body.addWidget(_toggle_row("llamacpp.cache_idle_slots", "Cache Idle Slots",
                                       "--cache-idle-slots / --no-cache-idle-slots: save and clear idle slots when a new task arrives. "
                                       "(Renamed from --clear-idle in upstream b9145.)"))
+    cache_body.addWidget(_toggle_row("llamacpp.context_shift",  "Context Shift",
+                                      "--context-shift / --no-context-shift: rotate the KV ring buffer instead of erroring on context overflow."))
+    cache_body.addWidget(_toggle_row("llamacpp.warmup",         "Warmup",
+                                      "--warmup / --no-warmup: run a token-less warmup pass at load (default enabled)."))
+    cache_body.addWidget(_number_row("llamacpp.sleep_idle_seconds", "Sleep Idle After", 0, 86400, 60, 0, "s",
+                                      "--sleep-idle-seconds: send the server to a low-power sleep after N seconds of idleness. "
+                                      "Note: telecode's own idle_unload still runs and will fully stop llama-server first."))
     cache_body.addWidget(_number_row("llamacpp.cache_ram",      "Cache RAM Ceiling", 0, 524288, 128, 0, "MiB",
                                       "-cram, --cache-ram: maximum host-memory cache size. 0 = unset."))
     cache_body.addWidget(_toggle_row("llamacpp.swa_full",       "SWA Full Cache",
@@ -1097,12 +1128,15 @@ def _llama(window) -> QWidget:
                                     ("N-gram Cache (on-disk)",   "ngram-cache")],
                                    "--spec-type. Auto = server picks based on whether a draft model is set. "
                                    "ngram-cache is the only mode that reads --lookup-cache-* files."))
-    spec_body.addWidget(_number_row("llamacpp.spec_ngram_size_n",   "N-gram N",            0, 16, 1, 0, "",
-                                     "--spec-ngram-size-n: lookup key length. 0 = default."))
-    spec_body.addWidget(_number_row("llamacpp.spec_ngram_size_m",   "N-gram M",            0, 16, 1, 0, "",
-                                     "--spec-ngram-size-m: draft length per match. 0 = default."))
+    # The three rows below feed --spec-ngram-{simple,map-k,map-k4v}-{size-n,size-m,min-hits}
+    # — argv.build_argv() picks the per-mode flag from the chosen Spec Type
+    # (ngram-mod ignores size-m and min-hits; it only takes n-match).
+    spec_body.addWidget(_number_row("llamacpp.spec_ngram_size_n",   "N-gram N",            0, 64, 1, 0, "",
+                                     "Lookup key length (ngram-mod: n-match; others: size-n). 0 = server default."))
+    spec_body.addWidget(_number_row("llamacpp.spec_ngram_size_m",   "N-gram M",            0, 64, 1, 0, "",
+                                     "Draft length per match (size-m). Ignored for ngram-mod. 0 = default."))
     spec_body.addWidget(_number_row("llamacpp.spec_ngram_min_hits", "N-gram Min Hits",     0, 64, 1, 0, "",
-                                     "--spec-ngram-min-hits: minimum match frequency for map-based modes."))
+                                     "Minimum match frequency (min-hits). Ignored for ngram-mod. 0 = default."))
     spec_body.addWidget(_number_row("llamacpp.threads_draft",       "Threads (draft)",     0, 128, 1, 0, "",
                                      "--threads-draft: CPU threads for draft-model generation. 0 = match --threads."))
     spec_body.addWidget(_number_row("llamacpp.threads_batch_draft", "Threads (draft batch)", 0, 128, 1, 0, "",
@@ -3319,8 +3353,6 @@ def _models(window) -> QWidget:
                                          "D:/models/draft-0.6b.gguf",
                                          "--model-draft: separate small LM for draft tokens. "
                                          "Leave empty + Spec Type=ngram-simple for prompt-lookup self-speculation."))
-        form_layout.addWidget(_number_row(f"{p}.ctx_size_draft",     "Draft Ctx Size",   0, 1048576, 256, 0, "tok",
-                                           "--ctx-size-draft: context size for the draft model. 0 = match main."))
         form_layout.addWidget(_number_row(f"{p}.n_gpu_layers_draft", "Draft GPU Layers", 0, 200, 1, 0, "",
                                            "--n-gpu-layers-draft / -ngld: layers of the draft model on GPU."))
         form_layout.addWidget(_enum_row_strs(f"{p}.cache_type_k_draft", "Draft Cache (K)", [("(default)", "")] + _CACHE_TYPES,
@@ -3331,11 +3363,11 @@ def _models(window) -> QWidget:
                                          "e.g. CUDA0,CUDA1",
                                          "--device-draft / -devd: comma-separated device list for draft offload."))
         form_layout.addWidget(_number_row(f"{p}.draft_n",     "Draft Max Tokens",  0, 32,   1,    0, "",
-                                           "--draft-max: max draft tokens per step. 0 = disabled. Typical: 8."))
+                                           "--spec-draft-n-max: max draft tokens per step. 0 = disabled. Typical: 8."))
         form_layout.addWidget(_number_row(f"{p}.draft_n_min", "Draft Min Tokens",  0, 32,   1,    0, "",
-                                           "--draft-min: minimum draft length before accepting. Typical: 0–2."))
+                                           "--spec-draft-n-min: minimum draft length before accepting. Typical: 0–2."))
         form_layout.addWidget(_number_row(f"{p}.draft_p_min", "Draft Min Probability", 0.0, 1.0, 0.05, 2, "",
-                                           "--draft-p-min: reject draft tokens below this probability. "
+                                           "--spec-draft-p-min: reject draft tokens below this probability. "
                                            "Draft-model: 0.5–0.75. N-gram: 0.1."))
         form_layout.addWidget(_line_row(f"{p}.lookup_cache_static", "Lookup Cache (static)",
                                          "./data/lookup-static.bin",
