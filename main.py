@@ -253,8 +253,9 @@ async def _async_main(token: str) -> None:
         log.warning(w)
 
     # Build Application — lifecycle managed manually so the bot is optional.
+    # initialize() is deferred to BotSupervisor.start() because it calls
+    # bot.get_me() against api.telegram.org and would block offline boot.
     app = Application.builder().token(token).build()
-    await app.initialize()
 
     mgr = SessionManager()
     app.bot_data["session_manager"] = mgr
@@ -406,7 +407,7 @@ async def _async_main(token: str) -> None:
             pass
 
     try:
-        await app.shutdown()
+        await bot_sup.shutdown_app()
     except Exception as exc:
         log.error("Application shutdown error: %s", exc)
 

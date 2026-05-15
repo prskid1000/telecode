@@ -52,7 +52,7 @@ Heartbeat scheduler (off by default, settings.heartbeat.enabled=true):
 | `settings.json` | Only config source. |
 | `config.py` | Read/write accessors (always functions for hot-reload). `store_path` / `logs_dir` resolve relative to the `settings.json` directory. |
 | `main.py` | App startup, handlers. Runs `asyncio.run(_async_main())` — no `run_polling()`. Telegram is optional: `telegram.auto_start: false` lets the process boot offline. |
-| `bot/supervisor.py` | `BotSupervisor` — mirrors `HostSupervisor`; owns `app.start()` / `updater.start_polling()` / `updater.stop()` / `app.stop()` lifecycle + optional auto-restart loop. Singleton via `get_supervisor()` / `set_supervisor()`. |
+| `bot/supervisor.py` | `BotSupervisor` — mirrors `HostSupervisor`; owns `app.initialize()` / `app.start()` / `updater.start_polling()` / `updater.stop()` / `app.stop()` / `app.shutdown()` lifecycle + optional auto-restart loop. `initialize()` is deferred until first `start()` so telecode boots offline (PTB's `Application.initialize()` calls `bot.get_me()` against `api.telegram.org`). Singleton via `get_supervisor()` / `set_supervisor()`. |
 | `store.py` | Topics JSON. |
 | `sessions/terminal.py` | PTY + pyte + snapshot diff + timers. |
 | `sessions/screen.py` | Image capture, video recording, window enumeration. |
