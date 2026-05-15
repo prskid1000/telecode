@@ -45,6 +45,7 @@ class BotSupervisor:
         self._mgr = mgr
         self._alive = False
         self._busy = False
+        self._initialized = False
         self._last_error: str | None = None
         self._restart_task: asyncio.Task | None = None
         self._topic_task: asyncio.Task | None = None
@@ -57,6 +58,12 @@ class BotSupervisor:
         self._busy = True
         try:
             log.info("BotSupervisor: starting")
+            if not self._initialized:
+                # Deferred until first start so telecode can boot offline:
+                # Application.initialize() calls bot.get_me() against
+                # api.telegram.org.
+                await self._app.initialize()
+                self._initialized = True
             await self._app.start()
             await self._app.updater.start_polling(drop_pending_updates=True)
             self._alive = True
@@ -102,6 +109,15 @@ class BotSupervisor:
         log.info("BotSupervisor: restarting")
         await self.stop()
         await self.start()
+
+    async def shutdown_app(self) -> None:
+        """Tear down the PTB Application. No-op if initialize() never ran."""
+        if not self._initialized:
+            return
+        try:
+            await self._app.shutdown()
+        finally:
+            self._initialized = False
 
     def alive(self) -> bool:
         if not self._alive:
