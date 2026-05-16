@@ -9,32 +9,95 @@ injection, tool injection, model-mapping) don't skew the numbers.
 """
 from __future__ import annotations
 
+import random
 import time
 import aiohttp
 
 from llamacpp import config as cfg
 
 
-_SEED_TEXT = (
-    "The quick brown fox jumps over the lazy dog. "
-    "Far out in the uncharted backwaters of the unfashionable end of the "
-    "western spiral arm of the galaxy lies a small unregarded yellow sun. "
-    "It was a bright cold day in April, and the clocks were striking thirteen. "
-    "All happy families are alike; each unhappy family is unhappy in its own way. "
-    "In the beginning the Universe was created. This has made a lot of people "
-    "very angry and been widely regarded as a bad move. "
-    "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod "
-    "tempor incididunt ut labore et dolore magna aliqua. "
+# A varied corpus — opening sentences from many different public-domain works,
+# plus technical/news/code-ish snippets. The point is to keep the n-gram
+# distribution wide so speculative draft models (ngram, draft-LM) don't get
+# free acceptance the way they do on a single repeated paragraph.
+_SEED_SENTENCES: tuple[str, ...] = (
+    "The quick brown fox jumps over the lazy dog.",
+    "Far out in the uncharted backwaters of the unfashionable end of the western spiral arm of the galaxy lies a small unregarded yellow sun.",
+    "It was a bright cold day in April, and the clocks were striking thirteen.",
+    "All happy families are alike; each unhappy family is unhappy in its own way.",
+    "In the beginning the Universe was created; this has made a lot of people very angry and been widely regarded as a bad move.",
+    "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
+    "Call me Ishmael. Some years ago, never mind how long precisely, having little or no money in my purse, I thought I would sail about.",
+    "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife.",
+    "Mr and Mrs Dursley, of number four, Privet Drive, were proud to say that they were perfectly normal, thank you very much.",
+    "Many years later, as he faced the firing squad, Colonel Aureliano Buendia was to remember that distant afternoon when his father took him to discover ice.",
+    "It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness.",
+    "The sky above the port was the color of television, tuned to a dead channel.",
+    "In a hole in the ground there lived a hobbit; not a nasty, dirty, wet hole filled with the ends of worms and an oozy smell.",
+    "Once upon a time, there was a woman who discovered she had turned into the wrong person.",
+    "You don't know about me without you have read a book by the name of The Adventures of Tom Sawyer, but that ain't no matter.",
+    "The Pacific Ocean covers more than thirty percent of the Earth's surface and contains more than half its free water.",
+    "Photosynthesis converts carbon dioxide and water into glucose and oxygen, powered by photons in the visible range.",
+    "The mitochondrion is a double-membrane-bound organelle found in most eukaryotic cells, generating most of the cell's supply of ATP.",
+    "Quantum entanglement is a physical phenomenon that occurs when groups of particles share a quantum state, even when separated by large distances.",
+    "Black holes form when a massive star collapses under its own gravity, leaving behind a region from which not even light can escape.",
+    "Reinforcement learning trains agents to maximize cumulative reward through trial and error in an environment with delayed feedback signals.",
+    "Transformers use self-attention to weigh the relative importance of every token in a sequence, allowing parallel computation across positions.",
+    "The Linux kernel scheduler decides which runnable process gets the CPU next, balancing throughput, latency, fairness, and power consumption.",
+    "A cache coherence protocol ensures that local copies of shared data across multiple processor caches remain consistent under concurrent writes.",
+    "TCP guarantees in-order, reliable delivery on top of an unreliable IP network by sequencing bytes, retransmitting losses, and pacing flow.",
+    "Public-key cryptography uses a pair of mathematically linked keys so that anyone can encrypt for a recipient but only the recipient can decrypt.",
+    "Garbage collection automates memory reclamation by tracing reachable objects from a root set and freeing whatever is no longer accessible.",
+    "Database indexes trade write amplification and storage for dramatically faster lookups, especially on selective columns in large tables.",
+    "The federal reserve raised interest rates by twenty-five basis points on Wednesday, signaling a more cautious stance amid persistent inflation.",
+    "Markets opened lower on news of slowing manufacturing output in Asia, though tech shares rallied on a stronger-than-expected earnings report.",
+    "Researchers at MIT announced a new battery chemistry that could roughly double the energy density of commercial lithium-ion cells.",
+    "Drought conditions in the southwest deepened over the summer, prompting emergency water-use restrictions across three counties.",
+    "The orchestra concluded with a stirring rendition of Beethoven's seventh symphony, the audience rising before the final chord had faded.",
+    "She tightened the bowline, leaned back into the harness, and stepped off the ledge, trusting the rope and the anchor and very little else.",
+    "Coffee, when grown in volcanic soil at altitude and slow-dried in the husk, develops a winey acidity that pairs unexpectedly with dark chocolate.",
+    "The recipe called for browning the butter until it smelled like toasted hazelnuts, then folding it gently into the egg yolks before adding the flour.",
+    "On long flights I find that a thin merino layer, broken-in shoes, and a paperback you do not mind losing make the indignities of travel bearable.",
+    "She paused at the threshold, listening, and for a moment everything in the house seemed to be holding its breath along with her.",
+    "Function composition, currying, and immutable data structures together form the practical core of most functional programming styles.",
+    "When debugging a heisenbug, instrument first, hypothesize second, and never trust a fix you cannot explain mechanism by mechanism.",
 )
 
 
-def _build_prompt(target_tokens: int) -> str:
+def _build_prompt(target_tokens: int, seed: int = 0xC0FFEE) -> str:
+    """Build a varied, deterministic prompt by sampling without replacement until we
+    overshoot, then trimming. Different from _build_exact_prompt (which uses
+    /tokenize for precision) — this is the cheap, sync version.
+    """
     if target_tokens <= 0:
         return " "
-    # English averages ~4 chars/token on llama tokenizers; 5 gives a safe upper bound.
+    rng = random.Random(seed)
+    pool = list(_SEED_SENTENCES)
+    rng.shuffle(pool)
     char_target = int(target_tokens * 5)
-    repeats = (char_target // len(_SEED_TEXT)) + 1
-    return (_SEED_TEXT * repeats)[:char_target]
+    out: list[str] = []
+    cur = 0
+    i = 0
+    while cur < char_target:
+        s = pool[i % len(pool)]
+        if i and i % len(pool) == 0:
+            rng.shuffle(pool)
+        out.append(s)
+        cur += len(s) + 1
+        i += 1
+    return (" ".join(out))[:char_target]
+
+
+def _varied_seed_text(seed: int = 0xC0FFEE) -> str:
+    """Long shuffled seed used by the exact builder. Stable across invocations."""
+    rng = random.Random(seed)
+    pool = list(_SEED_SENTENCES)
+    rng.shuffle(pool)
+    # Pre-build enough text that callers rarely need a second shuffle.
+    return " ".join(pool * 6)
+
+
+_SEED_TEXT = _varied_seed_text()
 
 
 async def _tokenize(sess: aiohttp.ClientSession, base: str, text: str) -> int:
@@ -142,8 +205,13 @@ async def run_speed_test(
             "n_predict": int(n_predict),
             "cache_prompt": False,
             "stream": False,
-            "temperature": 0.0,
-            "top_k": 1,
+            # Sampling instead of greedy so the generated tail doesn't lock
+            # into a repeating pattern that hands speculative draft models
+            # near-100% acceptance and inflates the reported tok/s.
+            "temperature": 0.8,
+            "top_k": 40,
+            "top_p": 0.95,
+            "seed": 0xC0FFEE,
         }
 
         if sup is not None:
