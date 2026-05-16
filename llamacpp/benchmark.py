@@ -200,19 +200,29 @@ async def run_speed_test(
             out["error"] = f"tokenize failed: {exc}"
             return out
 
-        payload = {
+        # Use the user's configured sampling so the bench matches real
+        # request behavior. Greedy decoding (temp=0, top_k=1) hands
+        # speculative draft models near-100% acceptance on this kind of
+        # synthetic prompt and inflates reported tok/s.
+        infer = cfg.inference_for(cfg.default_model())
+        payload: dict = {
             "prompt": prompt,
             "n_predict": int(n_predict),
             "cache_prompt": False,
             "stream": False,
-            # Sampling instead of greedy so the generated tail doesn't lock
-            # into a repeating pattern that hands speculative draft models
-            # near-100% acceptance and inflates the reported tok/s.
-            "temperature": 0.8,
-            "top_k": 40,
-            "top_p": 0.95,
             "seed": 0xC0FFEE,
         }
+        for src, dst in (
+            ("temperature", "temperature"),
+            ("top_k", "top_k"),
+            ("top_p", "top_p"),
+            ("min_p", "min_p"),
+            ("repeat_penalty", "repeat_penalty"),
+            ("presence_penalty", "presence_penalty"),
+            ("frequency_penalty", "frequency_penalty"),
+        ):
+            if src in infer and infer[src] is not None:
+                payload[dst] = infer[src]
 
         if sup is not None:
             try:
