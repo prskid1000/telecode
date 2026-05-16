@@ -287,22 +287,20 @@ def _apply_effort_entry(
     """Apply one reasoning_effort_map entry to the outgoing body.
 
     Recognized keys:
-      thinking_budget_tokens int   → body.reasoning_budget (llama.cpp
-                                      --reasoning-budget semantics:
-                                      -1 = unrestricted, 0 = immediate end,
-                                      N > 0 = token budget)
+      thinking_budget_tokens int   → body.thinking_budget_tokens (llama.cpp
+                                      enforces this server-side; 0 = unlimited)
       max_tokens             int   → body.max_tokens (hard cap on total output)
       system_nudge           str   → returned — caller prepends to system
 
-    Per-model template kwargs (jinja-template inputs specific to a family)
-    live on the per-model `chat_template_kwargs` config, not here — this map
-    is the universal effort layer.
+    Template-specific knobs (Qwen's `enable_thinking`, GPT-OSS's
+    `reasoning_effort`) live on the per-model `chat_template_kwargs` config,
+    not here — this map is the universal effort layer.
 
     Returns the system_nudge (may be "") so the caller can handle prompt-level
     injection in its own flow.
     """
     if "thinking_budget_tokens" in entry:
-        out_body["reasoning_budget"] = int(entry["thinking_budget_tokens"])
+        out_body["thinking_budget_tokens"] = int(entry["thinking_budget_tokens"])
 
     if "max_tokens" in entry and entry["max_tokens"] is not None:
         cur = out_body.get("max_tokens")
@@ -317,8 +315,9 @@ def _apply_model_chat_template_kwargs(body: dict[str, Any],
                                        defaults: dict[str, Any]) -> None:
     """Merge the model's configured `chat_template_kwargs` dict into the
     outgoing body. Arbitrary keys — whatever the model's jinja template
-    reads (whatever the model's jinja template declares). Per-request
-    entries added later via effort resolution take precedence."""
+    reads (Qwen: `enable_thinking`; GPT-OSS: `reasoning_effort`; custom
+    templates: whatever you declared). Per-request entries added later
+    via effort resolution take precedence."""
     cfg = defaults.get("chat_template_kwargs")
     if isinstance(cfg, dict) and cfg:
         _merge_chat_template_kwargs(body, cfg)
@@ -474,7 +473,7 @@ def anthropic_request_to_internal(
     messages: list[dict[str, Any]] = []
 
     # Resolve effort → entry dict, then apply to `out` (chat_template_kwargs,
-    # reasoning_budget, max_tokens, optional system_nudge). The direct
+    # thinking_budget_tokens, max_tokens, optional system_nudge). The direct
     # Anthropic budget_tokens wins over whatever the map says for budget.
     entry = _resolve_reasoning_effort(effort, defaults)
 
@@ -507,7 +506,7 @@ def anthropic_request_to_internal(
     nudge = _apply_effort_entry(entry, out)
     # direct budget from client overrides whatever the map said
     if direct_budget is not None:
-        out["reasoning_budget"] = direct_budget
+        out["thinking_budget_tokens"] = direct_budget
     if nudge:
         # Prepend nudge to leading system message (or create one)
         if out["messages"] and out["messages"][0].get("role") == "system":
