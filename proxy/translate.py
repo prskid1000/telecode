@@ -287,8 +287,21 @@ def _apply_effort_entry(
     """Apply one reasoning_effort_map entry to the outgoing body.
 
     Recognized keys:
-      thinking_budget_tokens int   → body.thinking_budget_tokens (llama.cpp
-                                      enforces this server-side; 0 = unlimited)
+      thinking_budget_tokens int   → body.thinking_budget_tokens. llama.cpp
+                                      enforces this server-side as a hard cap
+                                      on reasoning tokens.
+                                      Convention: key present → cap; key absent
+                                      → unlimited (model decides). Any present
+                                      value is normalised to ≥ 1 because the
+                                      body field is silently dropped by
+                                      llama-server when 0 (unlike the
+                                      --reasoning-budget CLI flag), and
+                                      negative values are equally meaningless
+                                      in the body — so 0 / negative / malformed
+                                      all clamp to 1, the smallest cap that
+                                      actually bites. Matches Anthropic /
+                                      OpenAI body conventions where absence
+                                      means "no limit".
       max_tokens             int   → body.max_tokens (hard cap on total output)
       system_nudge           str   → returned — caller prepends to system
 
@@ -300,7 +313,11 @@ def _apply_effort_entry(
     injection in its own flow.
     """
     if "thinking_budget_tokens" in entry:
-        out_body["thinking_budget_tokens"] = int(entry["thinking_budget_tokens"])
+        try:
+            n = int(entry["thinking_budget_tokens"])
+        except (TypeError, ValueError):
+            n = 1
+        out_body["thinking_budget_tokens"] = max(1, n)
 
     if "max_tokens" in entry and entry["max_tokens"] is not None:
         cur = out_body.get("max_tokens")

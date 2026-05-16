@@ -61,12 +61,12 @@ STANDARD_EFFORT_KEYS: tuple[str, ...] = (
 )
 
 _STANDARD_EFFORT_DEFAULTS: dict[str, dict[str, Any]] = {
-    "none":     {"thinking_budget_tokens": 0},
-    "minimal":  {"thinking_budget_tokens": 0},
+    "none":     {"thinking_budget_tokens": 1},
+    "minimal":  {"thinking_budget_tokens": 1},
     "low":      {"thinking_budget_tokens": 1024},
     "medium":   {"thinking_budget_tokens": 4096},
     "high":     {"thinking_budget_tokens": 16384},
-    "max":      {"thinking_budget_tokens": 0},
+    "max":      {},
     "adaptive": {"thinking_budget_tokens": 16384},
 }
 

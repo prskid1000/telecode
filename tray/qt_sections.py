@@ -1286,12 +1286,49 @@ def _llama(window) -> QWidget:
                 _refresh_effort_map()
             head.editingFinished.connect(_commit_rename)
 
-        # Budget Tokens — the only knob, inline on the same row
+        # Budget Tokens — key absent means "unlimited" (model decides),
+        # key present means "cap at N tokens" (auto-clamped to >= 1 at emit
+        # time because llama-server silently drops `0` in the body).
+        has_budget = "thinking_budget_tokens" in data
+        current_value = int(data.get("thinking_budget_tokens", 4096) or 4096)
+        if current_value < 1:
+            current_value = 4096
+
+        unl_lbl = QLabel("Unlimited"); unl_lbl.setStyleSheet(f"color: {FG_DIM};")
+        unl = Toggle()
+        unl.setChecked(not has_budget)
+        unl.setToolTip("When on, omits thinking_budget_tokens — model decides how long to think.")
+
         tbt_lbl = QLabel("Budget"); tbt_lbl.setStyleSheet(f"color: {FG_DIM};")
-        tbt = NumberEditor(0, 262144, 256, 0, "tok")
-        tbt.setValue(float(data.get("thinking_budget_tokens", 0) or 0))
+        tbt = NumberEditor(1, 262144, 256, 0, "tok")
+        tbt.setValue(float(current_value))
+
+        # "Unlimited" indicator that replaces the Budget editor when active.
+        inf_lbl = QLabel("∞")
+        inf_lbl.setStyleSheet(f"color: {ACCENT}; font-size: 18px; font-weight: 600;")
+        inf_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        def _apply_visibility(is_unlimited: bool):
+            tbt_lbl.setVisible(not is_unlimited)
+            tbt.setVisible(not is_unlimited)
+            inf_lbl.setVisible(is_unlimited)
+
+        _apply_visibility(not has_budget)
+
+        def _on_unl_changed(_state, b=base, editor=tbt, toggle=unl):
+            if toggle.isChecked():
+                remove_path(f"{b}.thinking_budget_tokens")
+                _apply_visibility(True)
+            else:
+                v = max(1, int(editor.value() or 4096))
+                if int(editor.value() or 0) != v:
+                    editor.setValue(float(v))
+                patch_settings(f"{b}.thinking_budget_tokens", v)
+                _apply_visibility(False)
+
+        unl.stateChanged.connect(_on_unl_changed)
         tbt.valueChanged.connect(
-            lambda v, b=base: patch_settings(f"{b}.thinking_budget_tokens", int(v))
+            lambda v, b=base: patch_settings(f"{b}.thinking_budget_tokens", max(1, int(v)))
         )
 
         rm_btn = QPushButton("Remove")
@@ -1302,8 +1339,11 @@ def _llama(window) -> QWidget:
             rm_btn.setToolTip("Standard Claude Code / OpenAI effort key — cannot be deleted. Edit Budget inline.")
 
         rl.addWidget(head)
+        rl.addWidget(unl_lbl)
+        rl.addWidget(unl)
         rl.addWidget(tbt_lbl)
         rl.addWidget(tbt, 1)
+        rl.addWidget(inf_lbl, 1)
         rl.addWidget(rm_btn)
 
         def _on_remove(_checked=False, b=base, k=key):

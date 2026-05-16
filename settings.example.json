@@ -260,13 +260,14 @@
       },
 
       "reasoning_effort_map": {
-        "none":     {"thinking_budget_tokens": 0},
-        "minimal":  {"thinking_budget_tokens": 0},
+        "_doc":     "thinking_budget_tokens: key present -> cap thinking at that many tokens (auto-clamped to >=1). Key absent -> unlimited thinking (model decides). Matches Anthropic/OpenAI body conventions.",
+        "none":     {"thinking_budget_tokens": 1},
+        "minimal":  {"thinking_budget_tokens": 1},
         "low":      {"thinking_budget_tokens": 1024},
         "medium":   {"thinking_budget_tokens": 4096},
         "high":     {"thinking_budget_tokens": 16384},
         "xhigh":    {"thinking_budget_tokens": 65536},
-        "max":      {"thinking_budget_tokens": 0},
+        "max":      {},
         "adaptive": {"thinking_budget_tokens": 16384}
       },
 
