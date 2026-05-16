@@ -66,7 +66,7 @@ _STANDARD_EFFORT_DEFAULTS: dict[str, dict[str, Any]] = {
     "low":      {"thinking_budget_tokens": 1024},
     "medium":   {"thinking_budget_tokens": 4096},
     "high":     {"thinking_budget_tokens": 16384},
-    "max":      {"thinking_budget_tokens": -1},
+    "max":      {"thinking_budget_tokens": 0},
     "adaptive": {"thinking_budget_tokens": 16384},
 }
 

@@ -225,18 +225,6 @@ Dual-protocol middleware in front of llama.cpp. Both **Anthropic** `/v1/messages
 
 To use: `llamacpp.enabled: true` + `proxy.enabled: true`, fill in `llamacpp.binary` + `llamacpp.models.<name>.path`, point client tools at `http://localhost:1235`.
 
-### Reasoning-effort resolution
-
-Clients pass `reasoning_effort` (OpenAI: flat or nested under `reasoning.effort`; Anthropic: derived from `thinking.type`/`budget_tokens`). `_resolve_reasoning_effort` looks up the string in the per-model `inference.reasoning_effort_map` and `_apply_effort_entry` applies recognized keys to the outgoing body:
-
-- `thinking_budget_tokens` (map key) → `reasoning_budget` (wire field, matches llama.cpp's `--reasoning-budget`). **Semantics: `-1` unrestricted, `0` immediate end-of-thinking, `N>0` token cap.**
-- `max_tokens` → caps `body.max_tokens` (only tightens, never relaxes).
-- `system_nudge` → returned to the caller for prompt-level injection.
-
-Any other key in a map entry (e.g. legacy `enable_thinking`, `reasoning_effort`) is silently dropped — only the three above are honoured. Model-specific jinja-template inputs belong in `inference_defaults.chat_template_kwargs`, not in the effort map.
-
-The Anthropic `thinking.budget_tokens` value, when present, overrides whatever the map says for the budget (but the bucketed effort string still drives any `system_nudge`).
-
 ---
 
 ## Live Telegram messages (`bot/live.py`)
