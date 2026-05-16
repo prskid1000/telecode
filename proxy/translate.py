@@ -287,28 +287,39 @@ def _apply_effort_entry(
     """Apply one reasoning_effort_map entry to the outgoing body.
 
     Recognized keys:
-      thinking_budget_tokens int   → body.reasoning_budget (llama.cpp
-                                      --reasoning-budget semantics:
-                                      -1 = unrestricted, 0 = immediate end,
-                                      N > 0 = token budget)
+      thinking_budget_tokens int   → body.thinking_budget_tokens
+                                      (llama.cpp per-request body field.
+                                      Empirically: N>=1 caps thinking,
+                                      -1 = unrestricted. CLI semantic of
+                                      `0 = immediate end` does NOT apply
+                                      to the body field — body `0` is
+                                      treated as unset, so we clamp
+                                      0 → 1 here to honour user intent.)
       max_tokens             int   → body.max_tokens (hard cap on total output)
       system_nudge           str   → returned — caller prepends to system
-
-    Per-model template kwargs (jinja-template inputs specific to a family)
-    live on the per-model `chat_template_kwargs` config, not here — this map
-    is the universal effort layer.
+      chat_template_kwargs   dict  → merged into body.chat_template_kwargs
+                                      (generic mechanism; per-model values
+                                      e.g. `enable_thinking: false` for Qwen
+                                      live in user settings, not in code)
 
     Returns the system_nudge (may be "") so the caller can handle prompt-level
     injection in its own flow.
     """
     if "thinking_budget_tokens" in entry:
-        out_body["reasoning_budget"] = int(entry["thinking_budget_tokens"])
+        n = int(entry["thinking_budget_tokens"])
+        out_body["thinking_budget_tokens"] = 1 if n == 0 else n
 
     if "max_tokens" in entry and entry["max_tokens"] is not None:
         cur = out_body.get("max_tokens")
         new = int(entry["max_tokens"])
         if cur is None or new < cur:
             out_body["max_tokens"] = new
+
+    extra_kwargs = entry.get("chat_template_kwargs")
+    if isinstance(extra_kwargs, dict) and extra_kwargs:
+        merged = dict(out_body.get("chat_template_kwargs") or {})
+        merged.update(extra_kwargs)
+        out_body["chat_template_kwargs"] = merged
 
     return str(entry.get("system_nudge", "") or "")
 
@@ -474,7 +485,7 @@ def anthropic_request_to_internal(
     messages: list[dict[str, Any]] = []
 
     # Resolve effort → entry dict, then apply to `out` (chat_template_kwargs,
-    # reasoning_budget, max_tokens, optional system_nudge). The direct
+    # thinking_budget_tokens, max_tokens, optional system_nudge). The direct
     # Anthropic budget_tokens wins over whatever the map says for budget.
     entry = _resolve_reasoning_effort(effort, defaults)
 
@@ -507,7 +518,7 @@ def anthropic_request_to_internal(
     nudge = _apply_effort_entry(entry, out)
     # direct budget from client overrides whatever the map said
     if direct_budget is not None:
-        out["reasoning_budget"] = direct_budget
+        out["thinking_budget_tokens"] = 1 if direct_budget == 0 else direct_budget
     if nudge:
         # Prepend nudge to leading system message (or create one)
         if out["messages"] and out["messages"][0].get("role") == "system":

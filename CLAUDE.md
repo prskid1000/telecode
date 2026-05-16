@@ -227,15 +227,16 @@ To use: `llamacpp.enabled: true` + `proxy.enabled: true`, fill in `llamacpp.bina
 
 ### Reasoning-effort resolution
 
-Clients pass `reasoning_effort` (OpenAI: flat or nested under `reasoning.effort`; Anthropic: derived from `thinking.type`/`budget_tokens`). `_resolve_reasoning_effort` looks up the string in the per-model `inference.reasoning_effort_map` and `_apply_effort_entry` applies recognized keys to the outgoing body:
+Clients pass `reasoning_effort` (OpenAI: flat or nested under `reasoning.effort`; Anthropic: derived from `thinking.type`/`budget_tokens`). `_resolve_reasoning_effort` looks up the string in the per-model `inference.reasoning_effort_map` and `_apply_effort_entry` applies recognized keys to the outgoing body. Four keys are honoured (everything else is silently dropped):
 
-- `thinking_budget_tokens` (map key) → `reasoning_budget` (wire field, matches llama.cpp's `--reasoning-budget`). **Semantics: `-1` unrestricted, `0` immediate end-of-thinking, `N>0` token cap.**
+- `thinking_budget_tokens` → forwarded verbatim as the llama.cpp body field `thinking_budget_tokens`. Empirically on b9145: `N>=1` caps thinking (llama.cpp injects the close-tag once N is reached); `-1` is unrestricted; **`0` in the body is treated as unset, NOT as "immediate end" like the `--reasoning-budget` CLI flag**. We clamp `0 → 1` in `_apply_effort_entry` so that user intent ("none means none") is honoured by the smallest cap llama.cpp actually enforces.
 - `max_tokens` → caps `body.max_tokens` (only tightens, never relaxes).
+- `chat_template_kwargs` (dict) → merged into `body.chat_template_kwargs`. Generic mechanism for per-request jinja-template inputs. **The mechanism is model-agnostic; the keys inside are necessarily model-specific.** For Qwen, `{"enable_thinking": false}` is the most reliable way to suppress thinking (0 reasoning tokens, ~0.4s latency vs ~25s with thinking on). Test matrix in `data/logs/test_thinking.py` documents which mechanisms work on this build.
 - `system_nudge` → returned to the caller for prompt-level injection.
 
-Any other key in a map entry (e.g. legacy `enable_thinking`, `reasoning_effort`) is silently dropped — only the three above are honoured. Model-specific jinja-template inputs belong in `inference_defaults.chat_template_kwargs`, not in the effort map.
+The Anthropic `thinking.budget_tokens` value from the request, when present, overrides whatever the map says for the budget (still 0-clamped to 1). The bucketed effort string still drives any `system_nudge` and `chat_template_kwargs` merge.
 
-The Anthropic `thinking.budget_tokens` value, when present, overrides whatever the map says for the budget (but the bucketed effort string still drives any `system_nudge`).
+Belt-and-braces design: an effort entry can carry both `thinking_budget_tokens` (universal fallback) and `chat_template_kwargs` (per-model belt-and-braces); whichever the model honours wins. Model-specific kwarg values stay in user-editable settings, never in code.
 
 ---
 
