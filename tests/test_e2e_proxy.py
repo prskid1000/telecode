@@ -21,7 +21,7 @@ What it covers:
       - thinking.type=enabled with budget_tokens bucket → system nudge
       - thinking.display=omitted → ReasoningState strips <think> blocks
       - /no_think path exercised indirectly by thinking.type=disabled
-        mapping to chat_template_kwargs.enable_thinking=false
+        mapping to reasoning_effort=none (→ reasoning_budget=0)
 
     Tool calls
       - Anthropic streaming tool_use

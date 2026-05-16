@@ -3398,8 +3398,8 @@ def _models(window) -> QWidget:
         form_layout.addWidget(_kv_row(f"{ip}.chat_template_kwargs",
             "Kwargs",
             "Merged into every request's chat_template_kwargs. Values are "
-            "JSON-parsed — use `enable_thinking=false`, `reasoning_effort=low`, "
-            "`budget=4096`. Anything the model's jinja template reads.",
+            "JSON-parsed (so `budget=4096` becomes an int, `flag=false` a bool). "
+            "Whatever the model's jinja template reads.",
             typed=True))
 
         form_layout.addWidget(_section_header("LoRA"))
@@ -3682,10 +3682,10 @@ def _kv_row(path: str, label: str, help_text: str = "",
             typed: bool = False) -> QWidget:
     """Structured key→value dict editor (one row per pair).
 
-    typed=True: values go through JSON parsing — so `enable_thinking=false`
-    becomes {"enable_thinking": false} (bool), `budget=4096` becomes int,
-    `voice=alloy` stays string. Needed for places like chat_template_kwargs
-    where downstream jinja templates distinguish `false` from `"false"`."""
+    typed=True: values go through JSON parsing — so `flag=false` becomes
+    {"flag": false} (bool), `budget=4096` becomes int, `voice=alloy` stays
+    string. Needed for places like chat_template_kwargs where downstream
+    jinja templates distinguish `false` from `"false"`."""
     import json as _json
     from tray.qt_theme import BG_ELEV as _BG_ELEV
 
