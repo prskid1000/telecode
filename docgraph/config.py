@@ -79,7 +79,8 @@ def resolve_binary() -> str | None:
 
 def roots() -> list[dict]:
     """Return the configured roots verbatim. Each entry is
-    `{"path": str, "watch": bool}`. Filters empty paths."""
+    `{"path": str, "watch": bool, "pinned": bool}`. Filters empty paths.
+    `pinned` rows can't be removed/reordered/edited in the tray UI."""
     out: list[dict] = []
     for entry in _root().get("roots") or []:
         if not isinstance(entry, dict):
@@ -87,7 +88,11 @@ def roots() -> list[dict]:
         path = str(entry.get("path", "") or "").strip()
         if not path:
             continue
-        out.append({"path": path, "watch": bool(entry.get("watch", False))})
+        out.append({
+            "path": path,
+            "watch": bool(entry.get("watch", False)),
+            "pinned": bool(entry.get("pinned", False)),
+        })
     return out
 
 

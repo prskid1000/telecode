@@ -24,6 +24,8 @@
 param(
     [string]$InstallDir  = "$env:USERPROFILE\.telecode",
     [string]$LlamaBinary = "llama-server",
+    [string]$DocgraphRoot = "",   # auto-detected; pass to override
+    [switch]$SkipPin,
     [switch]$SkipTask
 )
 
@@ -168,6 +170,87 @@ if (-not (Test-Path $settingsFile)) {
     }
 } else {
     Ok "settings.json exists"
+}
+
+# ─── Pin docgraph root ───────────────────────────────────────────────
+#
+# Ensure the docgraph repo is settings.docgraph.roots[0] with `pinned: true`.
+# The UI honors the flag by hiding the remove button and locking the path edit.
+#
+# Auto-detection order:
+#   1. -DocgraphRoot param
+#   2. ~/.local/bin/docgraph.bat shim → parse the venv exe path → repo = ../../..
+#   3. ~/.docgraph (convention; matches docgraph/setup.ps1 default)
+
+function Resolve-DocgraphRoot {
+    param([string]$Override)
+    if ($Override) {
+        if (Test-Path $Override) { return (Resolve-Path $Override).Path }
+        Warn "-DocgraphRoot '$Override' does not exist"
+        return $null
+    }
+    $shim = Join-Path $env:USERPROFILE ".local\bin\docgraph.bat"
+    if (Test-Path $shim) {
+        $m = Select-String -Path $shim -Pattern '"([^"]+\\\.venv\\Scripts\\docgraph\.exe)"' -ErrorAction SilentlyContinue
+        if ($m) {
+            $exe = $m.Matches[0].Groups[1].Value
+            $repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $exe))
+            if (Test-Path $repo) { return $repo }
+        }
+    }
+    $conv = Join-Path $env:USERPROFILE ".docgraph"
+    if (Test-Path $conv) { return $conv }
+    return $null
+}
+
+if ($SkipPin) {
+    Warn "Skipping docgraph root pin (per -SkipPin)"
+} elseif (Test-Path $settingsFile) {
+    $docgraphRepo = Resolve-DocgraphRoot -Override $DocgraphRoot
+    if ($docgraphRepo) {
+        Step "Pinning docgraph root: $docgraphRepo"
+        $pyCode = @'
+import json, os, sys
+settings_path, repo_root = sys.argv[1], sys.argv[2]
+norm = lambda p: os.path.normcase(os.path.normpath(p))
+with open(settings_path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+dg = data.setdefault("docgraph", {})
+roots = dg.setdefault("roots", [])
+existing = next((r for r in roots if isinstance(r, dict) and norm(r.get("path", "")) == norm(repo_root)), None)
+kept = [r for r in roots if not (isinstance(r, dict) and norm(r.get("path", "")) == norm(repo_root))]
+if existing is None:
+    entry = {"path": repo_root, "watch": False, "pinned": True}
+    msg = f"added {repo_root} as first root (pinned)"
+else:
+    entry = dict(existing)
+    entry["pinned"] = True
+    if "watch" not in entry: entry["watch"] = False
+    if roots and isinstance(roots[0], dict) and norm(roots[0].get("path", "")) == norm(repo_root) and roots[0].get("pinned") is True:
+        msg = f"{repo_root} already pinned and first (no change)"
+    else:
+        msg = f"pinned {repo_root} as first root"
+dg["roots"] = [entry] + kept
+with open(settings_path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+print(msg)
+'@
+        $pyTmp = Join-Path ([System.IO.Path]::GetTempPath()) "telecode_pin_$([guid]::NewGuid().ToString('N')).py"
+        Set-Content -Path $pyTmp -Value $pyCode -Encoding UTF8
+        try {
+            $pinOut = & $venvPython $pyTmp $settingsFile $docgraphRepo 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                $pinOut | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+                Fail "pin step failed (exit $LASTEXITCODE)"
+            }
+            Ok "$pinOut"
+        } finally {
+            Remove-Item -Force -ErrorAction SilentlyContinue $pyTmp
+        }
+    } else {
+        Warn "docgraph repo not found (param/shim/convention all empty) - skipping pin"
+    }
 }
 
 # ─── Data dir ────────────────────────────────────────────────────────
