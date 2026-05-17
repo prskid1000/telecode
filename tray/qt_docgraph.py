@@ -1919,7 +1919,7 @@ def _restart_host_row(window) -> QWidget:
     row = QWidget()
     h = QHBoxLayout(row)
     h.setContentsMargins(0, 4, 0, 0); h.setSpacing(8)
-    btn = QPushButton("🔄 Restart host")
+    btn = QPushButton("🔄")
     btn.setProperty("class", "ghost")
     btn.setToolTip(
         "Stops the running docgraph host and starts a fresh one so the\n"
@@ -2072,7 +2072,6 @@ def _build_idle_unload_card(window) -> tuple[QFrame, Callable[[], None] | None]:
         "docgraph.idle_unload_sec",
         "--idle-unload-sec",
     ), _idle_unload_row("docgraph.idle_unload_sec", 300)))
-    body.addWidget(_restart_host_row(window))
     return card, None
 
 
