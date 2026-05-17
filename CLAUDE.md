@@ -171,7 +171,7 @@ Telecode supervises **one** [DocGraph](../.docgraph) subprocess (`docgraph host 
 - `rerank.{default, model, gpu}`.
 - `index.{workers, embed_batch_size}`.
 - `wiki.depth`.
-- `idle_unload_sec` — seconds of inactivity after which the docgraph host evicts its embedding + reranker ONNX sessions (0 = never). Mirrors `llamacpp.idle_unload_sec` but for the docgraph-side models. Forwarded as `--idle-unload-sec`; needs a host restart to apply.
+- `embeddings.idle_unload_sec` / `rerank.idle_unload_sec` — per-class idle-unload windows (seconds; 0 = never). The docgraph host evicts the embedder / reranker ONNX session after the configured idleness; reloads lazily on next use. Forwarded as `--embed-idle-unload-sec` / `--rerank-idle-unload-sec`; takes effect on next host spawn.
 
 **Per-root config files** (not in `settings.json`):
 - `<root>/.docgraph/repos.json` — extra sibling paths indexed into the same graph. Editable via tray "Extra local paths" panel. `_wire_extra_paths` reads `.gitignore` etc. from within each extra path.
@@ -183,7 +183,7 @@ Telecode supervises **one** [DocGraph](../.docgraph) subprocess (`docgraph host 
 
 **Windows hybrid graphics (`_ensure_high_perf_gpu` in `process.py`).** Before each spawn we write `HKCU\Software\Microsoft\DirectX\UserGpuPreferences\<docgraph.exe path> = "GpuPreference=2;"`. Without this, processes started with `CREATE_NO_WINDOW` (which we always use) get the iGPU from DXGI's default adapter enumeration, and DML lands on Intel — slow at best, device-hung under sustained load. Idempotent; skipped if value already correct or off Windows.
 
-**Tray UI.** Cards: Host (start/stop/restart + bind config), Roots (table with per-row Index/Wiki/Clear/Watch + ✕ remove + `+ Add root`), LLM, Embeddings, Reranker, Model Idle Unload. Embeddings + Reranker cards have a "🔄 Restart host" button — those settings only take effect on the next host spawn. Each root row has two collapsible panels:
+**Tray UI.** Cards: Host (start/stop/restart + bind config), Roots (table with per-row Index/Wiki/Clear/Watch + ✕ remove + `+ Add root`), LLM, Embeddings (with Auto-Unload row), Reranker (with Auto-Unload row). Embeddings + Reranker cards have a "🔄 Restart host" button — those settings only take effect on the next host spawn. Each root row has two collapsible panels:
 - **Extra local paths** — reads/writes `<root>/.docgraph/repos.json`; paths are indexed into the same graph.
 - **External links** — reads/writes `<root>/.docgraph/links.json`; each link has URL, Depth (0–N), Max pages (0 = unlimited), and TTL fields. Progress shown in the index bar as `[1/12] fetching · level N · done/total`. All row buttons (Index, Wiki, Clear, Watch, ✕, + Add root) are disabled while a host restart is in progress (`_RootsTable._restarting`).
 

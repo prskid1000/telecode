@@ -205,6 +205,15 @@ def llm_prompt_wiki() -> str:
 def embeddings_cfg() -> dict:    return _section("embeddings")
 def embeddings_model() -> str:   return str(embeddings_cfg().get("model", "") or "")
 def embeddings_gpu() -> bool:    return bool(embeddings_cfg().get("gpu", False))
+def embeddings_idle_unload_sec() -> float:
+    """Seconds of embedder inactivity before the docgraph host evicts
+    the ONNX session. 0 = never. Forwarded as `--embed-idle-unload-sec`;
+    takes effect on next host spawn."""
+    raw = embeddings_cfg().get("idle_unload_sec", 0)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 # ── Reranker (cross-encoder over top-K search candidates) ──────────────────
@@ -213,6 +222,15 @@ def rerank_cfg() -> dict:        return _section("rerank")
 def rerank_model() -> str:       return str(rerank_cfg().get("model", "") or "")
 def rerank_default() -> bool:    return bool(rerank_cfg().get("default", False))
 def rerank_gpu() -> bool:        return bool(rerank_cfg().get("gpu", False))
+def rerank_idle_unload_sec() -> float:
+    """Seconds of reranker inactivity before the docgraph host evicts
+    the cross-encoder. 0 = never. Forwarded as `--rerank-idle-unload-sec`;
+    takes effect on next host spawn."""
+    raw = rerank_cfg().get("idle_unload_sec", 0)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 # ── Index (CLI subprocess flags) ───────────────────────────────────────────
@@ -223,21 +241,6 @@ def index_embed_batch_size() -> int:
     """`docgraph index --embed-batch-size`. 0 = use docgraph's default
     (256 on CPU / 32 on GPU). Lower it if `--gpu` saturates VRAM."""
     return int(index_cfg().get("embed_batch_size", 0) or 0)
-
-
-# ── Idle unload ────────────────────────────────────────────────────────────
-
-def idle_unload_sec() -> float:
-    """How long (seconds) to keep embedding + reranker ONNX sessions
-    loaded after the last use. 0 (default) = never unload. Forwarded to
-    `docgraph host --idle-unload-sec`; the host's workspace runs a
-    periodic check and evicts models past the threshold. Models reload
-    lazily on the next request."""
-    raw = _root().get("idle_unload_sec", 0)
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return 0.0
 
 
 # ── Wiki ────────────────────────────────────────────────────────────────────

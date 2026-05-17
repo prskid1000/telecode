@@ -94,13 +94,15 @@
 
     "embeddings": {
       "model": "",
-      "gpu": false
+      "gpu": false,
+      "idle_unload_sec": 0
     },
 
     "rerank": {
       "model": "",
       "default": false,
-      "gpu": false
+      "gpu": false,
+      "idle_unload_sec": 0
     },
 
     "index": {
@@ -110,9 +112,7 @@
 
     "wiki": {
       "depth": 12
-    },
-
-    "idle_unload_sec": 0
+    }
   },
 
   "llamacpp": {
