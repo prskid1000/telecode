@@ -110,7 +110,9 @@
 
     "wiki": {
       "depth": 12
-    }
+    },
+
+    "idle_unload_sec": 0
   },
 
   "llamacpp": {
