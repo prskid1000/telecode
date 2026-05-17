@@ -64,7 +64,6 @@ def build_docgraph_tabs(window) -> QWidget:
         _build_prompts_card,
         _build_embeddings_card,
         _build_reranker_card,
-        _build_idle_unload_card,
     ):
         card, refresh = build(window)
         layout.addWidget(card)
@@ -2055,23 +2054,14 @@ def _build_embeddings_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     body.addWidget(_number_row("docgraph.index.embed_batch_size", "Embed batch size",
                                 0, 1024, 16, 0, "", "0 = default (256 CPU / 32 GPU). Lower if GPU saturates.",
                                 cli="--embed-batch-size"))
-    return card, None
-
-
-def _build_idle_unload_card(window) -> tuple[QFrame, Callable[[], None] | None]:
-    card, body = _card(
-        "Model Idle Unload",
-        "Free embedding + reranker memory after a period of inactivity. "
-        "Models reload lazily on the next request. Mirrors llama.cpp's "
-        "idle-unload but inside the docgraph host process.",
-    )
     body.addWidget(_row(row_label(
         "Auto-Unload",
-        "When enabled, the docgraph host evicts the embedding and reranker "
-        "ONNX sessions after this many seconds of idleness. 0 = never unload.",
-        "docgraph.idle_unload_sec",
-        "--idle-unload-sec",
-    ), _idle_unload_row("docgraph.idle_unload_sec", 300)))
+        "Evict the embedding ONNX session after this many seconds of "
+        "idleness. 0 = never. Reloads lazily on next embed. Takes effect "
+        "on next host spawn.",
+        "docgraph.embeddings.idle_unload_sec",
+        "--embed-idle-unload-sec",
+    ), _idle_unload_row("docgraph.embeddings.idle_unload_sec", 300)))
     return card, None
 
 
@@ -2094,4 +2084,12 @@ def _build_reranker_card(window) -> tuple[QFrame, Callable[[], None] | None]:
                                 "-directml/-silicon. Falls back to CPU on init "
                                 "failure.",
                                 cli="--rerank-gpu"))
+    body.addWidget(_row(row_label(
+        "Auto-Unload",
+        "Evict the cross-encoder after this many seconds of idleness. "
+        "0 = never. Reloads lazily on next reranked search. Takes effect "
+        "on next host spawn.",
+        "docgraph.rerank.idle_unload_sec",
+        "--rerank-idle-unload-sec",
+    ), _idle_unload_row("docgraph.rerank.idle_unload_sec", 300)))
     return card, None

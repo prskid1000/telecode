@@ -1190,10 +1190,14 @@ class HostSupervisor:
             argv += ["--embed-batch-size", str(dg_cfg.index_embed_batch_size())]
         if dg_cfg.wiki_depth() and dg_cfg.wiki_depth() != 12:
             argv += ["--wiki-depth", str(dg_cfg.wiki_depth())]
-        # Auto-unload of embedding + reranker sessions after N seconds of
-        # idleness. 0 / unset = never unload (the docgraph default).
-        if dg_cfg.idle_unload_sec() > 0:
-            argv += ["--idle-unload-sec", str(dg_cfg.idle_unload_sec())]
+        # Per-class auto-unload after N seconds of idleness. 0 / unset =
+        # never unload (the docgraph default).
+        if dg_cfg.embeddings_idle_unload_sec() > 0:
+            argv += ["--embed-idle-unload-sec",
+                     str(dg_cfg.embeddings_idle_unload_sec())]
+        if dg_cfg.rerank_idle_unload_sec() > 0:
+            argv += ["--rerank-idle-unload-sec",
+                     str(dg_cfg.rerank_idle_unload_sec())]
         # LLM augmentation knobs — always forward the host/port/format so they
         # pick up defaults or overrides even if the model name is empty (the
         # docgraph host handles the model-name default).
