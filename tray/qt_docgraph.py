@@ -623,15 +623,17 @@ class _RootsTable(QWidget):
             if isinstance(entry, dict):
                 path = str(entry.get("path", "") or "")
                 watch = bool(entry.get("watch", False))
+                pinned = bool(entry.get("pinned", False))
             else:
-                path, watch = str(entry), False
-            self._append_row(path, watch)
+                path, watch, pinned = str(entry), False, False
+            self._append_row(path, watch, pinned)
 
-    def _append_row(self, path: str, watch: bool) -> None:
+    def _append_row(self, path: str, watch: bool, pinned: bool = False) -> None:
         row = _RootRow(
             path, watch, self._window,
             on_change=self._commit, on_remove=self._on_remove,
             force_getter=self._force_getter,
+            pinned=pinned,
         )
         self._rows_layout.addWidget(row)
         self._row_widgets.append(row)
@@ -641,6 +643,8 @@ class _RootsTable(QWidget):
         self._commit()
 
     def _on_remove(self, row: "_RootRow") -> None:
+        if row.is_pinned():
+            return
         try:
             self._row_widgets.remove(row)
         except ValueError:
@@ -662,7 +666,10 @@ class _RootsTable(QWidget):
             path = r.text().strip()
             if not path:
                 continue
-            out.append({"path": path, "watch": r.watch_state()})
+            entry: dict = {"path": path, "watch": r.watch_state()}
+            if r.is_pinned():
+                entry["pinned"] = True
+            out.append(entry)
         patch_settings("docgraph.roots", out)
 
         new_paths = {e["path"] for e in out}
@@ -696,11 +703,12 @@ class _RootsTable(QWidget):
         cur = list(get_path(read_settings(), "docgraph.roots", []) or [])
         cur_norm = [
             {"path": str(e.get("path", "") if isinstance(e, dict) else e),
-             "watch": bool(e.get("watch", False) if isinstance(e, dict) else False)}
+             "watch": bool(e.get("watch", False) if isinstance(e, dict) else False),
+             "pinned": bool(e.get("pinned", False) if isinstance(e, dict) else False)}
             for e in cur
         ]
         cur_norm = [e for e in cur_norm if e["path"]]
-        cur_view = [{"path": r.text().strip(), "watch": r.watch_state()}
+        cur_view = [{"path": r.text().strip(), "watch": r.watch_state(), "pinned": r.is_pinned()}
                     for r in self._row_widgets if r.text().strip()]
         if cur_norm != cur_view:
             self._rebuild()
@@ -711,12 +719,14 @@ class _RootsTable(QWidget):
 
 class _RootRow(QFrame):
     def __init__(self, path: str, watch: bool, window, *, on_change, on_remove,
-                 force_getter: Callable[[], bool] | None = None) -> None:
+                 force_getter: Callable[[], bool] | None = None,
+                 pinned: bool = False) -> None:
         super().__init__()
         self._window = window
         self._on_change = on_change
         self._on_remove = on_remove
         self._force_getter = force_getter or (lambda: False)
+        self._pinned = bool(pinned)
 
         self.setStyleSheet(
             f"_RootRow {{ background: {BG_ELEV}; border: 1px solid {BORDER}; border-radius: 6px; }}"
@@ -735,7 +745,11 @@ class _RootRow(QFrame):
         self._edit.setPlaceholderText("/path/to/repo")
         self._edit.editingFinished.connect(self._on_edit_done)
         self._edit.setMinimumWidth(140)
-        self._edit.setToolTip(path or "/path/to/repo")
+        if self._pinned:
+            self._edit.setReadOnly(True)
+            self._edit.setToolTip(f"{path}\n\nPinned root - path is locked.")
+        else:
+            self._edit.setToolTip(path or "/path/to/repo")
         # 3 : 1 split → path is the 75%, the status block is the 25%.
         h.addWidget(self._edit, 3)
 
@@ -785,7 +799,17 @@ class _RootRow(QFrame):
         )
         rm_btn.clicked.connect(lambda: self._on_remove(self))
         self._rm_btn = rm_btn
-        h.addWidget(rm_btn)
+        if self._pinned:
+            # Reserve the 28px column so pinned rows align with unpinned ones;
+            # show a non-actionable pin glyph instead of the remove button.
+            rm_btn.hide()
+            pin_lbl = QLabel("📌")
+            pin_lbl.setFixedWidth(28)
+            pin_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            pin_lbl.setToolTip("Pinned root - cannot be removed or reordered.")
+            h.addWidget(pin_lbl)
+        else:
+            h.addWidget(rm_btn)
 
         outer.addWidget(line1)
 
@@ -889,6 +913,9 @@ class _RootRow(QFrame):
 
     def watch_state(self) -> bool:
         return bool(self._watch.isChecked())
+
+    def is_pinned(self) -> bool:
+        return self._pinned
 
     def _on_edit_done(self) -> None:
         self._edit.setToolTip(self._edit.text() or "/path/to/repo")
