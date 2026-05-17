@@ -643,7 +643,9 @@ Telecode supervises **one** [DocGraph](https://github.com/prithwirajs/docgraph) 
 
 #### `docgraph.roots`
 
-Array of `{path, watch}` entries. Each `path` is registered with the host as `--root <path>`; entries with `watch: true` get `--watch <path>` so the host's per-root awatch task incrementally reindexes on file changes. **The workspace is immutable for a host's lifetime** — adding/removing a root or flipping a `watch` flag requires a host restart (telecode does this automatically when settings are patched and the user clicks Restart).
+Array of `{path, watch, pinned?}` entries. Each `path` is registered with the host as `--root <path>`; entries with `watch: true` get `--watch <path>` so the host's per-root awatch task incrementally reindexes on file changes. **The workspace is immutable for a host's lifetime** — adding/removing a root or flipping a `watch` flag requires a host restart (telecode does this automatically when settings are patched and the user clicks Restart).
+
+Entries with `"pinned": true` are protected in the tray UI: the path edit is read-only, the remove button is replaced by a 📌 marker, and `_RootsTable._on_remove` refuses pinned rows defensively. Set up by `setup.ps1`'s "Pin docgraph root" step — it auto-detects the docgraph repo via `-DocgraphRoot <path>` → `~/.local/bin/docgraph.bat` shim → `~/.docgraph` convention, prepends it to `roots`, and stamps `pinned: true`. Pin only restricts the docgraph repo entry; sibling roots, per-root extra paths, and external links remain freely editable.
 
 #### `docgraph.llm` and `docgraph.embeddings`
 
