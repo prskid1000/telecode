@@ -1453,6 +1453,38 @@ async def shutdown_all() -> None:
             pass
 
 
+# Tiny TTL cache for the host's /api/admin/models_status probe. The
+# tray refreshes every second; doing a real HTTP round-trip that often
+# is overkill, so we cache for ~2s. Sync stdlib urllib keeps this off
+# the asyncio loop — status_snapshot runs from the Qt thread.
+_MODELS_STATUS_CACHE: dict = {"ts": 0.0, "value": None}
+_MODELS_STATUS_TTL_SEC = 2.0
+
+
+def _fetch_models_status_sync() -> Optional[dict]:
+    """Blocking probe of the docgraph host. Returns None when the host
+    is unreachable / disabled / 500s. Called from the tray refresh
+    thread; never raises."""
+    if _HOST is None or not _HOST.alive() or not _HOST.port():
+        return None
+    now = time.time()
+    cached = _MODELS_STATUS_CACHE
+    if cached["value"] is not None and (now - cached["ts"]) < _MODELS_STATUS_TTL_SEC:
+        return cached["value"]
+    import urllib.request
+    url = f"http://{dg_cfg.host_host()}:{_HOST.port()}/api/admin/models_status"
+    try:
+        with urllib.request.urlopen(url, timeout=1.0) as resp:
+            if resp.status != 200:
+                return None
+            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except Exception:
+        return None
+    _MODELS_STATUS_CACHE["ts"] = now
+    _MODELS_STATUS_CACHE["value"] = payload
+    return payload
+
+
 def status_snapshot() -> dict:
     """Used by tray/qt_helpers.build_status()."""
     binary = dg_cfg.resolve_binary()
@@ -1471,4 +1503,5 @@ def status_snapshot() -> dict:
             "last_error": (_HOST.last_error() if _HOST else None),
             "log_path":   dg_cfg.log_path("host"),
         },
+        "models":       _fetch_models_status_sync(),
     }

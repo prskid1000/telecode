@@ -546,6 +546,76 @@ def _refresh_sessions(tile: _StatusTile, sessions: list[dict]) -> None:
         tile.set_viz(None)
 
 
+def _model_chip(label: str, loaded: bool, idle_for: float,
+                 unload_after: float) -> QWidget:
+    """One model indicator chip: [● EMB · 12s] when loaded, [○ EMB · idle]
+    when not. `idle_for` is seconds since last use; `unload_after` is the
+    configured threshold (0 = never)."""
+    chip = QWidget()
+    h = QHBoxLayout(chip)
+    h.setContentsMargins(6, 1, 8, 1); h.setSpacing(5)
+    dot = QLabel("●" if loaded else "○")
+    dot.setStyleSheet(
+        f"color: {OK if loaded else FG_MUTE}; font-size: 9px;"
+    )
+    name = QLabel(label)
+    name.setStyleSheet(
+        f"color: {FG_DIM}; font-size: 10px; letter-spacing: 0.5px; font-weight: 600;"
+    )
+    if loaded:
+        if unload_after > 0:
+            remaining = max(0.0, unload_after - idle_for)
+            tail = f"unload in {int(remaining)}s" if remaining > 0 else "unloading…"
+        else:
+            tail = f"idle {int(idle_for)}s" if idle_for >= 1 else "active"
+    else:
+        tail = "not loaded"
+    sub = QLabel(tail)
+    sub.setStyleSheet(f"color: {FG_MUTE}; font-size: 10px;")
+    h.addWidget(dot); h.addWidget(name); h.addWidget(sub)
+    chip.setStyleSheet(
+        f"QWidget {{ background: {BG_ELEV}; border: 1px solid {BORDER}; "
+        f"border-radius: 3px; }}"
+    )
+    return chip
+
+
+def _make_model_chips(models: dict) -> QWidget | None:
+    """Two-chip row for the docgraph tile viz slot: one for embeddings,
+    one for the reranker. `models` is the `/api/admin/models_status`
+    payload — None means the host is unreachable."""
+    if not models:
+        return None
+
+    def _agg(entries: list, threshold: float) -> tuple[bool, float, float]:
+        # Aggregate across pooled instances (usually 1 per class).
+        # `loaded` = any loaded; `idle_for` = smallest idle age among
+        # loaded entries (most-recently-used wins).
+        loaded = any(bool(e.get("loaded")) for e in entries)
+        idle_for = 0.0
+        if loaded:
+            candidates = [float(e.get("idle_for_sec", 0) or 0)
+                          for e in entries if e.get("loaded")]
+            if candidates:
+                idle_for = min(candidates)
+        return loaded, idle_for, float(threshold or 0.0)
+
+    embed_entries  = list(models.get("embed",  []) or [])
+    rerank_entries = list(models.get("rerank", []) or [])
+    e_loaded, e_idle, e_after = _agg(embed_entries,
+                                     models.get("embed_unload_after", 0))
+    r_loaded, r_idle, r_after = _agg(rerank_entries,
+                                     models.get("rerank_unload_after", 0))
+
+    row = QWidget()
+    h = QHBoxLayout(row)
+    h.setContentsMargins(0, 0, 0, 0); h.setSpacing(6)
+    h.addWidget(_model_chip("EMB",  e_loaded, e_idle, e_after))
+    h.addWidget(_model_chip("RRK",  r_loaded, r_idle, r_after))
+    h.addStretch(1)
+    return row
+
+
 def _refresh_docgraph(tile: _StatusTile, dg: dict) -> None:
     host = (dg.get("host") or {}) if isinstance(dg, dict) else {}
     if not host.get("enabled") and not host.get("alive"):
@@ -585,9 +655,10 @@ def _refresh_docgraph(tile: _StatusTile, dg: dict) -> None:
         bits = [err]
     tile.set_sub(" · ".join(bits) if bits else ("alive" if alive else ""))
 
-    # Sub line already says "<N> roots · <M> watching · <K> tools bridged"
-    # — a 1-dot strip on top is just visual noise.
-    tile.set_viz(None)
+    # Embed + rerank load indicators come from /api/admin/models_status
+    # (TTL-cached in docgraph/process.py). Only meaningful when the host
+    # is alive — when it isn't, the probe returns None and we skip.
+    tile.set_viz(_make_model_chips(dg.get("models")) if alive else None)
 
 
 def _refresh_telegram(tile: "_StatusTile") -> None:
