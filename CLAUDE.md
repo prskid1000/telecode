@@ -186,6 +186,8 @@ Telecode supervises **one** [DocGraph](../.docgraph) subprocess (`docgraph host 
 - **Extra local paths** — reads/writes `<root>/.docgraph/repos.json`; paths are indexed into the same graph.
 - **External links** — reads/writes `<root>/.docgraph/links.json`; each link has URL, Depth (0–N), Max pages (0 = unlimited), and TTL fields. Progress shown in the index bar as `[1/12] fetching · level N · done/total`. All row buttons (Index, Wiki, Clear, Watch, ✕, + Add root) are disabled while a host restart is in progress (`_RootsTable._restarting`).
 
+**Pinned roots.** Entries in `settings.docgraph.roots` with `"pinned": true` are protected end-to-end: `_RootRow` renders a 📌 marker in place of ✕ and makes `QLineEdit` read-only; `_RootsTable._on_remove` returns early on pinned rows; `_RootsTable._commit` re-serializes the flag so subsequent edits to *other* rows don't drop it. The `docgraph/config.py::roots()` accessor returns `{path, watch, pinned}`. `_RootsTable.refresh` includes `pinned` in its change-detection diff so flipping the flag in `settings.json` triggers a rebuild. `setup.ps1` has a "Pin docgraph root" step that auto-detects the docgraph repo (`-DocgraphRoot` param → `~/.local/bin/docgraph.bat` shim → `~/.docgraph` convention) and ensures it's `roots[0]` with `pinned: true`. `-SkipPin` opts out. The pin only restricts the docgraph repo row; other roots, per-root extra paths, and external links remain freely editable.
+
 **Logs.** `data/logs/docgraph_host.log` + `data/logs/docgraph_index.log`. Live tail in the global Logs section.
 
 ---
