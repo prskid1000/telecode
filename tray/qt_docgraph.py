@@ -35,7 +35,7 @@ from tray.qt_helpers import (
 from tray.qt_theme import FG, FG_DIM, FG_MUTE, BG, BG_CARD, BG_ELEV, BORDER, OK, ERR, WARN
 from tray.qt_sections import (
     _page, _card, _section_header, _row, _toggle_row, _line_row,
-    _number_row, _enum_row_strs, _wrap_align,
+    _number_row, _enum_row_strs, _wrap_align, _idle_unload_row,
 )
 
 log = logging.getLogger("telecode.tray.docgraph")
@@ -64,6 +64,7 @@ def build_docgraph_tabs(window) -> QWidget:
         _build_prompts_card,
         _build_embeddings_card,
         _build_reranker_card,
+        _build_idle_unload_card,
     ):
         card, refresh = build(window)
         layout.addWidget(card)
@@ -2054,6 +2055,24 @@ def _build_embeddings_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     body.addWidget(_number_row("docgraph.index.embed_batch_size", "Embed batch size",
                                 0, 1024, 16, 0, "", "0 = default (256 CPU / 32 GPU). Lower if GPU saturates.",
                                 cli="--embed-batch-size"))
+    return card, None
+
+
+def _build_idle_unload_card(window) -> tuple[QFrame, Callable[[], None] | None]:
+    card, body = _card(
+        "Model Idle Unload",
+        "Free embedding + reranker memory after a period of inactivity. "
+        "Models reload lazily on the next request. Mirrors llama.cpp's "
+        "idle-unload but inside the docgraph host process.",
+    )
+    body.addWidget(_row(row_label(
+        "Auto-Unload",
+        "When enabled, the docgraph host evicts the embedding and reranker "
+        "ONNX sessions after this many seconds of idleness. 0 = never unload.",
+        "docgraph.idle_unload_sec",
+        "--idle-unload-sec",
+    ), _idle_unload_row("docgraph.idle_unload_sec", 300)))
+    body.addWidget(_restart_host_row(window))
     return card, None
 
 

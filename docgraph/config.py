@@ -225,6 +225,21 @@ def index_embed_batch_size() -> int:
     return int(index_cfg().get("embed_batch_size", 0) or 0)
 
 
+# ── Idle unload ────────────────────────────────────────────────────────────
+
+def idle_unload_sec() -> float:
+    """How long (seconds) to keep embedding + reranker ONNX sessions
+    loaded after the last use. 0 (default) = never unload. Forwarded to
+    `docgraph host --idle-unload-sec`; the host's workspace runs a
+    periodic check and evicts models past the threshold. Models reload
+    lazily on the next request."""
+    raw = _root().get("idle_unload_sec", 0)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 # ── Wiki ────────────────────────────────────────────────────────────────────
 
 def wiki_cfg() -> dict:          return _section("wiki")
