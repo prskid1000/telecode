@@ -28,6 +28,7 @@ from proxy import managed_tools  # noqa: F401  side-effect: registers tools
 from proxy import request_log
 from proxy import translate as xlate
 from proxy import tokenizer as toks
+from proxy import api_routines
 from proxy import api_sessions
 from proxy import api_tasks
 from proxy import api_agents
@@ -1728,6 +1729,7 @@ def create_app() -> web.Application:
     api_jobs.register_routes(app)
     api_skills.register_routes(app)
     api_runs.register_routes(app)
+    api_routines.register_routes(app)
 
     app.router.add_get("/ui/legacy", handle_legacy_ui)
 
@@ -1752,4 +1754,12 @@ async def start_proxy_background() -> web.AppRunner | None:
     site = web.TCPSite(runner, host, port)
     await site.start()
     log.info("proxy listening on %s:%d — protocols=%s", host, port, proxy_config.protocols())
+
+    # Start the routine heartbeat thread so saved routines fire on their interval.
+    try:
+        from services.routine import routine_manager
+        routine_manager.start()
+    except Exception:
+        log.exception("routine_manager: failed to start")
+
     return runner

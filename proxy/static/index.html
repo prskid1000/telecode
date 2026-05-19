@@ -86,6 +86,7 @@
     <div class="tabs">
       <button class="tab active" data-tab="session">Session</button>
       <button class="tab" data-tab="skills">Skills</button>
+      <button class="tab" data-tab="routines">Routines</button>
     </div>
 
     <div id="tabSession">
@@ -159,14 +160,94 @@
         <span id="skillMsg" class="muted"></span>
       </div>
     </div><!-- /tabSkills -->
+
+    <div id="tabRoutines" style="display:none">
+      <div class="row">
+        <label>routine</label>
+        <select id="routinePicker" style="min-width:240px">
+          <option value="">— select a routine —</option>
+        </select>
+        <button class="ghost icon" id="routineRefresh" title="Refresh routines">↻</button>
+        <button id="routineNew" style="font-size:12px;padding:6px 12px">+ New</button>
+        <span class="grow"></span>
+        <span id="routineStatus" class="pill" style="display:none"></span>
+      </div>
+      <div class="muted" style="margin-bottom:10px">Routines fire tasks on a regular interval against a permanent session. The manager heartbeat checks every 60s — actual fire timing has up to 1 min drift.</div>
+
+      <div class="row"><label>name</label><input type="text" id="routineName" placeholder="Daily digest" style="flex:1"/></div>
+      <div class="row"><label>description</label><input type="text" id="routineDesc" placeholder="(optional)" style="flex:1"/></div>
+      <div class="row">
+        <label>prompt</label>
+        <textarea id="routinePrompt" placeholder="Read outputs/ for last run, then write outputs/&lt;date&gt;_digest.md ..." style="min-height:120px"></textarea>
+      </div>
+      <div class="row">
+        <label>every</label>
+        <input type="number" id="routineEverySec" min="60" value="3600" style="width:120px"/>
+        <span class="muted">seconds between fires (min 60)</span>
+      </div>
+      <div class="row">
+        <label>task timeout</label>
+        <input type="number" id="routineTaskTimeout" value="1800" style="width:120px"/>
+        <span class="muted">seconds per fire</span>
+      </div>
+      <div class="row">
+        <label>task type</label>
+        <select id="routineTaskType" style="width:160px">
+          <option value="CLAUDE_CODE">CLAUDE_CODE</option>
+          <option value="GEMINI">GEMINI</option>
+        </select>
+        <label style="min-width:auto;margin-left:10px"><input type="checkbox" id="routineIsLocal"/> local mode</label>
+      </div>
+      <div class="row">
+        <label>namespace</label>
+        <input type="text" id="routineNamespace" placeholder="(optional)" style="width:200px"/>
+        <label style="min-width:auto;margin-left:14px"><input type="checkbox" id="routineOutputsOnly"/> outputs_only</label>
+      </div>
+      <div class="row"><label>session</label><span id="routineSessionId" class="muted" style="font-family:var(--mono);font-size:12px">— (created on save)</span></div>
+
+      <div class="row" style="margin-top:8px">
+        <button id="routineSave">Save</button>
+        <button class="ghost" id="routinePause" disabled>Pause</button>
+        <button class="ghost" id="routineResume" disabled>Resume</button>
+        <button class="ghost" id="routineRunNow" disabled>Run now</button>
+        <span class="grow"></span>
+        <button class="ghost danger-hover" id="routineDelete" disabled style="font-size:12px;padding:6px 12px">Delete</button>
+        <span id="routineMsg" class="muted"></span>
+      </div>
+
+      <h2 style="margin-top:18px">Counters</h2>
+      <div class="row" style="gap:14px">
+        <div class="stat"><div class="muted">Next fire</div><div id="routineNextFire">—</div></div>
+        <div class="stat"><div class="muted">Last fire</div><div id="routineLastFire">—</div></div>
+        <div class="stat"><div class="muted">Last completed</div><div id="routineLastCompleted">—</div></div>
+        <div class="stat"><div class="muted">Total</div><div id="routineTotalRuns">0</div></div>
+        <div class="stat"><div class="muted">Skipped</div><div id="routineSkipped">0</div></div>
+      </div>
+    </div><!-- /tabRoutines -->
   </section>
 
   <section class="panel">
-    <h2>Active task</h2>
-    <div id="active"><span class="muted">No task yet. Submit one on the left.</span></div>
+    <div class="tabs">
+      <button class="tab active" data-rtab="active">Active task</button>
+      <button class="tab" data-rtab="byroutine">By routine</button>
+    </div>
 
-    <h2 style="margin-top:20px">Recent tasks</h2>
-    <div id="taskList" class="task-list"></div>
+    <div id="rtabActive">
+      <h2>Active task</h2>
+      <div id="active"><span class="muted">No task yet. Submit one on the left.</span></div>
+
+      <h2 style="margin-top:20px">Recent tasks</h2>
+      <div id="taskList" class="task-list"></div>
+    </div>
+
+    <div id="rtabByRoutine" style="display:none">
+      <div class="row" style="margin-bottom:10px">
+        <span class="muted">Click a routine to see its task history.</span>
+        <span class="grow"></span>
+        <button class="ghost icon" id="byRoutineRefresh" title="Refresh">↻</button>
+      </div>
+      <div id="byRoutineList"><span class="muted">Loading…</span></div>
+    </div>
   </section>
 </main>
 
@@ -452,15 +533,29 @@ async function refreshTasks() {
 refreshTasks();
 setInterval(refreshTasks, 5000);
 
-// ===== Tabs (Session / Skills) =====
-document.querySelectorAll(".tabs .tab").forEach(btn => {
-  btn.onclick = () => {
-    document.querySelectorAll(".tabs .tab").forEach(b => b.classList.toggle("active", b === btn));
-    const t = btn.dataset.tab;
-    $("tabSession").style.display = t === "session" ? "" : "none";
-    $("tabSkills").style.display = t === "skills" ? "" : "none";
-    if (t === "skills") refreshSkills();
-  };
+// ===== Tabs =====
+// Each .tabs group manages its own active state and its own panels. Two
+// groups today: left (data-tab → tabSession/tabSkills/tabRoutines) and
+// right (data-rtab → rtabActive/rtabByRoutine).
+document.querySelectorAll(".tabs").forEach(group => {
+  group.querySelectorAll(".tab").forEach(btn => {
+    btn.onclick = () => {
+      group.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b === btn));
+      if (btn.dataset.tab) {
+        const t = btn.dataset.tab;
+        $("tabSession").style.display = t === "session" ? "" : "none";
+        $("tabSkills").style.display = t === "skills" ? "" : "none";
+        $("tabRoutines").style.display = t === "routines" ? "" : "none";
+        if (t === "skills") refreshSkills();
+        if (t === "routines") refreshRoutines();
+      } else if (btn.dataset.rtab) {
+        const t = btn.dataset.rtab;
+        $("rtabActive").style.display = t === "active" ? "" : "none";
+        $("rtabByRoutine").style.display = t === "byroutine" ? "" : "none";
+        if (t === "byroutine") refreshByRoutine();
+      }
+    };
+  });
 });
 
 // ===== Skills =====
@@ -636,6 +731,315 @@ async function deleteSkillFile(rel) {
 window.deleteSkillFile = deleteSkillFile;
 
 refreshSkills();
+
+// ===== Routines =====
+let routineCache = [];
+let activeRoutine = null;
+
+function setRoutineMsg(text, isErr = false) {
+  const el = $("routineMsg");
+  el.textContent = text || "";
+  el.style.color = isErr ? "var(--err)" : "var(--muted)";
+}
+
+function renderRoutineForm() {
+  const r = activeRoutine;
+  const have = !!r;
+  $("routineName").value = have ? (r.name || "") : "";
+  $("routineDesc").value = have ? (r.description || "") : "";
+  $("routinePrompt").value = have ? (r.prompt || "") : "";
+  const sched = (have ? r.schedule : null) || { every_seconds: 3600 };
+  $("routineEverySec").value = sched.every_seconds || 3600;
+  $("routineTaskTimeout").value = have ? (r.task_timeout_seconds || 1800) : 1800;
+  $("routineNamespace").value = have ? (r.session_namespace || "") : "";
+  $("routineTaskType").value = have ? (r.task_type || "CLAUDE_CODE") : "CLAUDE_CODE";
+  $("routineIsLocal").checked = have ? !!r.is_local : false;
+  $("routineOutputsOnly").checked = have ? !!r.outputs_only : false;
+  $("routineSessionId").textContent = have ? r.session_id : "— (created on save)";
+  $("routineNamespace").disabled = have;
+
+  $("routineNextFire").textContent = have ? (r.next_fire_at || "—") : "—";
+  $("routineLastFire").textContent = have ? (r.last_fire_at || "—") : "—";
+  const lc = have && r.last_completed_at ? r.last_completed_at : "—";
+  const lcStatus = have ? (r.last_completion_status || "") : "";
+  $("routineLastCompleted").innerHTML = lcStatus
+    ? `${escapeHtml(lc)} <span class="pill ${lcStatus}">${escapeHtml(lcStatus)}</span>`
+    : escapeHtml(lc);
+  $("routineTotalRuns").textContent = have ? (r.total_runs || 0) : 0;
+  $("routineSkipped").textContent = have ? (r.skipped_runs || 0) : 0;
+
+  const status = $("routineStatus");
+  if (have) {
+    status.style.display = "";
+    status.textContent = r.status;
+    status.className = "pill " + (r.status === "active" ? "running"
+                                 : r.status === "paused" ? "pending"
+                                 : "cancelled");
+  } else {
+    status.style.display = "none";
+  }
+  $("routinePause").disabled = !have || r.status !== "active";
+  $("routineResume").disabled = !have || r.status === "active" || r.status === "cancelled";
+  $("routineRunNow").disabled = !have || r.status !== "active";
+  $("routineDelete").disabled = !have;
+}
+
+async function refreshRoutines() {
+  try {
+    const body = await api("/api/routines");
+    routineCache = body.routines || [];
+    const sel = $("routinePicker");
+    const keep = sel.value;
+    sel.innerHTML = '<option value="">— select a routine —</option>' +
+      routineCache.map(r => `<option value="${escapeHtml(r.routine_id)}">${escapeHtml(r.name)} (${r.status})</option>`).join("");
+    if (keep && routineCache.find(r => r.routine_id === keep)) {
+      sel.value = keep;
+      activeRoutine = routineCache.find(r => r.routine_id === keep);
+    } else {
+      activeRoutine = null;
+    }
+    renderRoutineForm();
+  } catch (e) { setRoutineMsg(e.message, true); }
+}
+
+$("routineRefresh").onclick = refreshRoutines;
+
+$("routinePicker").onchange = async (e) => {
+  const id = e.target.value;
+  if (!id) { activeRoutine = null; renderRoutineForm(); return; }
+  try {
+    const body = await api("/api/routines/" + encodeURIComponent(id));
+    activeRoutine = body.routine;
+    renderRoutineForm();
+  } catch (err) { setRoutineMsg(err.message, true); }
+};
+
+$("routineNew").onclick = () => {
+  activeRoutine = null;
+  $("routinePicker").value = "";
+  renderRoutineForm();
+  $("routineName").focus();
+  setRoutineMsg("New routine — fill in and click Save");
+};
+
+function readRoutineForm() {
+  return {
+    name: $("routineName").value.trim(),
+    description: $("routineDesc").value.trim(),
+    prompt: $("routinePrompt").value,
+    schedule: { every_seconds: parseInt($("routineEverySec").value, 10) || 0 },
+    task_timeout_seconds: parseInt($("routineTaskTimeout").value, 10) || 1800,
+    task_type: $("routineTaskType").value,
+    is_local: $("routineIsLocal").checked,
+    outputs_only: $("routineOutputsOnly").checked,
+    session_namespace: $("routineNamespace").value.trim() || null,
+  };
+}
+
+$("routineSave").onclick = async () => {
+  const payload = readRoutineForm();
+  setRoutineMsg("saving…");
+  try {
+    let saved;
+    if (activeRoutine && activeRoutine.routine_id) {
+      const body = await api("/api/routines/" + encodeURIComponent(activeRoutine.routine_id), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: payload.name,
+          description: payload.description,
+          prompt: payload.prompt,
+          schedule: payload.schedule,
+          task_timeout_seconds: payload.task_timeout_seconds,
+          task_type: payload.task_type,
+          is_local: payload.is_local,
+          outputs_only: payload.outputs_only,
+        }),
+      });
+      saved = body.routine;
+    } else {
+      const body = await api("/api/routines", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      saved = body.routine;
+    }
+    await refreshRoutines();
+    if (saved && saved.routine_id) {
+      $("routinePicker").value = saved.routine_id;
+      activeRoutine = routineCache.find(r => r.routine_id === saved.routine_id) || saved;
+    } else {
+      activeRoutine = null;
+    }
+    renderRoutineForm();
+    setRoutineMsg("saved");
+  } catch (e) { setRoutineMsg(e.message, true); }
+};
+
+$("routinePause").onclick = async () => {
+  if (!activeRoutine) return;
+  try {
+    const body = await api("/api/routines/" + encodeURIComponent(activeRoutine.routine_id) + "/pause", { method: "POST" });
+    activeRoutine = body.routine;
+    await refreshRoutines();
+    renderRoutineForm();
+    setRoutineMsg("paused");
+  } catch (e) { setRoutineMsg(e.message, true); }
+};
+
+$("routineResume").onclick = async () => {
+  if (!activeRoutine) return;
+  try {
+    const body = await api("/api/routines/" + encodeURIComponent(activeRoutine.routine_id) + "/resume", { method: "POST" });
+    activeRoutine = body.routine;
+    await refreshRoutines();
+    renderRoutineForm();
+    setRoutineMsg("resumed");
+  } catch (e) { setRoutineMsg(e.message, true); }
+};
+
+$("routineRunNow").onclick = async () => {
+  if (!activeRoutine) return;
+  try {
+    const body = await api("/api/routines/" + encodeURIComponent(activeRoutine.routine_id) + "/run-now", { method: "POST" });
+    if (body.skipped) {
+      setRoutineMsg("skipped (" + (body.error || "previous task still running") + ")");
+    } else {
+      setRoutineMsg("fired → task " + (body.task_id || ""));
+      refreshTasks();
+    }
+  } catch (e) { setRoutineMsg(e.message, true); }
+};
+
+$("routineDelete").onclick = async () => {
+  if (!activeRoutine) return;
+  const dropSession = confirm(
+    `Delete routine "${activeRoutine.name}"?\n\n` +
+    `OK = also drop its session folder (history lost)\n` +
+    `Cancel = keep session folder for forensics`
+  );
+  if (!dropSession) {
+    if (!confirm(`Delete routine but keep session folder?`)) return;
+  }
+  try {
+    await api(
+      "/api/routines/" + encodeURIComponent(activeRoutine.routine_id)
+      + (dropSession ? "?delete_session=true" : ""),
+      { method: "DELETE" }
+    );
+    activeRoutine = null;
+    await refreshRoutines();
+    renderRoutineForm();
+    setRoutineMsg("deleted");
+  } catch (e) { setRoutineMsg(e.message, true); }
+};
+
+// Poll the active routine every 5s while the Routines tab is visible
+// so counters / next_fire_at stay live.
+setInterval(async () => {
+  if ($("tabRoutines").style.display === "none") return;
+  if (!activeRoutine || !activeRoutine.routine_id) return;
+  try {
+    const body = await api("/api/routines/" + encodeURIComponent(activeRoutine.routine_id));
+    activeRoutine = body.routine;
+    renderRoutineForm();
+  } catch (e) { /* silent — survives transient errors */ }
+}, 5000);
+
+// ===== By-routine task browser (right-panel tab) =====
+const expandedRoutines = new Set();
+
+$("byRoutineRefresh").onclick = () => refreshByRoutine(true);
+
+async function refreshByRoutine(force = false) {
+  try {
+    const body = await api("/api/routines");
+    const list = body.routines || [];
+    if (!list.length) {
+      $("byRoutineList").innerHTML = '<span class="muted">No routines yet. Create one on the left.</span>';
+      return;
+    }
+    $("byRoutineList").innerHTML = list.map(r => {
+      const open = expandedRoutines.has(r.routine_id);
+      const statusCls = r.status === "active" ? "running"
+                      : r.status === "paused" ? "pending"
+                      : "cancelled";
+      return `
+        <div class="task" style="cursor:default" data-rid="${escapeHtml(r.routine_id)}">
+          <div class="routine-head" style="display:flex;gap:8px;align-items:center;cursor:pointer" onclick="toggleRoutineGroup('${escapeHtml(r.routine_id)}')">
+            <span style="width:12px;display:inline-block">${open ? "▼" : "▶"}</span>
+            ${badge(r.status, statusCls)}
+            <span style="font-weight:600">${escapeHtml(r.name || r.routine_id.slice(0,8))}</span>
+            <span class="muted">· runs=${r.total_runs || 0} · skipped=${r.skipped_runs || 0}</span>
+            <span class="grow"></span>
+            <span class="muted" style="font-size:11px">next: ${escapeHtml(r.next_fire_at || "—")}</span>
+          </div>
+          <div class="routine-runs" id="runs-${escapeHtml(r.routine_id)}" style="margin-top:8px;display:${open ? "" : "none"}">
+            ${open ? '<span class="muted">Loading…</span>' : ""}
+          </div>
+        </div>`;
+    }).join("");
+    expandedRoutines.forEach(rid => loadRoutineRuns(rid));
+  } catch (e) {
+    $("byRoutineList").innerHTML = `<span class="muted">${escapeHtml(e.message)}</span>`;
+  }
+}
+
+window.toggleRoutineGroup = (rid) => {
+  const head = document.querySelector(`[data-rid="${rid}"] .routine-head span`);
+  const box = $("runs-" + rid);
+  if (!box) return;
+  if (expandedRoutines.has(rid)) {
+    expandedRoutines.delete(rid);
+    box.style.display = "none";
+    if (head) head.textContent = "▶";
+  } else {
+    expandedRoutines.add(rid);
+    box.style.display = "";
+    if (head) head.textContent = "▼";
+    loadRoutineRuns(rid);
+  }
+};
+
+async function loadRoutineRuns(rid) {
+  const box = $("runs-" + rid);
+  if (!box) return;
+  box.innerHTML = '<span class="muted">Loading…</span>';
+  try {
+    const body = await api("/api/routines/" + encodeURIComponent(rid) + "/runs?limit=50");
+    const runs = body.runs || [];
+    if (!runs.length) {
+      box.innerHTML = '<span class="muted">No runs yet.</span>';
+      return;
+    }
+    box.innerHTML = runs.map(t => `
+      <div class="task ${t.task_id === activeTaskId ? 'active' : ''}" style="margin-left:18px"
+           onclick="openRunFromGroup('${t.task_id}')">
+        ${badge(t.status, t.status)}
+        <span style="font-family:var(--mono)">${t.task_id.slice(0,8)}…</span>
+        <span class="muted"> · ${fmtTime(t.created_at)}</span>
+        ${t.metadata && t.metadata.fire_source ? `<span class="muted"> · ${escapeHtml(t.metadata.fire_source)}</span>` : ""}
+      </div>
+    `).join("");
+  } catch (e) {
+    box.innerHTML = `<span class="muted">${escapeHtml(e.message)}</span>`;
+  }
+}
+
+window.openRunFromGroup = (tid) => {
+  document.querySelectorAll('.tabs .tab[data-rtab]').forEach(b => {
+    b.classList.toggle("active", b.dataset.rtab === "active");
+  });
+  $("rtabActive").style.display = "";
+  $("rtabByRoutine").style.display = "none";
+  watchTask(tid);
+};
+
+setInterval(() => {
+  if ($("rtabByRoutine").style.display === "none") return;
+  refreshByRoutine();
+}, 5000);
 </script>
 </body>
 </html>
