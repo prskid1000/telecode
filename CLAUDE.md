@@ -29,6 +29,14 @@ Agent → Job → Run pipeline (Team Mode):
 Heartbeat scheduler (off by default, settings.heartbeat.enabled=true):
   per agent each tick: parse HEARTBEAT.md (yaml fences) → reconcile to kind="heartbeat" Jobs
   → fire due+enabled entries; ephemeral=create+delete-after, persistent=submit on entry.workspace_id
+
+Routines (Task Mode, separate from Team-Mode Heartbeat):
+  data/routines/<id>.json = {prompt, schedule.every_seconds≥60, task_type, session_id, status…}
+  routine_manager daemon thread (60s tick) inside proxy process:
+    list_all() → reconcile completion of last_task_id → fire active+due via task_manager.submit_task
+  Skip-if-running on previous task. next_fire_at always advances (no catch-up).
+  Each fire prefixes the prompt with a heartbeat preface (tick #, cadence, "build on prior work").
+  get_routine / list_routines reconcile inline so the UI's 5s poll sees completion within seconds.
 ```
 
 - **Session key:** `{backend}:{name}` — colon is the separator; no colons in names.
@@ -84,6 +92,10 @@ Heartbeat scheduler (off by default, settings.heartbeat.enabled=true):
 | `proxy/api_{sessions,tasks,agents,jobs,runs}.py` | Pythonmagic-style task/agent/job/run REST surface. |
 | `proxy/runtime_state.py` | Persists managed/MCP-tool toggles to `data/runtime-overrides.json`. |
 | `services/task/staging.py` | `stage_for_run()` ctx-mgr — copies SOUL/USER/MEMORY → workspace/, AGENT.md → workspace/CLAUDE.md or GEMINI.md (engine-dependent). On exit, diffs vs snapshot, writes back modified files, deletes staged. Per-workspace `threading.Lock`. HEARTBEAT.md is intentionally NOT staged. |
+| `services/routine/routine_store.py` | Filesystem JSON store at `data/routines/<id>.json`. Atomic tmp+rename writes. Per-routine RLock. `build_record` / `save` / `get` / `patch` / `set_status` / `record_fire` / `record_completion` (idempotent via `last_completed_task_id` dedup) / `delete` / `list_all`. `MIN_ROUTINE_INTERVAL_SECONDS = 60`. |
+| `services/routine/routine_manager.py` | Daemon thread tick (every 60s, `MANAGER_INTERVAL_SECONDS`) — `_reconcile_completion` polls terminal status of `last_task_id` for every routine (active + paused) and writes completion fields; then `fire_routine` submits via `task_manager.submit_task` for active+due. Skip-if-running on `last_task_id` in PENDING/RUNNING. Heartbeat preface prepended to every fire's prompt. Started inside `start_proxy_background()`. |
+| `services/routine/routine_service.py` | CRUD over store + manager. `create_routine` ensures the bound session via `session_store.ensure`. `get_routine` / `list_routines` / `run_now` call `_reconcile_completion` inline so the UI's 5s poll picks up terminal status without waiting for the next tick. |
+| `proxy/api_routines.py` | aiohttp routes for `/api/routines*` — list / create / get / patch / delete (?delete_session=true) / pause / resume / run-now / runs. Registered alongside `api_tasks` in `proxy/server.py:create_app`. No auth (matches `/api/tasks`). |
 | `services/run/executor.py` | Pipeline driver thread per Run. Phase-based; single-step phase = job workspace, multi-step = ephemeral session per step. Threads outputs via `<previous_output>` / `<previous_outputs>`. |
 | `services/heartbeat/{parser,state,reconcile,scheduler}.py` | YAML-fence parser, atomic JSON state, sync HEARTBEAT.md → `kind:"heartbeat"` Jobs, async tick loop. |
 | `mcp_server/app.py`, `tools/*` | FastMCP (stateless streamable HTTP, port 1236). Drop-in tools/resources/prompts auto-discovered. |
@@ -193,6 +205,28 @@ Telecode supervises **one** [DocGraph](../.docgraph) subprocess (`docgraph host 
 
 ---
 
+## Routines (Task Mode) (`services/routine/`, `proxy/api_routines.py`)
+
+Recurring task fires on an interval against a permanent task-mode session. Independent of the Team-Mode HEARTBEAT.md scheduler — Team Mode is untouched.
+
+1. **Record** — `data/routines/<id>.json`. Schema in `routine_store.build_record`: `{routine_id, name, description, prompt, task_type ("CLAUDE_CODE"|"GEMINI"), is_local, outputs_only, schedule:{every_seconds≥60}, session_id, session_namespace, status ("active"|"paused"|"cancelled"), next_fire_at, last_fire_at, last_task_id, last_completed_at, last_completed_task_id, last_completion_status, total_runs, skipped_runs, last_error, task_timeout_seconds, session_idle_timeout_seconds, created_at, updated_at}`. Atomic tmp+rename writes under a per-routine `RLock`.
+2. **Manager** — single daemon thread spawned by `routine_manager.start()` inside `start_proxy_background()`. 60s `threading.Event.wait` loop; bootstrap-tick fires immediately on start so routines that became due while the proxy was down recover without an extra interval.
+3. **Tick** — `routine_manager.tick()`:
+   a. `_reconcile_completion(rec)` for **every** routine (active + paused) — checks `task_manager.get_task(last_task_id).status`; if terminal AND not yet recorded, writes `last_completed_at` / `last_completion_status` / clears `last_error` on success. Idempotent via `last_completed_task_id` dedup.
+   b. For active+due routines (`is_due`: `status=="active"` and `now ≥ next_fire_at`), `fire_routine(rec, source="manager")`.
+4. **Fire** — `routine_manager.fire_routine`:
+   - **Skip-if-running:** if `last_task_id` is still `PENDING`/`RUNNING`, `record_fire(skipped=True)` and bail (the `next_fire_at` still advances — no catch-up).
+   - **Heartbeat preface** prepended to the prompt: tick number, cadence (`_format_duration`), time-since-last-fire, "this is a RECURRING wake-up, build on prior work, stop if nothing new". Frames the new fire as cycle N of an ongoing assignment.
+   - Submits via `task_manager.submit_task(task_type, params={prompt, is_local, outputs_only}, metadata={routine_id, routine_name, fire_source}, session_id=rec["session_id"], session_namespace=...)`. The CLAUDE_CODE / GEMINI handlers resume the same session, so prior-tick output is already in the conversation history.
+   - On success: `record_fire(task_id=...)` — updates `next_fire_at`, `last_fire_at`, `last_task_id`, `total_runs`.
+5. **Service layer** (`routine_service.py`) — CRUD wrappers. `get_routine` / `list_routines` / `run_now` call `_reconcile_completion` inline so the UI's 5s poll picks up terminal status within seconds (without waiting up to 60s for the next tick). `delete_routine(delete_session=True)` drops the bound session folder.
+6. **API** (`proxy/api_routines.py`) — `/api/routines` list/create, `/api/routines/<id>` get/patch/delete (?delete_session=true), `/api/routines/<id>/{pause,resume,run-now,runs}`. No auth — matches the rest of `/api/*` in telecode. Registered alongside the other API blueprints in `create_app`.
+7. **UI** — Task-mode `proxy/static/index.html`. Left-panel **Routines** tab (create/edit form + Save/Pause/Resume/Run-now/Delete + live counters); right-panel **By routine** tab (collapsible per-routine task lists, lazy-loaded via `/api/routines/<id>/runs`, clicking a run pops back to Active and watches it). Tab handler scoped per `.tabs` group via `data-tab` (left) vs `data-rtab` (right).
+
+**Where the manager runs.** Inside the proxy aiohttp process. Bot-only deployments don't tick — start the proxy if you need routines.
+
+---
+
 ## llama.cpp supervisor (`llamacpp/`)
 
 1. **Spawn:** `LlamaSupervisor.start_default()` runs from `main.py:_post_init` BEFORE the proxy. stdout+stderr merged into `data/logs/llama.log` (append, one banner per restart).
@@ -290,6 +324,8 @@ FastMCP streamable HTTP, port 1236. Drop-in `tools/` / `resources/` / `prompts/`
 | Bot silent | Token, group id, bot admin, Topics on. Also `data/logs/telecode.log.prev`. |
 | Bot stops after a while | `data/logs/telecode.log.prev` — crash handlers route exceptions there. Set `telegram.auto_restart: true` to re-start automatically. |
 | Heartbeat not firing | `heartbeat.enabled` must be `true`; check `data/logs/telecode.log` for scheduler start message. |
+| Routine not firing | Manager runs inside the proxy — confirm `proxy.enabled: true`. Check `data/logs/telecode.log` for `routine_manager: heartbeat started`. Per-tick summary lines (`routine_manager.tick: scanned=… fired=… skipped=…`) only emit when something actually fired/skipped/errored. |
+| Routine "Last completed" never updates | Reconcile only runs while the proxy is up. If a tick finished while the proxy was down, the next `get_routine` / `list_routines` poll (or the next manager tick) will catch up via `_reconcile_completion`. |
 | "No session for thread" | `/new` again; store may be missing mapping. |
 | CLI exits at once | Missing API key, wrong `startup_cmd`, binary not on PATH. |
 | Stuck on prompt | `/key enter` or `/key y`. |

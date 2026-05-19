@@ -100,8 +100,32 @@ Telecode includes a fully-featured stateful **Session and Task Management** syst
 - **Background Task Queue**: Submit jobs (like `CLAUDE_CODE`) that run asynchronously. The model can poll for status and rich tool-use events.
 - **Web Interface**: Dual-mode UI for monitoring tasks and managing files:
   - **Team Mode** (`/ui`): Workspaces / Agents (with the 5-tab internal-file editor + YAML-validated HEARTBEAT.md) / Jobs (USER and HEARTBEAT sidebar tabs, pipeline builder, run history).
-  - **Task Mode** (`/ui/legacy`): Simplified session-based task submission and monitoring.
+  - **Task Mode** (`/ui/legacy`): Simplified session-based task submission and monitoring. Includes a **Routines** tab (recurring task fires on an interval against a permanent session) and a **By routine** right-panel tab for browsing run history grouped per routine.
   - Browser titles ("Telecode-Team" / "Telecode-Task") and icons match the active mode for easy navigation.
+
+#### Routines (Task Mode)
+
+A routine is a saved recipe — `{name, prompt, schedule.every_seconds ≥ 60, task_type, session_id}` — that the routine manager's heartbeat fires on its interval against a long-lived session. The CLI (`CLAUDE_CODE` or `GEMINI`) resumes the same conversation every tick, so the agent walks back into the same folder and history each time. Skip-if-running is enforced (no two fires of the same routine in flight); pause / resume / edit / delete are pure file ops on `data/routines/<id>.json` — the manager picks up changes on its next tick (≤ 60s).
+
+Each fire's prompt is prefixed with a heartbeat preface (tick number, cadence, time-since-last-fire, "this is a recurring wake-up, build on prior work, stop if nothing new") so the model treats the session as one ongoing assignment instead of restarting work each cycle.
+
+The Routines tab on the left has the create/edit form + Save / Pause / Resume / Run-now / Delete and live counters (`Next fire`, `Last fire`, `Last completed` with a status pill, `Total`, `Skipped`). The right panel's **By routine** tab lists every routine with run/skipped counters; click to expand and lazy-load that routine's task history via `/api/routines/<id>/runs`. Clicking a run pops back to the Active-task view and starts watching it.
+
+REST surface (open, no auth — same as `/api/tasks`):
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/routines` | List (?status, ?namespace) |
+| POST | `/api/routines` | Create routine + bound session |
+| GET | `/api/routines/<id>` | One routine + last 5 runs |
+| PATCH | `/api/routines/<id>` | Update prompt/schedule/options |
+| DELETE | `/api/routines/<id>` | Cancel (?delete_session=true also drops the session folder) |
+| POST | `/api/routines/<id>/pause` | Pause scheduling |
+| POST | `/api/routines/<id>/resume` | Resume scheduling |
+| POST | `/api/routines/<id>/run-now` | Fire one tick immediately |
+| GET | `/api/routines/<id>/runs` | Task history for this routine |
+
+The manager thread starts inside `start_proxy_background()` (proxy process). **Routines only fire while the proxy is running** — bot-only deployments won't tick.
 
 ### System tray UI + settings window
 
