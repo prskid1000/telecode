@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 from tray.qt_widgets import Toggle, NumberEditor, WrapLabel, row_label
 from tray.qt_helpers import (
     read_settings, get_path, patch_settings, remove_path, schedule,
-    humanize, format_protocol, build_status,
+    humanize, format_protocol, build_status, settings_bus,
 )
 from tray.qt_theme import (
     FG, FG_DIM, FG_MUTE, BG, BG_ELEV, BG_CARD, BORDER, OK, WARN, ERR, ACCENT,
@@ -187,6 +187,136 @@ def _enum_row(path: str, label: str, options: list[tuple[str, Any]],
         lambda i: patch_settings(path, cb.itemData(i))
     )
     return _row(row_label(label, help_text, path), _wrap_align(cb, Qt.AlignmentFlag.AlignLeft))
+
+
+def _dependent(row: QWidget, parent_paths: list[str], predicate) -> QWidget:
+    """Grey-out `row` whenever predicate(*current_parent_values) is False.
+
+    Subscribes to the settings bus so the disabled state tracks live edits
+    (made via the same tray UI, via patch_settings from anywhere, or via
+    direct settings.json writes routed through the same helpers).
+
+    `predicate` receives one positional arg per parent_path, in order.
+    """
+
+    def _evaluate() -> None:
+        snap = read_settings()
+        try:
+            vals = [get_path(snap, p) for p in parent_paths]
+            enabled = bool(predicate(*vals))
+        except Exception:
+            enabled = True
+        row.setEnabled(enabled)
+
+    bus = settings_bus()
+
+    def _on_change(path: str) -> None:
+        # Cheap match: re-evaluate only when one of our parents (or a
+        # subpath of it) changed.
+        for p in parent_paths:
+            if path == p or path.startswith(p + ".") or p.startswith(path + "."):
+                _evaluate()
+                return
+
+    bus.settingChanged.connect(_on_change)
+    _evaluate()
+    # Cache the disconnect lambda on the widget so it can be cleaned up by
+    # Qt's garbage collector when the row is reparented away.
+    row._dep_disconnect = lambda: bus.settingChanged.disconnect(_on_change)  # type: ignore[attr-defined]
+    return row
+
+
+def _has_spec(spec_value, *names: str) -> bool:
+    """True if any of `names` is in the comma-separated spec_type value."""
+    if not spec_value:
+        return False
+    active = {s.strip() for s in str(spec_value).split(",") if s.strip()}
+    return any(n in active for n in names)
+
+
+def _spec_value_is_active(spec_value) -> bool:
+    """True iff spec_type is set to something other than empty/none."""
+    raw = str(spec_value or "").strip().lower()
+    if not raw:
+        return False
+    active = {s.strip() for s in raw.split(",") if s.strip()}
+    return bool(active - {"none"})
+
+
+_MUTEX_REGISTERED: set[tuple[str, ...]] = set()
+
+
+def _mutex_bools(path_a: str, path_b: str) -> None:
+    """Bind two boolean settings so turning one ON clears the other.
+
+    Fires through the settings bus so the cross-clear works regardless of
+    which UI control did the write. Idempotent — wires the listener at
+    most once per (path_a, path_b) pair.
+    """
+    key = (path_a, path_b)
+    if key in _MUTEX_REGISTERED:
+        return
+    _MUTEX_REGISTERED.add(key)
+
+    bus = settings_bus()
+    _busy = {"on": False}
+
+    def _on_change(path: str) -> None:
+        if _busy["on"]:
+            return
+        snap = read_settings()
+        if path == path_a and bool(get_path(snap, path_a)):
+            if bool(get_path(snap, path_b)):
+                _busy["on"] = True
+                try:
+                    patch_settings(path_b, False)
+                finally:
+                    _busy["on"] = False
+        elif path == path_b and bool(get_path(snap, path_b)):
+            if bool(get_path(snap, path_a)):
+                _busy["on"] = True
+                try:
+                    patch_settings(path_a, False)
+                finally:
+                    _busy["on"] = False
+
+    bus.settingChanged.connect(_on_change)
+
+
+def _mutex_spec_default_vs_type() -> None:
+    """spec_default ↔ spec_type checkboxes: enabling one clears the other.
+
+    - spec_default=true → write spec_type="none"
+    - spec_type becomes non-empty/non-none → write spec_default=false
+    """
+    key = ("llamacpp.spec_default", "llamacpp.spec_type")
+    if key in _MUTEX_REGISTERED:
+        return
+    _MUTEX_REGISTERED.add(key)
+
+    bus = settings_bus()
+    _busy = {"on": False}
+
+    def _on_change(path: str) -> None:
+        if _busy["on"]:
+            return
+        snap = read_settings()
+        sd = bool(get_path(snap, "llamacpp.spec_default"))
+        st = get_path(snap, "llamacpp.spec_type")
+        if path == "llamacpp.spec_default" and sd and _spec_value_is_active(st):
+            _busy["on"] = True
+            try:
+                patch_settings("llamacpp.spec_type", "none")
+            finally:
+                _busy["on"] = False
+        elif path == "llamacpp.spec_type" and _spec_value_is_active(st) and sd:
+            _busy["on"] = True
+            try:
+                patch_settings("llamacpp.spec_default", False)
+            finally:
+                _busy["on"] = False
+
+    bus.settingChanged.connect(_on_change)
 
 
 _SPEC_TYPE_OPTIONS: list[tuple[str, str, str]] = [
@@ -1228,21 +1358,28 @@ def _llama(window) -> QWidget:
     layout.addWidget(ep_card)
 
     # ── Server Mode card — alternate endpoint modes ───────────────────
+    _mutex_bools("llamacpp.embedding", "llamacpp.rerank")
     sm_card, sm_body = _card("Server Mode",
                               "llamacpp.* — repurpose the running server for embedding or reranking. "
                               "Leave all OFF for normal chat completions.")
-    sm_body.addWidget(_toggle_row("llamacpp.embedding", "Embedding Mode",
-                                   "--embedding: restrict server to embedding requests. Requires an embedding-capable GGUF."))
-    sm_body.addWidget(_toggle_row("llamacpp.rerank", "Rerank Mode",
-                                   "--rerank: enable /rerank endpoint. Requires a reranker GGUF."))
-    sm_body.addWidget(_enum_row("llamacpp.pooling", "Pooling",
-                                 [("(model default)", ""),
-                                  ("none",  "none"),
-                                  ("mean",  "mean"),
-                                  ("cls",   "cls"),
-                                  ("last",  "last"),
-                                  ("rank",  "rank")],
-                                 "--pooling: pooling type for embedding output. Only meaningful when Embedding Mode is on."))
+    sm_body.addWidget(_dependent(
+        _toggle_row("llamacpp.embedding", "Embedding Mode",
+                     "--embedding: restrict server to embedding requests. Requires an embedding-capable GGUF."),
+        ["llamacpp.rerank"], lambda r: not bool(r)))
+    sm_body.addWidget(_dependent(
+        _toggle_row("llamacpp.rerank", "Rerank Mode",
+                     "--rerank: enable /rerank endpoint. Requires a reranker GGUF."),
+        ["llamacpp.embedding"], lambda e: not bool(e)))
+    sm_body.addWidget(_dependent(
+        _enum_row("llamacpp.pooling", "Pooling",
+                   [("(model default)", ""),
+                    ("none",  "none"),
+                    ("mean",  "mean"),
+                    ("cls",   "cls"),
+                    ("last",  "last"),
+                    ("rank",  "rank")],
+                   "--pooling: pooling type for embedding output. Only meaningful when Embedding Mode is on."),
+        ["llamacpp.embedding"], lambda e: bool(e)))
     layout.addWidget(sm_card)
 
     # Caching policy card — server-wide
@@ -1250,13 +1387,20 @@ def _llama(window) -> QWidget:
                                     "llamacpp.* — KV cache & slot / checkpoint policy")
     cache_body.addWidget(_toggle_row("llamacpp.kv_offload",     "KV Offload (GPU)",
                                       "--kv-offload / --no-kv-offload: keep KV cache on GPU. Toggle off to stay on CPU."))
-    cache_body.addWidget(_toggle_row("llamacpp.kv_unified",     "Unified KV",
-                                      "--kv-unified / --no-kv-unified: single KV buffer shared across all slots."))
+    # Unified KV only matters with multiple slots (parallel > 1 or -1 = auto).
+    cache_body.addWidget(_dependent(
+        _toggle_row("llamacpp.kv_unified",     "Unified KV",
+                     "--kv-unified / --no-kv-unified: single KV buffer shared across all slots."),
+        ["llamacpp.parallel"], lambda p: int(p or 1) != 1))
     cache_body.addWidget(_toggle_row("llamacpp.cache_prompt",   "Cache Prompt",
                                       "--cache-prompt / --no-cache-prompt: reuse KV across requests with shared prefixes."))
-    cache_body.addWidget(_toggle_row("llamacpp.cache_idle_slots", "Cache Idle Slots",
-                                      "--cache-idle-slots / --no-cache-idle-slots: save and clear idle slots when a new task arrives. "
-                                      "(Renamed from --clear-idle in upstream b9145.)"))
+    # cache_idle_slots needs unified KV AND a positive cache_ram.
+    cache_body.addWidget(_dependent(
+        _toggle_row("llamacpp.cache_idle_slots", "Cache Idle Slots",
+                     "--cache-idle-slots / --no-cache-idle-slots: save and clear idle slots when a new task arrives. "
+                     "(Renamed from --clear-idle in upstream b9145.) Requires Unified KV + Cache RAM > 0."),
+        ["llamacpp.kv_unified", "llamacpp.cache_ram"],
+        lambda u, cr: bool(u) and int(cr or 0) > 0))
     cache_body.addWidget(_toggle_row("llamacpp.context_shift",  "Context Shift",
                                       "--context-shift / --no-context-shift: rotate the KV ring buffer instead of erroring on context overflow."))
     cache_body.addWidget(_toggle_row("llamacpp.warmup",         "Warmup",
@@ -1284,30 +1428,61 @@ def _llama(window) -> QWidget:
     # is supported (e.g. "draft-mtp,ngram-mod" = MTP heads for high-confidence
     # guesses + ngram-mod for verbatim runs). Serialized as a comma-joined string
     # in settings.json. "none" is intentionally NOT a checkbox — uncheck all.
-    spec_body.addWidget(_spec_type_multi_row("llamacpp.spec_type", "Spec Type"))
-    spec_body.addWidget(_toggle_row("llamacpp.spec_default",         "Spec Default (auto-pick)",
-                                     "--spec-default: let llama-server pick a working spec config based on what the model exposes "
-                                     "(e.g. enables draft-mtp automatically if the model has MTP heads). Mutually exclusive with the checkboxes above."))
+    _mutex_spec_default_vs_type()
+    spec_body.addWidget(_dependent(
+        _spec_type_multi_row("llamacpp.spec_type", "Spec Type"),
+        ["llamacpp.spec_default"],
+        lambda sd: not bool(sd),
+    ))
+    spec_body.addWidget(_dependent(
+        _toggle_row("llamacpp.spec_default",         "Spec Default (auto-pick)",
+                     "--spec-default: let llama-server pick a working spec config based on what the model exposes "
+                     "(e.g. enables draft-mtp automatically if the model has MTP heads). Mutually exclusive with the checkboxes above."),
+        ["llamacpp.spec_type"],
+        lambda st: not _spec_value_is_active(st),
+    ))
     # The three rows below feed --spec-ngram-{simple,map-k,map-k4v}-{size-n,size-m,min-hits}
     # — argv.build_argv() picks the per-mode flag from the chosen Spec Type.
     # ngram-mod has its own (n-min, n-max, n-match) shape — separate rows below.
-    spec_body.addWidget(_number_row("llamacpp.spec_ngram_size_n",   "N-gram N (size-n)",   0, 64, 1, 0, "",
-                                     "Lookup key length for ngram-simple / ngram-map-k / ngram-map-k4v. 0 = server default."))
-    spec_body.addWidget(_number_row("llamacpp.spec_ngram_size_m",   "N-gram M (size-m)",   0, 64, 1, 0, "",
-                                     "Draft length per match for ngram-simple / ngram-map-k / ngram-map-k4v. 0 = default."))
-    spec_body.addWidget(_number_row("llamacpp.spec_ngram_min_hits", "N-gram Min Hits",     0, 64, 1, 0, "",
-                                     "Minimum match frequency for ngram-simple / ngram-map-k / ngram-map-k4v. 0 = default."))
-    # ngram-mod specific knobs (n-min/n-max added in v9243; n-match was already there)
-    spec_body.addWidget(_number_row("llamacpp.spec_ngram_mod_n_min",   "N-gram Mod N-Min",   0, 256, 1, 0, "tok",
-                                     "--spec-ngram-mod-n-min: minimum ngram tokens for ngram-mod (default 48)."))
-    spec_body.addWidget(_number_row("llamacpp.spec_ngram_mod_n_max",   "N-gram Mod N-Max",   0, 256, 1, 0, "tok",
-                                     "--spec-ngram-mod-n-max: maximum ngram tokens for ngram-mod (default 64)."))
-    spec_body.addWidget(_number_row("llamacpp.spec_ngram_mod_n_match", "N-gram Mod N-Match", 0, 256, 1, 0, "tok",
-                                     "--spec-ngram-mod-n-match: lookup length for ngram-mod (default 24). 0 = falls back to N (size-n)."))
-    spec_body.addWidget(_number_row("llamacpp.threads_draft",       "Threads (draft)",     0, 128, 1, 0, "",
-                                     "--threads-draft: CPU threads for draft-model generation. 0 = match --threads."))
-    spec_body.addWidget(_number_row("llamacpp.threads_batch_draft", "Threads (draft batch)", 0, 128, 1, 0, "",
-                                     "--threads-batch-draft: CPU threads for draft-model prompt processing."))
+    # Shared ngram triplet for simple / map-k / map-k4v — greyed out when none active.
+    _ngram_simple_active = lambda st: _has_spec(st, "ngram-simple", "ngram-map-k", "ngram-map-k4v")
+    spec_body.addWidget(_dependent(
+        _number_row("llamacpp.spec_ngram_size_n",   "N-gram N (size-n)",   0, 64, 1, 0, "",
+                     "Lookup key length for ngram-simple / ngram-map-k / ngram-map-k4v. 0 = server default."),
+        ["llamacpp.spec_type"], _ngram_simple_active))
+    spec_body.addWidget(_dependent(
+        _number_row("llamacpp.spec_ngram_size_m",   "N-gram M (size-m)",   0, 64, 1, 0, "",
+                     "Draft length per match for ngram-simple / ngram-map-k / ngram-map-k4v. 0 = default."),
+        ["llamacpp.spec_type"], _ngram_simple_active))
+    spec_body.addWidget(_dependent(
+        _number_row("llamacpp.spec_ngram_min_hits", "N-gram Min Hits",     0, 64, 1, 0, "",
+                     "Minimum match frequency for ngram-simple / ngram-map-k / ngram-map-k4v. 0 = default."),
+        ["llamacpp.spec_type"], _ngram_simple_active))
+    # ngram-mod specific knobs (n-min/n-max added in v9243; n-match was already there) —
+    # greyed when ngram-mod is not in spec_type.
+    _ngram_mod_active = lambda st: _has_spec(st, "ngram-mod")
+    spec_body.addWidget(_dependent(
+        _number_row("llamacpp.spec_ngram_mod_n_min",   "N-gram Mod N-Min",   0, 256, 1, 0, "tok",
+                     "--spec-ngram-mod-n-min: minimum ngram tokens for ngram-mod (default 48)."),
+        ["llamacpp.spec_type"], _ngram_mod_active))
+    spec_body.addWidget(_dependent(
+        _number_row("llamacpp.spec_ngram_mod_n_max",   "N-gram Mod N-Max",   0, 256, 1, 0, "tok",
+                     "--spec-ngram-mod-n-max: maximum ngram tokens for ngram-mod (default 64)."),
+        ["llamacpp.spec_type"], _ngram_mod_active))
+    spec_body.addWidget(_dependent(
+        _number_row("llamacpp.spec_ngram_mod_n_match", "N-gram Mod N-Match", 0, 256, 1, 0, "tok",
+                     "--spec-ngram-mod-n-match: lookup length for ngram-mod (default 24). 0 = falls back to N (size-n)."),
+        ["llamacpp.spec_type"], _ngram_mod_active))
+    # Draft-side thread knobs only matter when a draft-* spec type or ngram-cache is active.
+    _draft_active = lambda st: _has_spec(st, "draft-simple", "draft-eagle3", "draft-mtp", "ngram-cache")
+    spec_body.addWidget(_dependent(
+        _number_row("llamacpp.threads_draft",       "Threads (draft)",     0, 128, 1, 0, "",
+                     "--threads-draft: CPU threads for draft-model generation. 0 = match --threads."),
+        ["llamacpp.spec_type"], _draft_active))
+    spec_body.addWidget(_dependent(
+        _number_row("llamacpp.threads_batch_draft", "Threads (draft batch)", 0, 128, 1, 0, "",
+                     "--threads-batch-draft: CPU threads for draft-model prompt processing."),
+        ["llamacpp.spec_type"], _draft_active))
     layout.addWidget(spec_card)
 
     # Proxy Behavior card — global behavior knobs with NO per-model equivalent.
@@ -3496,16 +3671,24 @@ def _models(window) -> QWidget:
         form_layout.addWidget(_line_row(f"{p}.path",   "GGUF Path",
                                          "D:/models/foo.gguf",
                                          "Absolute path to the model .gguf file."))
-        form_layout.addWidget(_line_row(f"{p}.mmproj", "mmproj Path (vision)",
+        form_layout.addWidget(_section_header("Vision (mmproj — leave empty for text-only models)"))
+        form_layout.addWidget(_line_row(f"{p}.mmproj", "mmproj Path",
                                          "D:/models/mmproj.gguf",
                                          "Optional — only needed for vision-capable GGUFs (Qwen-VL etc)."))
-        form_layout.addWidget(_toggle_row(f"{p}.mmproj_offload",  "mmproj on GPU",
-                                           "--mmproj-offload / --no-mmproj-offload: keep the vision projector in VRAM (default enabled). "
-                                           "Disable to save ~1 GiB VRAM at the cost of slower per-image prefill."))
-        form_layout.addWidget(_number_row(f"{p}.image_min_tokens", "Image Min Tokens",  0, 16384, 64, 0, "tok",
-                                           "--image-min-tokens: minimum tokens each image consumes (dynamic-resolution vision models). 0 = read from model."))
-        form_layout.addWidget(_number_row(f"{p}.image_max_tokens", "Image Max Tokens",  0, 16384, 64, 0, "tok",
-                                           "--image-max-tokens: maximum tokens per image. 0 = read from model. Lower = less prefill compute."))
+        _has_mmproj = lambda v: bool(str(v or "").strip())
+        form_layout.addWidget(_dependent(
+            _toggle_row(f"{p}.mmproj_offload",  "mmproj on GPU",
+                         "--mmproj-offload / --no-mmproj-offload: keep the vision projector in VRAM (default enabled). "
+                         "Disable to save ~1 GiB VRAM at the cost of slower per-image prefill."),
+            [f"{p}.mmproj"], _has_mmproj))
+        form_layout.addWidget(_dependent(
+            _number_row(f"{p}.image_min_tokens", "Image Min Tokens",  0, 16384, 64, 0, "tok",
+                         "--image-min-tokens: minimum tokens each image consumes (dynamic-resolution vision models). 0 = read from model."),
+            [f"{p}.mmproj"], _has_mmproj))
+        form_layout.addWidget(_dependent(
+            _number_row(f"{p}.image_max_tokens", "Image Max Tokens",  0, 16384, 64, 0, "tok",
+                         "--image-max-tokens: maximum tokens per image. 0 = read from model. Lower = less prefill compute."),
+            [f"{p}.mmproj"], _has_mmproj))
 
         form_layout.addWidget(_section_header("Capacity"))
         form_layout.addWidget(_number_row(f"{p}.ctx_size",     "Context Size",       512, 1048576, 256, 0, "tok"))
@@ -3520,10 +3703,15 @@ def _models(window) -> QWidget:
         form_layout.addWidget(_section_header("Context Fitting"))
         form_layout.addWidget(_toggle_row(f"{p}.fit",          "Fit Context",
                                            "--fit on: auto-shrink ctx_size to what the model + KV actually fits in available memory."))
-        form_layout.addWidget(_number_row(f"{p}.fit_ctx",      "Fit Ctx Ceiling",    0,   2097152, 1024, 0, "tok",
-                                           "--fit-ctx: max ctx the fitter is allowed to grow to. 0 = use ctx_size."))
-        form_layout.addWidget(_number_row(f"{p}.fit_target",   "Fit Target Headroom", 0,  16384,   16,   0, "MB",
-                                           "--fit-target: free VRAM/RAM (MB) to leave after fitting."))
+        _fit_on = lambda f: bool(f)
+        form_layout.addWidget(_dependent(
+            _number_row(f"{p}.fit_ctx",      "Fit Ctx Ceiling",    0,   2097152, 1024, 0, "tok",
+                         "--fit-ctx: max ctx the fitter is allowed to grow to. 0 = use ctx_size."),
+            [f"{p}.fit"], _fit_on))
+        form_layout.addWidget(_dependent(
+            _number_row(f"{p}.fit_target",   "Fit Target Headroom", 0,  16384,   16,   0, "MB",
+                         "--fit-target: free VRAM/RAM (MB) to leave after fitting."),
+            [f"{p}.fit"], _fit_on))
 
         form_layout.addWidget(_section_header("Cache"))
         form_layout.addWidget(_enum_row_strs(f"{p}.cache_type_k", "Cache Type (K)", _CACHE_TYPES))
@@ -3552,63 +3740,113 @@ def _models(window) -> QWidget:
         form_layout.addWidget(_line_row(f"{p}.rope_scaling",     "RoPE Scaling",
                                          "none / linear / yarn",
                                          "--rope-scaling. Empty = model default."))
-        form_layout.addWidget(_number_row(f"{p}.rope_freq_base", "RoPE Freq Base",       0, 10000000, 1000, 0, "",
-                                           "--rope-freq-base. 0 = model default."))
-        form_layout.addWidget(_number_row(f"{p}.rope_freq_scale","RoPE Freq Scale",      0, 4.0, 0.05, 2, "",
-                                           "--rope-freq-scale. 0 = model default."))
-        form_layout.addWidget(_number_row(f"{p}.yarn_orig_ctx",  "YaRN Orig Ctx",        0, 1048576, 1024, 0, "tok",
-                                           "--yarn-orig-ctx: original training context for YaRN scaling."))
+        _has_rope_scaling = lambda rs: bool(str(rs or "").strip()) and str(rs).strip().lower() != "none"
+        _yarn_active = lambda rs: str(rs or "").strip().lower() == "yarn"
+        form_layout.addWidget(_dependent(
+            _number_row(f"{p}.rope_freq_base", "RoPE Freq Base",       0, 10000000, 1000, 0, "",
+                         "--rope-freq-base. 0 = model default."),
+            [f"{p}.rope_scaling"], _has_rope_scaling))
+        form_layout.addWidget(_dependent(
+            _number_row(f"{p}.rope_freq_scale","RoPE Freq Scale",      0, 4.0, 0.05, 2, "",
+                         "--rope-freq-scale. 0 = model default."),
+            [f"{p}.rope_scaling"], _has_rope_scaling))
+
+        form_layout.addWidget(_section_header("YaRN (only when RoPE Scaling = yarn)"))
+        form_layout.addWidget(_dependent(
+            _number_row(f"{p}.yarn_orig_ctx",  "YaRN Orig Ctx",        0, 1048576, 1024, 0, "tok",
+                         "--yarn-orig-ctx: original training context for YaRN scaling."),
+            [f"{p}.rope_scaling"], _yarn_active))
         # YaRN fine-tuning — defaults are -1.0 (auto) upstream; 0 here means
         # "skip flag emission, use server default".
-        form_layout.addWidget(_number_row(f"{p}.yarn_ext_factor",  "YaRN Ext Factor",  -1.0, 4.0, 0.05, 2, "",
-                                           "--yarn-ext-factor: extrapolation mix factor. 0 = use server default (auto)."))
-        form_layout.addWidget(_number_row(f"{p}.yarn_attn_factor", "YaRN Attn Factor", -1.0, 4.0, 0.05, 2, "",
-                                           "--yarn-attn-factor: scale sqrt(t) or attention magnitude. 0 = default."))
-        form_layout.addWidget(_number_row(f"{p}.yarn_beta_slow",   "YaRN Beta Slow",   -1.0, 4.0, 0.05, 2, "",
-                                           "--yarn-beta-slow: high correction dim (alpha). 0 = default."))
-        form_layout.addWidget(_number_row(f"{p}.yarn_beta_fast",   "YaRN Beta Fast",   -1.0, 64.0, 0.5, 2, "",
-                                           "--yarn-beta-fast: low correction dim (beta). 0 = default."))
+        form_layout.addWidget(_dependent(
+            _number_row(f"{p}.yarn_ext_factor",  "YaRN Ext Factor",  -1.0, 4.0, 0.05, 2, "",
+                         "--yarn-ext-factor: extrapolation mix factor. 0 = use server default (auto)."),
+            [f"{p}.rope_scaling"], _yarn_active))
+        form_layout.addWidget(_dependent(
+            _number_row(f"{p}.yarn_attn_factor", "YaRN Attn Factor", -1.0, 4.0, 0.05, 2, "",
+                         "--yarn-attn-factor: scale sqrt(t) or attention magnitude. 0 = default."),
+            [f"{p}.rope_scaling"], _yarn_active))
+        form_layout.addWidget(_dependent(
+            _number_row(f"{p}.yarn_beta_slow",   "YaRN Beta Slow",   -1.0, 4.0, 0.05, 2, "",
+                         "--yarn-beta-slow: high correction dim (alpha). 0 = default."),
+            [f"{p}.rope_scaling"], _yarn_active))
+        form_layout.addWidget(_dependent(
+            _number_row(f"{p}.yarn_beta_fast",   "YaRN Beta Fast",   -1.0, 64.0, 0.5, 2, "",
+                         "--yarn-beta-fast: low correction dim (beta). 0 = default."),
+            [f"{p}.rope_scaling"], _yarn_active))
 
         form_layout.addWidget(_section_header("Draft Model (Speculative)"))
         form_layout.addWidget(_line_row(f"{p}.draft_model", "Draft Model (GGUF)",
                                          "D:/models/draft-0.6b.gguf",
                                          "--model-draft: separate small LM for draft tokens. "
-                                         "Leave empty + Spec Type=ngram-simple for prompt-lookup self-speculation."))
-        form_layout.addWidget(_number_row(f"{p}.n_gpu_layers_draft", "Draft GPU Layers", 0, 200, 1, 0, "",
-                                           "--n-gpu-layers-draft / -ngld: layers of the draft model on GPU."))
-        form_layout.addWidget(_enum_row_strs(f"{p}.cache_type_k_draft", "Draft Cache (K)", [("(default)", "")] + _CACHE_TYPES,
-                                              "--cache-type-k-draft: K-cache dtype for the draft model."))
-        form_layout.addWidget(_enum_row_strs(f"{p}.cache_type_v_draft", "Draft Cache (V)", [("(default)", "")] + _CACHE_TYPES,
-                                              "--cache-type-v-draft: V-cache dtype for the draft model."))
-        form_layout.addWidget(_line_row(f"{p}.device_draft",         "Draft Devices",
-                                         "e.g. CUDA0,CUDA1",
-                                         "--device-draft / -devd: comma-separated device list for draft offload."))
-        form_layout.addWidget(_toggle_row(f"{p}.cpu_moe_draft",      "Draft CPU MoE (all)",
-                                           "--cpu-moe-draft: keep ALL MoE expert layers of the draft model on CPU (mirrors --cpu-moe)."))
-        form_layout.addWidget(_number_row(f"{p}.n_cpu_moe_draft",    "Draft CPU MoE Layers", 0, 200, 1, 0, "",
-                                           "--n-cpu-moe-draft: first N MoE layers of the draft model on CPU. 0 = all on GPU."))
-        form_layout.addWidget(_number_row(f"{p}.draft_n",     "Draft Max Tokens",  0, 32,   1,    0, "",
-                                           "--spec-draft-n-max: max draft tokens per step. v9243 default 3 (was 16)."))
-        form_layout.addWidget(_number_row(f"{p}.draft_n_min", "Draft Min Tokens",  0, 32,   1,    0, "",
-                                           "--spec-draft-n-min: minimum draft length before accepting. Typical: 0–2."))
-        form_layout.addWidget(_number_row(f"{p}.draft_p_min", "Draft Min Probability", 0.0, 1.0, 0.05, 2, "",
-                                           "--spec-draft-p-min: reject draft tokens below this probability. "
-                                           "v9243 default 0.00 (was 0.75). Draft-model: 0.5–0.75. N-gram: 0.1."))
-        form_layout.addWidget(_number_row(f"{p}.draft_p_split", "Draft P-Split", 0.0, 1.0, 0.05, 2, "",
-                                           "--spec-draft-p-split: speculative decoding split probability (default 0.10)."))
-        form_layout.addWidget(_line_row(f"{p}.spec_draft_override_tensor", "Draft Tensor Override",
-                                         "blk\\.[0-9]+\\.ffn_.*=CPU",
-                                         "--spec-draft-override-tensor: per-tensor buffer override for the draft model. Pattern=buffer (regex)."))
-        form_layout.addWidget(_line_row(f"{p}.lookup_cache_static", "Lookup Cache (static)",
-                                         "./data/lookup-static.bin",
-                                         "--lookup-cache-static. Only used when Spec Type = ngram-cache. "
-                                         "Precomputed via llama-lookup-create; read-only at runtime."))
-        form_layout.addWidget(_line_row(f"{p}.lookup_cache_dynamic", "Lookup Cache (dynamic)",
-                                         "./data/lookup-dyn.bin",
-                                         "--lookup-cache-dynamic. Only loaded when Spec Type = ngram-cache. "
-                                         "NOTE: llama-server does not persist writes — file will not be created or updated."))
+                                         "Leave empty + Spec Type=ngram-simple for prompt-lookup self-speculation, "
+                                         "or Spec Type=draft-mtp to use the main model's MTP heads."))
+        # Draft knobs are active when either: a draft GGUF is set, OR a draft-*
+        # spec strategy is active (draft-mtp uses model's own heads, no draft GGUF).
+        _draft_knobs_active = lambda dm, st: bool(str(dm or "").strip()) or _has_spec(st, "draft-simple", "draft-eagle3", "draft-mtp")
+        _draft_paths = [f"{p}.draft_model", "llamacpp.spec_type"]
+        form_layout.addWidget(_dependent(
+            _number_row(f"{p}.n_gpu_layers_draft", "Draft GPU Layers", 0, 200, 1, 0, "",
+                         "--n-gpu-layers-draft / -ngld: layers of the draft model on GPU."),
+            _draft_paths, _draft_knobs_active))
+        form_layout.addWidget(_dependent(
+            _enum_row_strs(f"{p}.cache_type_k_draft", "Draft Cache (K)", [("(default)", "")] + _CACHE_TYPES,
+                            "--cache-type-k-draft: K-cache dtype for the draft model."),
+            _draft_paths, _draft_knobs_active))
+        form_layout.addWidget(_dependent(
+            _enum_row_strs(f"{p}.cache_type_v_draft", "Draft Cache (V)", [("(default)", "")] + _CACHE_TYPES,
+                            "--cache-type-v-draft: V-cache dtype for the draft model."),
+            _draft_paths, _draft_knobs_active))
+        form_layout.addWidget(_dependent(
+            _line_row(f"{p}.device_draft",         "Draft Devices",
+                       "e.g. CUDA0,CUDA1",
+                       "--device-draft / -devd: comma-separated device list for draft offload."),
+            _draft_paths, _draft_knobs_active))
+        form_layout.addWidget(_dependent(
+            _toggle_row(f"{p}.cpu_moe_draft",      "Draft CPU MoE (all)",
+                         "--cpu-moe-draft: keep ALL MoE expert layers of the draft model on CPU (mirrors --cpu-moe)."),
+            _draft_paths, _draft_knobs_active))
+        form_layout.addWidget(_dependent(
+            _number_row(f"{p}.n_cpu_moe_draft",    "Draft CPU MoE Layers", 0, 200, 1, 0, "",
+                         "--n-cpu-moe-draft: first N MoE layers of the draft model on CPU. 0 = all on GPU."),
+            _draft_paths, _draft_knobs_active))
+        form_layout.addWidget(_dependent(
+            _number_row(f"{p}.draft_n",     "Draft Max Tokens",  0, 32,   1,    0, "",
+                         "--spec-draft-n-max: max draft tokens per step. v9243 default 3 (was 16)."),
+            _draft_paths, _draft_knobs_active))
+        form_layout.addWidget(_dependent(
+            _number_row(f"{p}.draft_n_min", "Draft Min Tokens",  0, 32,   1,    0, "",
+                         "--spec-draft-n-min: minimum draft length before accepting. Typical: 0–2."),
+            _draft_paths, _draft_knobs_active))
+        form_layout.addWidget(_dependent(
+            _number_row(f"{p}.draft_p_min", "Draft Min Probability", 0.0, 1.0, 0.05, 2, "",
+                         "--spec-draft-p-min: reject draft tokens below this probability. "
+                         "v9243 default 0.00 (was 0.75). Draft-model: 0.5–0.75. N-gram: 0.1."),
+            _draft_paths, _draft_knobs_active))
+        form_layout.addWidget(_dependent(
+            _number_row(f"{p}.draft_p_split", "Draft P-Split", 0.0, 1.0, 0.05, 2, "",
+                         "--spec-draft-p-split: speculative decoding split probability (default 0.10)."),
+            _draft_paths, _draft_knobs_active))
+        form_layout.addWidget(_dependent(
+            _line_row(f"{p}.spec_draft_override_tensor", "Draft Tensor Override",
+                       "blk\\.[0-9]+\\.ffn_.*=CPU",
+                       "--spec-draft-override-tensor: per-tensor buffer override for the draft model. Pattern=buffer (regex)."),
+            _draft_paths, _draft_knobs_active))
+        # Lookup caches only matter for spec_type=ngram-cache.
+        _ngram_cache_active = lambda st: _has_spec(st, "ngram-cache")
+        form_layout.addWidget(_dependent(
+            _line_row(f"{p}.lookup_cache_static", "Lookup Cache (static)",
+                       "./data/lookup-static.bin",
+                       "--lookup-cache-static. Only used when Spec Type = ngram-cache. "
+                       "Precomputed via llama-lookup-create; read-only at runtime."),
+            ["llamacpp.spec_type"], _ngram_cache_active))
+        form_layout.addWidget(_dependent(
+            _line_row(f"{p}.lookup_cache_dynamic", "Lookup Cache (dynamic)",
+                       "./data/lookup-dyn.bin",
+                       "--lookup-cache-dynamic. Only loaded when Spec Type = ngram-cache. "
+                       "NOTE: llama-server does not persist writes — file will not be created or updated."),
+            ["llamacpp.spec_type"], _ngram_cache_active))
 
-        form_layout.addWidget(_section_header("Inference Defaults"))
         # Per-model Inference Defaults — proxy-applied per-request body fields.
         # Override hierarchy: request body > this > top-level llamacpp.inference.
         form_layout.addWidget(_section_header("Inference Defaults (proxy per-request)"))
@@ -3626,12 +3864,19 @@ def _models(window) -> QWidget:
                                          "Generation halts when any of these appears (one per line).",
                                          "</s>"))
 
-        form_layout.addWidget(_section_header("Reasoning"))
+        form_layout.addWidget(_section_header("Reasoning (proxy <think> parser)"))
         rp = f"{ip}.reasoning"
         form_layout.addWidget(_toggle_row(f"{rp}.enabled",              "Parse <think> Blocks"))
-        form_layout.addWidget(_line_row(f"{rp}.start",                  "Start Tag", "<think>"))
-        form_layout.addWidget(_line_row(f"{rp}.end",                    "End Tag",   "</think>"))
-        form_layout.addWidget(_toggle_row(f"{rp}.emit_thinking_blocks", "Emit Thinking Blocks"))
+        _think_enabled = lambda en: bool(en)
+        form_layout.addWidget(_dependent(
+            _line_row(f"{rp}.start",                  "Start Tag", "<think>"),
+            [f"{rp}.enabled"], _think_enabled))
+        form_layout.addWidget(_dependent(
+            _line_row(f"{rp}.end",                    "End Tag",   "</think>"),
+            [f"{rp}.enabled"], _think_enabled))
+        form_layout.addWidget(_dependent(
+            _toggle_row(f"{rp}.emit_thinking_blocks", "Emit Thinking Blocks"),
+            [f"{rp}.enabled"], _think_enabled))
 
         form_layout.addWidget(_section_header("Chat Template Kwargs"))
         form_layout.addWidget(_kv_row(f"{ip}.chat_template_kwargs",
@@ -3645,9 +3890,11 @@ def _models(window) -> QWidget:
         form_layout.addWidget(_line_row(f"{p}.lora",        "LoRA Adapter (path)",
                                          "/path/to/adapter.gguf",
                                          "--lora: GGUF LoRA adapter file."))
-        form_layout.addWidget(_number_row(f"{p}.lora_scale", "LoRA Scale",
-                                           0.0, 4.0, 0.05, 2, "",
-                                           "--lora-scaled: blend strength (1.0 = full)."))
+        form_layout.addWidget(_dependent(
+            _number_row(f"{p}.lora_scale", "LoRA Scale",
+                         0.0, 4.0, 0.05, 2, "",
+                         "--lora-scaled: blend strength (1.0 = full)."),
+            [f"{p}.lora"], lambda l: bool(str(l or "").strip())))
 
         form_layout.addWidget(_section_header("Grammar"))
         form_layout.addWidget(_code_row(f"{p}.grammar",       "GBNF Grammar (inline)",
@@ -3679,10 +3926,16 @@ def _models(window) -> QWidget:
                                                ("off",  "off"),
                                                ("auto", "auto")],
                                               "--reasoning: master toggle for thinking. 'auto' detects from template."))
-        form_layout.addWidget(_number_row(f"{p}.reasoning_budget",        "Reasoning Budget",   -1, 1048576, 256, 0, "tok",
-                                           "--reasoning-budget. -1 = unlimited, 0 = disable thinking."))
-        form_layout.addWidget(_number_row(f"{p}.reasoning_budget_message","Reasoning Budget (per message)", -1, 1048576, 256, 0, "tok",
-                                           "--reasoning-budget-message. Per-turn cap."))
+        # Budgets are meaningless once thinking is forced off.
+        _reason_not_off = lambda r: str(r or "").strip().lower() != "off"
+        form_layout.addWidget(_dependent(
+            _number_row(f"{p}.reasoning_budget",        "Reasoning Budget",   -1, 1048576, 256, 0, "tok",
+                         "--reasoning-budget. -1 = unlimited, 0 = disable thinking."),
+            [f"{p}.reasoning"], _reason_not_off))
+        form_layout.addWidget(_dependent(
+            _number_row(f"{p}.reasoning_budget_message","Reasoning Budget (per message)", -1, 1048576, 256, 0, "tok",
+                         "--reasoning-budget-message. Per-turn cap."),
+            [f"{p}.reasoning"], _reason_not_off))
         form_layout.addWidget(_enum_row_strs(f"{p}.reasoning_format", "Reasoning Format",
                                               [("(model default)", ""),
                                                ("none — keep <think> inline", "none"),

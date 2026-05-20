@@ -246,6 +246,12 @@ Tracks llama-server **v9243** (commit 17d22a35b) — `--no-ui` (not `--no-webui`
 
 Server-wide flags must NOT appear in `_MODEL_DEFAULTS` (qt_sections.py) — they get written into each new model's JSON but `argv.py` ignores them. The dict is pinned to per-model keys only.
 
+### Dependency-aware UI (qt_sections.py)
+
+`_dependent(row, [parent_paths], predicate)` wraps a row so it greys out whenever `predicate(*parent_values)` is False. Listens on `settings_bus()` (a module-level Qt `QObject` that `patch_settings` / `remove_path` emit on after every write), so the disabled state tracks live edits regardless of which UI control did the write. Used to grey ngram knobs when their spec_type isn't ticked, draft-side controls when no draft model / spec_type is set, YaRN factors when `rope_scaling != "yarn"`, etc.
+
+`_mutex_bools(path_a, path_b)` and `_mutex_spec_default_vs_type()` wire mutual-exclusion behavior over the bus — turning one ON clears the other. Registered idempotently via `_MUTEX_REGISTERED` so it survives section rebuilds without doubling listeners.
+
 ---
 
 ## Proxy pipeline (`proxy/`)
