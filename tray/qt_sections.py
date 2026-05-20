@@ -189,6 +189,56 @@ def _enum_row(path: str, label: str, options: list[tuple[str, Any]],
     return _row(row_label(label, help_text, path), _wrap_align(cb, Qt.AlignmentFlag.AlignLeft))
 
 
+_SPEC_TYPE_OPTIONS: list[tuple[str, str, str]] = [
+    # (key, display, tooltip)
+    ("draft-simple",   "draft-simple",   "Standard speculative decoding with a small draft model."),
+    ("draft-eagle3",   "draft-eagle3",   "EAGLE-3 tree-based draft. Needs an EAGLE-trained draft model."),
+    ("draft-mtp",      "draft-mtp",      "Multi-Token Prediction heads built into the main model (Qwen3-Next / DeepSeek-V3). No draft model needed."),
+    ("ngram-simple",   "ngram-simple",   "Prompt-lookup n-gram (cheapest; no draft model)."),
+    ("ngram-map-k",    "ngram-map-k",    "Map-keyed n-gram variant."),
+    ("ngram-map-k4v",  "ngram-map-k4v",  "Map-keyed n-gram with 4-value buckets."),
+    ("ngram-mod",      "ngram-mod",      "Modular n-gram lookup, fits well alongside draft-mtp."),
+    ("ngram-cache",    "ngram-cache",    "On-disk n-gram cache. Requires --lookup-cache-static/dynamic."),
+]
+
+
+def _spec_type_multi_row(path: str, label: str) -> QWidget:
+    """Multi-select Spec Type. Serializes the selected checkboxes back to
+    `settings[path]` as a comma-joined string (v9243+ --spec-type accepts a
+    comma-separated list). Empty selection → "none"."""
+    from PySide6.QtWidgets import QCheckBox, QGridLayout, QWidget as _W
+
+    raw = str(get_path(read_settings(), path, "") or "").strip()
+    selected: set[str] = set()
+    if raw and raw.lower() != "none":
+        selected = {s.strip() for s in raw.split(",") if s.strip()}
+
+    host = _W()
+    grid = QGridLayout(host)
+    grid.setContentsMargins(0, 0, 0, 0)
+    grid.setHorizontalSpacing(18)
+    grid.setVerticalSpacing(4)
+
+    boxes: list[tuple[str, QCheckBox]] = []
+
+    def _commit() -> None:
+        active = [k for k, cb in boxes if cb.isChecked()]
+        patch_settings(path, ",".join(active) if active else "none")
+
+    cols = 2
+    for i, (key, disp, tip) in enumerate(_SPEC_TYPE_OPTIONS):
+        cb = QCheckBox(disp)
+        cb.setChecked(key in selected)
+        cb.setToolTip(tip)
+        cb.stateChanged.connect(lambda _s: _commit())
+        boxes.append((key, cb))
+        grid.addWidget(cb, i // cols, i % cols)
+
+    help_text = ("--spec-type. Tick zero or more strategies — v9243+ stacks comma-separated values. "
+                 "Tick nothing = 'none'. Use 'Spec Default' below to let the server auto-pick instead.")
+    return _row(row_label(label, help_text, path, "--spec-type"), host)
+
+
 def _idle_unload_row(path: str, default_sec: int = 300) -> QWidget:
     """Auto-unload composite: [Enabled] + [N s spinbox]. Stores one int:
         0          → disabled
@@ -1146,10 +1196,14 @@ def _llama(window) -> QWidget:
     spawn_body.addWidget(_section_header("Memory / Offload"))
     spawn_body.addWidget(_toggle_row("llamacpp.no_host",          "No Host Buffer",
                                       "--no-host: skip host (CPU) buffer allocations so secondary buffers can be used. Advanced."))
+    spawn_body.addWidget(_toggle_row("llamacpp.direct_io",        "Direct I/O",
+                                      "--direct-io: use O_DIRECT during load (bypasses OS page cache). Useful on fast NVMe with --no-mmap."))
     spawn_body.addWidget(_toggle_row("llamacpp.repack",           "Weight Repack",
                                       "--repack / --no-repack: pack weights for faster CPU kernels (default enabled)."))
     spawn_body.addWidget(_toggle_row("llamacpp.op_offload",       "Op Offload",
                                       "--op-offload / --no-op-offload: offload host tensor ops to device (default enabled)."))
+    spawn_body.addWidget(_toggle_row("llamacpp.check_tensors",    "Check Tensors",
+                                      "--check-tensors: verify model tensor data on load (slows startup; catches corrupted GGUFs)."))
     layout.addWidget(spawn_card)
 
     # Caching policy card — server-wide
@@ -1179,8 +1233,6 @@ def _llama(window) -> QWidget:
                                       "--ctx-checkpoints: max number of context checkpoints per slot."))
     cache_body.addWidget(_number_row("llamacpp.checkpoint_every_n_tokens", "Checkpoint Every N",       0, 100000, 256, 0, "tok",
                                       "--checkpoint-every-n-tokens: create a checkpoint during prefill every N tokens."))
-    cache_body.addWidget(_number_row("llamacpp.defrag_thold",   "Defrag Threshold",  0.0, 1.0, 0.05, 2, "",
-                                      "--defrag-thold (deprecated). Fragmentation ratio above which KV is defragged."))
     cache_body.addWidget(_line_row("llamacpp.slot_save_path",   "Slot Save Path",
                                     "./data/slots",
                                     "--slot-save-path: directory for /slots/save & /slots/restore."))
@@ -1189,25 +1241,30 @@ def _llama(window) -> QWidget:
     # Speculative decoding card — server-wide algorithm, per-model draft pair
     spec_card, spec_body = _card("Speculative Decoding",
                                   "llamacpp.* — algorithm choice & tuning. Draft model lives per-model.")
-    spec_body.addWidget(_enum_row("llamacpp.spec_type", "Spec Type",
-                                   [("(auto — default)",         ""),
-                                    ("None (disable)",           "none"),
-                                    ("N-gram Simple (prompt-lookup)", "ngram-simple"),
-                                    ("N-gram Map-K",             "ngram-map-k"),
-                                    ("N-gram Map-K4V",           "ngram-map-k4v"),
-                                    ("N-gram Mod",               "ngram-mod"),
-                                    ("N-gram Cache (on-disk)",   "ngram-cache")],
-                                   "--spec-type. Auto = server picks based on whether a draft model is set. "
-                                   "ngram-cache is the only mode that reads --lookup-cache-* files."))
+    # Multi-select Spec Type. v9243+ accepts a comma-separated list, so stacking
+    # is supported (e.g. "draft-mtp,ngram-mod" = MTP heads for high-confidence
+    # guesses + ngram-mod for verbatim runs). Serialized as a comma-joined string
+    # in settings.json. "none" is intentionally NOT a checkbox — uncheck all.
+    spec_body.addWidget(_spec_type_multi_row("llamacpp.spec_type", "Spec Type"))
+    spec_body.addWidget(_toggle_row("llamacpp.spec_default",         "Spec Default (auto-pick)",
+                                     "--spec-default: let llama-server pick a working spec config based on what the model exposes "
+                                     "(e.g. enables draft-mtp automatically if the model has MTP heads). Mutually exclusive with the checkboxes above."))
     # The three rows below feed --spec-ngram-{simple,map-k,map-k4v}-{size-n,size-m,min-hits}
-    # — argv.build_argv() picks the per-mode flag from the chosen Spec Type
-    # (ngram-mod ignores size-m and min-hits; it only takes n-match).
-    spec_body.addWidget(_number_row("llamacpp.spec_ngram_size_n",   "N-gram N",            0, 64, 1, 0, "",
-                                     "Lookup key length (ngram-mod: n-match; others: size-n). 0 = server default."))
-    spec_body.addWidget(_number_row("llamacpp.spec_ngram_size_m",   "N-gram M",            0, 64, 1, 0, "",
-                                     "Draft length per match (size-m). Ignored for ngram-mod. 0 = default."))
+    # — argv.build_argv() picks the per-mode flag from the chosen Spec Type.
+    # ngram-mod has its own (n-min, n-max, n-match) shape — separate rows below.
+    spec_body.addWidget(_number_row("llamacpp.spec_ngram_size_n",   "N-gram N (size-n)",   0, 64, 1, 0, "",
+                                     "Lookup key length for ngram-simple / ngram-map-k / ngram-map-k4v. 0 = server default."))
+    spec_body.addWidget(_number_row("llamacpp.spec_ngram_size_m",   "N-gram M (size-m)",   0, 64, 1, 0, "",
+                                     "Draft length per match for ngram-simple / ngram-map-k / ngram-map-k4v. 0 = default."))
     spec_body.addWidget(_number_row("llamacpp.spec_ngram_min_hits", "N-gram Min Hits",     0, 64, 1, 0, "",
-                                     "Minimum match frequency (min-hits). Ignored for ngram-mod. 0 = default."))
+                                     "Minimum match frequency for ngram-simple / ngram-map-k / ngram-map-k4v. 0 = default."))
+    # ngram-mod specific knobs (n-min/n-max added in v9243; n-match was already there)
+    spec_body.addWidget(_number_row("llamacpp.spec_ngram_mod_n_min",   "N-gram Mod N-Min",   0, 256, 1, 0, "tok",
+                                     "--spec-ngram-mod-n-min: minimum ngram tokens for ngram-mod (default 48)."))
+    spec_body.addWidget(_number_row("llamacpp.spec_ngram_mod_n_max",   "N-gram Mod N-Max",   0, 256, 1, 0, "tok",
+                                     "--spec-ngram-mod-n-max: maximum ngram tokens for ngram-mod (default 64)."))
+    spec_body.addWidget(_number_row("llamacpp.spec_ngram_mod_n_match", "N-gram Mod N-Match", 0, 256, 1, 0, "tok",
+                                     "--spec-ngram-mod-n-match: lookup length for ngram-mod (default 24). 0 = falls back to N (size-n)."))
     spec_body.addWidget(_number_row("llamacpp.threads_draft",       "Threads (draft)",     0, 128, 1, 0, "",
                                      "--threads-draft: CPU threads for draft-model generation. 0 = match --threads."))
     spec_body.addWidget(_number_row("llamacpp.threads_batch_draft", "Threads (draft batch)", 0, 128, 1, 0, "",
@@ -3412,6 +3469,13 @@ def _models(window) -> QWidget:
         form_layout.addWidget(_line_row(f"{p}.mmproj", "mmproj Path (vision)",
                                          "D:/models/mmproj.gguf",
                                          "Optional — only needed for vision-capable GGUFs (Qwen-VL etc)."))
+        form_layout.addWidget(_toggle_row(f"{p}.mmproj_offload",  "mmproj on GPU",
+                                           "--mmproj-offload / --no-mmproj-offload: keep the vision projector in VRAM (default enabled). "
+                                           "Disable to save ~1 GiB VRAM at the cost of slower per-image prefill."))
+        form_layout.addWidget(_number_row(f"{p}.image_min_tokens", "Image Min Tokens",  0, 16384, 64, 0, "tok",
+                                           "--image-min-tokens: minimum tokens each image consumes (dynamic-resolution vision models). 0 = read from model."))
+        form_layout.addWidget(_number_row(f"{p}.image_max_tokens", "Image Max Tokens",  0, 16384, 64, 0, "tok",
+                                           "--image-max-tokens: maximum tokens per image. 0 = read from model. Lower = less prefill compute."))
 
         form_layout.addWidget(_section_header("Capacity"))
         form_layout.addWidget(_number_row(f"{p}.ctx_size",     "Context Size",       512, 1048576, 256, 0, "tok"))
@@ -3473,13 +3537,19 @@ def _models(window) -> QWidget:
         form_layout.addWidget(_line_row(f"{p}.device_draft",         "Draft Devices",
                                          "e.g. CUDA0,CUDA1",
                                          "--device-draft / -devd: comma-separated device list for draft offload."))
+        form_layout.addWidget(_toggle_row(f"{p}.cpu_moe_draft",      "Draft CPU MoE (all)",
+                                           "--cpu-moe-draft: keep ALL MoE expert layers of the draft model on CPU (mirrors --cpu-moe)."))
+        form_layout.addWidget(_number_row(f"{p}.n_cpu_moe_draft",    "Draft CPU MoE Layers", 0, 200, 1, 0, "",
+                                           "--n-cpu-moe-draft: first N MoE layers of the draft model on CPU. 0 = all on GPU."))
         form_layout.addWidget(_number_row(f"{p}.draft_n",     "Draft Max Tokens",  0, 32,   1,    0, "",
-                                           "--spec-draft-n-max: max draft tokens per step. 0 = disabled. Typical: 8."))
+                                           "--spec-draft-n-max: max draft tokens per step. v9243 default 3 (was 16)."))
         form_layout.addWidget(_number_row(f"{p}.draft_n_min", "Draft Min Tokens",  0, 32,   1,    0, "",
                                            "--spec-draft-n-min: minimum draft length before accepting. Typical: 0–2."))
         form_layout.addWidget(_number_row(f"{p}.draft_p_min", "Draft Min Probability", 0.0, 1.0, 0.05, 2, "",
                                            "--spec-draft-p-min: reject draft tokens below this probability. "
-                                           "Draft-model: 0.5–0.75. N-gram: 0.1."))
+                                           "v9243 default 0.00 (was 0.75). Draft-model: 0.5–0.75. N-gram: 0.1."))
+        form_layout.addWidget(_number_row(f"{p}.draft_p_split", "Draft P-Split", 0.0, 1.0, 0.05, 2, "",
+                                           "--spec-draft-p-split: speculative decoding split probability (default 0.10)."))
         form_layout.addWidget(_line_row(f"{p}.lookup_cache_static", "Lookup Cache (static)",
                                          "./data/lookup-static.bin",
                                          "--lookup-cache-static. Only used when Spec Type = ngram-cache. "
