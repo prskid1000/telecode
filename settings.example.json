@@ -127,26 +127,31 @@
 
     "default_model": "your-model",
 
-    "threads": 12,
-    "threads_batch": 0,
+    "_comment_defaults":
+      "Values below mirror llama-server v9243 upstream defaults so this file shows 'do nothing' baselines. Tune per machine in your live settings.json.",
+
+    "threads": -1,
+    "threads_batch": -1,
     "batch_size": 2048,
     "ubatch_size": 512,
-    "parallel": 1,
+    "parallel": -1,
     "cont_batching": true,
 
     "cpu_strict": 0,
     "cpu_strict_batch": 0,
-    "prio": 2,
-    "prio_batch": 2,
+    "prio": 0,
+    "prio_batch": 0,
     "poll": 50,
     "poll_batch": 50,
-    "threads_http": 0,
+    "threads_http": -1,
 
     "mlock": false,
     "no_mmap": false,
+    "direct_io": false,
     "no_host": false,
     "repack": true,
     "op_offload": true,
+    "check_tensors": false,
 
     "main_gpu": 0,
     "tensor_split": "",
@@ -159,23 +164,29 @@
     "kv_offload": true,
     "kv_unified": false,
     "cache_prompt": true,
-    "cache_idle_slots": false,
-    "context_shift": true,
+    "cache_idle_slots": true,
+    "context_shift": false,
     "warmup": true,
-    "cache_ram": 0,
+    "cache_ram": 8192,
     "swa_full": false,
-    "ctx_checkpoints": 0,
-    "checkpoint_every_n_tokens": 0,
-    "defrag_thold": 0.1,
+    "ctx_checkpoints": 32,
+    "checkpoint_every_n_tokens": 8192,
     "sleep_idle_seconds": 0,
     "slot_save_path": "",
 
+    "_comment_spec_type":
+      "spec_type accepts a comma-separated list (v9243+). Values: none, draft-simple, draft-eagle3, draft-mtp, ngram-simple, ngram-map-k, ngram-map-k4v, ngram-mod, ngram-cache. Set spec_default=true instead to let the server auto-pick based on model heads.",
     "spec_type": "",
+    "spec_default": false,
+
     "_comment_spec_ngram":
-      "Upstream b9145 split these into per-mode flags. Telecode keeps the historical keys; the dispatcher emits --spec-ngram-{simple|map-k|map-k4v}-{size-n|size-m|min-hits} or --spec-ngram-mod-n-match based on spec_type.",
+      "Per-mode ngram knobs. spec_ngram_size_n/_m/_min_hits feed the (lookup-N, draft-M, min-hits) triplet of ngram-simple / ngram-map-k / ngram-map-k4v. spec_ngram_mod_* feed ngram-mod's (n-min, n-max, n-match) which has different semantics. 0 = use server default.",
     "spec_ngram_size_n": 0,
     "spec_ngram_size_m": 0,
     "spec_ngram_min_hits": 0,
+    "spec_ngram_mod_n_min": 0,
+    "spec_ngram_mod_n_max": 0,
+    "spec_ngram_mod_n_match": 0,
     "threads_draft": 0,
     "threads_batch_draft": 0,
 
@@ -183,16 +194,19 @@
       "your-model": {
         "path": "/absolute/path/to/model.gguf",
         "mmproj": "",
+        "mmproj_offload": true,
+        "image_min_tokens": 0,
+        "image_max_tokens": 0,
         "preload": false,
 
-        "ctx_size": 32768,
+        "ctx_size": 0,
         "n_gpu_layers": 99,
 
         "flash_attn": true,
 
         "cache_type_k": "f16",
         "cache_type_v": "f16",
-        "cache_reuse": 256,
+        "cache_reuse": 0,
 
         "n_cpu_moe": 0,
         "cpu_moe": false,
@@ -205,14 +219,19 @@
         "chat_template": "",
         "jinja": true,
 
+        "_comment_draft":
+          "v9243 reduced spec-draft-n-max default 16->3 and spec-draft-p-min default 0.75->0.00. cpu_moe_draft / n_cpu_moe_draft mirror the main-model MoE-offload knobs but for the draft model.",
         "draft_model": "",
         "n_gpu_layers_draft": 0,
         "cache_type_k_draft": "",
         "cache_type_v_draft": "",
         "device_draft": "",
-        "draft_n": 5,
+        "cpu_moe_draft": false,
+        "n_cpu_moe_draft": 0,
+        "draft_n": 3,
         "draft_n_min": 0,
-        "draft_p_min": 0.75,
+        "draft_p_min": 0,
+        "draft_p_split": 0.10,
         "lookup_cache_static": "",
         "lookup_cache_dynamic": "",
 

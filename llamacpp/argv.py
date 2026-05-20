@@ -57,9 +57,11 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     # Memory policy
     ("mlock",            "--mlock",           "flag"),
     ("no_mmap",          "--no-mmap",         "flag"),
+    ("direct_io",        "--direct-io",       "flag"),
     ("no_host",          "--no-host",         "flag"),
     ("repack",           ("--repack", "--no-repack"),           "bool_pair"),
     ("op_offload",       ("--op-offload", "--no-op-offload"),   "bool_pair"),
+    ("check_tensors",    "--check-tensors",   "flag"),
 
     # Hardware layout
     ("main_gpu",         "--main-gpu",        "value"),
@@ -84,8 +86,9 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     # "value" (not "value_nz") so explicit zero passes through. Skipping zero
     # would silently apply the server defaults (8192 MiB cache, 32 checkpoints,
     # 8192-token checkpoint interval), wasting RAM/VRAM.
+    # defrag_thold was removed in v9243 (DEPRECATED warning + no-op upstream).
+    # Don't emit it at all; tolerate the key in old settings.json files silently.
     ("cache_ram",                  "--cache-ram",                 "value"),
-    ("defrag_thold",               "--defrag-thold",              "value_nz"),
     ("ctx_checkpoints",            "--ctx-checkpoints",           "value"),
     ("checkpoint_every_n_tokens",  "--checkpoint-every-n-tokens", "value"),
     ("swa_full",                   "--swa-full",                  "flag"),
@@ -95,40 +98,77 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     # Speculative decoding algorithm (server-wide choice).
     # The per-ngram size/min-hits knobs are dispatched in _emit_spec_ngram()
     # because each spec_type takes its own per-mode flag now.
+    # spec_type accepts a comma-separated list of strategies (v9243+),
+    # e.g. "draft-mtp,ngram-mod" — passed through verbatim.
     ("spec_type",                "--spec-type",            "value"),
+    # Auto-pick a working spec config based on what the model exposes
+    # (e.g. MTP heads). Mutually exclusive with explicit spec_type — set
+    # one or the other, not both.
+    ("spec_default",             "--spec-default",         "flag"),
     ("threads_draft",            "--threads-draft",        "value_nz"),
     ("threads_batch_draft",      "--threads-batch-draft",  "value_nz"),
 ]
 
 
-# spec_type → (size-n flag, size-m flag, min-hits flag). None entries are no-op.
-# Upstream replaced the single --spec-ngram-* flags with per-mode variants;
-# ngram-mod has only n-match (the "lookup length" knob), no size-m / min-hits.
-_NGRAM_FLAG_MAP: dict[str, tuple[Optional[str], Optional[str], Optional[str]]] = {
+# Per-spec-type ngram flag dispatch.
+#
+# Upstream replaced the single --spec-ngram-* flags with per-mode variants in
+# b9145, and v9243 added n-min/n-max to ngram-mod (previously only n-match).
+# Three spec types share a (lookup-n, draft-m, min-hits) shape; ngram-mod has
+# its own (n-min, n-max, n-match) shape so it's handled separately.
+_NGRAM_SIZE_FLAG_MAP: dict[str, tuple[str, str, str]] = {
     "ngram-simple":  ("--spec-ngram-simple-size-n",  "--spec-ngram-simple-size-m",  "--spec-ngram-simple-min-hits"),
     "ngram-map-k":   ("--spec-ngram-map-k-size-n",   "--spec-ngram-map-k-size-m",   "--spec-ngram-map-k-min-hits"),
     "ngram-map-k4v": ("--spec-ngram-map-k4v-size-n", "--spec-ngram-map-k4v-size-m", "--spec-ngram-map-k4v-min-hits"),
-    "ngram-mod":     ("--spec-ngram-mod-n-match",    None,                          None),
 }
 
 
+def _spec_types(gcfg: dict) -> list[str]:
+    """spec_type may be a comma-separated list (v9243+); split + strip."""
+    raw = str(gcfg.get("spec_type", "") or "").strip()
+    if not raw:
+        return []
+    return [s.strip() for s in raw.split(",") if s.strip()]
+
+
 def _emit_spec_ngram(argv: list[str], gcfg: dict) -> None:
-    """Translate the historical `spec_ngram_size_n/_m/_min_hits` keys to the
-    per-spec-type flags llama-server now requires (b9145+)."""
-    st = str(gcfg.get("spec_type", "") or "").strip()
-    mapping = _NGRAM_FLAG_MAP.get(st)
-    if not mapping:
-        return
-    n_flag, m_flag, h_flag = mapping
-    for key, flag in (("spec_ngram_size_n", n_flag),
-                      ("spec_ngram_size_m", m_flag),
-                      ("spec_ngram_min_hits", h_flag)):
-        if flag is None:
+    """Emit the per-spec-type ngram knobs.
+
+    For ngram-simple / ngram-map-k / ngram-map-k4v: dispatch from
+    `spec_ngram_size_n/_m/_min_hits` (server-wide).
+
+    For ngram-mod: read `spec_ngram_mod_n_min/_max/_match`. As a backward-compat
+    shim, fall back to legacy `spec_ngram_size_n` for n-match if the dedicated
+    key isn't set — that matches what telecode emitted pre-v9243.
+    """
+    active = _spec_types(gcfg)
+
+    for st in active:
+        mapping = _NGRAM_SIZE_FLAG_MAP.get(st)
+        if not mapping:
             continue
-        val = gcfg.get(key)
-        if val in (None, "", 0, "0"):
-            continue
-        argv += [flag, str(val)]
+        n_flag, m_flag, h_flag = mapping
+        for key, flag in (("spec_ngram_size_n",   n_flag),
+                          ("spec_ngram_size_m",   m_flag),
+                          ("spec_ngram_min_hits", h_flag)):
+            val = gcfg.get(key)
+            if val in (None, "", 0, "0"):
+                continue
+            argv += [flag, str(val)]
+
+    if "ngram-mod" in active:
+        # Dedicated keys override the legacy shim.
+        n_match = gcfg.get("spec_ngram_mod_n_match")
+        if n_match in (None, "", 0, "0"):
+            n_match = gcfg.get("spec_ngram_size_n")  # legacy fallback
+        for key_or_val, flag in (
+            (gcfg.get("spec_ngram_mod_n_min"), "--spec-ngram-mod-n-min"),
+            (gcfg.get("spec_ngram_mod_n_max"), "--spec-ngram-mod-n-max"),
+            (n_match,                          "--spec-ngram-mod-n-match"),
+        ):
+            if key_or_val in (None, "", 0, "0"):
+                continue
+            argv += [flag, str(key_or_val)]
 
 
 # Per-model flags read from llamacpp.models.<m>.*
@@ -160,20 +200,27 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("jinja",         "--jinja",           "flag"),
 
     # Vision
-    ("mmproj",        "--mmproj",          "path"),
+    ("mmproj",            "--mmproj",            "path"),
+    ("mmproj_offload",    ("--mmproj-offload", "--no-mmproj-offload"), "bool_pair"),
+    ("image_min_tokens",  "--image-min-tokens",  "value_nz"),
+    ("image_max_tokens",  "--image-max-tokens",  "value_nz"),
 
     # Draft model (paired with main model). Upstream b9145 dropped
     # --draft-max/--draft-min/--ctx-size-draft; the replacements are the
-    # --spec-draft-* family. --draft-p-min is still accepted as an alias of
-    # --spec-draft-p-min.
+    # --spec-draft-* family. v9243 added cpu-moe-draft / n-cpu-moe-draft for
+    # offloading MoE experts of the draft model, and exposed --spec-draft-p-split.
+    # v9243 also changed defaults: --spec-draft-n-max 16→3, --spec-draft-p-min 0.75→0.
     ("draft_model",         "--model-draft",        "path"),
     ("n_gpu_layers_draft",  "--n-gpu-layers-draft", "value_nz"),
     ("cache_type_k_draft",  "--cache-type-k-draft", "value"),
     ("cache_type_v_draft",  "--cache-type-v-draft", "value"),
     ("device_draft",        "--device-draft",       "value"),
-    ("draft_n",       "--spec-draft-n-max", "value"),
-    ("draft_n_min",   "--spec-draft-n-min", "value"),
-    ("draft_p_min",   "--spec-draft-p-min", "value"),
+    ("cpu_moe_draft",       "--cpu-moe-draft",      "flag"),
+    ("n_cpu_moe_draft",     "--n-cpu-moe-draft",    "value_nz"),
+    ("draft_n",        "--spec-draft-n-max",   "value"),
+    ("draft_n_min",    "--spec-draft-n-min",   "value"),
+    ("draft_p_min",    "--spec-draft-p-min",   "value"),
+    ("draft_p_split",  "--spec-draft-p-split", "value_nz"),
 
     # N-gram lookup cache (only active when spec_type=ngram-cache; server
     # does not implement save, so dynamic file is never written — load only)
@@ -266,8 +313,9 @@ def build_argv(model_name: str) -> list[str]:
         argv += ["--api-key", key]
 
     # Disable the built-in web UI — we don't want it exposed on the same
-    # port the proxy talks to.
-    argv.append("--no-webui")
+    # port the proxy talks to. v9243 renamed --no-webui to --no-ui (the old
+    # name still works with a deprecation warning).
+    argv.append("--no-ui")
 
     # Main model
     argv += ["--model", cfg.resolve_path(model_path)]
