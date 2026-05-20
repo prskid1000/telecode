@@ -107,6 +107,25 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("spec_default",             "--spec-default",         "flag"),
     ("threads_draft",            "--threads-draft",        "value_nz"),
     ("threads_batch_draft",      "--threads-batch-draft",  "value_nz"),
+
+    # Server-wide generation cap
+    ("n_predict",                "--n-predict",            "value_nz"),
+
+    # HTTP / endpoints
+    ("timeout",                  "--timeout",              "value_nz"),
+    ("api_prefix",               "--api-prefix",           "value"),
+    ("media_path",               "--media-path",           "path"),
+    ("metrics",                  "--metrics",              "flag"),
+    ("props",                    "--props",                "flag"),
+    ("slots",                    ("--slots", "--no-slots"), "bool_pair"),
+
+    # Server-mode selectors (mutually exclusive with chat mode — usually leave off)
+    ("embedding",                "--embedding",            "flag"),
+    ("rerank",                   "--rerank",               "flag"),
+    ("pooling",                  "--pooling",              "value"),
+
+    # Diagnostic / debug
+    ("skip_chat_parsing",        "--skip-chat-parsing",    "flag"),
 ]
 
 
@@ -176,6 +195,7 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     # Capacity
     ("ctx_size",      "--ctx-size",        "value"),
     ("n_gpu_layers",  "--n-gpu-layers",    "value"),
+    ("device",        "--device",          "value"),
 
     # Attention
     ("flash_attn",    "--flash-attn",      "onoff"),
@@ -189,15 +209,21 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("n_cpu_moe",     "--n-cpu-moe",       "value"),
     ("cpu_moe",       "--cpu-moe",         "flag"),
 
-    # RoPE (0 = model default for all numeric RoPE knobs)
-    ("rope_scaling",   "--rope-scaling",     "value"),
-    ("rope_freq_base", "--rope-freq-base",   "value_nz"),
-    ("rope_freq_scale","--rope-freq-scale",  "value_nz"),
-    ("yarn_orig_ctx",  "--yarn-orig-ctx",    "value_nz"),
+    # RoPE / YaRN (0 = model default; YaRN factors default to -1.00 = auto,
+    # so emit only when explicitly set to a non-zero override).
+    ("rope_scaling",     "--rope-scaling",      "value"),
+    ("rope_freq_base",   "--rope-freq-base",    "value_nz"),
+    ("rope_freq_scale",  "--rope-freq-scale",   "value_nz"),
+    ("yarn_orig_ctx",    "--yarn-orig-ctx",     "value_nz"),
+    ("yarn_ext_factor",  "--yarn-ext-factor",   "value_nz"),
+    ("yarn_attn_factor", "--yarn-attn-factor",  "value_nz"),
+    ("yarn_beta_slow",   "--yarn-beta-slow",    "value_nz"),
+    ("yarn_beta_fast",   "--yarn-beta-fast",    "value_nz"),
 
     # Chat template
-    ("chat_template", "--chat-template",   "value"),
-    ("jinja",         "--jinja",           "flag"),
+    ("chat_template",      "--chat-template",       "value"),
+    ("chat_template_file", "--chat-template-file",  "path"),
+    ("jinja",              "--jinja",               "flag"),
 
     # Vision
     ("mmproj",            "--mmproj",            "path"),
@@ -214,13 +240,14 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("n_gpu_layers_draft",  "--n-gpu-layers-draft", "value_nz"),
     ("cache_type_k_draft",  "--cache-type-k-draft", "value"),
     ("cache_type_v_draft",  "--cache-type-v-draft", "value"),
-    ("device_draft",        "--device-draft",       "value"),
-    ("cpu_moe_draft",       "--cpu-moe-draft",      "flag"),
-    ("n_cpu_moe_draft",     "--n-cpu-moe-draft",    "value_nz"),
-    ("draft_n",        "--spec-draft-n-max",   "value"),
-    ("draft_n_min",    "--spec-draft-n-min",   "value"),
-    ("draft_p_min",    "--spec-draft-p-min",   "value"),
-    ("draft_p_split",  "--spec-draft-p-split", "value_nz"),
+    ("device_draft",                "--device-draft",                 "value"),
+    ("cpu_moe_draft",               "--cpu-moe-draft",                "flag"),
+    ("n_cpu_moe_draft",             "--n-cpu-moe-draft",              "value_nz"),
+    ("draft_n",                     "--spec-draft-n-max",             "value"),
+    ("draft_n_min",                 "--spec-draft-n-min",             "value"),
+    ("draft_p_min",                 "--spec-draft-p-min",             "value"),
+    ("draft_p_split",               "--spec-draft-p-split",           "value_nz"),
+    ("spec_draft_override_tensor",  "--spec-draft-override-tensor",   "value"),
 
     # N-gram lookup cache (only active when spec_type=ngram-cache; server
     # does not implement save, so dynamic file is never written — load only)
@@ -235,10 +262,15 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("grammar",       "--grammar",         "value"),
     ("grammar_file",  "--grammar-file",    "path"),
 
-    # Reasoning
+    # Reasoning (--reasoning is the on/off/auto master toggle; budget knobs cap it)
+    ("reasoning",                "--reasoning",                "value"),
     ("reasoning_budget",         "--reasoning-budget",         "value"),
     ("reasoning_budget_message", "--reasoning-budget-message", "value"),
     ("reasoning_format",         "--reasoning-format",         "value"),
+
+    # Advanced placement
+    ("override_tensor",  "--override-tensor",  "value"),
+    ("override_kv",      "--override-kv",      "value"),
 
     # Context fitter
     ("fit",                      "--fit",                      "onoff"),

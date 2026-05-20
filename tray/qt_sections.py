@@ -1135,6 +1135,12 @@ def _llama(window) -> QWidget:
     srv_body.addWidget(_password_row("llamacpp.api_key", "API Key",
                                       "leave empty to disable",
                                       "Optional --api-key. Clients must send Authorization: Bearer <key>."))
+    srv_body.addWidget(_number_row("llamacpp.timeout", "HTTP Timeout", 0, 86400, 30, 0, "s",
+                                    "--timeout: server read/write timeout. 0 = use llama-server default (600s)."))
+    srv_body.addWidget(_line_row("llamacpp.api_prefix", "API Prefix", "/llama",
+                                  "--api-prefix: mount the server under a path prefix (for reverse-proxy setups)."))
+    srv_body.addWidget(_line_row("llamacpp.media_path", "Media Path", "./data/media",
+                                  "--media-path: directory served via file:// URLs in chat completion image refs."))
     srv_body.addWidget(_pair_list_row("llamacpp.extra_args", "Extra CLI Args",
                                   'Appended to every spawn. One [flag, value] pair per row '
                                   '— leave value empty for flag-only switches.'))
@@ -1204,7 +1210,40 @@ def _llama(window) -> QWidget:
                                       "--op-offload / --no-op-offload: offload host tensor ops to device (default enabled)."))
     spawn_body.addWidget(_toggle_row("llamacpp.check_tensors",    "Check Tensors",
                                       "--check-tensors: verify model tensor data on load (slows startup; catches corrupted GGUFs)."))
+    spawn_body.addWidget(_toggle_row("llamacpp.skip_chat_parsing", "Skip Chat Parsing (debug)",
+                                      "--skip-chat-parsing: force the server to skip Jinja chat-template parsing. Useful for debugging template bugs."))
+    spawn_body.addWidget(_number_row("llamacpp.n_predict",         "N-Predict (default)", -1, 1048576, 64, 0, "tok",
+                                      "--n-predict: server-wide default cap on tokens generated. -1 = unlimited."))
     layout.addWidget(spawn_card)
+
+    # ── Endpoints card — diagnostic / monitoring endpoints ───────────
+    ep_card, ep_body = _card("Endpoints",
+                              "llamacpp.* — diagnostic / monitoring HTTP endpoints (server-wide).")
+    ep_body.addWidget(_toggle_row("llamacpp.slots", "Slots Endpoint",
+                                   "--slots / --no-slots: expose /slots monitoring (default enabled). Slot state shows the live prompt cache and KV usage."))
+    ep_body.addWidget(_toggle_row("llamacpp.metrics", "Prometheus /metrics",
+                                   "--metrics: expose Prometheus-compatible /metrics endpoint."))
+    ep_body.addWidget(_toggle_row("llamacpp.props", "Mutable /props",
+                                   "--props: allow POST /props to change global properties (samplers etc.) at runtime."))
+    layout.addWidget(ep_card)
+
+    # ── Server Mode card — alternate endpoint modes ───────────────────
+    sm_card, sm_body = _card("Server Mode",
+                              "llamacpp.* — repurpose the running server for embedding or reranking. "
+                              "Leave all OFF for normal chat completions.")
+    sm_body.addWidget(_toggle_row("llamacpp.embedding", "Embedding Mode",
+                                   "--embedding: restrict server to embedding requests. Requires an embedding-capable GGUF."))
+    sm_body.addWidget(_toggle_row("llamacpp.rerank", "Rerank Mode",
+                                   "--rerank: enable /rerank endpoint. Requires a reranker GGUF."))
+    sm_body.addWidget(_enum_row("llamacpp.pooling", "Pooling",
+                                 [("(model default)", ""),
+                                  ("none",  "none"),
+                                  ("mean",  "mean"),
+                                  ("cls",   "cls"),
+                                  ("last",  "last"),
+                                  ("rank",  "rank")],
+                                 "--pooling: pooling type for embedding output. Only meaningful when Embedding Mode is on."))
+    layout.addWidget(sm_card)
 
     # Caching policy card — server-wide
     cache_card, cache_body = _card("Caching",
@@ -1271,27 +1310,26 @@ def _llama(window) -> QWidget:
                                      "--threads-batch-draft: CPU threads for draft-model prompt processing."))
     layout.addWidget(spec_card)
 
-    # Sampling card
-    samp, samp_body = _card("Sampling defaults")
-    samp_body.addWidget(_number_row("llamacpp.inference.temperature",       "Temperature",       0.0, 1.5, 0.05, 2))
-    samp_body.addWidget(_number_row("llamacpp.inference.top_p",             "Top-P",             0.0, 1.0, 0.01, 2))
-    samp_body.addWidget(_number_row("llamacpp.inference.top_k",             "Top-K",             0,   200, 1,    0))
-    samp_body.addWidget(_number_row("llamacpp.inference.min_p",             "Min-P",             0.0, 1.0, 0.01, 2))
-    samp_body.addWidget(_number_row("llamacpp.inference.repeat_penalty",    "Repeat Penalty",    0.5, 2.0, 0.01, 2))
-    samp_body.addWidget(_number_row("llamacpp.inference.presence_penalty",  "Presence Penalty",  0.0, 2.0, 0.05, 2))
-    samp_body.addWidget(_number_row("llamacpp.inference.frequency_penalty", "Frequency Penalty", 0.0, 2.0, 0.05, 2))
-    samp_body.addWidget(_number_row("llamacpp.inference.max_tokens",        "Max Tokens",       -1,  1048576, 64, 0, "tok",
-                                      "Hard cap on generated tokens. -1 = unlimited / model-default."))
-    samp_body.addWidget(_list_row("llamacpp.inference.stop", "Stop Strings",
-                                   "Generation halts when any of these appears (one per line).",
-                                   "</s>"))
-    samp_body.addWidget(_enum_row("llamacpp.inference.context_overflow", "Context Overflow",
-                                   [("Truncate Middle", "truncate_middle"),
-                                    ("Truncate Left",   "truncate_left"),
-                                    ("Truncate Right",  "truncate_right"),
-                                    ("Error",           "error")],
-                                   "What to do when prompt exceeds ctx_size."))
-    layout.addWidget(samp)
+    # Proxy Behavior card — global behavior knobs with NO per-model equivalent.
+    # Sampling defaults (temperature/top_p/etc.) live in the Models section per
+    # model since each model has its own sweet spot.
+    pb_card, pb_body = _card("Proxy Behavior",
+                              "Global proxy behavior — these have no per-model override. "
+                              "Sampler defaults moved to the Models tab per-model form.")
+    pb_body.addWidget(_enum_row("llamacpp.inference.context_overflow", "Context Overflow",
+                                 [("Truncate Middle", "truncate_middle"),
+                                  ("Truncate Left",   "truncate_left"),
+                                  ("Truncate Right",  "truncate_right"),
+                                  ("Error",           "error")],
+                                 "What to do when the prompt exceeds ctx_size."))
+    pb_body.addWidget(_toggle_row("llamacpp.inference.drop_prior_thinking",
+                                   "Drop Prior-Turn Thinking",
+                                   "On (default): strip thinking blocks from prior assistant turns before sending upstream — llama.cpp regenerates. "
+                                   "Off: re-inject as <think>...</think> for trained-adaptive models that need prior reasoning for multi-turn coherence."))
+    pb_body.addWidget(_toggle_row("llamacpp.inference.disable_thinking",
+                                   "Disable Thinking (proxy override)",
+                                   "Force thinking off in the proxy regardless of model template — overrides per-model reasoning.enabled."))
+    layout.addWidget(pb_card)
 
     # Structured output card
     so_card, so_body = _card("Structured Output", "llamacpp.inference.structured_output.* — JSON schema / GBNF grammar")
@@ -1307,18 +1345,9 @@ def _llama(window) -> QWidget:
                                  height=180, highlighter=_GbnfHighlighter))
     layout.addWidget(so_card)
 
-    # Reasoning card
-    rcard, rbody = _card("Reasoning")
-    rbody.addWidget(_toggle_row("llamacpp.inference.reasoning.enabled",
-                                 "Parse <think> Blocks",
-                                 "Split <think>…</think> out of the text stream."))
-    rbody.addWidget(_toggle_row("llamacpp.inference.reasoning.emit_thinking_blocks",
-                                 "Show Reasoning In Output",
-                                 "Forward parsed thinking as Anthropic thinking content blocks."))
-    rbody.addWidget(_toggle_row("llamacpp.inference.drop_prior_thinking",
-                                 "Drop Prior-Turn Thinking",
-                                 "On (default): strip thinking blocks from prior assistant turns before sending upstream — llama.cpp regenerates. Off: reinject as <think>...</think> for trained-adaptive models that need prior reasoning for multi-turn coherence."))
-    layout.addWidget(rcard)
+    # (Reasoning card removed — its drop_prior_thinking toggle moved into the
+    # Proxy Behavior card; reasoning.enabled and reasoning.emit_thinking_blocks
+    # are per-model only now and live in the Models tab.)
 
     # ── Reasoning Effort Map card ────────────────────────────────────
     from PySide6.QtWidgets import QInputDialog as _QInputDialog, QMessageBox as _QMessageBox
@@ -3284,20 +3313,18 @@ def _logs(window) -> QWidget:
 # Models (llamacpp.models.*) — add/remove + full field editor
 # ══════════════════════════════════════════════════════════════════════
 
+# NOTE: Server-wide flags (threads, batch_size, ubatch_size, parallel, mlock,
+# no_mmap, etc.) live ONLY at top-level `llamacpp.*`. They are intentionally
+# absent here — adding them to a per-model block would have no effect because
+# argv.build_argv() reads them from the top-level config, not from this dict.
 _MODEL_DEFAULTS: dict[str, Any] = {
     "path": "",
     "mmproj": "",
     "ctx_size": 4096,
     "n_gpu_layers": 0,
-    "threads": 8,
-    "batch_size": 2048,
-    "ubatch_size": 512,
-    "parallel": 1,
     "flash_attn": True,
     "cache_type_k": "f16",
     "cache_type_v": "f16",
-    "mlock": False,
-    "no_mmap": False,
     "n_cpu_moe": 0,
     "jinja": True,
     "fit": False,
@@ -3310,6 +3337,9 @@ _MODEL_DEFAULTS: dict[str, Any] = {
         "min_p": 0.0,
         "presence_penalty": 0.0,
         "repeat_penalty": 1.0,
+        "frequency_penalty": 0.0,
+        "max_tokens": -1,
+        "stop": [],
         "reasoning": {
             "enabled": False,
             "start": "<think>",
@@ -3483,6 +3513,9 @@ def _models(window) -> QWidget:
                                            "Layers offloaded to GPU. Higher = faster, more VRAM."))
         form_layout.addWidget(_number_row(f"{p}.n_cpu_moe",    "CPU MoE Layers",     0,   200,     1,   0, "",
                                            "MoE experts kept on CPU. 0 = all on GPU."))
+        form_layout.addWidget(_line_row(f"{p}.device",         "Devices",
+                                         "e.g. CUDA0,CUDA1 / Vulkan0 / none",
+                                         "--device: explicit comma-separated device list. Empty = let llama-server pick (split-mode applies)."))
 
         form_layout.addWidget(_section_header("Context Fitting"))
         form_layout.addWidget(_toggle_row(f"{p}.fit",          "Fit Context",
@@ -3511,6 +3544,9 @@ def _models(window) -> QWidget:
                                          "--chat-template: override the GGUF's chat template by name "
                                          "or paste an inline jinja template.",
                                          height=200, highlighter=_JinjaHighlighter))
+        form_layout.addWidget(_line_row(f"{p}.chat_template_file", "Chat Template File",
+                                         "/path/to/template.jinja",
+                                         "--chat-template-file: load the jinja template from a file (alternative to the inline override above)."))
 
         form_layout.addWidget(_section_header("RoPE"))
         form_layout.addWidget(_line_row(f"{p}.rope_scaling",     "RoPE Scaling",
@@ -3522,6 +3558,16 @@ def _models(window) -> QWidget:
                                            "--rope-freq-scale. 0 = model default."))
         form_layout.addWidget(_number_row(f"{p}.yarn_orig_ctx",  "YaRN Orig Ctx",        0, 1048576, 1024, 0, "tok",
                                            "--yarn-orig-ctx: original training context for YaRN scaling."))
+        # YaRN fine-tuning — defaults are -1.0 (auto) upstream; 0 here means
+        # "skip flag emission, use server default".
+        form_layout.addWidget(_number_row(f"{p}.yarn_ext_factor",  "YaRN Ext Factor",  -1.0, 4.0, 0.05, 2, "",
+                                           "--yarn-ext-factor: extrapolation mix factor. 0 = use server default (auto)."))
+        form_layout.addWidget(_number_row(f"{p}.yarn_attn_factor", "YaRN Attn Factor", -1.0, 4.0, 0.05, 2, "",
+                                           "--yarn-attn-factor: scale sqrt(t) or attention magnitude. 0 = default."))
+        form_layout.addWidget(_number_row(f"{p}.yarn_beta_slow",   "YaRN Beta Slow",   -1.0, 4.0, 0.05, 2, "",
+                                           "--yarn-beta-slow: high correction dim (alpha). 0 = default."))
+        form_layout.addWidget(_number_row(f"{p}.yarn_beta_fast",   "YaRN Beta Fast",   -1.0, 64.0, 0.5, 2, "",
+                                           "--yarn-beta-fast: low correction dim (beta). 0 = default."))
 
         form_layout.addWidget(_section_header("Draft Model (Speculative)"))
         form_layout.addWidget(_line_row(f"{p}.draft_model", "Draft Model (GGUF)",
@@ -3550,6 +3596,9 @@ def _models(window) -> QWidget:
                                            "v9243 default 0.00 (was 0.75). Draft-model: 0.5–0.75. N-gram: 0.1."))
         form_layout.addWidget(_number_row(f"{p}.draft_p_split", "Draft P-Split", 0.0, 1.0, 0.05, 2, "",
                                            "--spec-draft-p-split: speculative decoding split probability (default 0.10)."))
+        form_layout.addWidget(_line_row(f"{p}.spec_draft_override_tensor", "Draft Tensor Override",
+                                         "blk\\.[0-9]+\\.ffn_.*=CPU",
+                                         "--spec-draft-override-tensor: per-tensor buffer override for the draft model. Pattern=buffer (regex)."))
         form_layout.addWidget(_line_row(f"{p}.lookup_cache_static", "Lookup Cache (static)",
                                          "./data/lookup-static.bin",
                                          "--lookup-cache-static. Only used when Spec Type = ngram-cache. "
@@ -3560,13 +3609,22 @@ def _models(window) -> QWidget:
                                          "NOTE: llama-server does not persist writes — file will not be created or updated."))
 
         form_layout.addWidget(_section_header("Inference Defaults"))
+        # Per-model Inference Defaults — proxy-applied per-request body fields.
+        # Override hierarchy: request body > this > top-level llamacpp.inference.
+        form_layout.addWidget(_section_header("Inference Defaults (proxy per-request)"))
         ip = f"{p}.inference_defaults"
-        form_layout.addWidget(_number_row(f"{ip}.temperature",      "Temperature",      0.0, 1.5, 0.05, 2))
-        form_layout.addWidget(_number_row(f"{ip}.top_p",            "Top-P",            0.0, 1.0, 0.01, 2))
-        form_layout.addWidget(_number_row(f"{ip}.top_k",            "Top-K",            0,   200, 1,    0))
-        form_layout.addWidget(_number_row(f"{ip}.min_p",            "Min-P",            0.0, 1.0, 0.01, 2))
-        form_layout.addWidget(_number_row(f"{ip}.presence_penalty", "Presence Penalty", 0.0, 2.0, 0.05, 2))
-        form_layout.addWidget(_number_row(f"{ip}.repeat_penalty",   "Repeat Penalty",   0.5, 2.0, 0.01, 2))
+        form_layout.addWidget(_number_row(f"{ip}.temperature",       "Temperature",       0.0, 1.5, 0.05, 2))
+        form_layout.addWidget(_number_row(f"{ip}.top_p",             "Top-P",             0.0, 1.0, 0.01, 2))
+        form_layout.addWidget(_number_row(f"{ip}.top_k",             "Top-K",             0,   200, 1,    0))
+        form_layout.addWidget(_number_row(f"{ip}.min_p",             "Min-P",             0.0, 1.0, 0.01, 2))
+        form_layout.addWidget(_number_row(f"{ip}.presence_penalty",  "Presence Penalty",  0.0, 2.0, 0.05, 2))
+        form_layout.addWidget(_number_row(f"{ip}.repeat_penalty",    "Repeat Penalty",    0.5, 2.0, 0.01, 2))
+        form_layout.addWidget(_number_row(f"{ip}.frequency_penalty", "Frequency Penalty", 0.0, 2.0, 0.05, 2))
+        form_layout.addWidget(_number_row(f"{ip}.max_tokens",        "Max Tokens",       -1,   1048576, 64, 0, "tok",
+                                           "Hard cap on generated tokens. -1 = unlimited / model-default."))
+        form_layout.addWidget(_list_row(f"{ip}.stop", "Stop Strings",
+                                         "Generation halts when any of these appears (one per line).",
+                                         "</s>"))
 
         form_layout.addWidget(_section_header("Reasoning"))
         rp = f"{ip}.reasoning"
@@ -3600,12 +3658,27 @@ def _models(window) -> QWidget:
                                          "/path/to/grammar.gbnf",
                                          "--grammar-file: load GBNF from disk."))
 
+        form_layout.addWidget(_section_header("Advanced Placement"))
+        form_layout.addWidget(_line_row(f"{p}.override_tensor", "Override Tensor",
+                                         "blk\\.[0-9]+\\.ffn_.*=CPU",
+                                         "--override-tensor: per-tensor buffer placement. Pattern=buffer (regex), comma-separated. "
+                                         "Common use: pin specific layer weights to CPU/GPU."))
+        form_layout.addWidget(_line_row(f"{p}.override_kv", "Override KV",
+                                         "tokenizer.ggml.add_bos_token=bool:false",
+                                         "--override-kv: override GGUF metadata at load. Format KEY=TYPE:VALUE, comma-separated."))
+
         form_layout.addWidget(_section_header("Extra CLI Args"))
         form_layout.addWidget(_pair_list_row(f"{p}.extra_args", "Extra Args",
             'Per-model escape hatch — one [flag, value] pair per row. '
             'Top-level llamacpp.extra_args is also appended.'))
 
         form_layout.addWidget(_section_header("Per-Model Reasoning Override"))
+        form_layout.addWidget(_enum_row_strs(f"{p}.reasoning", "Reasoning",
+                                              [("(server default — auto)", ""),
+                                               ("on",   "on"),
+                                               ("off",  "off"),
+                                               ("auto", "auto")],
+                                              "--reasoning: master toggle for thinking. 'auto' detects from template."))
         form_layout.addWidget(_number_row(f"{p}.reasoning_budget",        "Reasoning Budget",   -1, 1048576, 256, 0, "tok",
                                            "--reasoning-budget. -1 = unlimited, 0 = disable thinking."))
         form_layout.addWidget(_number_row(f"{p}.reasoning_budget_message","Reasoning Budget (per message)", -1, 1048576, 256, 0, "tok",

@@ -152,6 +152,21 @@
     "repack": true,
     "op_offload": true,
     "check_tensors": false,
+    "skip_chat_parsing": false,
+
+    "n_predict": -1,
+    "timeout": 600,
+    "api_prefix": "",
+    "media_path": "",
+    "metrics": false,
+    "props": false,
+    "slots": true,
+
+    "_comment_server_mode":
+      "Set embedding=true OR rerank=true (mutually exclusive with chat mode) to repurpose llama-server as an embedding/reranker endpoint. Leave both false for normal chat completions. pooling only applies in embedding mode.",
+    "embedding": false,
+    "rerank": false,
+    "pooling": "",
 
     "main_gpu": 0,
     "tensor_split": "",
@@ -215,8 +230,17 @@
         "rope_freq_base": 0,
         "rope_freq_scale": 0,
         "yarn_orig_ctx": 0,
+        "yarn_ext_factor": 0,
+        "yarn_attn_factor": 0,
+        "yarn_beta_slow": 0,
+        "yarn_beta_fast": 0,
+
+        "device": "",
+        "override_tensor": "",
+        "override_kv": "",
 
         "chat_template": "",
+        "chat_template_file": "",
         "jinja": true,
 
         "_comment_draft":
@@ -232,8 +256,16 @@
         "draft_n_min": 0,
         "draft_p_min": 0,
         "draft_p_split": 0.10,
+        "spec_draft_override_tensor": "",
         "lookup_cache_static": "",
         "lookup_cache_dynamic": "",
+
+        "_comment_reasoning":
+          "reasoning: 'on'|'off'|'auto'|'' (empty = use server default which is 'auto'). reasoning_budget caps the number of thinking tokens. reasoning_format controls how thoughts are returned (none / deepseek / deepseek-legacy).",
+        "reasoning": "",
+        "reasoning_budget": -1,
+        "reasoning_budget_message": -1,
+        "reasoning_format": "",
 
         "lora": "",
         "lora_scale": 1.0,
@@ -259,6 +291,9 @@
         }
       }
     },
+
+    "_comment_inference":
+      "Inference defaults below are PROXY-APPLIED per-request body fields (NOT spawn-time CLI flags). Override hierarchy: request body > models.<name>.inference_defaults > llamacpp.inference. Per-model defaults are the preferred place to set per-model sampler tuning — only set knobs here for global fallbacks. Sampler rows in the tray UI live under the per-model form for the same reason.",
 
     "inference": {
       "temperature": 0.6,

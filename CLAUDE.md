@@ -229,11 +229,22 @@ Recurring task fires on an interval against a permanent task-mode session. Indep
 
 ## llama.cpp supervisor (`llamacpp/`)
 
+Tracks llama-server **v9243** (commit 17d22a35b) — `--no-ui` (not `--no-webui`), `draft-mtp` in `--spec-type`, `--spec-default`, `--direct-io`, etc.
+
 1. **Spawn:** `LlamaSupervisor.start_default()` runs from `main.py:_post_init` BEFORE the proxy. stdout+stderr merged into `data/logs/llama.log` (append, one banner per restart).
-2. **argv builder** (`llamacpp/argv.py`): walks `llamacpp.models.<model>` → flags via a table-driven mapper (`ctx_size → --ctx-size`, `n_gpu_layers → --n-gpu-layers`, `flash_attn → --flash-attn`, `mmproj`, `draft_model → --model-draft`, `chat_template`, `jinja`, `cache_type_k/v`, `slot_save_path`, LoRA, grammar, …). Anything else: `extra_args: [["--flag","value"]]`. Both per-model and top-level `extra_args` honored.
+2. **argv builder** (`llamacpp/argv.py`): table-driven mapping `settings_key → --cli-flag` with a `kind` per row (`flag` / `onoff` / `bool_pair` / `value` / `value_nz` / `path`). `value_nz` skips zero (knobs where 0 means "use default"); `value` emits literal 0 (knobs where 0 means "disable"). Two tables: `_GLOBAL_FLAG_SPECS` reads `llamacpp.*` (server-wide), `_MODEL_FLAG_SPECS` reads `llamacpp.models.<m>.*` (per-model). Both per-model and top-level `extra_args` honored. `spec_type` accepts a **comma-separated list** (v9243+) — `_spec_types()` splits it and `_emit_spec_ngram()` emits per-mode ngram knobs for every active strategy. `ngram-mod` has its own `(n-min, n-max, n-match)` flag set distinct from the `(size-n, size-m, min-hits)` triplet shared by ngram-simple / ngram-map-k / ngram-map-k4v.
 3. **Model swap:** `ensure_model(name)` resolves through `llamacpp.models` → `proxy.model_mapping` → `default_model`. Different model = stop + respawn + `/health` poll.
-4. **Ready probe:** `/health` `"ok"` = ready; `503` / `"loading model"` = warming; connection error = not up. Deadline: `llamacpp.ready_timeout_sec` (default 120).
+4. **Ready probe:** `/health` `"ok"` = ready; `503` / `"loading model"` = warming; connection error = not up. Deadline: `llamacpp.ready_timeout_sec` (default 120). After `"ok"` a 1s re-poll catches orphans that fake readiness on the same port.
 5. **Shutdown:** `shutdown_supervisor()` in `main.py:_post_shutdown` — SIGTERM, 4s wait, then kill. Fired AFTER the proxy runner.
+
+### Settings layout (no duplicates)
+
+- **Top-level `llamacpp.*`** — server-wide CLI flags only (threads, batch, mlock, kv_*, spec_type, cache_ram, endpoints — metrics/slots/props, server-mode — embedding/rerank/pooling, timeout, api_prefix, …).
+- **Per-model `llamacpp.models.<m>.*`** — flags that re-take effect on respawn (ctx_size, n_gpu_layers, n_cpu_moe, mmproj, rope_*, yarn_*, draft_*, lora, grammar, reasoning_*, override_tensor, override_kv, device, chat_template[_file]).
+- **Per-model `…inference_defaults.*`** — proxy-applied per-request body fields (temperature, top_p, …, max_tokens, stop, frequency_penalty, reasoning.{enabled, start, end, emit_thinking_blocks}, chat_template_kwargs). The tray UI puts these per-model.
+- **Top-level `llamacpp.inference.*`** — proxy-applied global fallbacks. Override hierarchy: request body > per-model `inference_defaults` > top-level `inference`. The tray UI's "Proxy Behavior" card exposes only the keys with no per-model equivalent (`context_overflow`, `drop_prior_thinking`, `disable_thinking`, `structured_output.*`, `reasoning_effort_map.*`). Sampler defaults moved to the per-model form to avoid duplicate UI rows.
+
+Server-wide flags must NOT appear in `_MODEL_DEFAULTS` (qt_sections.py) — they get written into each new model's JSON but `argv.py` ignores them. The dict is pinned to per-model keys only.
 
 ---
 
