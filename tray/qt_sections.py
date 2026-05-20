@@ -173,7 +173,7 @@ def _number_row(path: str, label: str,
 
 
 def _enum_row(path: str, label: str, options: list[tuple[str, Any]],
-              help_text: str = "") -> QWidget:
+              help_text: str = "", *, max_width: int | None = None) -> QWidget:
     """Dropdown row. options: list of (display, value)."""
     cb = QComboBox()
     cur = get_path(read_settings(), path)
@@ -186,6 +186,8 @@ def _enum_row(path: str, label: str, options: list[tuple[str, Any]],
     cb.currentIndexChanged.connect(
         lambda i: patch_settings(path, cb.itemData(i))
     )
+    if max_width is not None:
+        cb.setMaximumWidth(max_width)
     return _row(row_label(label, help_text, path), _wrap_align(cb, Qt.AlignmentFlag.AlignLeft))
 
 
@@ -3737,9 +3739,11 @@ def _models(window) -> QWidget:
                                          "--chat-template-file: load the jinja template from a file (alternative to the inline override above)."))
 
         form_layout.addWidget(_section_header("RoPE"))
-        form_layout.addWidget(_line_row(f"{p}.rope_scaling",     "RoPE Scaling",
-                                         "none / linear / yarn",
-                                         "--rope-scaling. Empty = model default."))
+        form_layout.addWidget(_enum_row(
+            f"{p}.rope_scaling", "RoPE Scaling",
+            [("Model default", ""), ("none", "none"), ("linear", "linear"), ("yarn", "yarn")],
+            "--rope-scaling. Empty = model default.",
+            max_width=360))
         _has_rope_scaling = lambda rs: bool(str(rs or "").strip()) and str(rs).strip().lower() != "none"
         _yarn_active = lambda rs: str(rs or "").strip().lower() == "yarn"
         form_layout.addWidget(_dependent(
