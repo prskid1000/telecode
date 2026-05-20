@@ -113,6 +113,7 @@ def patch_settings(path: str, value: Any) -> None:
         app_config.reload()
     except Exception as exc:
         log.error("reload failed: %s", exc, exc_info=True)
+    _emit_setting_changed(path)
 
 
 def remove_path(path: str) -> None:
@@ -132,6 +133,38 @@ def remove_path(path: str) -> None:
     tmp.write_text(json.dumps(raw, indent=2, ensure_ascii=False) + "\n",
                    encoding="utf-8")
     os.replace(tmp, sp)
+    _emit_setting_changed(path)
+
+
+# ── Settings-change signal bus ───────────────────────────────────────
+# Lets dependent UI rows (Tier-2 grey-outs, Tier-1 mutual exclusions) react
+# to settings writes without polling. patch_settings / remove_path emit
+# `settingChanged(path)` after each successful write.
+_SETTINGS_BUS: Any = None
+
+
+def _get_bus() -> Any:
+    global _SETTINGS_BUS
+    if _SETTINGS_BUS is None:
+        from PySide6.QtCore import QObject, Signal
+
+        class _Bus(QObject):
+            settingChanged = Signal(str)
+
+        _SETTINGS_BUS = _Bus()
+    return _SETTINGS_BUS
+
+
+def settings_bus() -> Any:
+    """The shared QObject emitting `settingChanged(str)` after every patch_settings / remove_path."""
+    return _get_bus()
+
+
+def _emit_setting_changed(path: str) -> None:
+    try:
+        _get_bus().settingChanged.emit(path)
+    except Exception as exc:  # bus init can fail off the Qt thread; ignore
+        log.debug("settings_bus emit failed for %s: %s", path, exc)
     try:
         app_config.reload()
     except Exception as exc:
