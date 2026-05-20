@@ -206,11 +206,16 @@ spawns, babysits, and model-swaps `llama-server` automatically. Enable it in
 }
 ```
 
-Every LM-Studio load-tab knob (40+ flags: `ubatch_size`, `parallel`,
-`flash_attn`, `cache_type_k/v`, `n_cpu_moe`, `mmproj`, `draft_model`,
-`grammar`, `reasoning_budget`, …) maps to a llama-server CLI flag. Anything
-not special-cased can be passed verbatim via `extra_args: [["--flag","val"]]`.
-See `settings.example.json` for the full list.
+Every LM-Studio load-tab knob — plus the v9243 additions (`spec-type` /
+`draft-mtp`, `spec-default`, `direct-io`, `check-tensors`, `mmproj-offload`,
+`cpu-moe-draft` / `n-cpu-moe-draft`, YaRN fine-tuning, embedding / rerank /
+pooling, `metrics` / `slots` / `props`, etc.) — maps to a llama-server CLI
+flag. Server-wide flags live under top-level `llamacpp.*`; per-model knobs
+under `llamacpp.models.<name>.*` (the tray UI mirrors this split with no
+duplicate rows). `spec_type` accepts a comma-separated list so strategies
+stack (e.g. `"draft-mtp,ngram-mod"`). Anything not special-cased can be
+passed verbatim via `extra_args: [["--flag","val"]]`. See
+`settings.example.json` for the full list with safe defaults.
 
 With `llamacpp.enabled: true`, the proxy at `:1235` becomes the
 single endpoint for both Anthropic (`/v1/messages`) and OpenAI
