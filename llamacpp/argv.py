@@ -79,10 +79,15 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("cache_idle_slots", ("--cache-idle-slots", "--no-cache-idle-slots"), "bool_pair"),
     ("context_shift",    ("--context-shift", "--no-context-shift"), "bool_pair"),
     ("warmup",           ("--warmup", "--no-warmup"),             "bool_pair"),
-    ("cache_ram",                  "--cache-ram",                 "value_nz"),
+    # cache_ram / ctx_checkpoints / checkpoint_every_n_tokens use server-side
+    # "0 = disable" semantics — must emit literally `--flag 0`, not skip. Hence
+    # "value" (not "value_nz") so explicit zero passes through. Skipping zero
+    # would silently apply the server defaults (8192 MiB cache, 32 checkpoints,
+    # 8192-token checkpoint interval), wasting RAM/VRAM.
+    ("cache_ram",                  "--cache-ram",                 "value"),
     ("defrag_thold",               "--defrag-thold",              "value_nz"),
-    ("ctx_checkpoints",            "--ctx-checkpoints",           "value_nz"),
-    ("checkpoint_every_n_tokens",  "--checkpoint-every-n-tokens", "value_nz"),
+    ("ctx_checkpoints",            "--ctx-checkpoints",           "value"),
+    ("checkpoint_every_n_tokens",  "--checkpoint-every-n-tokens", "value"),
     ("swa_full",                   "--swa-full",                  "flag"),
     ("slot_save_path",             "--slot-save-path",            "path"),
     ("sleep_idle_seconds",         "--sleep-idle-seconds",        "value_nz"),
