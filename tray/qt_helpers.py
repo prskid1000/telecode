@@ -161,14 +161,11 @@ def settings_bus() -> Any:
 
 
 def _emit_setting_changed(path: str) -> None:
+    # patch_settings / remove_path already handle config.reload(); just emit.
     try:
         _get_bus().settingChanged.emit(path)
     except Exception as exc:  # bus init can fail off the Qt thread; ignore
         log.debug("settings_bus emit failed for %s: %s", path, exc)
-    try:
-        app_config.reload()
-    except Exception as exc:
-        log.error("reload failed: %s", exc, exc_info=True)
 
 
 # ── Async dispatch onto the bot loop ─────────────────────────────────
