@@ -1327,7 +1327,7 @@ class HostSupervisor:
                 pass
 
     async def _wait_ready(self) -> None:
-        deadline = asyncio.get_event_loop().time() + 30
+        deadline = asyncio.get_event_loop().time() + 300
         url = f"http://{dg_cfg.host_host()}:{self._port}/api/roots"
         async with aiohttp.ClientSession() as session:
             while asyncio.get_event_loop().time() < deadline:
@@ -1342,7 +1342,7 @@ class HostSupervisor:
                 except (aiohttp.ClientError, asyncio.TimeoutError):
                     pass
                 await asyncio.sleep(0.5)
-        raise RuntimeError(f"docgraph host not ready within 30s")
+        raise RuntimeError(f"docgraph host not ready within 300s")
 
     def _spawn(self, argv: list[str], extra_env: dict[str, str] | None = None) -> subprocess.Popen:
         env = dict(os.environ)
