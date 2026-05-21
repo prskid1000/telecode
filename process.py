@@ -442,6 +442,7 @@ class LlamaSupervisor:
 
         _LLAMA_LOG.info("llama.cpp: spawning '%s' on %s:%d",
                         model_name, cfg.host(), cfg.port())
+        _LLAMA_LOG.info("llama.cpp: argv: %s", describe(model_name))
 
         # If a previous telecode crashed before its Job Object could tear
         # down llama-server (or the Job binding failed), an orphan may still
