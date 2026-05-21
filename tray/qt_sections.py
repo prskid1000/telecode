@@ -3498,7 +3498,11 @@ _MODEL_DEFAULTS: dict[str, Any] = {
     "path": "",
     "mmproj": "",
     "ctx_size": 4096,
-    "n_gpu_layers": 0,
+    # 99 = "all layers on GPU"; llama-server caps to the model's actual layer
+    # count. Matches settings.example.json's recommended baseline. Users with
+    # tight VRAM can lower this or flip fit on (which suppresses --n-gpu-layers
+    # entirely so the auto-fitter can pick).
+    "n_gpu_layers": 99,
     "flash_attn": True,
     "cache_type_k": "f16",
     "cache_type_v": "f16",
@@ -3694,8 +3698,14 @@ def _models(window) -> QWidget:
 
         form_layout.addWidget(_section_header("Capacity"))
         form_layout.addWidget(_number_row(f"{p}.ctx_size",     "Context Size",       512, 1048576, 256, 0, "tok"))
-        form_layout.addWidget(_number_row(f"{p}.n_gpu_layers", "GPU Layers",         0,   200,     1,   0, "",
-                                           "Layers offloaded to GPU. Higher = faster, more VRAM."))
+        # n_gpu_layers is greyed when fit is on — the auto-fitter aborts if it
+        # sees a user-pinned ngl, so argv.build_argv() suppresses --n-gpu-layers
+        # in that case. This dependency mirrors that suppression in the UI.
+        _fit_off = lambda f: not bool(f)
+        form_layout.addWidget(_dependent(
+            _number_row(f"{p}.n_gpu_layers", "GPU Layers",         0,   200,     1,   0, "",
+                                               "Layers offloaded to GPU. Higher = faster, more VRAM."),
+            [f"{p}.fit"], _fit_off))
         form_layout.addWidget(_number_row(f"{p}.n_cpu_moe",    "CPU MoE Layers",     0,   200,     1,   0, "",
                                            "MoE experts kept on CPU. 0 = all on GPU."))
         form_layout.addWidget(_line_row(f"{p}.device",         "Devices",
