@@ -1900,13 +1900,13 @@ def _build_prompts_card(window) -> tuple[QFrame, Callable[[], None] | None]:
 
 # Curated embedding model dropdown.
 #
-# All entries are fastembed-native (verified against
-# `TextEmbedding.list_supported_models()`). Ordered by popularity + quality:
-# the BGE family covers most code/RAG installs; jina-v3 + e5-large are the
-# frontier multilingual picks; jina-v2-base-code is the only code-specialized
-# fastembed model; mxbai-large was MTEB top-of-list through 2024-2025;
-# all-MiniLM-L6-v2 is the historically most-downloaded sentence embedding
-# (Continue.dev's default, LangChain/ChromaDB common pick).
+# All entries are sentence-transformers / HuggingFace models that docgraph
+# loads via torch. Ordered by popularity + quality: the BGE family covers
+# most code/RAG installs; jina-v3 + e5-large are the frontier multilingual
+# picks; jina-v2-base-code is the only code-specialized pick in the list;
+# mxbai-large was MTEB top-of-list through 2024-2025; all-MiniLM-L6-v2 is
+# the historically most-downloaded sentence embedding (Continue.dev's
+# default, LangChain/ChromaDB common pick).
 #
 # DocGraph auto-derives the Kuzu schema dim from the chosen model — switching
 # to a different-dim model requires `Clear` + full reindex (existing vectors
@@ -2061,9 +2061,13 @@ def _build_embeddings_card(window) -> tuple[QFrame, Callable[[], None] | None]:
                                 cli="--embed-batch-size"))
     body.addWidget(_row(row_label(
         "Auto-Unload",
-        "Evict the embedding ONNX session after this many seconds of "
-        "idleness. 0 = never. Reloads lazily on next embed. Takes effect "
-        "on next host spawn.",
+        "Evict the pooled torch embedder after this many seconds of "
+        "idleness. 0 = never. Reloads lazily on next embed. Setting a "
+        "positive value also opts into telecode's VRAM reaper — once "
+        "every pooled model is idle-unloaded the host is restarted to "
+        "release the CUDA context (~300 MB). Reaper is skipped when "
+        "torch.compile is enabled on either embedder or reranker (a "
+        "restart would invalidate the compiled kernels).",
         "docgraph.embeddings.idle_unload_sec",
         "--embed-idle-unload-sec",
     ), _idle_unload_row("docgraph.embeddings.idle_unload_sec", 300)))
