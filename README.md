@@ -681,8 +681,8 @@ Entries with `"pinned": true` are protected in the tray UI: the path edit is rea
 | Key | Description |
 |---|---|
 | `llm.{model, host, port, format, max_tokens, max_tokens_wiki, prompts.{docstring, wiki}}` | Optional LLM-augmented docstrings + wiki. Setting `llm.model` is enough to enable. Passed to `docgraph host` / `index` / `wiki` as `--llm-*` flags; long-form prompt overrides materialized to `data/runtime/*.txt` and passed via `--llm-prompt-{docstring,wiki}-file`. |
-| `embeddings.{model, gpu}` | Embedding model + GPU opt-in, shared by both the index runner and the host. Passed as `--embed-model` / `--gpu`. |
-| `rerank.{default, model, gpu}` | Cross-encoder reranker config. `default=true` flips `/api/search` and MCP search to rerank by default. `gpu=true` runs the reranker on GPU independently from `embeddings.gpu`. |
+| `embeddings.{model, gpu, torch_compile, idle_unload_sec}` | Embedding model + GPU opt-in, shared by both the index runner and the host. Passed as `--embed-model` / `--gpu` / `--embed-torch-compile` / `--embed-idle-unload-sec`. `torch_compile` is host-only (the 10–30 s compile cold-start never amortizes for one-shot index runs). `idle_unload_sec > 0` also opts the host into telecode's [VRAM reaper](#vram-reaper) — after every pooled model has idle-unloaded, telecode restarts the host to release the CUDA context (~300 MB) that `torch.cuda.empty_cache()` cannot. |
+| `rerank.{default, model, gpu, torch_compile, idle_unload_sec}` | Cross-encoder reranker config. `default=true` flips `/api/search` and MCP search to rerank by default. `gpu=true` runs the reranker on GPU independently from `embeddings.gpu`. `torch_compile` + `idle_unload_sec` mirror the embeddings knobs. |
 | `wiki.depth` | Max directory depth for wiki page bucketing. |
 
 **No environment variables.** Every config knob in `settings.docgraph.*` is forwarded to docgraph as a CLI flag. The only env vars on docgraph subprocess spawns are `PYTHONIOENCODING=utf-8` + `PYTHONUTF8=1` (govern Python stdio encoding; no CLI equivalent).
@@ -698,6 +698,9 @@ Entries with `"pinned": true` are protected in the tray UI: the path edit is rea
 **MCP bridge.** When the host is reachable, telecode opens an MCP streamable-HTTP session against `http://host:port/mcp`, lists tools, and registers each in the proxy's managed-tools registry as `docgraph_<tool>` — appears in the **Managed** section grouped under a `DOCGRAPH` header with a master toggle that flips every child on/off in one click.
 
 **Logs.** `data/logs/docgraph_host.log` (the long-running host child) + `data/logs/docgraph_index.log` (one-shot index runs, truncated per spawn). Live tail in the global Logs section.
+
+<a id="vram-reaper"></a>
+**VRAM reaper.** `HostSupervisor._vram_reaper_loop` runs alongside the auto-restart loop. The docgraph host's per-class idle unloader (`--embed-idle-unload-sec` / `--rerank-idle-unload-sec`) only frees model weights — the CUDA context itself (~300 MB on consumer GPUs: lazy cuBLAS/cuDNN init, kernel cache, allocator state) is pinned for the process lifetime and `torch.cuda.empty_cache()` cannot release it. The reaper closes that gap: every 15 s it polls `/api/admin/models_status`; when (a) at least one model has been instantiated, (b) every embed/rerank entry reports `loaded=false`, (c) no Index/Wiki run is active, and (d) `host.auto_restart` is on — it `kill_process_tree`s the host. The auto-restart loop respawns it ~2 s later with a clean context. **Implicit opt-in:** the unload windows themselves are the gate; no separate toggle. **Trade-off with `torch.compile`:** compiled kernels are per-process, so a reap forces a 10–30 s recompile on the next first call. Steady-state speed inside one host lifetime is unchanged.
 
 ### `tools.<key>` — CLI backends
 
