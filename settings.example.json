@@ -221,7 +221,7 @@
 
         "cache_type_k": "f16",
         "cache_type_v": "f16",
-        "cache_reuse": 0,
+        "cache_reuse": 256,
 
         "n_cpu_moe": 0,
         "cpu_moe": false,
