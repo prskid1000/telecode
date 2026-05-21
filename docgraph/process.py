@@ -1204,6 +1204,11 @@ class HostSupervisor:
         if dg_cfg.rerank_idle_unload_sec() > 0:
             argv += ["--rerank-idle-unload-sec",
                      str(dg_cfg.rerank_idle_unload_sec())]
+        # After every pooled model is idle-unloaded, host self-SIGTERMs.
+        # Our _auto_restart_loop respawns it ~2s later. Frees the CUDA
+        # context that `torch.cuda.empty_cache()` cannot release.
+        if dg_cfg.auto_shutdown_on_idle():
+            argv.append("--auto-shutdown-on-idle")
         # LLM augmentation knobs — always forward the host/port/format so they
         # pick up defaults or overrides even if the model name is empty (the
         # docgraph host handles the model-name default).

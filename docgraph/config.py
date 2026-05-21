@@ -242,6 +242,18 @@ def rerank_idle_unload_sec() -> float:
         return 0.0
 
 
+# ── Auto-shutdown ──────────────────────────────────────────────────────────
+
+def auto_shutdown_on_idle() -> bool:
+    """Whether the docgraph host self-exits after idle-unloading every
+    pooled model. Telecode's `HostSupervisor._auto_restart_loop` respawns
+    on demand, so this releases the CUDA context (~300 MB) instead of just
+    the model weights. Off by default. Stored at
+    `docgraph.host.auto_shutdown_on_idle` because it concerns the host
+    process lifecycle, not embeddings or rerank specifically."""
+    return bool(host_cfg().get("auto_shutdown_on_idle", False))
+
+
 # ── Index (CLI subprocess flags) ───────────────────────────────────────────
 
 def index_cfg() -> dict:             return _section("index")
