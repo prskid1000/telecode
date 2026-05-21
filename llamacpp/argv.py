@@ -83,9 +83,10 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("warmup",           ("--warmup", "--no-warmup"),             "bool_pair"),
     # cache_ram / ctx_checkpoints / checkpoint_every_n_tokens use server-side
     # "0 = disable" semantics — must emit literally `--flag 0`, not skip. Hence
-    # "value" (not "value_nz") so explicit zero passes through. Skipping zero
-    # would silently apply the server defaults (8192 MiB cache, 32 checkpoints,
-    # 8192-token checkpoint interval), wasting RAM/VRAM.
+    # "value" (not "value_nz") so explicit zero passes through. v9243's own
+    # defaults for all three are disabled, so the difference between emitting
+    # `--flag 0` and not emitting at all is currently semantic-only; keeping
+    # explicit emission makes intent visible in `describe()` output.
     # defrag_thold was removed in v9243 (DEPRECATED warning + no-op upstream).
     # Don't emit it at all; tolerate the key in old settings.json files silently.
     ("cache_ram",                  "--cache-ram",                 "value"),
@@ -95,15 +96,15 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("slot_save_path",             "--slot-save-path",            "path"),
     ("sleep_idle_seconds",         "--sleep-idle-seconds",        "value_nz"),
 
-    # Speculative decoding algorithm (server-wide choice).
-    # The per-ngram size/min-hits knobs are dispatched in _emit_spec_ngram()
-    # because each spec_type takes its own per-mode flag now.
-    # spec_type accepts a comma-separated list of strategies (v9243+),
-    # e.g. "draft-mtp,ngram-mod" — passed through verbatim.
-    ("spec_type",                "--spec-type",            "value"),
-    # Auto-pick a working spec config based on what the model exposes
-    # (e.g. MTP heads). Mutually exclusive with explicit spec_type — set
-    # one or the other, not both.
+    # Speculative decoding:
+    # - spec_type is dispatched in _emit_spec_type() so the "none" sentinel
+    #   used by the tray (when spec_default is the active toggle) doesn't leak
+    #   to llama-server as `--spec-type none`, which would activate the spec
+    #   machinery without picking an implementation. Also dispatches the
+    #   per-mode ngram knobs.
+    # - spec_default is emitted here, but build_argv() defensively suppresses
+    #   it when spec_type is meaningfully set (the two are mutually
+    #   exclusive — set one or the other, not both).
     ("spec_default",             "--spec-default",         "flag"),
     ("threads_draft",            "--threads-draft",        "value_nz"),
     ("threads_batch_draft",      "--threads-batch-draft",  "value_nz"),
@@ -143,11 +144,31 @@ _NGRAM_SIZE_FLAG_MAP: dict[str, tuple[str, str, str]] = {
 
 
 def _spec_types(gcfg: dict) -> list[str]:
-    """spec_type may be a comma-separated list (v9243+); split + strip."""
+    """spec_type may be a comma-separated list (v9243+); split + strip.
+
+    Drops the "none" sentinel — the tray writes spec_type="none" when the
+    user picks spec_default as the active toggle, and llama-server would
+    otherwise interpret it as "enable spec decoding with no implementation".
+    Empty/"none"-only values return [].
+    """
     raw = str(gcfg.get("spec_type", "") or "").strip()
     if not raw:
         return []
-    return [s.strip() for s in raw.split(",") if s.strip()]
+    out = [s.strip() for s in raw.split(",") if s.strip()]
+    return [s for s in out if s.lower() != "none"]
+
+
+def _emit_spec_type(argv: list[str], gcfg: dict) -> None:
+    """Emit --spec-type only when at least one real strategy is selected.
+
+    Filtering happens via _spec_types(), which strips empty + "none" entries.
+    The value is rejoined so the upstream server sees the canonical
+    comma-separated form.
+    """
+    active = _spec_types(gcfg)
+    if not active:
+        return
+    argv += ["--spec-type", ",".join(active)]
 
 
 def _emit_spec_ngram(argv: list[str], gcfg: dict) -> None:
@@ -353,12 +374,31 @@ def build_argv(model_name: str) -> list[str]:
     argv += ["--model", cfg.resolve_path(model_path)]
 
     # Server-wide flags (top-level llamacpp.*)
+    spec_active = bool(_spec_types(gcfg))
+    suppressed_global: set[str] = set()
+    # spec_default and spec_type are mutually exclusive — if spec_type names
+    # a real strategy, drop spec_default even if it was left truthy in
+    # settings.json (defensive mirror of _mutex_spec_default_vs_type in the
+    # tray, in case settings.json was hand-edited).
+    if spec_active:
+        suppressed_global.add("spec_default")
     for k, flag, kind in _GLOBAL_FLAG_SPECS:
+        if k in suppressed_global:
+            continue
         _emit_flag(argv, gcfg, k, flag, kind)
+    _emit_spec_type(argv, gcfg)
     _emit_spec_ngram(argv, gcfg)
 
-    # Per-model flags
+    # Per-model flags. When fit is on, suppress n_gpu_layers / n_gpu_layers_draft —
+    # llama-server's auto-fitter aborts the moment it sees a user-pinned ngl
+    # ("n_gpu_layers already set by user to N, abort"), leaving the model
+    # in a degraded layout. fit and explicit ngl are mutually exclusive.
+    suppressed_model: set[str] = set()
+    if bool(mcfg.get("fit")):
+        suppressed_model.update({"n_gpu_layers", "n_gpu_layers_draft"})
     for k, flag, kind in _MODEL_FLAG_SPECS:
+        if k in suppressed_model:
+            continue
         _emit_flag(argv, mcfg, k, flag, kind)
 
     # Generic escape hatch — [["--flag","value"], ["--bare-flag"], ...]
