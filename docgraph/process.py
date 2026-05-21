@@ -74,13 +74,10 @@ def _creation_flags() -> int:
 
 def _ensure_high_perf_gpu(exe_path: str) -> None:
     """Mark `exe_path` as preferring the discrete GPU on Windows hybrid
-    graphics. Historical workaround from the ONNX Runtime / DirectML era,
-    when DXGI's default-adapter enumeration would hand the iGPU to
-    CREATE_NO_WINDOW processes. The current torch + CUDA stack enumerates
-    devices through the NVIDIA driver directly, not DXGI, so this is
-    largely defensive now — but kept because (a) it's idempotent and
-    cheap, and (b) anything in the process that does hit DXGI (display
-    libraries, OpenGL fallbacks) still benefits.
+    graphics. Without this, processes spawned with CREATE_NO_WINDOW get
+    handed the iGPU by DXGI's default adapter enumeration, and ONNX
+    Runtime / DirectML lands on Intel Graphics — slow at best, device-hung
+    under sustained load at worst.
 
     Writes `HKCU\\Software\\Microsoft\\DirectX\\UserGpuPreferences` with
     the absolute exe path → `GpuPreference=2;` (2 = High Performance).
@@ -808,10 +805,8 @@ class IndexRunner:
                         argv += ["--embed-batch-size", str(dg_cfg.index_embed_batch_size())]
                     if dg_cfg.embeddings_gpu():
                         argv.append("--gpu")
-                    # `--embed-torch-compile` is host-only: the 10-30s
-                    # compile cold-start never amortizes for a one-shot
-                    # index pass, and `docgraph index` doesn't accept
-                    # the flag anyway.
+                    if dg_cfg.embeddings_torch_compile():
+                        argv.append("--embed-torch-compile")
                     if dg_cfg.embeddings_model():
                         argv += ["--embed-model", dg_cfg.embeddings_model()]
                     if dg_cfg.llm_model():
@@ -1110,10 +1105,6 @@ class HostSupervisor:
         self._started_at: float = 0.0
         self._port: int | None = None
         self._restart_task: Optional[asyncio.Task] = None
-        # VRAM reaper: kills the host after all pooled models have
-        # idle-unloaded so the next spawn starts with a fresh (empty)
-        # CUDA context. Long-lived across respawns.
-        self._reaper_task: Optional[asyncio.Task] = None
         self._last_error: str | None = None
         self._bridged_count = 0
 
@@ -1283,11 +1274,6 @@ class HostSupervisor:
             log.error("docgraph host: bridge failed: %s", exc)
             self._bridged_count = 0
         self._arm_auto_restart(dg_cfg.host_auto_restart())
-        # Reaper rides alongside auto-restart: when the host's idle
-        # unloader evicts every pooled model, the reaper kills the host
-        # so the next spawn comes up with a fresh CUDA context. Gated
-        # on host_auto_restart inside _arm_vram_reaper.
-        self._arm_vram_reaper()
 
     async def _stop_locked(self) -> None:
         try:
@@ -1297,25 +1283,9 @@ class HostSupervisor:
         self._bridged_count = 0
         proc = self._proc
         self._proc = None
-        # Never cancel the task we're running on. The auto-restart loop
-        # calls `_stop_locked()` followed by `_start_locked()` to respawn
-        # a dead host — if we cancelled ourselves here, the cancellation
-        # would fire at the next `await` inside `_start_locked`, aborting
-        # the respawn and leaving the host permanently stopped.
-        try:
-            current = asyncio.current_task()
-        except RuntimeError:
-            current = None
-        if (self._restart_task and not self._restart_task.done()
-                and self._restart_task is not current):
+        if self._restart_task and not self._restart_task.done():
             self._restart_task.cancel()
-        if self._restart_task is not current:
-            self._restart_task = None
-        if (self._reaper_task and not self._reaper_task.done()
-                and self._reaper_task is not current):
-            self._reaper_task.cancel()
-        if self._reaper_task is not current:
-            self._reaper_task = None
+        self._restart_task = None
         if proc and proc.poll() is None:
             try:
                 kill_process_tree(proc.pid)
@@ -1371,13 +1341,15 @@ class HostSupervisor:
             env.update(extra_env)
         binary = argv[0]
         argv[0] = shutil.which(binary) or binary
-        # Pin the discrete GPU as the high-performance adapter for this
-        # exe on Windows hybrid graphics. Defensive holdover from the
-        # ONNX Runtime / DirectML era — torch + CUDA enumerates through
-        # the NVIDIA driver, not DXGI, so this doesn't gate device choice
-        # for the embedder / reranker today. Still set because it's
-        # idempotent and protects any DXGI-driven library in-process.
-        # See `_ensure_high_perf_gpu` for the registry mechanics.
+        # On Windows hybrid graphics, processes spawned with CREATE_NO_WINDOW
+        # default to the power-saving GPU (Intel iGPU) for DXGI / DirectML
+        # adapter enumeration. ONNX Runtime then lands on the iGPU and either
+        # runs slow or device-hangs under sustained inference load. Setting
+        # the per-app GpuPreference=2 (High Performance) override in
+        # HKCU\Software\Microsoft\DirectX\UserGpuPreferences forces Windows
+        # to expose the discrete GPU to that exe regardless of windowed
+        # state. Idempotent — only writes when the value is missing or
+        # different. No-op off Windows.
         _ensure_high_perf_gpu(argv[0])
         proc = subprocess.Popen(
             argv,
@@ -1419,80 +1391,6 @@ class HostSupervisor:
             except Exception as exc:
                 log.error("docgraph host: auto-restart failed: %s", exc)
                 return
-
-    def _arm_vram_reaper(self) -> None:
-        """Launch the VRAM reaper if not already running. No-op when auto-
-        restart is disabled (killing without respawn would be destructive)."""
-        if not dg_cfg.host_auto_restart():
-            return
-        if self._reaper_task and not self._reaper_task.done():
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-        self._reaper_task = loop.create_task(self._vram_reaper_loop())
-
-    async def _vram_reaper_loop(self) -> None:
-        """Periodically check whether every pooled embed/rerank model has
-        idle-unloaded; if so, kill the host so `_auto_restart_loop`
-        respawns it with a fresh (empty) CUDA context. Releases the
-        ~300 MB context that `torch.cuda.empty_cache()` cannot.
-
-        Implicit opt-in: no toggle. The unload windows
-        (`embeddings.idle_unload_sec` / `rerank.idle_unload_sec`) are the
-        gate — without those nothing ever unloads and the predicate never
-        trips. Skips when an index or wiki job is in flight; restarting
-        mid-build would corrupt the run.
-
-        Trade-off with `torch.compile`: the compiled kernels live in the
-        process, so a reap forces a 10-30s recompile on warm-back. We
-        accept this; if the user enabled idle-unload windows they care
-        about freed VRAM more than warm-back latency.
-        """
-        while True:
-            try:
-                await asyncio.sleep(15.0)
-            except asyncio.CancelledError:
-                return
-            if not dg_cfg.host_auto_restart():
-                continue
-            if (dg_cfg.embeddings_idle_unload_sec() <= 0
-                    and dg_cfg.rerank_idle_unload_sec() <= 0):
-                continue
-            proc = self._proc
-            if proc is None or proc.poll() is not None:
-                continue  # host dead — restart loop owns the respawn
-            # Don't interrupt an active index/wiki run.
-            try:
-                if (_INDEX is not None and _INDEX.alive()) or \
-                   (_WIKI is not None and _WIKI.alive()):
-                    continue
-            except Exception:
-                continue
-            status = _fetch_models_status_sync()
-            if not status:
-                continue
-            embed = status.get("embed") or []
-            rerank = status.get("rerank") or []
-            if not (embed or rerank):
-                continue  # nothing instantiated yet — cold host
-            if any(e.get("loaded") for e in embed):
-                continue
-            if any(r.get("loaded") for r in rerank):
-                continue
-            log.info(
-                "docgraph: all pooled models idle-unloaded — terminating "
-                "host pid %d to release CUDA context (auto-restart will "
-                "respawn)", proc.pid,
-            )
-            try:
-                kill_process_tree(proc.pid)
-            except Exception as exc:
-                log.warning("docgraph reaper: kill failed: %s", exc)
-            # Don't return — stay alive across respawns. The next iteration
-            # will see `proc.poll() != None` and skip until the restart
-            # loop swaps in a new Popen.
 
 
 # ── Module singletons ──────────────────────────────────────────────────────
