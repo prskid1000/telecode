@@ -36,7 +36,6 @@ from tray.qt_theme import FG, FG_DIM, FG_MUTE, BG, BG_CARD, BG_ELEV, BORDER, OK,
 from tray.qt_sections import (
     _page, _card, _section_header, _row, _toggle_row, _line_row,
     _number_row, _enum_row_strs, _wrap_align, _idle_unload_row,
-    _dependent,
 )
 
 log = logging.getLogger("telecode.tray.docgraph")
@@ -260,26 +259,6 @@ def _build_host_card(window) -> tuple[QFrame, Callable[[], None]]:
                                 "Start the host when telecode boots."))
     body.addWidget(_toggle_row("docgraph.host.auto_restart", "Auto-restart",
                                 "Re-spawn on unexpected exit."))
-    # VRAM reclaim — host SIGTERMs itself when all pooled models are
-    # idle-unloaded, supervisor respawns. Frees the ~300 MB CUDA context
-    # that torch.cuda.empty_cache() can't release. No-op unless at least
-    # one of the per-class idle-unload windows is > 0 — greyed out below.
-    body.addWidget(_dependent(
-        _toggle_row("docgraph.host.auto_shutdown_on_idle",
-                    "Auto-shutdown on idle",
-                    "After every pooled embed/rerank model has been "
-                    "idle-unloaded, the host self-SIGTERMs. Auto-restart "
-                    "respawns it ~2 s later. Frees the CUDA context "
-                    "(~300 MB) that `unload()` alone cannot release. "
-                    "Requires at least one of "
-                    "Embeddings → Auto-Unload / Reranker → Auto-Unload "
-                    "to be > 0; otherwise nothing ever idle-unloads and "
-                    "this never fires.",
-                    cli="--auto-shutdown-on-idle"),
-        ["docgraph.embeddings.idle_unload_sec",
-         "docgraph.rerank.idle_unload_sec"],
-        lambda emb, rer: (float(emb or 0) > 0) or (float(rer or 0) > 0),
-    ))
     body.addWidget(_line_row("docgraph.host.host", "Bind Host", "127.0.0.1",
                               cli="--host"))
     body.addWidget(_number_row("docgraph.host.port", "Bind Port", 1024, 65535, 1, 0,
