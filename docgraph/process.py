@@ -805,6 +805,8 @@ class IndexRunner:
                         argv += ["--embed-batch-size", str(dg_cfg.index_embed_batch_size())]
                     if dg_cfg.embeddings_gpu():
                         argv.append("--gpu")
+                    if dg_cfg.embeddings_torch_compile():
+                        argv.append("--embed-torch-compile")
                     if dg_cfg.embeddings_model():
                         argv += ["--embed-model", dg_cfg.embeddings_model()]
                     if dg_cfg.llm_model():
@@ -1172,6 +1174,8 @@ class HostSupervisor:
         # used by both the host spawn and the index-subprocess fallback.
         if dg_cfg.embeddings_gpu():
             argv.append("--gpu")
+        if dg_cfg.embeddings_torch_compile():
+            argv.append("--embed-torch-compile")
         if dg_cfg.embeddings_model():
             argv += ["--embed-model", dg_cfg.embeddings_model()]
         if dg_cfg.rerank_model():
@@ -1180,6 +1184,8 @@ class HostSupervisor:
             argv.append("--rerank-default")
         if dg_cfg.rerank_gpu():
             argv.append("--rerank-gpu")
+        if dg_cfg.rerank_torch_compile():
+            argv.append("--rerank-torch-compile")
         # Indexer + wiki tunables that affect /api/admin/index and
         # /api/wiki/build inside the host. These must travel with the host
         # spawn, not just the fallback subprocess, since the host route is

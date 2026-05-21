@@ -95,6 +95,7 @@
     "embeddings": {
       "model": "",
       "gpu": false,
+      "torch_compile": false,
       "idle_unload_sec": 0
     },
 
@@ -102,6 +103,7 @@
       "model": "",
       "default": false,
       "gpu": false,
+      "torch_compile": false,
       "idle_unload_sec": 0
     },
 

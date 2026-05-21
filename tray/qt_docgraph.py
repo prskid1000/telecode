@@ -2035,19 +2035,24 @@ def _build_embeddings_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     )
     body.addWidget(_hf_model_row(window, "docgraph.embeddings.model", "Model",
                                  _DEFAULT_EMBED_MODEL,
-                                 "HuggingFace model ID (fastembed-compatible). "
+                                 "HuggingFace sentence-transformers model id. "
                                  "Schema dim auto-aligns to model. "
                                  "Switching to a different-dim model = Clear + reindex.",
                                  cli="--embed-model"))
     body.addWidget(_toggle_row("docgraph.embeddings.gpu", "GPU embeddings",
-                                "Needs onnxruntime-gpu/-directml/-silicon. "
-                                "Forwarded to both the host process and any "
-                                "fallback `docgraph index` subprocess. On "
-                                "Windows hybrid graphics, telecode writes "
-                                "`GpuPreference=2;` for the docgraph binary "
-                                "on spawn so the windowless host lands on "
-                                "the dGPU rather than the iGPU.",
+                                "NVIDIA CUDA via torch. Requires a `+cuXY` "
+                                "torch wheel installed in the docgraph venv "
+                                "(see docgraph's setup.ps1). Falls back to "
+                                "CPU silently if torch.cuda.is_available() "
+                                "is False, and mid-run on OOM / driver errors.",
                                 cli="--gpu"))
+    body.addWidget(_toggle_row("docgraph.embeddings.torch_compile", "torch.compile (embeddings)",
+                                "Apply torch.compile(mode='reduce-overhead') "
+                                "to the embedder. Pays ~10-30s extra cold-start "
+                                "for ~1.3-1.6× steady-state speedup on GPU. "
+                                "Worth it for long-lived host processes; not "
+                                "for one-shot index runs.",
+                                cli="--embed-torch-compile"))
     body.addWidget(_number_row("docgraph.index.workers", "Index workers",
                                 0, 64, 1, 0, "", "0 = default.",
                                 cli="--workers"))
@@ -2075,15 +2080,21 @@ def _build_reranker_card(window) -> tuple[QFrame, Callable[[], None] | None]:
                                 "Costs one cross-encoder pass per query."))
     body.addWidget(_hf_model_row(window, "docgraph.rerank.model", "Model",
                                  _DEFAULT_RERANK_MODEL,
-                                 "HuggingFace model ID (fastembed cross-encoder). "
+                                 "HuggingFace cross-encoder model id. "
                                  "Lazy-loaded on first reranked search.",
                                  cli="--rerank-model"))
     body.addWidget(_toggle_row("docgraph.rerank.gpu", "GPU reranker",
-                                "Cross-encoder on GPU. Independent of "
-                                "embeddings GPU. Needs onnxruntime-gpu/"
-                                "-directml/-silicon. Falls back to CPU on init "
-                                "failure.",
+                                "Cross-encoder on NVIDIA CUDA via torch. "
+                                "Independent of embeddings GPU. Same `+cuXY` "
+                                "torch wheel requirement; same CPU fallback "
+                                "on init failure.",
                                 cli="--rerank-gpu"))
+    body.addWidget(_toggle_row("docgraph.rerank.torch_compile", "torch.compile (reranker)",
+                                "Apply torch.compile to the cross-encoder. "
+                                "Independent of the embedder flag — same "
+                                "trade-off (slower first call, faster steady "
+                                "state on GPU).",
+                                cli="--rerank-torch-compile"))
     body.addWidget(_row(row_label(
         "Auto-Unload",
         "Evict the cross-encoder after this many seconds of idleness. "
