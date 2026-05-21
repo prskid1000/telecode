@@ -1105,7 +1105,11 @@ class HostSupervisor:
         self._lock = asyncio.Lock()
         self._started_at: float = 0.0
         self._port: int | None = None
-        self._restart_task: Optional[asyncio.Task] = None
+        # VRAM reaper: polls /api/admin/models_status and calls restart()
+        # when every pooled model has been idle-unloaded, so the next host
+        # spawn comes up with a fresh CUDA context. Gated on
+        # `host.auto_restart` — that toggle's only meaning now.
+        self._reaper_task: Optional[asyncio.Task] = None
         self._last_error: str | None = None
         self._bridged_count = 0
 
@@ -1274,7 +1278,7 @@ class HostSupervisor:
         except Exception as exc:
             log.error("docgraph host: bridge failed: %s", exc)
             self._bridged_count = 0
-        self._arm_auto_restart(dg_cfg.host_auto_restart())
+        self._arm_vram_reaper()
 
     async def _stop_locked(self) -> None:
         try:
@@ -1284,9 +1288,19 @@ class HostSupervisor:
         self._bridged_count = 0
         proc = self._proc
         self._proc = None
-        if self._restart_task and not self._restart_task.done():
-            self._restart_task.cancel()
-        self._restart_task = None
+        # Never cancel the task we're running on. The reaper calls
+        # `self.restart()` → `self.stop()` → `_stop_locked()`; if we
+        # cancelled ourselves the cancellation would fire at the next
+        # `await` inside `_start_locked`, aborting the respawn.
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+        if (self._reaper_task and not self._reaper_task.done()
+                and self._reaper_task is not current):
+            self._reaper_task.cancel()
+        if self._reaper_task is not current:
+            self._reaper_task = None
         if proc and proc.poll() is None:
             try:
                 kill_process_tree(proc.pid)
@@ -1364,34 +1378,75 @@ class HostSupervisor:
             log.info("docgraph host: pid %d bound to lifetime job", proc.pid)
         return proc
 
-    def _arm_auto_restart(self, enabled: bool) -> None:
-        if not enabled:
+    def _arm_vram_reaper(self) -> None:
+        """Launch the VRAM reaper if not already running. Gated on
+        `host.auto_restart` — the only meaning that toggle has now (the
+        old crash-respawn loop has been removed in favour of this single,
+        simpler restart path)."""
+        if not dg_cfg.host_auto_restart():
             return
-        if self._restart_task and not self._restart_task.done():
+        if self._reaper_task and not self._reaper_task.done():
             return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._restart_task = loop.create_task(self._auto_restart_loop())
+        self._reaper_task = loop.create_task(self._vram_reaper_loop())
 
-    async def _auto_restart_loop(self) -> None:
+    async def _vram_reaper_loop(self) -> None:
+        """Periodically check whether every pooled embed/rerank model has
+        idle-unloaded; if so, call `self.restart()` so the next host spawn
+        comes up with a fresh CUDA context. Releases the ~300 MB context
+        that `torch.cuda.empty_cache()` cannot.
+
+        Implicit opt-in: a positive `embeddings.idle_unload_sec` or
+        `rerank.idle_unload_sec` is the gate (without those nothing ever
+        unloads and the predicate never trips). Also skips when an index
+        or wiki job is in flight; restarting mid-build would corrupt the
+        run. Trade-off with `torch.compile`: the compiled kernels live in
+        the process, so a reap forces a 10-30 s recompile on warm-back.
+        Accepted: warm steady-state inside one host lifetime is unchanged.
+        """
         while True:
-            await asyncio.sleep(2.0)
-            proc = self._proc
-            if proc is None:
-                return
-            if proc.poll() is None:
-                continue
-            log.warning("docgraph host: subprocess exited (code %s) — restarting",
-                        proc.returncode)
             try:
-                async with self._lock:
-                    await self._stop_locked()
-                    await self._start_locked()
-            except Exception as exc:
-                log.error("docgraph host: auto-restart failed: %s", exc)
+                await asyncio.sleep(15.0)
+            except asyncio.CancelledError:
                 return
+            if not dg_cfg.host_auto_restart():
+                continue
+            if (dg_cfg.embeddings_idle_unload_sec() <= 0
+                    and dg_cfg.rerank_idle_unload_sec() <= 0):
+                continue
+            proc = self._proc
+            if proc is None or proc.poll() is not None:
+                continue
+            try:
+                if (_INDEX is not None and _INDEX.alive()) or \
+                   (_WIKI is not None and _WIKI.alive()):
+                    continue
+            except Exception:
+                continue
+            status = _fetch_models_status_sync()
+            if not status:
+                continue
+            embed = status.get("embed") or []
+            rerank = status.get("rerank") or []
+            if not (embed or rerank):
+                continue  # nothing instantiated yet — cold host
+            if any(e.get("loaded") for e in embed):
+                continue
+            if any(r.get("loaded") for r in rerank):
+                continue
+            log.info(
+                "docgraph: all pooled models idle-unloaded — restarting "
+                "host to release CUDA context"
+            )
+            try:
+                await self.restart()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.warning("docgraph reaper: restart failed: %s", exc)
 
 
 # ── Module singletons ──────────────────────────────────────────────────────
