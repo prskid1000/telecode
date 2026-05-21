@@ -258,14 +258,10 @@ def _build_host_card(window) -> tuple[QFrame, Callable[[], None]]:
     body.addWidget(_toggle_row("docgraph.host.auto_start", "Auto-start",
                                 "Start the host when telecode boots."))
     body.addWidget(_toggle_row("docgraph.host.auto_restart", "Auto-restart",
-                                "Restart the host once every pooled embed/"
-                                "rerank model has been idle-unloaded. "
-                                "Releases the CUDA context (~300 MB) that "
-                                "torch.cuda.empty_cache() cannot. No-op "
-                                "unless at least one of Embeddings → "
-                                "Auto-Unload / Reranker → Auto-Unload is "
-                                "> 0; otherwise nothing ever unloads and "
-                                "the reaper never fires."))
+                                "Restart the host after all models "
+                                "idle-unload to free the CUDA context "
+                                "(~300 MB). Needs an Auto-Unload window "
+                                "> 0."))
     body.addWidget(_line_row("docgraph.host.host", "Bind Host", "127.0.0.1",
                               cli="--host"))
     body.addWidget(_number_row("docgraph.host.port", "Bind Port", 1024, 65535, 1, 0,
