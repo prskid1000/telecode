@@ -205,6 +205,11 @@ def llm_prompt_wiki() -> str:
 def embeddings_cfg() -> dict:    return _section("embeddings")
 def embeddings_model() -> str:   return str(embeddings_cfg().get("model", "") or "")
 def embeddings_gpu() -> bool:    return bool(embeddings_cfg().get("gpu", False))
+def embeddings_torch_compile() -> bool:
+    """Whether the docgraph embedder applies `torch.compile`. Costs
+    ~10-30 s extra cold-start; ~1.3-1.6× steady-state speedup on GPU.
+    Forwarded as `--embed-torch-compile`. Off by default."""
+    return bool(embeddings_cfg().get("torch_compile", False))
 def embeddings_idle_unload_sec() -> float:
     """Seconds of embedder inactivity before the docgraph host evicts
     the ONNX session. 0 = never. Forwarded as `--embed-idle-unload-sec`;
@@ -222,6 +227,10 @@ def rerank_cfg() -> dict:        return _section("rerank")
 def rerank_model() -> str:       return str(rerank_cfg().get("model", "") or "")
 def rerank_default() -> bool:    return bool(rerank_cfg().get("default", False))
 def rerank_gpu() -> bool:        return bool(rerank_cfg().get("gpu", False))
+def rerank_torch_compile() -> bool:
+    """Same trade-off as `embeddings_torch_compile` but for the cross-encoder.
+    Independent of the embedder flag. Forwarded as `--rerank-torch-compile`."""
+    return bool(rerank_cfg().get("torch_compile", False))
 def rerank_idle_unload_sec() -> float:
     """Seconds of reranker inactivity before the docgraph host evicts
     the cross-encoder. 0 = never. Forwarded as `--rerank-idle-unload-sec`;
