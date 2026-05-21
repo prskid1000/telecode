@@ -805,8 +805,9 @@ class IndexRunner:
                         argv += ["--embed-batch-size", str(dg_cfg.index_embed_batch_size())]
                     if dg_cfg.embeddings_gpu():
                         argv.append("--gpu")
-                    if dg_cfg.embeddings_torch_compile():
-                        argv.append("--embed-torch-compile")
+                    # `--embed-torch-compile` is host-only: `docgraph index`
+                    # doesn't accept the flag, and the 10-30 s compile cold
+                    # start never amortizes for a one-shot index pass anyway.
                     if dg_cfg.embeddings_model():
                         argv += ["--embed-model", dg_cfg.embeddings_model()]
                     if dg_cfg.llm_model():
