@@ -212,8 +212,12 @@ def embeddings_torch_compile() -> bool:
     return bool(embeddings_cfg().get("torch_compile", False))
 def embeddings_idle_unload_sec() -> float:
     """Seconds of embedder inactivity before the docgraph host evicts
-    the ONNX session. 0 = never. Forwarded as `--embed-idle-unload-sec`;
-    takes effect on next host spawn."""
+    the pooled torch SentenceTransformer. 0 = never. Forwarded as
+    `--embed-idle-unload-sec`; takes effect on next host spawn. Setting
+    a positive value also opts the host into telecode's VRAM reaper —
+    once every pooled model has idle-unloaded, telecode restarts the
+    host to release the CUDA context (~300 MB) that
+    `torch.cuda.empty_cache()` cannot."""
     raw = embeddings_cfg().get("idle_unload_sec", 0)
     try:
         return float(raw)
