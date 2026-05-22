@@ -666,7 +666,6 @@ Telecode supervises **one** [DocGraph](https://github.com/prithwirajs/docgraph) 
 |---|---|
 | `enabled` | Live-state flag. Off here = host is currently stopped. Doesn't gate Auto-start. |
 | `auto_start` | Spawn the host at `main.py:_post_init`. **Independent of `enabled`** — Auto-start fires even when Enabled is off, so the host comes up at boot regardless of the live-state flag. |
-| `auto_restart` | Re-spawn on unexpected exit. |
 | `host`, `port` | Bind address. Defaults: `127.0.0.1`, `5500`. |
 | `gpu` | Passed to `docgraph host` as `--gpu`. The embedder transparently falls back to CPU if a GPU session is poisoned mid-inference (e.g. another process saturating the GPU), so this is safe to leave on. |
 
@@ -681,8 +680,9 @@ Entries with `"pinned": true` are protected in the tray UI: the path edit is rea
 | Key | Description |
 |---|---|
 | `llm.{model, host, port, format, max_tokens, max_tokens_wiki, prompts.{docstring, wiki}}` | Optional LLM-augmented docstrings + wiki. Setting `llm.model` is enough to enable. Passed to `docgraph host` / `index` / `wiki` as `--llm-*` flags; long-form prompt overrides materialized to `data/runtime/*.txt` and passed via `--llm-prompt-{docstring,wiki}-file`. |
-| `embeddings.{model, gpu}` | Embedding model + GPU opt-in, shared by both the index runner and the host. Passed as `--embed-model` / `--gpu`. |
-| `rerank.{default, model, gpu}` | Cross-encoder reranker config. `default=true` flips `/api/search` and MCP search to rerank by default. `gpu=true` runs the reranker on GPU independently from `embeddings.gpu`. |
+| `embeddings.{model, gpu, torch_compile, idle_unload_sec}` | Embedding model + GPU opt-in, shared by the index runner and the host. Passed as `--embed-model` / `--gpu` / `--embed-torch-compile` / `--embed-idle-unload-sec`. `idle_unload_sec>0` unloads the model weights after that idle window (reloads lazily). |
+| `embeddings.daemon.{enabled, port, idle_exit_sec}` | Route embed + rerank to a shared `docgraph daemon` (one warm model + one CUDA context for the whole host, requests queued). `enabled=true` → host gets `--embed-daemon --daemon-port`; the host spawns the daemon lazily and it runs detached (telecode sweeps its port on stop). `idle_exit_sec>0` → the daemon exits after that idle window to free the ~300 MB CUDA context, respawned on next demand. Off = in-process (context stays until the host exits). Replaces the old `host.auto_restart` VRAM-reaper. |
+| `rerank.{default, model, gpu, torch_compile, idle_unload_sec}` | Cross-encoder reranker config. `default=true` flips `/api/search` and MCP search to rerank by default. `gpu=true` runs the reranker on GPU independently from `embeddings.gpu`. When the daemon is enabled it serves reranking too. |
 | `wiki.depth` | Max directory depth for wiki page bucketing. |
 
 **No environment variables.** Every config knob in `settings.docgraph.*` is forwarded to docgraph as a CLI flag. The only env vars on docgraph subprocess spawns are `PYTHONIOENCODING=utf-8` + `PYTHONUTF8=1` (govern Python stdio encoding; no CLI equivalent).
