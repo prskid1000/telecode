@@ -18,7 +18,7 @@ Proxy:  client → translate to OpenAI → model swap → intercept loop → SSE
 Agent → Job → Run (Team Mode):
   Agent owns 5 files in data/agents/<id>/internal/ (SOUL/USER/AGENT/MEMORY/HEARTBEAT).
   Job.pipeline.steps run sequentially by phase; same-phase in parallel.
-  stage_for_run() copies SOUL/USER/MEMORY → workspace, AGENT.md → CLAUDE.md/GEMINI.md; on exit writes back.
+  stage_for_run() copies SOUL/USER/MEMORY → workspace, AGENT.md → CLAUDE.md; on exit writes back.
 
 Heartbeat (Team Mode, off by default): parse HEARTBEAT.md → kind="heartbeat" Jobs → fire due+enabled.
 Routines (Task Mode, separate): data/routines/<id>.json, 60s tick in proxy, fires active+due via
@@ -133,7 +133,7 @@ Logs: `data/logs/docgraph_host.log` + `data/logs/docgraph_index.log`.
 
 Recurring task fires against a permanent task-mode session. Independent of Team-Mode Heartbeat. **Manager runs inside the proxy aiohttp process** — bot-only deployments don't tick.
 
-- **Record:** `data/routines/<id>.json` — `{prompt, task_type ("CLAUDE_CODE"|"GEMINI"), schedule.every_seconds≥60, session_id, status, next_fire_at, last_fire_at, last_task_id, last_completed_*, total/skipped_runs}`. Atomic tmp+rename under per-routine `RLock`.
+- **Record:** `data/routines/<id>.json` — `{prompt, task_type ("CLAUDE_CODE"), schedule.every_seconds≥60, session_id, status, next_fire_at, last_fire_at, last_task_id, last_completed_*, total/skipped_runs}`. Atomic tmp+rename under per-routine `RLock`.
 - **Manager:** daemon thread inside `start_proxy_background()`. 60s loop; bootstrap-tick fires immediately so missed routines recover.
 - **Tick:** every routine → `_reconcile_completion(last_task_id)`. Active+due (`status=="active"` and `now ≥ next_fire_at`) → `fire_routine`.
 - **Fire:** skip-if-running (PENDING/RUNNING → record skipped, `next_fire_at` still advances). Heartbeat preface prepended (tick #, cadence, time-since-last-fire, "recurring wake-up — build on prior work"). Submits via `task_manager.submit_task(..., session_id=rec["session_id"])`; handlers resume the same session.

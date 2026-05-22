@@ -1,17 +1,16 @@
-"""Filesystem-backed CRUD for Claude Code + Gemini CLI skills.
+"""Filesystem-backed CRUD for Claude Code skills.
 
 Skills live as directories under each enabled root (default
-``~/.claude/skills/`` and ``~/.gemini/skills/``). Each skill folder has a
-``SKILL.md`` describing the skill in the standard skills frontmatter format,
-plus optional reference files alongside it.
+``~/.claude/skills/``). Each skill folder has a ``SKILL.md`` describing the
+skill in the standard skills frontmatter format, plus optional reference
+files alongside it.
 
-Both Claude Code (`claude -p`) and Gemini CLI (`gemini -p`) auto-discover
-skills from the runtime user's home on every invocation — so writes here
-are picked up by the next task without restarting telecode.
+Claude Code (`claude -p`) auto-discovers skills from the runtime user's home
+on every invocation — so writes here are picked up by the next task without
+restarting telecode.
 
-This module mirrors writes to **all enabled roots** so the same skill is
-available to both CLIs. Reads pick the first root that has the file; lists
-union by name.
+This module mirrors writes to **all enabled roots**. Reads pick the first
+root that has the file; lists union by name.
 
 Layout per root::
 
@@ -53,15 +52,14 @@ MAX_FILE_BYTES = 256 * 1024
 
 _ROOT_DEFINITIONS = (
     ("claude", "CLAUDE_SKILLS_DIR", "~/.claude/skills"),
-    ("gemini", "GEMINI_SKILLS_DIR", "~/.gemini/skills"),
 )
 
 
 def _enabled_roots() -> List[tuple[str, Path]]:
     """Return enabled (label, path) pairs.
 
-    Per-root override via ``CLAUDE_SKILLS_DIR`` / ``GEMINI_SKILLS_DIR`` env vars.
-    Set either to the literal string ``"off"`` or ``""`` to disable that root.
+    Per-root override via the ``CLAUDE_SKILLS_DIR`` env var. Set it to the
+    literal string ``"off"`` or ``""`` to disable that root.
     """
     out: List[tuple[str, Path]] = []
     for label, env_key, default in _ROOT_DEFINITIONS:
@@ -71,7 +69,7 @@ def _enabled_roots() -> List[tuple[str, Path]]:
         out.append((label, Path(os.path.expanduser(raw))))
     if not out:
         raise RuntimeError(
-            "No skill roots enabled. Set CLAUDE_SKILLS_DIR or GEMINI_SKILLS_DIR."
+            "No skill roots enabled. Set CLAUDE_SKILLS_DIR."
         )
     return out
 

@@ -7,7 +7,6 @@ from typing import Any, Dict
 
 from services.task.task_manager import get_task_queue
 from services.task.handlers.claude_code import claude_code_task
-from services.task.handlers.gemini import gemini_task
 
 logger = logging.getLogger("telecode.services.task")
 
@@ -35,7 +34,7 @@ def register_default_tasks():
         "properties": {
             "prompt": {"type": "string", "description": "Pre-rendered prompt (text or XML). Mutually exclusive with agent+job."},
             "is_local": {"type": "boolean", "description": "Point to the local proxy and currently loaded model", "default": False},
-            "agent_id": {"type": "string", "description": "Agent UUID — when set, agent's internal files are staged into the workspace (SOUL/USER/MEMORY + AGENT→CLAUDE.md|GEMINI.md) for this run."},
+            "agent_id": {"type": "string", "description": "Agent UUID — when set, agent's internal files are staged into the workspace (SOUL/USER/MEMORY + AGENT→CLAUDE.md) for this run."},
             "agent": {
                 "type": "object",
                 "description": "Agent struct (id, name, instructions). Server renders <agent_task> XML.",
@@ -70,12 +69,4 @@ def register_default_tasks():
         params_schema=_agent_task_schema,
     )
 
-    # 3. Gemini Task
-    queue.register_handler(
-        "GEMINI",
-        gemini_task,
-        description="Run Gemini CLI in a stateful session folder",
-        params_schema=_agent_task_schema,
-    )
-
-    logger.info("Task handlers registered (ECHO, CLAUDE_CODE, GEMINI)")
+    logger.info("Task handlers registered (ECHO, CLAUDE_CODE)")

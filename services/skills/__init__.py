@@ -1,1 +1,1 @@
-"""Filesystem-backed skill store for Claude Code + Gemini CLI."""
+"""Filesystem-backed skill store for Claude Code."""

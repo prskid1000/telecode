@@ -49,7 +49,7 @@ def tmp_data_root(tmp_path, monkeypatch):
 
 @pytest.fixture
 def fake_task_queue(monkeypatch):
-    """Register a synthetic CLAUDE_CODE / GEMINI handler that doesn't spawn a CLI.
+    """Register a synthetic CLAUDE_CODE handler that doesn't spawn a CLI.
 
     Yields a wrapper exposing:
       - last_calls: list of (task_type, params, metadata, session_id) per submit
@@ -88,9 +88,7 @@ def fake_task_queue(monkeypatch):
             "duration_ms": 1,
         }
 
-    # Re-register for both engines so executor's _engine_to_task_type maps cleanly.
     queue.register_handler("CLAUDE_CODE", fake_handler, description="(test) fake")
-    queue.register_handler("GEMINI", fake_handler, description="(test) fake")
 
     class Wrapper:
         @property

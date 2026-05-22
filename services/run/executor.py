@@ -64,7 +64,7 @@ def _result_preview(result: Any, limit: int = 400) -> str:
 
 
 def _engine_to_task_type(engine: str) -> str:
-    return {"claude_code": "CLAUDE_CODE", "gemini": "GEMINI"}.get(engine or "claude_code", "CLAUDE_CODE")
+    return {"claude_code": "CLAUDE_CODE"}.get(engine or "claude_code", "CLAUDE_CODE")
 
 
 def _agent_default_engine(agent_id: str) -> str:

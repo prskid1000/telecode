@@ -15,7 +15,7 @@ Pytest suite for agents, jobs, runs, and heartbeats.
 | `test_int_run_store.py` | integration | Run CRUD, `finalise()` status aggregation matrix |
 | `test_int_heartbeat_state.py` | integration | Atomic state file, `mark_fired/finished`, `prune_orphans` |
 | `test_int_heartbeat_reconcile.py` | integration | YAML → HB Jobs sync (create / update / archive / un-archive on return) |
-| `test_int_staging.py` | integration | Stage / writeback / unstage with the AGENT.md → CLAUDE.md/GEMINI.md rename |
+| `test_int_staging.py` | integration | Stage / writeback / unstage with the AGENT.md → CLAUDE.md rename |
 | `test_flow_run_executor.py` | flow | Phase-based executor with a fake task handler — single, sequential, parallel, custom; output threading; failure halt; cancellation |
 | `test_flow_heartbeat_scheduler.py` | flow | `_is_due`, `_fire`, `_sweep_ephemeral`, `_tick` (reconcile + cap on concurrent fires) |
 | `test_e2e_http.py` | e2e | Hits the running proxy at `:1235` — workspace/agent CRUD, pipeline normalisation, parallel/custom run topology, heartbeat validate/reconcile/archive. Auto-skipped when server is down. |
@@ -39,7 +39,7 @@ Pytest suite for agents, jobs, runs, and heartbeats.
 ## Fixtures (`conftest.py`)
 
 - **`tmp_data_root`** — redirects `config._settings_dir()` to a tmp dir and re-instantiates every team-mode singleton (`AgentManager`, `JobManager`, `RunStore`) so their cached base directories pick up the new path. Cleans up between tests.
-- **`fake_task_queue`** — registers a synthetic `CLAUDE_CODE` / `GEMINI` handler that doesn't spawn a CLI. Exposes `.set_result(text)`, `.fail()`, `.block()` / `.release()` (for cancellation tests), `.last_calls`, and `.reset()`. Lets the flow tests exercise the run executor and heartbeat scheduler end-to-end without subprocess overhead.
+- **`fake_task_queue`** — registers a synthetic `CLAUDE_CODE` handler that doesn't spawn a CLI. Exposes `.set_result(text)`, `.fail()`, `.block()` / `.release()` (for cancellation tests), `.last_calls`, and `.reset()`. Lets the flow tests exercise the run executor and heartbeat scheduler end-to-end without subprocess overhead.
 
 ## E2E
 

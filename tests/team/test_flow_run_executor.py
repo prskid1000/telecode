@@ -1,4 +1,4 @@
-"""Flow tests for the run executor — mocks CLAUDE_CODE/GEMINI handler so no
+"""Flow tests for the run executor — mocks the CLAUDE_CODE handler so no
 real subprocess is spawned. Verifies phase grouping, workspace strategy,
 output threading, failure halt, and cancellation.
 """
