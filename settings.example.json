@@ -60,7 +60,6 @@
     "host": {
       "enabled": false,
       "auto_start": false,
-      "auto_restart": true,
       "host": "127.0.0.1",
       "port": 5500,
       "debounce": 500
@@ -96,7 +95,12 @@
       "model": "",
       "gpu": false,
       "torch_compile": false,
-      "idle_unload_sec": 0
+      "idle_unload_sec": 0,
+      "daemon": {
+        "enabled": false,
+        "port": 5577,
+        "idle_exit_sec": 0
+      }
     },
 
     "rerank": {

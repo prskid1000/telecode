@@ -257,11 +257,24 @@ def _build_host_card(window) -> tuple[QFrame, Callable[[], None]]:
                                 "Off = host is stopped right now."))
     body.addWidget(_toggle_row("docgraph.host.auto_start", "Auto-start",
                                 "Start the host when telecode boots."))
-    body.addWidget(_toggle_row("docgraph.host.auto_restart", "Auto-restart",
-                                "Restart the host after all models "
-                                "idle-unload to free the CUDA context "
-                                "(~300 MB). Needs an Auto-Unload window "
-                                "> 0."))
+    body.addWidget(_toggle_row("docgraph.embeddings.daemon.enabled",
+                                "Embedding daemon",
+                                "Route embed + rerank to a shared daemon "
+                                "process (one warm model + one CUDA context, "
+                                "requests queued). The host stays "
+                                "GPU-stateless. Spawned lazily on first use."))
+    body.addWidget(_number_row("docgraph.embeddings.daemon.port",
+                                "Daemon port", 1024, 65535, 1, 0,
+                                "", "Loopback port for the embedding daemon "
+                                "(default 5577).",
+                                cli="--daemon-port"))
+    body.addWidget(_number_row("docgraph.embeddings.daemon.idle_exit_sec",
+                                "Daemon idle-exit", 0, 86400, 30, 0, "s",
+                                "Once both daemon models are unloaded and it "
+                                "has been idle this long, the daemon exits to "
+                                "free the ~300 MB CUDA context (0 = never). "
+                                "Respawned on next demand.",
+                                cli="--daemon-idle-exit-sec"))
     body.addWidget(_line_row("docgraph.host.host", "Bind Host", "127.0.0.1",
                               cli="--host"))
     body.addWidget(_number_row("docgraph.host.port", "Bind Port", 1024, 65535, 1, 0,

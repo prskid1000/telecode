@@ -1105,11 +1105,6 @@ class HostSupervisor:
         self._lock = asyncio.Lock()
         self._started_at: float = 0.0
         self._port: int | None = None
-        # VRAM reaper: polls /api/admin/models_status and calls restart()
-        # when every pooled model has been idle-unloaded, so the next host
-        # spawn comes up with a fresh CUDA context. Gated on
-        # `host.auto_restart` — that toggle's only meaning now.
-        self._reaper_task: Optional[asyncio.Task] = None
         self._last_error: str | None = None
         self._bridged_count = 0
 
@@ -1209,6 +1204,18 @@ class HostSupervisor:
         if dg_cfg.rerank_idle_unload_sec() > 0:
             argv += ["--rerank-idle-unload-sec",
                      str(dg_cfg.rerank_idle_unload_sec())]
+        # Embedding daemon: when enabled, the host routes embed+rerank to a
+        # shared `docgraph daemon` process (one warm model + one CUDA context
+        # for the whole host, requests queued). The daemon is spawned lazily
+        # by the host on first use; telecode just forwards the config and
+        # sweeps the daemon port on teardown (the daemon runs detached, so
+        # it isn't bound to telecode's Job object).
+        if dg_cfg.embed_daemon_enabled():
+            argv += ["--embed-daemon",
+                     "--daemon-port", str(dg_cfg.daemon_port())]
+            if dg_cfg.daemon_idle_exit_sec() > 0:
+                argv += ["--daemon-idle-exit-sec",
+                         str(dg_cfg.daemon_idle_exit_sec())]
         # LLM augmentation knobs — always forward the host/port/format so they
         # pick up defaults or overrides even if the model name is empty (the
         # docgraph host handles the model-name default).
@@ -1278,7 +1285,6 @@ class HostSupervisor:
         except Exception as exc:
             log.error("docgraph host: bridge failed: %s", exc)
             self._bridged_count = 0
-        self._arm_vram_reaper()
 
     async def _stop_locked(self) -> None:
         try:
@@ -1288,19 +1294,6 @@ class HostSupervisor:
         self._bridged_count = 0
         proc = self._proc
         self._proc = None
-        # Never cancel the task we're running on. The reaper calls
-        # `self.restart()` → `self.stop()` → `_stop_locked()`; if we
-        # cancelled ourselves the cancellation would fire at the next
-        # `await` inside `_start_locked`, aborting the respawn.
-        try:
-            current = asyncio.current_task()
-        except RuntimeError:
-            current = None
-        if (self._reaper_task and not self._reaper_task.done()
-                and self._reaper_task is not current):
-            self._reaper_task.cancel()
-        if self._reaper_task is not current:
-            self._reaper_task = None
         if proc and proc.poll() is None:
             try:
                 kill_process_tree(proc.pid)
@@ -1323,6 +1316,14 @@ class HostSupervisor:
         if self._port:
             try:
                 sweep_port(self._port, ("docgraph",))
+            except Exception:
+                pass
+        # The embedding daemon runs detached (lazily spawned by the host), so
+        # it isn't bound to telecode's Job object. Sweep its port too so a
+        # host stop doesn't leave an orphaned daemon holding VRAM.
+        if dg_cfg.embed_daemon_enabled():
+            try:
+                sweep_port(dg_cfg.daemon_port(), ("docgraph", "daemon"))
             except Exception:
                 pass
 
@@ -1377,76 +1378,6 @@ class HostSupervisor:
         if bind_to_lifetime_job(proc.pid, proc=proc):
             log.info("docgraph host: pid %d bound to lifetime job", proc.pid)
         return proc
-
-    def _arm_vram_reaper(self) -> None:
-        """Launch the VRAM reaper if not already running. Gated on
-        `host.auto_restart` — the only meaning that toggle has now (the
-        old crash-respawn loop has been removed in favour of this single,
-        simpler restart path)."""
-        if not dg_cfg.host_auto_restart():
-            return
-        if self._reaper_task and not self._reaper_task.done():
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-        self._reaper_task = loop.create_task(self._vram_reaper_loop())
-
-    async def _vram_reaper_loop(self) -> None:
-        """Periodically check whether every pooled embed/rerank model has
-        idle-unloaded; if so, call `self.restart()` so the next host spawn
-        comes up with a fresh CUDA context. Releases the ~300 MB context
-        that `torch.cuda.empty_cache()` cannot.
-
-        Implicit opt-in: a positive `embeddings.idle_unload_sec` or
-        `rerank.idle_unload_sec` is the gate (without those nothing ever
-        unloads and the predicate never trips). Also skips when an index
-        or wiki job is in flight; restarting mid-build would corrupt the
-        run. Trade-off with `torch.compile`: the compiled kernels live in
-        the process, so a reap forces a 10-30 s recompile on warm-back.
-        Accepted: warm steady-state inside one host lifetime is unchanged.
-        """
-        while True:
-            try:
-                await asyncio.sleep(15.0)
-            except asyncio.CancelledError:
-                return
-            if not dg_cfg.host_auto_restart():
-                continue
-            if (dg_cfg.embeddings_idle_unload_sec() <= 0
-                    and dg_cfg.rerank_idle_unload_sec() <= 0):
-                continue
-            proc = self._proc
-            if proc is None or proc.poll() is not None:
-                continue
-            try:
-                if (_INDEX is not None and _INDEX.alive()) or \
-                   (_WIKI is not None and _WIKI.alive()):
-                    continue
-            except Exception:
-                continue
-            status = _fetch_models_status_sync()
-            if not status:
-                continue
-            embed = status.get("embed") or []
-            rerank = status.get("rerank") or []
-            if not (embed or rerank):
-                continue  # nothing instantiated yet — cold host
-            if any(e.get("loaded") for e in embed):
-                continue
-            if any(r.get("loaded") for r in rerank):
-                continue
-            log.info(
-                "docgraph: all pooled models idle-unloaded — restarting "
-                "host to release CUDA context"
-            )
-            try:
-                await self.restart()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                log.warning("docgraph reaper: restart failed: %s", exc)
 
 
 # ── Module singletons ──────────────────────────────────────────────────────

@@ -211,10 +211,31 @@ def embeddings_torch_compile() -> bool:
     Forwarded as `--embed-torch-compile`. Off by default."""
     return bool(embeddings_cfg().get("torch_compile", False))
 def embeddings_idle_unload_sec() -> float:
-    """Seconds of embedder inactivity before the docgraph host evicts
-    the ONNX session. 0 = never. Forwarded as `--embed-idle-unload-sec`;
-    takes effect on next host spawn."""
+    """Seconds of embedder inactivity before the model weights are evicted
+    (in-process or in the daemon). 0 = never. Forwarded as
+    `--embed-idle-unload-sec`; takes effect on next host spawn."""
     raw = embeddings_cfg().get("idle_unload_sec", 0)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+# ── Embedding daemon (shared embed+rerank process) ─────────────────────────
+
+def daemon_cfg() -> dict:        return embeddings_cfg().get("daemon", {}) or {}
+def embed_daemon_enabled() -> bool:
+    """When True, the docgraph host routes embed + rerank to a shared
+    `docgraph daemon` process (one warm model + one CUDA context, requests
+    queued). Forwarded as `--embed-daemon`. Off by default (in-process)."""
+    return bool(daemon_cfg().get("enabled", False))
+def daemon_port() -> int:
+    return int(daemon_cfg().get("port", 5577) or 5577)
+def daemon_idle_exit_sec() -> float:
+    """With the daemon: once both models are unloaded and it has been idle
+    this long, the daemon exits to free the ~300 MB CUDA context (respawned
+    lazily on next demand). 0 = never. Forwarded as `--daemon-idle-exit-sec`."""
+    raw = daemon_cfg().get("idle_exit_sec", 0)
     try:
         return float(raw)
     except (TypeError, ValueError):
