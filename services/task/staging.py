@@ -1,9 +1,9 @@
 """Per-run staging of agent internal files into a workspace.
 
 Stages SOUL.md / USER.md / MEMORY.md verbatim, plus AGENT.md renamed to
-CLAUDE.md or GEMINI.md depending on the engine. On exit, diffs each staged
-file against its initial snapshot; any change is written back to the agent's
-internal storage. Then the staged files are deleted from the workspace.
+CLAUDE.md depending on the engine. On exit, diffs each staged file against
+its initial snapshot; any change is written back to the agent's internal
+storage. Then the staged files are deleted from the workspace.
 
 HEARTBEAT.md is intentionally NOT staged — it is read by the heartbeat
 scheduler directly from agent storage and never touches the workspace.
@@ -27,7 +27,6 @@ PASSTHROUGH_FILES = ("SOUL.md", "USER.md", "MEMORY.md")
 # Engine → workspace-side filename for the agent's AGENT.md
 AGENT_BRIDGE = {
     "claude": "CLAUDE.md",
-    "gemini": "GEMINI.md",
 }
 
 # Per-workspace lock so two concurrent runs don't clobber each other's staged files.

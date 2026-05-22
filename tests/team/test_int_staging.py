@@ -40,16 +40,6 @@ def test_stage_renames_agent_md_to_claude_md_for_claude(tmp_data_root, tmp_path)
     with stage_for_run(a["id"], "ws-1", workspace, engine="claude"):
         assert (workspace / "CLAUDE.md").read_text(encoding="utf-8") == "my-instructions"
         assert not (workspace / "AGENT.md").exists()
-        assert not (workspace / "GEMINI.md").exists()
-
-
-def test_stage_renames_to_gemini_md_for_gemini(tmp_data_root, tmp_path):
-    a = _seed_agent_with_internals(agent_md="gemini-rules")
-    workspace = tmp_path / "ws"
-    workspace.mkdir()
-    with stage_for_run(a["id"], "ws-1", workspace, engine="gemini"):
-        assert (workspace / "GEMINI.md").read_text(encoding="utf-8") == "gemini-rules"
-        assert not (workspace / "CLAUDE.md").exists()
 
 
 def test_heartbeat_md_never_staged(tmp_data_root, tmp_path):

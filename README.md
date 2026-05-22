@@ -90,7 +90,7 @@ Telecode includes a fully-featured stateful **Session and Task Management** syst
 - **Persistent Agents** with five OpenClaw-style internal files:
   - **SOUL.md** — identity, tone, values
   - **USER.md** — who the user is, address conventions
-  - **AGENT.md** — operating rules / behavioural guidance (auto-renamed to `CLAUDE.md` or `GEMINI.md` in the workspace so the underlying CLI auto-loads it)
+  - **AGENT.md** — operating rules / behavioural guidance (auto-renamed to `CLAUDE.md` in the workspace so the underlying CLI auto-loads it)
   - **MEMORY.md** — long-term memory the agent self-curates
   - **HEARTBEAT.md** — YAML-fenced cron schedule (read by the scheduler, never staged into the workspace)
   - All five files live under `data/agents/<id>/internal/`. SOUL/USER/AGENT/MEMORY are **staged** into the workspace for the run, then **written back** verbatim on exit.
@@ -105,7 +105,7 @@ Telecode includes a fully-featured stateful **Session and Task Management** syst
 
 #### Routines (Task Mode)
 
-A routine is a saved recipe — `{name, prompt, schedule.every_seconds ≥ 60, task_type, session_id}` — that the routine manager's heartbeat fires on its interval against a long-lived session. The CLI (`CLAUDE_CODE` or `GEMINI`) resumes the same conversation every tick, so the agent walks back into the same folder and history each time. Skip-if-running is enforced (no two fires of the same routine in flight); pause / resume / edit / delete are pure file ops on `data/routines/<id>.json` — the manager picks up changes on its next tick (≤ 60s).
+A routine is a saved recipe — `{name, prompt, schedule.every_seconds ≥ 60, task_type, session_id}` — that the routine manager's heartbeat fires on its interval against a long-lived session. The CLI (`CLAUDE_CODE`) resumes the same conversation every tick, so the agent walks back into the same folder and history each time. Skip-if-running is enforced (no two fires of the same routine in flight); pause / resume / edit / delete are pure file ops on `data/routines/<id>.json` — the manager picks up changes on its next tick (≤ 60s).
 
 Each fire's prompt is prefixed with a heartbeat preface (tick number, cadence, time-since-last-fire, "this is a recurring wake-up, build on prior work, stop if nothing new") so the model treats the session as one ongoing assignment instead of restarting work each cycle.
 
@@ -514,7 +514,7 @@ Periodic loop that reads each agent's `HEARTBEAT.md`, parses the YAML schedule e
   prompt: |                   # required
     Summarise today's calendar and unread mail.
   workspace: ephemeral        # ephemeral (default) | persistent
-  engine: claude_code         # claude_code (default) | gemini
+  engine: claude_code         # claude_code (default)
   enabled: true               # default true
 ```
 

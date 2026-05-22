@@ -239,7 +239,7 @@ def fire_routine(rec: dict, *, source: str = "manager") -> Optional[str]:
     params: dict = {
         "prompt": heartbeat_preface + rec["prompt"],
     }
-    if task_type in ("CLAUDE_CODE", "GEMINI"):
+    if task_type == "CLAUDE_CODE":
         params["is_local"] = bool(rec.get("is_local", False))
     if rec.get("outputs_only"):
         params["outputs_only"] = True

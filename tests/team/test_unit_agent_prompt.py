@@ -21,7 +21,7 @@ def test_xml_envelope_has_required_blocks():
 
 
 def test_xml_does_not_include_instructions_block():
-    """Instructions are auto-loaded by the CLI from CLAUDE.md/GEMINI.md now;
+    """Instructions are auto-loaded by the CLI from CLAUDE.md now;
     they must NOT be embedded in the XML."""
     out = render_agent_prompt_xml(
         agent={"id": "a-1", "name": "Alice", "instructions": "should not appear"},

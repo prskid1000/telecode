@@ -11,7 +11,7 @@ fence we expect a YAML list whose items have at least:
 Optional:
   workspace      "ephemeral" (default) | "persistent"
   workspace_id   required when workspace == "persistent"
-  engine         "claude_code" (default) | "gemini"
+  engine         "claude_code" (default)
   enabled        bool, default True
 
 Per-entry errors are collected; bad entries are skipped, valid ones still parsed.
@@ -29,7 +29,7 @@ from croniter import croniter
 
 logger = logging.getLogger("telecode.services.heartbeat.parser")
 
-VALID_ENGINES = ("claude_code", "gemini")
+VALID_ENGINES = ("claude_code",)
 VALID_WORKSPACE_MODES = ("ephemeral", "persistent")
 
 

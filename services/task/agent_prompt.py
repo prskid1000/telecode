@@ -1,4 +1,4 @@
-"""Shared structured-prompt builder for agent tasks (Claude Code, Gemini, ...).
+"""Shared structured-prompt builder for agent tasks (Claude Code).
 
 Single source of truth for the XML wire format passed to the underlying CLI.
 Mirrors the client-side `buildAgentPromptXml` in proxy/static/telecode.html.
@@ -43,7 +43,7 @@ def render_agent_prompt_xml(
 
     `agent` requires `id`, `name`. The agent's identity (SOUL/USER/MEMORY/AGENT)
     is staged into the workspace as separate markdown files and auto-loaded by
-    the CLI from CLAUDE.md / GEMINI.md, so this XML does NOT carry an
+    the CLI from CLAUDE.md, so this XML does NOT carry an
     <instructions> block.
 
     `job` requires `workspace_id`, `task_description`.

@@ -1,4 +1,4 @@
-"""AIOHTTP routes for recurring CLAUDE_CODE / GEMINI routines.
+"""AIOHTTP routes for recurring CLAUDE_CODE routines.
 
 A routine is a saved recipe (prompt + interval + permanent session)
 that the routine manager's heartbeat fires until the user cancels.

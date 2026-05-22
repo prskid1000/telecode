@@ -1,4 +1,4 @@
-"""AIOHTTP routes for managing Claude Code + Gemini CLI skills.
+"""AIOHTTP routes for managing Claude Code skills.
 
 Wraps :mod:`services.skills.skill_store`. Skills are operator-tier configuration
 (reusable agent context that the CLIs auto-discover from the user's home), not

@@ -42,8 +42,8 @@ import pyte
 
 # pyte 0.8.2 bug: streams.py:_parser_fsm passes `private=True` to every CSI
 # dispatch handler when the sequence starts with `?`, but Screen handlers
-# like select_graphic_rendition only accept *attrs. Modern CLIs (Gemini CLI,
-# anything using ink/react) emit private CSI sequences and pyte raises
+# like select_graphic_rendition only accept *attrs. Modern CLIs (anything
+# using ink/react) emit private CSI sequences and pyte raises
 # TypeError, aborting the rest of the read — so output goes missing.
 # Wrap the affected handlers to swallow `private`.
 def _patch_pyte_for_private_kwarg() -> None:
@@ -515,7 +515,7 @@ class PTYProcess:
         self._watch_task: asyncio.Task | None = None
 
         # win32-input-mode tracking (CSI ? 9001 h / l). Some Node.js/ink-based
-        # CLIs (notably Gemini CLI 0.39+) enable this at startup, after which
+        # CLIs enable this at startup, after which
         # they expect keystrokes formatted as
         #   ESC [ Vk ; Sc ; Uc ; KeyDown ; CtrlState ; Repeat _
         # instead of plain bytes. pywinpty/ConPTY does not auto-translate our
@@ -619,7 +619,7 @@ class PTYProcess:
     async def send(self, text: str) -> None:
         """Send a line of input + Enter. When the child has enabled
         win32-input-mode, encode text and Enter as proper key events so
-        ink-based CLIs (e.g. Gemini CLI) recognize the submission.
+        ink-based CLIs recognize the submission.
 
         Keystrokes are sent one at a time with a small delay so that
         ink/readline-style input handlers don't classify the burst as a

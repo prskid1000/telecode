@@ -187,7 +187,7 @@ class HeartbeatScheduler:
         hb_job = get_job_manager().find_heartbeat_job(agent_id, entry.name)
         job_id = hb_job["id"] if hb_job else None
 
-        task_type_map = {"claude_code": "CLAUDE_CODE", "gemini": "GEMINI"}
+        task_type_map = {"claude_code": "CLAUDE_CODE"}
         task_type = task_type_map.get(entry.engine, "CLAUDE_CODE")
 
         params = {

@@ -112,7 +112,6 @@
       <label>task type</label>
       <select id="taskType" style="width:200px">
         <option value="CLAUDE_CODE">CLAUDE_CODE</option>
-        <option value="GEMINI">GEMINI</option>
       </select>
       <label style="min-width:auto;margin-left:10px">
         <input type="checkbox" id="isLocal"/> local mode
@@ -139,7 +138,7 @@
         <span class="grow"></span>
         <button class="ghost danger-hover" id="skillDelete" disabled style="font-size:12px;padding:6px 12px">Delete skill</button>
       </div>
-      <div id="skillBadge" class="muted" style="margin-bottom:14px">Skills mirror to <span style="font-family:var(--mono)">~/.claude/skills/</span> and <span style="font-family:var(--mono)">~/.gemini/skills/</span> — auto-discovered by both CLIs on every task.</div>
+      <div id="skillBadge" class="muted" style="margin-bottom:14px">Skills mirror to <span style="font-family:var(--mono)">~/.claude/skills/</span> — auto-discovered by Claude Code on every task.</div>
 
       <h2>Upload reference file</h2>
       <div id="skillDrop" class="drop">Drop a file here or click to pick — goes into the selected skill's folder</div>
@@ -194,7 +193,6 @@
         <label>task type</label>
         <select id="routineTaskType" style="width:160px">
           <option value="CLAUDE_CODE">CLAUDE_CODE</option>
-          <option value="GEMINI">GEMINI</option>
         </select>
         <label style="min-width:auto;margin-left:10px"><input type="checkbox" id="routineIsLocal"/> local mode</label>
       </div>
@@ -418,7 +416,7 @@ $("submit").onclick = async () => {
   const isLocal = $("isLocal").checked;
   
   const params = taskType === "ECHO" ? { text: $("prompt").value } : { prompt: $("prompt").value };
-  if (taskType === "CLAUDE_CODE" || taskType === "GEMINI") {
+  if (taskType === "CLAUDE_CODE") {
     params.is_local = isLocal;
   }
 
@@ -637,7 +635,7 @@ $("skillRefresh").onclick = refreshSkills;
 $("skillNew").onclick = async () => {
   const name = (window.prompt("New skill name (lowercase, digits, _ or -)") || "").trim();
   if (!name) return;
-  const tpl = `---\nname: ${name}\ndescription: One-line summary that triggers activation\n---\n\n# ${name}\n\nWrite the SKILL.md body here. Both Claude Code and Gemini CLI auto-discover skills on every task.\n`;
+  const tpl = `---\nname: ${name}\ndescription: One-line summary that triggers activation\n---\n\n# ${name}\n\nWrite the SKILL.md body here. Claude Code auto-discovers skills on every task.\n`;
   try {
     await api(`/api/skills/${encodeURIComponent(name)}`, {
       method: "PUT",
