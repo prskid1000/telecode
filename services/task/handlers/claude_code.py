@@ -172,6 +172,10 @@ def _run_claude_subprocess(
         "is_local": is_local,
     })
 
+    creation = 0
+    if os.name == "nt":
+        creation = subprocess.CREATE_NO_WINDOW
+
     proc = subprocess.Popen(
         cmd,
         cwd=str(work_dir),
@@ -181,6 +185,7 @@ def _run_claude_subprocess(
         text=True,
         bufsize=1,
         shell=True,
+        creationflags=creation,
     )
 
     tool_calls: List[str] = []
