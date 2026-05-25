@@ -80,6 +80,7 @@ def build_docgraph_tabs(window) -> QWidget:
                 pass
 
     scroll.refresh = refresh  # type: ignore[attr-defined]
+    window.refresh_docgraph_page = refresh
     return scroll
 
 
@@ -253,8 +254,28 @@ def _build_host_card(window) -> tuple[QFrame, Callable[[], None]]:
         "Restart to apply settings changes.",
     )
 
-    body.addWidget(_toggle_row("docgraph.host.enabled", "Enabled",
-                                "Off = host is stopped right now."))
+    enabled_toggle = Toggle()
+    enabled_val = bool(get_path(read_settings(), "docgraph.host.enabled", False))
+    enabled_toggle.setChecked(enabled_val)
+
+    def _on_enabled_changed(_state: int) -> None:
+        val = enabled_toggle.isChecked()
+        patch_settings("docgraph.host.enabled", val)
+        async def _toggle_host():
+            from docgraph.process import get_host
+            sup = get_host()
+            if val:
+                await sup.start()
+            else:
+                await sup.stop()
+        _run(window, _toggle_host)
+        if hasattr(window, "refresh_docgraph_page"):
+            window.refresh_docgraph_page()
+
+    enabled_toggle.stateChanged.connect(_on_enabled_changed)
+
+    body.addWidget(_row(row_label("Enabled", "Off = host is stopped right now.", "docgraph.host.enabled"),
+                        _wrap_align(enabled_toggle, Qt.AlignmentFlag.AlignLeft)))
     body.addWidget(_toggle_row("docgraph.host.auto_start", "Auto-start",
                                 "Start the host when telecode boots."))
     body.addWidget(_toggle_row("docgraph.embeddings.daemon.enabled",
@@ -321,9 +342,15 @@ def _build_host_card(window) -> tuple[QFrame, Callable[[], None]]:
         except Exception:
             alive = False
             busy = False
-        start_btn.setEnabled(not alive and not busy)
-        stop_btn.setEnabled(alive and not busy)
-        restart_btn.setEnabled(alive and not busy)
+        enabled = bool(get_path(read_settings(), "docgraph.host.enabled", False))
+        if not enabled:
+            start_btn.setEnabled(False)
+            stop_btn.setEnabled(False)
+            restart_btn.setEnabled(False)
+        else:
+            start_btn.setEnabled(not alive and not busy)
+            stop_btn.setEnabled(alive and not busy)
+            restart_btn.setEnabled(alive and not busy)
 
         # Endpoints (recomputed every refresh — host/port edits land in
         # settings.json on focus-out, so the next 1 s tick shows them).
@@ -497,12 +524,13 @@ def _build_roots_card(window) -> tuple[QFrame, Callable[[], None]]:
             index_alive = wiki_alive = False
 
         busy = index_alive or wiki_alive
+        enabled = bool(get_path(read_settings(), "docgraph.host.enabled", False))
 
-        all_force.setEnabled(not busy)
-        run_all_btn.setEnabled(not busy)
-        cancel_btn.setEnabled(index_alive)
-        run_all_wiki_btn.setEnabled(not busy)
-        cancel_wiki_btn.setEnabled(wiki_alive)
+        all_force.setEnabled(not busy and enabled)
+        run_all_btn.setEnabled(not busy and enabled)
+        cancel_btn.setEnabled(index_alive and enabled)
+        run_all_wiki_btn.setEnabled(not busy and enabled)
+        cancel_wiki_btn.setEnabled(wiki_alive and enabled)
         paths_widget.refresh(busy=busy)
 
         refresh_status()
@@ -728,7 +756,8 @@ class _RootsTable(QWidget):
                     for r in self._row_widgets if r.text().strip()]
         if cur_norm != cur_view:
             self._rebuild()
-        self._add_btn.setEnabled(not busy)
+        enabled = bool(get_path(read_settings(), "docgraph.host.enabled", False))
+        self._add_btn.setEnabled(not busy and enabled)
         for r in self._row_widgets:
             r.refresh_state(busy=busy)
 
@@ -1015,13 +1044,14 @@ class _RootRow(QFrame):
         self._links_section.set_path(path)
         self._links_section.refresh()
 
-        enabled = not busy
-        self._edit.setEnabled(enabled)
+        host_enabled = bool(get_path(read_settings(), "docgraph.host.enabled", False))
+        enabled = not busy and host_enabled
+        self._edit.setEnabled(not busy)
         self._index_btn.setEnabled(enabled)
         self._wiki_btn.setEnabled(enabled)
         self._clear_btn.setEnabled(enabled)
         self._watch.setEnabled(enabled)
-        self._rm_btn.setEnabled(enabled)
+        self._rm_btn.setEnabled(not busy)
         self._extra_paths_section.setEnabled(enabled)
         self._links_section.setEnabled(enabled)
 
@@ -1958,10 +1988,11 @@ def _restart_host_row(window) -> QWidget:
             alive = bool((status_snapshot().get("host") or {}).get("alive"))
         except Exception:
             alive = False
-        btn.setEnabled(alive)
+        enabled = bool(get_path(read_settings(), "docgraph.host.enabled", False))
+        btn.setEnabled(alive and enabled)
         btn.setToolTip(
-            btn.toolTip() if alive else
-            "Host is not running — start it from the Host card first."
+            btn.toolTip() if (alive and enabled) else
+            ("Host is disabled in settings." if not enabled else "Host is not running — start it from the Host card first.")
         )
 
     btn.clicked.connect(_on_restart)
