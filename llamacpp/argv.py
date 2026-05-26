@@ -81,17 +81,19 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("cache_idle_slots", ("--cache-idle-slots", "--no-cache-idle-slots"), "bool_pair"),
     ("context_shift",    ("--context-shift", "--no-context-shift"), "bool_pair"),
     ("warmup",           ("--warmup", "--no-warmup"),             "bool_pair"),
-    # cache_ram / ctx_checkpoints / checkpoint_every_n_tokens use server-side
-    # "0 = disable" semantics — must emit literally `--flag 0`, not skip. Hence
-    # "value" (not "value_nz") so explicit zero passes through. v9243's own
-    # defaults for all three are disabled, so the difference between emitting
-    # `--flag 0` and not emitting at all is currently semantic-only; keeping
-    # explicit emission makes intent visible in `describe()` output.
+    # cache_ram / ctx_checkpoints / checkpoint_min_step carry meaningful zero
+    # semantics, so emit literally `--flag 0` (kind "value", not "value_nz"):
+    #   --cache-ram N         default 8192 MiB; -1 = no limit, 0 = disable.
+    #   --ctx-checkpoints N   default 32; max context checkpoints per slot.
+    #   --checkpoint-min-step N  default 256; min token spacing between
+    #                            checkpoints, 0 = no minimum. (Renamed from the
+    #                            removed --checkpoint-every-n-tokens.)
+    # Keeping explicit emission makes intent visible in `describe()` output.
     # defrag_thold was removed in v9243 (DEPRECATED warning + no-op upstream).
     # Don't emit it at all; tolerate the key in old settings.json files silently.
     ("cache_ram",                  "--cache-ram",                 "value"),
     ("ctx_checkpoints",            "--ctx-checkpoints",           "value"),
-    ("checkpoint_every_n_tokens",  "--checkpoint-every-n-tokens", "value"),
+    ("checkpoint_min_step",        "--checkpoint-min-step",       "value"),
     ("swa_full",                   "--swa-full",                  "flag"),
     ("slot_save_path",             "--slot-save-path",            "path"),
     ("sleep_idle_seconds",         "--sleep-idle-seconds",        "value_nz"),
