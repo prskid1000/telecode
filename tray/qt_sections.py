@@ -1160,55 +1160,66 @@ def _llama_updater_card(window) -> QWidget:
     return card
 
 
-def _llama_flag_audit_card(window) -> QWidget:
-    """On-demand audit of the flags telecode passes vs the live --help.
+def _llama_version_manager_card(window) -> QWidget:
+    """Manage installed + backed-up llama.cpp versions, and audit/compare their
+    CLI flag surfaces.
 
-    A llama.cpp update can rename or remove flags (e.g. v9243 dropped
-    ``--checkpoint-every-n-tokens``), which makes llama-server reject the
-    argv and refuse to start. This card parses ``llama-server --help``,
-    cross-checks every flag the argv builder emits, diffs against a saved
-    snapshot, and logs the report to data/logs/cli_audit.log. Snapshots can
-    be restored to roll back the comparison baseline.
+    The updater leaves every replaced build in `<install_dir>/.bak-<ts>/`, so
+    each backup is a real, runnable previous version. This card lists the
+    active binary + all backups and can:
+      • Test     — probe a version's `--help`/`--version` and cross-check the
+                   flags telecode emits against it ("would my config run on it?").
+      • Compare  — diff the flag surface of the active binary vs a selected one.
+      • Restore  — revert the install to a backup (stops the supervisor first;
+                   the displaced files become a fresh, reversible backup).
+      • Delete   — prune a backup folder.
+
+    Probes run the real binary; if an old backup can't relaunch, they fall back
+    to the spec cached at update time. Reports append to data/logs/cli_audit.log.
     """
+    import asyncio as _asyncio
     from PySide6.QtWidgets import QPlainTextEdit
     from llamacpp import flag_audit as fa
+    from llamacpp import updater as upd
 
     mono = "font-family: 'JetBrains Mono', Consolas, monospace;"
 
     card, body = _card(
-        "Flag Audit",
-        "Validate the flags telecode passes against the live `llama-server --help`. "
-        "Run after updating llama.cpp to catch removed/renamed flags or out-of-range "
-        "values before they break startup. Reports append to data/logs/cli_audit.log.",
+        "Version Manager",
+        "Audit, compare, and restore installed / backed-up llama.cpp versions. "
+        "Run a flag audit after updating to catch removed/renamed flags before "
+        "they break startup. Reports append to data/logs/cli_audit.log.",
     )
 
     info = QLabel("…")
     info.setWordWrap(True)
     info.setStyleSheet(f"color: {FG}; {mono} font-size: 11px;")
-    body.addWidget(_row(row_label("Target",
-                                   "Binary that will be probed, and its current build."),
+    body.addWidget(_row(row_label("Active",
+                                   "Currently installed binary and its build."),
                         info))
 
-    compare_box = QComboBox()
-    compare_box.setMinimumWidth(320)
-    body.addWidget(_row(row_label("Compare against",
-                                   "Saved snapshot to diff the live capture against. "
-                                   "Newest is the baseline."),
-                        _wrap_align(compare_box, Qt.AlignmentFlag.AlignLeft)))
+    version_box = QComboBox()
+    version_box.setMinimumWidth(360)
+    body.addWidget(_row(row_label("Backup / version",
+                                   "Active binary plus every .bak-<ts> the updater "
+                                   "kept. Selected = target of Test / Compare / "
+                                   "Restore / Delete."),
+                        _wrap_align(version_box, Qt.AlignmentFlag.AlignLeft)))
 
     # ── Action buttons ───────────────────────────────────────────────
-    capture_btn = QPushButton("Capture Current")
-    run_btn = QPushButton("Run Audit")
-    run_btn.setProperty("class", "primary")
+    test_btn = QPushButton("Test Selected")
+    compare_btn = QPushButton("Compare Current ↔ Selected")
+    audit_btn = QPushButton("Audit Active Config")
+    audit_btn.setProperty("class", "primary")
     restore_btn = QPushButton("Restore Selected")
-    delete_btn = QPushButton("Delete Selected")
+    delete_btn = QPushButton("Delete Backup")
     delete_btn.setProperty("class", "danger")
 
     actions = QWidget()
     al = QHBoxLayout(actions)
     al.setContentsMargins(0, 0, 0, 0)
     al.setSpacing(8)
-    for b in (capture_btn, run_btn, restore_btn, delete_btn):
+    for b in (test_btn, compare_btn, audit_btn, restore_btn, delete_btn):
         al.addWidget(b)
     al.addStretch(1)
     body.addWidget(actions)
@@ -1223,27 +1234,27 @@ def _llama_flag_audit_card(window) -> QWidget:
         f"background: {BG_ELEV}; color: {FG}; border: 1px solid {BORDER}; "
         f"border-radius: 6px; {mono} font-size: 11px;"
     )
-    results.setMinimumHeight(180)
-    results.setPlaceholderText("Run an audit to see results here.")
+    results.setMinimumHeight(190)
+    results.setPlaceholderText("Run Test / Compare / Audit to see results here.")
     body.addWidget(results)
 
-    # ── Handlers (flag_audit calls are synchronous + fast) ────────────
-    def _reload_snaps() -> None:
-        compare_box.blockSignals(True)
-        compare_box.clear()
-        snaps = fa.list_snapshots()
-        if not snaps:
-            compare_box.addItem("(no snapshots — capture one first)", None)
-            compare_box.setEnabled(False)
-            restore_btn.setEnabled(False)
-            delete_btn.setEnabled(False)
-        else:
-            compare_box.setEnabled(True)
-            restore_btn.setEnabled(True)
-            delete_btn.setEnabled(True)
-            for s in snaps:
-                compare_box.addItem(s["label"], s["ts"])
-        compare_box.blockSignals(False)
+    # ── Helpers ───────────────────────────────────────────────────────
+    def _set_status(text: str, ok: bool | None = None) -> None:
+        color = FG_MUTE if ok is None else (OK if ok else ERR)
+        status_lbl.setText(text)
+        status_lbl.setStyleSheet(f"color: {color}; font-size: 11.5px;")
+
+    def _selected() -> dict | None:
+        return version_box.currentData()
+
+    def _selected_target() -> tuple[str | None, str]:
+        """(binary_path_or_None, version_hint) for the selected entry.
+        None binary = active (flag_audit resolves it itself)."""
+        sel = _selected() or {}
+        if sel.get("kind") == "backup":
+            binp = upd.backup_binary(sel["ts"])
+            return (str(binp) if binp else None, sel.get("version") or "")
+        return (None, "")
 
     def _refresh_info() -> None:
         try:
@@ -1252,68 +1263,141 @@ def _llama_flag_audit_card(window) -> QWidget:
         except Exception as exc:
             info.setText(f"binary probe failed: {exc}")
 
-    def _set_status(text: str, ok: bool | None = None) -> None:
-        color = FG_MUTE if ok is None else (OK if ok else ERR)
-        status_lbl.setText(text)
-        status_lbl.setStyleSheet(f"color: {color}; font-size: 11.5px;")
+    def _reload_versions() -> None:
+        version_box.blockSignals(True)
+        prev = _selected()
+        version_box.clear()
+        av = fa.detect_version()
+        version_box.addItem(f"Active · b{av['version'] or '?'} ({av['build'] or '?'})",
+                            {"kind": "active"})
+        for b in upd.list_backups():
+            import datetime as _dt
+            when = _dt.datetime.fromtimestamp(b["mtime"]).strftime("%Y-%m-%d %H:%M") \
+                if b.get("mtime") else b["ts"]
+            run = "" if b["has_binary"] else "  [no binary]"
+            version_box.addItem(
+                f"Backup · b{b['version'] or '?'} · {when} · {b['file_count']} files{run}",
+                {"kind": "backup", "ts": b["ts"], "version": b["version"],
+                 "has_binary": b["has_binary"]})
+        version_box.blockSignals(False)
+        # Restore previous selection by ts where possible.
+        if prev and prev.get("kind") == "backup":
+            for i in range(version_box.count()):
+                d = version_box.itemData(i)
+                if d and d.get("kind") == "backup" and d.get("ts") == prev.get("ts"):
+                    version_box.setCurrentIndex(i)
+                    break
+        _sync_buttons()
 
-    def _on_capture() -> None:
+    def _sync_buttons() -> None:
+        sel = _selected() or {}
+        is_backup = sel.get("kind") == "backup"
+        restore_btn.setEnabled(is_backup)
+        delete_btn.setEnabled(is_backup)
+
+    # ── Actions (flag_audit calls are synchronous + fast) ─────────────
+    def _on_test() -> None:
         try:
-            snap = fa.capture()
-            ts = fa.save_snapshot(snap)
-            _reload_snaps()
-            _refresh_info()
-            _set_status(
-                f"Captured {ts}: b{snap['version'] or '?'}, {snap['flag_count']} flags "
-                f"(saved as baseline).", ok=True)
+            binp, vh = _selected_target()
+            rep = fa.audit_config(binary=binp, version_hint=vh)
+            results.setPlainText(fa.format_audit(rep))
+            cc = rep["cross_check"]
+            n_bad = len(cc["unknown"]) + len(cc["removed_used"]) + len(cc["bad_values"])
+            src = "" if rep.get("source") == "live" else " (from cache)"
+            if rep["ok"]:
+                _set_status(f"b{rep['version'] or '?'}{src}: config valid against this build.",
+                            ok=True)
+            else:
+                _set_status(f"b{rep['version'] or '?'}{src}: {n_bad} problem(s) — see results.",
+                            ok=False)
         except Exception as exc:
-            _set_status(f"Capture failed: {exc}", ok=False)
+            _set_status(f"Test failed: {exc}", ok=False)
             results.setPlainText(str(exc))
 
-    def _on_run() -> None:
+    def _on_compare() -> None:
         try:
-            ts = compare_box.currentData()
-            rep = fa.audit(compare_ts=ts)
-            results.setPlainText(fa.format_report(rep))
+            binp, vh = _selected_target()
+            rep = fa.compare(binary_a=None, binary_b=binp, version_b=vh)
+            results.setPlainText(fa.format_compare(rep))
+            _set_status(f"Compared current b{rep['a_version'] or '?'} ↔ "
+                        f"selected b{rep['b_version'] or '?'}: "
+                        f"{len(rep['added'])} added, {len(rep['removed'])} removed, "
+                        f"{len(rep['changed'])} changed.", ok=None)
+        except Exception as exc:
+            _set_status(f"Compare failed: {exc}", ok=False)
+            results.setPlainText(str(exc))
+
+    def _on_audit() -> None:
+        try:
+            rep = fa.audit_config()  # active binary
+            results.setPlainText(fa.format_audit(rep))
             cc = rep["cross_check"]
             n_bad = len(cc["unknown"]) + len(cc["removed_used"]) + len(cc["bad_values"])
             if rep["ok"]:
-                _set_status("All emitted flags valid against the live --help.", ok=True)
+                _set_status("Active config valid against the installed build.", ok=True)
             else:
-                _set_status(f"{n_bad} problem(s) found — see results + cli_audit.log.", ok=False)
+                _set_status(f"{n_bad} problem(s) on the active build — see results + log.",
+                            ok=False)
         except Exception as exc:
             _set_status(f"Audit failed: {exc}", ok=False)
             results.setPlainText(str(exc))
 
     def _on_restore() -> None:
-        ts = compare_box.currentData()
-        if not ts:
+        sel = _selected() or {}
+        if sel.get("kind") != "backup":
             return
+        ts = sel["ts"]
         try:
-            fa.restore(ts)
-            _reload_snaps()
-            _set_status(f"Restored {ts} as baseline (previous baseline backed up).", ok=True)
+            # Stop the supervisor first — Windows locks the running exe/DLLs.
+            loop = getattr(window, "bot_loop", None)
+            try:
+                from process import _SUPERVISOR  # type: ignore
+                if _SUPERVISOR and loop is not None and _SUPERVISOR.alive():
+                    _set_status("Stopping llama-server before restore…")
+                    fut = _asyncio.run_coroutine_threadsafe(_SUPERVISOR.stop(), loop)
+                    fut.result(timeout=20)
+            except Exception as exc:
+                log.warning("supervisor stop before restore failed: %s", exc)
+            res = upd.restore_backup(ts)
+            _refresh_info()
+            _reload_versions()
+            redo = res.get("redo_backup")
+            tail = f" (previous build saved to {redo})" if redo else ""
+            _set_status(f"Restored b{res.get('restored_version') or '?'} — "
+                        f"{res['files_restored']} files{tail}. Reload the model to use it.",
+                        ok=True)
+            results.setPlainText(
+                f"Restored from : {res['restored_from']}\n"
+                f"Files restored: {res['files_restored']}\n"
+                f"Redo backup   : {res.get('redo_backup') or '(none)'}\n"
+                f"Restored build: b{res.get('restored_version') or '?'}\n\n"
+                f"Reload / respawn the model (Status → Load, or next request) "
+                f"to start using the restored binary.")
         except Exception as exc:
             _set_status(f"Restore failed: {exc}", ok=False)
+            results.setPlainText(str(exc))
 
     def _on_delete() -> None:
-        ts = compare_box.currentData()
-        if not ts:
+        sel = _selected() or {}
+        if sel.get("kind") != "backup":
             return
+        ts = sel["ts"]
         try:
-            fa.delete(ts)
-            _reload_snaps()
-            _set_status(f"Deleted snapshot {ts}.", ok=None)
+            upd.delete_backup(ts)
+            _reload_versions()
+            _set_status(f"Deleted backup {ts}.", ok=None)
         except Exception as exc:
             _set_status(f"Delete failed: {exc}", ok=False)
 
-    capture_btn.clicked.connect(_on_capture)
-    run_btn.clicked.connect(_on_run)
+    test_btn.clicked.connect(_on_test)
+    compare_btn.clicked.connect(_on_compare)
+    audit_btn.clicked.connect(_on_audit)
     restore_btn.clicked.connect(_on_restore)
     delete_btn.clicked.connect(_on_delete)
+    version_box.currentIndexChanged.connect(lambda _i: _sync_buttons())
 
     _refresh_info()
-    _reload_snaps()
+    _reload_versions()
     return card
 
 
@@ -1413,7 +1497,7 @@ def _llama(window) -> QWidget:
 
     # ── Updater ──────────────────────────────────────────────────────
     layout.addWidget(_llama_updater_card(window))
-    layout.addWidget(_llama_flag_audit_card(window))
+    layout.addWidget(_llama_version_manager_card(window))
 
     # Server (binary + binding)
     srv_card, srv_body = _card("Server", "llamacpp.* — binary + binding (restart required)")

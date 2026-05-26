@@ -1,36 +1,33 @@
-"""On-demand llama-server CLI option auditor.
+"""llama-server CLI option auditor + version flag comparison.
 
 llama-server's flag surface drifts between builds — flags get renamed,
 removed, or have their accepted values changed (e.g. v9243 dropped
-``--checkpoint-every-n-tokens`` in favour of ``--checkpoint-min-step``).
-When that happens the argv telecode builds is rejected and the server
-refuses to start. This module catches that class of breakage *before* a
-spawn, on demand from the tray's Updates section.
+``--checkpoint-every-n-tokens`` for ``--checkpoint-min-step``). When that
+happens the argv telecode builds is rejected and the server refuses to
+start. This module backs the tray **Version Manager** card.
 
-What it does
-------------
-1. Parse ``llama-server --help`` into a structured spec: every option,
-   all its aliases, whether it takes a value, and any acceptable values
-   (``{none,linear,yarn}`` enums, ``[on|off|auto]`` toggles,
-   ``allowed values: …`` continuation lines, comma-list placeholders).
-2. Persist that spec as a timestamped *snapshot* under
-   ``data/cli-audit/llama-server/``. The most recent capture is also kept
-   as ``baseline.json`` (the default comparison target). ``restore()``
-   promotes any snapshot back to baseline, backing up the existing
-   baseline first — so a known-good capture is always recoverable.
-3. **Audit** = two checks in one pass:
-     - *cross-check*: every flag telecode would actually emit (from
-       ``argv.build_argv`` across all configured models) is validated
-       against the live ``--help`` — unknown/removed flags and
-       out-of-range enum values are reported.
-     - *snapshot diff*: the live capture vs a chosen snapshot — options
-       removed / added / with changed accepted-values.
-4. Every audit appends a human-readable report to
-   ``data/logs/cli_audit.log`` (viewable in the tray Logs section).
+It operates on *real binaries*: the active ``llama-server`` plus every
+``.bak-<ts>`` the updater leaves behind (see ``llamacpp.updater``). For any
+binary it can:
 
-Stdlib only; safe to import without Qt. All parsing is heuristic against
-llama.cpp's ``common_arg`` help formatter (fixed description column,
-2+-space gap between the flag header and its description).
+1. **Probe** — run ``--help`` / ``--version`` and parse the flag surface into
+   ``{flag → {aliases, takes_value, allowed, removed, deprecated}}``.
+2. **Audit a config** — cross-check every flag ``argv.build_argv`` would emit
+   across all configured models against that binary's flags (unknown/removed
+   flags, out-of-range enum values).
+3. **Compare** two binaries — diff their flag surfaces (added / removed /
+   changed accepted-values).
+
+Probing a binary is always tried *live* first; if an old backup binary can't
+relaunch (missing DLLs), it falls back to a spec cached at update time
+(``record_version_spec`` is called by the updater before+after each install).
+Specs are cached under ``data/cli-audit/specs/`` keyed by build number.
+Audit / compare reports append to ``data/logs/cli_audit.log`` (in the tray
+Logs allowlist).
+
+Stdlib only; safe to import without Qt. Parsing is heuristic against
+llama.cpp's ``common_arg`` help formatter (fixed description column, 2+-space
+gap between the flag header and its description).
 """
 from __future__ import annotations
 
@@ -51,22 +48,12 @@ from llamacpp import argv as argv_builder
 
 # ── Paths ──────────────────────────────────────────────────────────────────
 
-def _audit_dir() -> Path:
-    """``data/cli-audit/llama-server`` — derived from the logs dir's parent
-    (the ``data`` directory) so it follows TELECODE_SETTINGS relocation."""
+def _spec_dir() -> Path:
+    """``data/cli-audit/specs`` — version-keyed flag-spec cache."""
     base = Path(cfg.log_file()).resolve().parent.parent  # …/data
-    d = base / "cli-audit" / "llama-server"
+    d = base / "cli-audit" / "specs"
     d.mkdir(parents=True, exist_ok=True)
-    (d / "snapshots").mkdir(exist_ok=True)
     return d
-
-
-def _baseline_path() -> Path:
-    return _audit_dir() / "baseline.json"
-
-
-def _snapshot_path(ts: str) -> Path:
-    return _audit_dir() / "snapshots" / f"{ts}.json"
 
 
 def log_path() -> str:
@@ -77,10 +64,12 @@ def log_path() -> str:
 
 _FLAG_TOKEN = re.compile(r"^--?[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SECTION_RE = re.compile(r"^-{3,}.*-{3,}\s*$")
+# A real flag is "-"/"--" + a letter; "-1"/"-0.5" is a (negative) value.
+_IS_FLAG = re.compile(r"^--?[A-Za-z]")
 
 
 def binary_path() -> str:
-    """Resolved llama-server binary (PATH lookup applied)."""
+    """Resolved active llama-server binary (PATH lookup applied)."""
     b = cfg.binary()
     return shutil.which(b) or b
 
@@ -124,30 +113,25 @@ def _extract_allowed(header_str: str, cont_text: str) -> list[str]:
     """Pull acceptable values from the value placeholder and/or the
     ``allowed values: …`` continuation text. Returns [] when free-form.
 
-    Reads the *raw* header string (commas intact) — splitting it into tokens
-    first would destroy the ``{a,b,c}`` / comma-list delimiters."""
+    Reads the *raw* header string (commas intact) — tokenising it first would
+    destroy the ``{a,b,c}`` / comma-list delimiters."""
     allowed: list[str] = []
 
-    # {a,b,c}
-    for grp in re.findall(r"\{([^}]+)\}", header_str):
+    for grp in re.findall(r"\{([^}]+)\}", header_str):              # {a,b,c}
         allowed += [x.strip() for x in grp.split(",") if x.strip()]
-    # [on|off|auto]
-    for grp in re.findall(r"\[([^\]]+)\]", header_str):
+    for grp in re.findall(r"\[([^\]]+)\]", header_str):             # [on|off|auto]
         if "|" in grp:
             allowed += [x.strip() for x in grp.split("|") if x.strip()]
-    # bare comma-list placeholder, e.g. --spec-type none,draft-simple,...
-    for tok in header_str.split():
+    for tok in header_str.split():                                  # bare comma-list
         if tok.startswith("-"):
             continue
         if "," in tok and re.fullmatch(r"[a-z0-9][a-z0-9,_-]*", tok):
             allowed += [x.strip() for x in tok.split(",") if x.strip()]
-    # continuation: "allowed values: f32, f16, bf16, …"
-    m = re.search(r"allowed values:\s*(.+)", cont_text)
+    m = re.search(r"allowed values:\s*(.+)", cont_text)             # continuation
     if m:
         seg = m.group(1).split("(")[0]
         allowed += [x.strip() for x in seg.split(",") if x.strip()]
 
-    # de-dup preserving order, drop ellipsis artifacts
     seen: set[str] = set()
     out: list[str] = []
     for a in allowed:
@@ -167,7 +151,7 @@ def parse_help(text: str) -> dict[str, dict[str, Any]]:
     lines = text.splitlines()
 
     # Group each definition line with its indented continuation lines.
-    blocks: list[tuple[str, str]] = []  # (defline, continuation_text)
+    blocks: list[tuple[str, str]] = []
     i = 0
     n = len(lines)
     while i < n:
@@ -186,7 +170,6 @@ def parse_help(text: str) -> dict[str, dict[str, Any]]:
             nxt = lines[j]
             nstrip = nxt.strip()
             nindent = len(nxt) - len(nxt.lstrip(" "))
-            # continuation = indented, non-empty, not a new flag/section
             if nstrip and (nstrip[0] != "-" or nindent > 8) \
                     and not _SECTION_RE.match(nstrip):
                 cont.append(nstrip)
@@ -209,10 +192,8 @@ def parse_help(text: str) -> dict[str, dict[str, Any]]:
                 in_header = False
                 desc_parts.append(s)
         desc = " ".join(desc_parts + ([cont] if cont else [])).strip()
-
         header_str = " ".join(header_parts)
 
-        # Tokenise the header into aliases + value placeholder tokens.
         header_tokens: list[str] = []
         for part in header_parts:
             for tok in re.split(r"[,\s]+", part.strip()):
@@ -252,10 +233,10 @@ def _alias_index(specs: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return idx
 
 
-# ── Capture / snapshots ──────────────────────────────────────────────────────
+# ── Probe a binary → spec snapshot ────────────────────────────────────────────
 
-def capture(binary: Optional[str] = None) -> dict[str, Any]:
-    """Parse the live ``--help``, build a snapshot dict (not yet persisted)."""
+def probe(binary: Optional[str] = None) -> dict[str, Any]:
+    """Parse the live ``--help`` of `binary` (default: active) into a snapshot."""
     b = binary or binary_path()
     help_text = _run_capture([b, "--help"])
     if not help_text.strip():
@@ -275,56 +256,29 @@ def capture(binary: Optional[str] = None) -> dict[str, Any]:
     }
 
 
-def save_snapshot(snapshot: dict[str, Any], *, make_baseline: bool = True) -> str:
-    """Persist a snapshot under snapshots/<ts>.json (+ promote to baseline).
+# ── Version-keyed spec cache ──────────────────────────────────────────────────
 
-    Returns the snapshot timestamp id.
-    """
-    ts = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    path = _snapshot_path(ts)
+def _spec_key(snapshot: dict[str, Any]) -> str:
+    ver = (snapshot.get("version") or "").strip()
+    if ver:
+        return f"b{ver}"
+    build = (snapshot.get("build") or "").strip()
+    if build:
+        return f"build-{build}"
+    return "ts-" + _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def cache_spec(snapshot: dict[str, Any]) -> Path:
+    path = _spec_dir() / f"{_spec_key(snapshot)}.json"
     path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
-    if make_baseline:
-        _baseline_path().write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
-    return ts
+    return path
 
 
-def list_snapshots() -> list[dict[str, Any]]:
-    """Saved snapshots, newest first. Each: {ts, version, build, captured_at,
-    flag_count, label, is_baseline}."""
-    base = _audit_dir() / "snapshots"
-    baseline = load_baseline()
-    baseline_at = baseline.get("captured_at") if baseline else None
-    out: list[dict[str, Any]] = []
-    for f in sorted(base.glob("*.json"), reverse=True):
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        ts = f.stem
-        ver = data.get("version") or "?"
-        cap = data.get("captured_at", ts)
-        is_baseline = baseline_at is not None and data.get("captured_at") == baseline_at
-        label = f"{cap} · b{ver} · {data.get('flag_count', '?')} flags"
-        if is_baseline:
-            label += "  (baseline)"
-        out.append({
-            "ts": ts,
-            "version": ver,
-            "build": data.get("build", ""),
-            "captured_at": cap,
-            "flag_count": data.get("flag_count"),
-            "label": label,
-            "is_baseline": is_baseline,
-        })
-    return out
-
-
-def load_snapshot(ts: str) -> dict[str, Any]:
-    return json.loads(_snapshot_path(ts).read_text(encoding="utf-8"))
-
-
-def load_baseline() -> Optional[dict[str, Any]]:
-    p = _baseline_path()
+def load_cached_spec(version: str) -> Optional[dict[str, Any]]:
+    """Load a cached spec by build number (e.g. '9145')."""
+    if not version:
+        return None
+    p = _spec_dir() / f"b{version}.json"
     if not p.exists():
         return None
     try:
@@ -333,38 +287,43 @@ def load_baseline() -> Optional[dict[str, Any]]:
         return None
 
 
-def restore(ts: str) -> None:
-    """Promote snapshot <ts> to baseline, backing up the current baseline first."""
-    snap = load_snapshot(ts)  # raises if missing
-    cur = _baseline_path()
-    if cur.exists():
-        stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-        backup = _audit_dir() / "snapshots" / f"baseline-backup-{stamp}.json"
-        backup.write_text(cur.read_text(encoding="utf-8"), encoding="utf-8")
-    cur.write_text(json.dumps(snap, indent=2), encoding="utf-8")
+def record_version_spec(binary: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """Probe `binary` and cache its spec. Best-effort — never raises.
+
+    Called by the updater before and after each install so a build's flag
+    surface is preserved even after its binary is replaced or can't relaunch.
+    """
+    try:
+        snap = probe(binary)
+        cache_spec(snap)
+        return snap
+    except Exception:
+        return None
 
 
-def delete(ts: str) -> None:
-    p = _snapshot_path(ts)
-    if p.exists():
-        p.unlink()
+def _spec_for(binary: Optional[str], version_hint: str = "") -> dict[str, Any]:
+    """Spec for a binary: live probe first, cached spec (by version hint) as
+    fallback when the binary won't launch."""
+    try:
+        return probe(binary)
+    except Exception as exc:
+        cached = load_cached_spec(version_hint)
+        if cached is not None:
+            cached = dict(cached)
+            cached["_source"] = "cache"
+            return cached
+        raise RuntimeError(
+            f"could not probe binary and no cached spec for b{version_hint or '?'}: {exc}"
+        )
 
 
 # ── Emitted-flag extraction ───────────────────────────────────────────────────
-
-# A real flag is "-" or "--" followed by a letter. A token like "-1" or
-# "-0.5" is a (negative) value, not a flag — important for --seed -1, etc.
-_IS_FLAG = re.compile(r"^--?[A-Za-z]")
-
 
 def _emitted_flags() -> dict[str, set[str]]:
     """Every flag telecode would emit, mapped to the set of values seen for it
     across all configured models. Flags with no value map to an empty set."""
     out: dict[str, set[str]] = {}
-    models = list(cfg.models().keys())
-    if not models:
-        return out
-    for name in models:
+    for name in cfg.models().keys():
         try:
             argv = argv_builder.build_argv(name)
         except Exception:
@@ -383,16 +342,9 @@ def _emitted_flags() -> dict[str, set[str]]:
     return out
 
 
-# ── Audit ──────────────────────────────────────────────────────────────────
-
-def audit(compare_ts: Optional[str] = None) -> dict[str, Any]:
-    """Parse live help, cross-check telecode's emitted flags, and diff against a
-    snapshot. Returns a structured report (also written to the log)."""
-    live = capture()
-    specs = live["flags"]
+def cross_check(specs: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Validate telecode's emitted flags against a spec's flag surface."""
     idx = _alias_index(specs)
-
-    # ── 1. cross-check emitted flags ──
     unknown: list[dict[str, Any]] = []
     removed_used: list[dict[str, Any]] = []
     deprecated_used: list[dict[str, Any]] = []
@@ -410,78 +362,93 @@ def audit(compare_ts: Optional[str] = None) -> dict[str, Any]:
         if allowed:
             allowed_low = {a.lower() for a in allowed}
             for v in sorted(values):
-                # comma-joined values (e.g. --spec-type a,b) validate per item
                 parts = [p.strip() for p in v.split(",")] if "," in v else [v]
                 bad = [p for p in parts if p and p.lower() not in allowed_low]
                 if bad:
-                    bad_values.append({
-                        "flag": flag, "value": v,
-                        "bad": bad, "allowed": allowed,
-                    })
+                    bad_values.append({"flag": flag, "value": v,
+                                       "bad": bad, "allowed": allowed})
+    return {"unknown": unknown, "removed_used": removed_used,
+            "deprecated_used": deprecated_used, "bad_values": bad_values}
 
-    # ── 2. snapshot diff ──
-    base = load_snapshot(compare_ts) if compare_ts else load_baseline()
-    diff: dict[str, Any] = {"compared": False}
-    if base:
-        old = base.get("flags", {})
-        new = specs
-        old_keys = set(old.keys())
-        new_keys = set(new.keys())
-        changed: list[dict[str, Any]] = []
-        for k in sorted(old_keys & new_keys):
-            o_allowed = old[k].get("allowed") or []
-            n_allowed = new[k].get("allowed") or []
-            if o_allowed != n_allowed:
-                changed.append({"flag": k, "old": o_allowed, "new": n_allowed})
-        diff = {
-            "compared": True,
-            "against": base.get("captured_at", compare_ts or "baseline"),
-            "against_version": base.get("version", ""),
-            "removed": sorted(old_keys - new_keys),
+
+def diff_specs(old: dict[str, dict[str, Any]],
+               new: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Flag-surface diff between two specs."""
+    old_keys = set(old.keys())
+    new_keys = set(new.keys())
+    changed: list[dict[str, Any]] = []
+    for k in sorted(old_keys & new_keys):
+        o_allowed = old[k].get("allowed") or []
+        n_allowed = new[k].get("allowed") or []
+        if o_allowed != n_allowed:
+            changed.append({"flag": k, "old": o_allowed, "new": n_allowed})
+    return {"removed": sorted(old_keys - new_keys),
             "added": sorted(new_keys - old_keys),
-            "changed": changed,
-        }
+            "changed": changed}
 
+
+# ── Public operations (used by the tray) ──────────────────────────────────────
+
+def audit_config(binary: Optional[str] = None, version_hint: str = "") -> dict[str, Any]:
+    """Probe `binary` and cross-check telecode's emitted flags against it."""
+    snap = _spec_for(binary, version_hint)
+    cc = cross_check(snap["flags"])
     report = {
+        "kind": "audit",
         "ran_at": _dt.datetime.now().isoformat(timespec="seconds"),
-        "binary": live["binary"],
-        "version": live["version"],
-        "build": live["build"],
-        "flag_count": live["flag_count"],
+        "binary": snap.get("binary", binary or binary_path()),
+        "version": snap.get("version", ""),
+        "build": snap.get("build", ""),
+        "source": snap.get("_source", "live"),
+        "flag_count": snap.get("flag_count"),
         "models_checked": list(cfg.models().keys()),
-        "cross_check": {
-            "unknown": unknown,
-            "removed_used": removed_used,
-            "deprecated_used": deprecated_used,
-            "bad_values": bad_values,
-        },
-        "diff": diff,
-        "ok": not (unknown or removed_used or bad_values),
+        "cross_check": cc,
+        "ok": not (cc["unknown"] or cc["removed_used"] or cc["bad_values"]),
     }
-    write_log(report)
+    write_log(format_audit(report))
+    return report
+
+
+def compare(binary_a: Optional[str] = None, binary_b: Optional[str] = None,
+            *, version_a: str = "", version_b: str = "") -> dict[str, Any]:
+    """Diff the flag surfaces of two binaries (A = current, B = selected)."""
+    spec_a = _spec_for(binary_a, version_a)
+    spec_b = _spec_for(binary_b, version_b)
+    d = diff_specs(spec_b["flags"], spec_a["flags"])  # old=B, new=A
+    report = {
+        "kind": "compare",
+        "ran_at": _dt.datetime.now().isoformat(timespec="seconds"),
+        "a_label": f"b{spec_a.get('version') or '?'} ({spec_a.get('binary')})",
+        "b_label": f"b{spec_b.get('version') or '?'} ({spec_b.get('binary')})",
+        "a_version": spec_a.get("version", ""),
+        "b_version": spec_b.get("version", ""),
+        "a_count": spec_a.get("flag_count"),
+        "b_count": spec_b.get("flag_count"),
+        "added": d["added"],       # present in A (current), absent in B
+        "removed": d["removed"],   # present in B, gone in A
+        "changed": d["changed"],
+    }
+    write_log(format_compare(report))
     return report
 
 
 # ── Report formatting / logging ───────────────────────────────────────────────
 
-def format_report(rep: dict[str, Any]) -> str:
-    """Compact plaintext rendering used for both the log file and the tray."""
+def format_audit(rep: dict[str, Any]) -> str:
     cc = rep["cross_check"]
-    lines: list[str] = []
-    lines.append(f"llama-server flag audit — {rep['ran_at']}")
-    lines.append(f"  binary : {rep['binary']}")
-    lines.append(f"  version: b{rep['version'] or '?'} ({rep['build'] or '?'}), "
-                 f"{rep['flag_count']} flags")
-    lines.append(f"  models : {', '.join(rep['models_checked']) or '(none)'}")
-
+    src = "" if rep.get("source", "live") == "live" else "  [from cache]"
+    lines = [
+        f"AUDIT  b{rep['version'] or '?'} ({rep['build'] or '?'}){src} — {rep['ran_at']}",
+        f"  binary : {rep['binary']}",
+        f"  flags  : {rep['flag_count']}",
+        f"  models : {', '.join(rep['models_checked']) or '(none)'}",
+    ]
     if cc["unknown"]:
         lines.append(f"  [X] flags telecode uses that are UNKNOWN ({len(cc['unknown'])}):")
-        for u in cc["unknown"]:
-            lines.append(f"       {u['flag']}")
+        lines += [f"       {u['flag']}" for u in cc["unknown"]]
     if cc["removed_used"]:
         lines.append(f"  [X] flags telecode uses that were REMOVED ({len(cc['removed_used'])}):")
-        for r in cc["removed_used"]:
-            lines.append(f"       {r['flag']}")
+        lines += [f"       {r['flag']}" for r in cc["removed_used"]]
     if cc["bad_values"]:
         lines.append(f"  [!] values outside the allowed set ({len(cc['bad_values'])}):")
         for bv in cc["bad_values"]:
@@ -489,32 +456,33 @@ def format_report(rep: dict[str, Any]) -> str:
                          f"(bad: {','.join(bv['bad'])}; allowed: {','.join(bv['allowed'])})")
     if cc["deprecated_used"]:
         lines.append(f"  [~] deprecated flags telecode still uses ({len(cc['deprecated_used'])}):")
-        for d in cc["deprecated_used"]:
-            lines.append(f"       {d['flag']}")
+        lines += [f"       {d['flag']}" for d in cc["deprecated_used"]]
     if not (cc["unknown"] or cc["removed_used"] or cc["bad_values"] or cc["deprecated_used"]):
-        lines.append("  [ok] all emitted flags valid against the live --help")
-
-    diff = rep["diff"]
-    if diff.get("compared"):
-        lines.append(f"  diff vs {diff['against']} (b{diff.get('against_version') or '?'}): "
-                     f"{len(diff['removed'])} removed, {len(diff['added'])} added, "
-                     f"{len(diff['changed'])} changed")
-        for k in diff["removed"]:
-            lines.append(f"       - {k}")
-        for k in diff["added"]:
-            lines.append(f"       + {k}")
-        for c in diff["changed"]:
-            lines.append(f"       ~ {c['flag']}: {','.join(c['old']) or '∅'} "
-                         f"-> {','.join(c['new']) or '∅'}")
-    else:
-        lines.append("  diff: no snapshot to compare against")
+        lines.append("  [ok] all emitted flags valid against this build")
     return "\n".join(lines)
 
 
-def write_log(rep: dict[str, Any]) -> None:
+def format_compare(rep: dict[str, Any]) -> str:
+    lines = [
+        f"COMPARE current {rep['a_label']} ({rep['a_count']} flags) "
+        f"vs {rep['b_label']} ({rep['b_count']} flags) — {rep['ran_at']}",
+        f"  {len(rep['added'])} added, {len(rep['removed'])} removed, "
+        f"{len(rep['changed'])} changed (current relative to selected):",
+    ]
+    lines += [f"       + {k}  (new in current)" for k in rep["added"]]
+    lines += [f"       - {k}  (gone in current)" for k in rep["removed"]]
+    for c in rep["changed"]:
+        lines.append(f"       ~ {c['flag']}: {','.join(c['new']) or '∅'} "
+                     f"(was {','.join(c['old']) or '∅'})")
+    if not (rep["added"] or rep["removed"] or rep["changed"]):
+        lines.append("       (identical flag surface)")
+    return "\n".join(lines)
+
+
+def write_log(text: str) -> None:
     try:
         with open(log_path(), "a", encoding="utf-8") as fp:
-            fp.write(format_report(rep))
+            fp.write(text)
             fp.write("\n" + ("─" * 70) + "\n")
     except Exception:
         pass
