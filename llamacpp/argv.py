@@ -219,7 +219,7 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("device",        "--device",          "value"),
 
     # Attention
-    ("flash_attn",    "--flash-attn",      "onoff"),
+    ("flash_attn",    "--flash-attn",      "value"),
 
     # KV cache dtypes (model-sensitive)
     ("cache_type_k",  "--cache-type-k",    "value"),
@@ -306,6 +306,25 @@ def _emit_flag(argv: list[str], cfg_dict: dict, key: str, flag: object, kind: st
         return
     val = cfg_dict[key]
     if val is None:
+        return
+
+    if key == "flash_attn":
+        if isinstance(val, bool):
+            sval = "on" if val else "off"
+        elif str(val).lower() == "true":
+            sval = "on"
+        elif str(val).lower() == "false":
+            sval = "off"
+        else:
+            sval = str(val).strip().lower()
+        if sval not in ("on", "off", "auto"):
+            sval = "auto"
+        argv += [str(flag), sval]
+        return
+
+    if key in ("cpu_strict", "cpu_strict_batch"):
+        sval = "1" if bool(val) else "0"
+        argv += [str(flag), sval]
         return
 
     if kind == "flag":

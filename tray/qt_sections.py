@@ -1287,6 +1287,18 @@ def _llama(window) -> QWidget:
                                       "--threads-batch: CPU threads for prompt processing. 0 = match --threads."))
     spawn_body.addWidget(_number_row("llamacpp.batch_size",     "Batch Size",        32, 8192, 32, 0, "tok",
                                       "--batch-size: logical batch size. Tokens processed per upstream step."))
+    spawn_body.addWidget(_enum_row("llamacpp.split_mode",       "Split Mode",
+                                    [("Layer (default)", "layer"),
+                                     ("Row",             "row"),
+                                     ("Tensor (EXPERIMENTAL)", "tensor"),
+                                     ("None",            "none")],
+                                    "--split-mode: how layers are sharded across GPUs."))
+    spawn_body.addWidget(_enum_row("llamacpp.numa",             "NUMA Strategy",
+                                    [("(no tweaks)", ""),
+                                     ("Distribute", "distribute"),
+                                     ("Isolate", "isolate"),
+                                     ("Numactl", "numactl")],
+                                    "--numa: attempt optimizations that help on some NUMA systems."))
     spawn_body.addWidget(_number_row("llamacpp.ubatch_size",    "Micro-Batch Size",  32, 8192, 32, 0, "tok",
                                       "--ubatch-size: physical sub-batch. Usually = batch_size / 2 or / 4."))
     spawn_body.addWidget(_number_row("llamacpp.parallel",       "Parallel Slots",    1,  32,  1, 0, "",
@@ -1302,23 +1314,16 @@ def _llama(window) -> QWidget:
     spawn_body.addWidget(_line_row("llamacpp.tensor_split",     "Tensor Split",
                                     "e.g. 0.5,0.5",
                                     "--tensor-split: comma-separated weights for multi-GPU split."))
-    spawn_body.addWidget(_enum_row("llamacpp.split_mode",       "Split Mode",
-                                    [("Layer (default)", "layer"),
-                                     ("Row",             "row"),
-                                     ("None",            "none")],
-                                    "--split-mode: how layers are sharded across GPUs."))
-    spawn_body.addWidget(_line_row("llamacpp.numa",             "NUMA Strategy",
-                                    "distribute / isolate / numactl",
-                                    "--numa. Empty = no NUMA tweaks."))
+
     spawn_body.addWidget(_number_row("llamacpp.seed",           "Seed",             -1, 2147483647, 1, 0, "",
                                       "--seed: -1 = random."))
     spawn_body.addWidget(_number_row("llamacpp.keep",           "Keep Tokens",       0, 8192, 32, 0, "tok",
                                       "--keep: tokens from prompt always kept when truncating."))
 
     spawn_body.addWidget(_section_header("Scheduling"))
-    spawn_body.addWidget(_number_row("llamacpp.cpu_strict",       "CPU Strict",        0, 1, 1, 0, "",
+    spawn_body.addWidget(_toggle_row("llamacpp.cpu_strict", "CPU Strict",
                                       "--cpu-strict <0|1>: pin threads strictly to selected cores (default 0)."))
-    spawn_body.addWidget(_number_row("llamacpp.cpu_strict_batch", "CPU Strict (batch)",0, 1, 1, 0, "",
+    spawn_body.addWidget(_toggle_row("llamacpp.cpu_strict_batch", "CPU Strict (batch)",
                                       "--cpu-strict-batch: same as --cpu-strict but for prompt-processing threads."))
     spawn_body.addWidget(_number_row("llamacpp.prio",             "Priority",         -1, 3, 1, 0, "",
                                       "--prio: process/thread priority. -1=low, 0=normal, 1=medium, 2=high, 3=realtime."))
@@ -3503,7 +3508,7 @@ _MODEL_DEFAULTS: dict[str, Any] = {
     # tight VRAM can lower this or flip fit on (which suppresses --n-gpu-layers
     # entirely so the auto-fitter can pick).
     "n_gpu_layers": 99,
-    "flash_attn": True,
+    "flash_attn": "auto",
     "cache_type_k": "f16",
     "cache_type_v": "f16",
     "n_cpu_moe": 0,
@@ -3533,7 +3538,7 @@ _MODEL_DEFAULTS: dict[str, Any] = {
 _CACHE_TYPES = [
     ("f32", "f32"), ("f16", "f16"), ("bf16", "bf16"),
     ("q8_0", "q8_0"), ("q5_1", "q5_1"), ("q5_0", "q5_0"),
-    ("q4_1", "q4_1"), ("q4_0", "q4_0"),
+    ("q4_1", "q4_1"), ("q4_0", "q4_0"), ("iq4_nl", "iq4_nl"),
 ]
 
 
@@ -3734,7 +3739,11 @@ def _models(window) -> QWidget:
         form_layout.addWidget(_section_header("Flags"))
         form_layout.addWidget(_toggle_row(f"{p}.preload",       "Preload",
                                            "Load this model at telecode startup regardless of auto_start."))
-        form_layout.addWidget(_toggle_row(f"{p}.flash_attn",    "Flash Attention"))
+        form_layout.addWidget(_enum_row_strs(f"{p}.flash_attn", "Flash Attention",
+                                              [("Auto (default)", "auto"),
+                                               ("On", "on"),
+                                               ("Off", "off")],
+                                              "--flash-attn: set Flash Attention use ('on', 'off', or 'auto')."))
         form_layout.addWidget(_toggle_row(f"{p}.cpu_moe",       "CPU MoE (all experts)",
                                            "--cpu-moe: keep ALL MoE expert layers on CPU (overrides n_cpu_moe)."))
         form_layout.addWidget(_toggle_row(f"{p}.jinja",         "Jinja Chat Template",
