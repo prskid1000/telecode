@@ -57,7 +57,7 @@ def _save(data: dict[str, Any]) -> None:
 # always hit a real entry. Users can edit values freely but the tray
 # blocks deletion of these keys.
 STANDARD_EFFORT_KEYS: tuple[str, ...] = (
-    "none", "minimal", "low", "medium", "high", "max", "adaptive",
+    "none", "minimal", "low", "medium", "high", "adaptive", "max",
 )
 
 _STANDARD_EFFORT_DEFAULTS: dict[str, dict[str, Any]] = {

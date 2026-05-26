@@ -1709,7 +1709,27 @@ def _llama(window) -> QWidget:
             empty_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11.5px; padding: 6px;")
             rows_layout.addWidget(empty_lbl)
             return
-        for k, v in emap.items():
+        
+        # Sort standard keys logically with 'max' at the end, and custom keys alphabetically after standard keys
+        sort_order = {
+            "none": 0,
+            "minimal": 1,
+            "low": 2,
+            "medium": 3,
+            "high": 4,
+            "adaptive": 5,
+            "max": 6,
+        }
+        
+        def _sort_key(k: str):
+            k_low = k.lower()
+            if k_low in sort_order:
+                return (0, sort_order[k_low])
+            return (1, k_low)
+            
+        sorted_keys = sorted(emap.keys(), key=_sort_key)
+        for k in sorted_keys:
+            v = emap[k]
             rows_layout.addWidget(_build_effort_row(k, v if isinstance(v, dict) else {}))
 
     def _on_add_preset() -> None:
