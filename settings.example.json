@@ -191,7 +191,7 @@
     "cache_ram": 0,
     "swa_full": false,
     "ctx_checkpoints": 32,
-    "checkpoint_every_n_tokens": 8192,
+    "checkpoint_min_step": 256,
     "sleep_idle_seconds": 0,
     "slot_save_path": "",
 

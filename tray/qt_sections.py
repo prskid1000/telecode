@@ -1160,6 +1160,163 @@ def _llama_updater_card(window) -> QWidget:
     return card
 
 
+def _llama_flag_audit_card(window) -> QWidget:
+    """On-demand audit of the flags telecode passes vs the live --help.
+
+    A llama.cpp update can rename or remove flags (e.g. v9243 dropped
+    ``--checkpoint-every-n-tokens``), which makes llama-server reject the
+    argv and refuse to start. This card parses ``llama-server --help``,
+    cross-checks every flag the argv builder emits, diffs against a saved
+    snapshot, and logs the report to data/logs/cli_audit.log. Snapshots can
+    be restored to roll back the comparison baseline.
+    """
+    from PySide6.QtWidgets import QPlainTextEdit
+    from llamacpp import flag_audit as fa
+
+    mono = "font-family: 'JetBrains Mono', Consolas, monospace;"
+
+    card, body = _card(
+        "Flag Audit",
+        "Validate the flags telecode passes against the live `llama-server --help`. "
+        "Run after updating llama.cpp to catch removed/renamed flags or out-of-range "
+        "values before they break startup. Reports append to data/logs/cli_audit.log.",
+    )
+
+    info = QLabel("…")
+    info.setWordWrap(True)
+    info.setStyleSheet(f"color: {FG}; {mono} font-size: 11px;")
+    body.addWidget(_row(row_label("Target",
+                                   "Binary that will be probed, and its current build."),
+                        info))
+
+    compare_box = QComboBox()
+    compare_box.setMinimumWidth(320)
+    body.addWidget(_row(row_label("Compare against",
+                                   "Saved snapshot to diff the live capture against. "
+                                   "Newest is the baseline."),
+                        _wrap_align(compare_box, Qt.AlignmentFlag.AlignLeft)))
+
+    # ── Action buttons ───────────────────────────────────────────────
+    capture_btn = QPushButton("Capture Current")
+    run_btn = QPushButton("Run Audit")
+    run_btn.setProperty("class", "primary")
+    restore_btn = QPushButton("Restore Selected")
+    delete_btn = QPushButton("Delete Selected")
+    delete_btn.setProperty("class", "danger")
+
+    actions = QWidget()
+    al = QHBoxLayout(actions)
+    al.setContentsMargins(0, 0, 0, 0)
+    al.setSpacing(8)
+    for b in (capture_btn, run_btn, restore_btn, delete_btn):
+        al.addWidget(b)
+    al.addStretch(1)
+    body.addWidget(actions)
+
+    status_lbl = QLabel("")
+    status_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11.5px;")
+    body.addWidget(status_lbl)
+
+    results = QPlainTextEdit()
+    results.setReadOnly(True)
+    results.setStyleSheet(
+        f"background: {BG_ELEV}; color: {FG}; border: 1px solid {BORDER}; "
+        f"border-radius: 6px; {mono} font-size: 11px;"
+    )
+    results.setMinimumHeight(180)
+    results.setPlaceholderText("Run an audit to see results here.")
+    body.addWidget(results)
+
+    # ── Handlers (flag_audit calls are synchronous + fast) ────────────
+    def _reload_snaps() -> None:
+        compare_box.blockSignals(True)
+        compare_box.clear()
+        snaps = fa.list_snapshots()
+        if not snaps:
+            compare_box.addItem("(no snapshots — capture one first)", None)
+            compare_box.setEnabled(False)
+            restore_btn.setEnabled(False)
+            delete_btn.setEnabled(False)
+        else:
+            compare_box.setEnabled(True)
+            restore_btn.setEnabled(True)
+            delete_btn.setEnabled(True)
+            for s in snaps:
+                compare_box.addItem(s["label"], s["ts"])
+        compare_box.blockSignals(False)
+
+    def _refresh_info() -> None:
+        try:
+            v = fa.detect_version()
+            info.setText(f"{fa.binary_path()}\nb{v['version'] or '?'} ({v['build'] or '?'})")
+        except Exception as exc:
+            info.setText(f"binary probe failed: {exc}")
+
+    def _set_status(text: str, ok: bool | None = None) -> None:
+        color = FG_MUTE if ok is None else (OK if ok else ERR)
+        status_lbl.setText(text)
+        status_lbl.setStyleSheet(f"color: {color}; font-size: 11.5px;")
+
+    def _on_capture() -> None:
+        try:
+            snap = fa.capture()
+            ts = fa.save_snapshot(snap)
+            _reload_snaps()
+            _refresh_info()
+            _set_status(
+                f"Captured {ts}: b{snap['version'] or '?'}, {snap['flag_count']} flags "
+                f"(saved as baseline).", ok=True)
+        except Exception as exc:
+            _set_status(f"Capture failed: {exc}", ok=False)
+            results.setPlainText(str(exc))
+
+    def _on_run() -> None:
+        try:
+            ts = compare_box.currentData()
+            rep = fa.audit(compare_ts=ts)
+            results.setPlainText(fa.format_report(rep))
+            cc = rep["cross_check"]
+            n_bad = len(cc["unknown"]) + len(cc["removed_used"]) + len(cc["bad_values"])
+            if rep["ok"]:
+                _set_status("All emitted flags valid against the live --help.", ok=True)
+            else:
+                _set_status(f"{n_bad} problem(s) found — see results + cli_audit.log.", ok=False)
+        except Exception as exc:
+            _set_status(f"Audit failed: {exc}", ok=False)
+            results.setPlainText(str(exc))
+
+    def _on_restore() -> None:
+        ts = compare_box.currentData()
+        if not ts:
+            return
+        try:
+            fa.restore(ts)
+            _reload_snaps()
+            _set_status(f"Restored {ts} as baseline (previous baseline backed up).", ok=True)
+        except Exception as exc:
+            _set_status(f"Restore failed: {exc}", ok=False)
+
+    def _on_delete() -> None:
+        ts = compare_box.currentData()
+        if not ts:
+            return
+        try:
+            fa.delete(ts)
+            _reload_snaps()
+            _set_status(f"Deleted snapshot {ts}.", ok=None)
+        except Exception as exc:
+            _set_status(f"Delete failed: {exc}", ok=False)
+
+    capture_btn.clicked.connect(_on_capture)
+    run_btn.clicked.connect(_on_run)
+    restore_btn.clicked.connect(_on_restore)
+    delete_btn.clicked.connect(_on_delete)
+
+    _refresh_info()
+    _reload_snaps()
+    return card
+
+
 def _llama(window) -> QWidget:
     scroll, content, layout = _page()
 
@@ -1256,6 +1413,7 @@ def _llama(window) -> QWidget:
 
     # ── Updater ──────────────────────────────────────────────────────
     layout.addWidget(_llama_updater_card(window))
+    layout.addWidget(_llama_flag_audit_card(window))
 
     # Server (binary + binding)
     srv_card, srv_body = _card("Server", "llamacpp.* — binary + binding (restart required)")
@@ -1421,8 +1579,8 @@ def _llama(window) -> QWidget:
                                       "--swa-full: allocate full-size SWA (sliding-window attention) cache."))
     cache_body.addWidget(_number_row("llamacpp.ctx_checkpoints",           "Ctx Checkpoints",          0, 256, 1, 0, "",
                                       "--ctx-checkpoints: max number of context checkpoints per slot."))
-    cache_body.addWidget(_number_row("llamacpp.checkpoint_every_n_tokens", "Checkpoint Every N",       0, 100000, 256, 0, "tok",
-                                      "--checkpoint-every-n-tokens: create a checkpoint during prefill every N tokens."))
+    cache_body.addWidget(_number_row("llamacpp.checkpoint_min_step",       "Checkpoint Min Step",      0, 100000, 256, 0, "tok",
+                                      "--checkpoint-min-step: minimum token spacing between context checkpoints (0 = no minimum)."))
     cache_body.addWidget(_line_row("llamacpp.slot_save_path",   "Slot Save Path",
                                     "./data/slots",
                                     "--slot-save-path: directory for /slots/save & /slots/restore."))
@@ -3219,6 +3377,7 @@ def _logs(window) -> QWidget:
         "docgraph_watch.log",  "docgraph_watch.log.prev",
         "docgraph_serve.log",  "docgraph_serve.log.prev",
         "docgraph_daemon.log", "docgraph_daemon.log.prev",
+        "cli_audit.log",
         "tray-bot.stderr.log",
     ]
     MAX_TAIL_BYTES = 512 * 1024  # last ~512 KB is plenty for UI

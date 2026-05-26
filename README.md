@@ -217,6 +217,19 @@ stack (e.g. `"draft-mtp,ngram-mod"`). Anything not special-cased can be
 passed verbatim via `extra_args: [["--flag","val"]]`. See
 `settings.example.json` for the full list with safe defaults.
 
+**Flag Audit** (tray → llama.cpp page → *Flag Audit* card). llama.cpp
+renames and removes CLI flags between builds; when that happens the argv
+telecode builds is rejected and `llama-server` won't start. The audit parses
+the live `llama-server --help`, then **Capture Current** saves a snapshot of
+every available flag and its accepted values. **Run Audit** cross-checks the
+flags telecode would actually emit against that live help (flagging unknown /
+removed flags and out-of-range enum values) and diffs the capture against a
+chosen snapshot (options added / removed / changed). Pick the comparison
+snapshot from the **Compare against** dropdown; **Restore Selected** rolls the
+baseline back to an earlier capture. Every run appends a report to
+`data/logs/cli_audit.log` (visible in the tray Logs section). Run it after
+updating llama.cpp.
+
 With `llamacpp.enabled: true`, the proxy at `:1235` becomes the
 single endpoint for both Anthropic (`/v1/messages`) and OpenAI
 (`/v1/chat/completions`) clients — point `ANTHROPIC_BASE_URL` or
