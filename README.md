@@ -217,18 +217,30 @@ stack (e.g. `"draft-mtp,ngram-mod"`). Anything not special-cased can be
 passed verbatim via `extra_args: [["--flag","val"]]`. See
 `settings.example.json` for the full list with safe defaults.
 
-**Flag Audit** (tray → llama.cpp page → *Flag Audit* card). llama.cpp
-renames and removes CLI flags between builds; when that happens the argv
-telecode builds is rejected and `llama-server` won't start. The audit parses
-the live `llama-server --help`, then **Capture Current** saves a snapshot of
-every available flag and its accepted values. **Run Audit** cross-checks the
-flags telecode would actually emit against that live help (flagging unknown /
-removed flags and out-of-range enum values) and diffs the capture against a
-chosen snapshot (options added / removed / changed). Pick the comparison
-snapshot from the **Compare against** dropdown; **Restore Selected** rolls the
-baseline back to an earlier capture. Every run appends a report to
-`data/logs/cli_audit.log` (visible in the tray Logs section). Run it after
-updating llama.cpp.
+**Version Manager** (tray → llama.cpp page → *Version Manager* card). The
+updater overlays each new release onto the install dir and moves every file it
+replaces into `<install_dir>/.bak-<ts>/`, so each backup is a real, runnable
+previous llama.cpp build. The card lists the **active** binary plus every
+backup in a dropdown, and acts on the selected one:
+
+- **Test Selected** — runs that build's `--help` / `--version` and cross-checks
+  the flags telecode would emit against it ("would my config run on this
+  build?"). llama.cpp renames/removes CLI flags between builds; when an emitted
+  flag is unknown/removed or a value falls outside the accepted set, the argv is
+  rejected and `llama-server` won't start — this catches it first.
+- **Compare Current ↔ Selected** — diffs the flag surface of the active binary
+  vs the selected build (flags added / removed / accepted-values changed).
+- **Restore Selected** — reverts the install to that backup (stops the
+  supervisor first; the displaced current files become a fresh, reversible
+  backup). Reload the model afterwards to use it.
+- **Audit Active Config** — the cross-check above against the currently
+  installed binary.
+- **Delete Backup** — prune an old backup to reclaim disk.
+
+Tests/compares run the real binary, falling back to a flag spec cached at
+update time if an old backup can't relaunch. Every run appends a report to
+`data/logs/cli_audit.log` (visible in the tray Logs section). Run a Test/Audit
+after updating llama.cpp.
 
 With `llamacpp.enabled: true`, the proxy at `:1235` becomes the
 single endpoint for both Anthropic (`/v1/messages`) and OpenAI

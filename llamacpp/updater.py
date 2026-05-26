@@ -414,6 +414,11 @@ async def download_and_install(
     target_dir = Path(target_dir) if target_dir else install_dir()
     target_dir.mkdir(parents=True, exist_ok=True)
 
+    # Outgoing build (probed while the old binary is still in place) — written
+    # into the backup as a sentinel so the Version Manager can label/compare
+    # it without having to relaunch the old exe.
+    outgoing_version = installed_version()
+
     ts = int(time.time())
     tmp_root = target_dir.parent / f".llamacpp-update-{ts}"
     tmp_root.mkdir(parents=True, exist_ok=True)
@@ -427,6 +432,14 @@ async def download_and_install(
     asset_summary: list[str] = []
 
     try:
+        # 0. Record the outgoing build's flag spec while its exe is still in
+        #    place (best-effort; never blocks an update).
+        try:
+            from llamacpp import flag_audit as _fa
+            _fa.record_version_spec()
+        except Exception as exc:
+            log.debug("pre-update flag spec capture skipped: %s", exc)
+
         # 1. Stop supervisor so DLLs unload.
         try:
             from process import _SUPERVISOR  # type: ignore
@@ -500,6 +513,22 @@ async def download_and_install(
                     shutil.move(str(item), str(dst))
                     files_installed += 1
 
+        # Tag the backup with the outgoing build so the Version Manager can
+        # identify/compare it without relaunching the old binary.
+        if files_moved and bak_dir.is_dir():
+            try:
+                (bak_dir / ".telecode-version").write_text(outgoing_version or "",
+                                                           encoding="utf-8")
+            except Exception as exc:
+                log.debug("backup version sentinel write skipped: %s", exc)
+
+        # Record the freshly-installed build's flag spec (best-effort).
+        try:
+            from llamacpp import flag_audit as _fa
+            _fa.record_version_spec()
+        except Exception as exc:
+            log.debug("post-update flag spec capture skipped: %s", exc)
+
         if progress:
             progress("Done.", 1.0)
         return {
@@ -544,3 +573,121 @@ def _find_payload_root(extract_dir: Path, *, expect_llama: bool) -> Optional[Pat
             best = p.parent
             best_depth = depth
     return best or extract_dir
+
+
+# ── Backups (previous installed versions) ────────────────────────────
+#
+# Every download_and_install() moves the files it overwrites into
+# `<install_dir>/.bak-<ts>/` — a snapshot of the previous llama.cpp version
+# (incl. its llama-server binary + DLLs). These helpers list, inspect,
+# restore, and prune those backups for the tray Version Manager.
+
+_BINARY_NAME = "llama-server.exe" if sys.platform == "win32" else "llama-server"
+
+
+def _backup_dirs() -> list[Path]:
+    base = install_dir()
+    if not base.is_dir():
+        return []
+    return sorted((p for p in base.glob(".bak-*") if p.is_dir()),
+                  key=lambda p: p.name, reverse=True)
+
+
+def backup_binary(ts: str) -> Optional[Path]:
+    """Path to the llama-server binary inside backup `.bak-<ts>`, if present."""
+    d = install_dir() / f".bak-{ts}"
+    cand = d / _BINARY_NAME
+    if cand.exists():
+        return cand
+    matches = [p for p in d.glob("llama-server*") if p.is_file()] if d.is_dir() else []
+    return matches[0] if matches else None
+
+
+def _backup_recorded_version(d: Path) -> str:
+    sentinel = d / ".telecode-version"
+    if sentinel.exists():
+        try:
+            return sentinel.read_text(encoding="utf-8").strip()
+        except Exception:
+            return ""
+    return ""
+
+
+def list_backups() -> list[dict[str, Any]]:
+    """Saved version backups, newest first. Each:
+    {ts, dir, version, has_binary, file_count, mtime}."""
+    out: list[dict[str, Any]] = []
+    for d in _backup_dirs():
+        ts = d.name[len(".bak-"):]
+        try:
+            files = [p for p in d.iterdir() if not p.name.startswith(".telecode")]
+        except OSError:
+            files = []
+        out.append({
+            "ts": ts,
+            "dir": str(d),
+            "version": _backup_recorded_version(d),
+            "has_binary": backup_binary(ts) is not None,
+            "file_count": len(files),
+            "mtime": d.stat().st_mtime if d.exists() else 0,
+        })
+    return out
+
+
+def restore_backup(ts: str) -> dict[str, Any]:
+    """Reverse a previous update: move the backup's files back into the install
+    dir, saving the currently-installed copies into a fresh `.bak-<ts>` first so
+    the restore is itself reversible.
+
+    The caller MUST stop the llama supervisor before calling this (Windows
+    locks the running exe/DLLs). Synchronous file moves only.
+    """
+    bak = install_dir() / f".bak-{ts}"
+    if not bak.is_dir():
+        raise RuntimeError(f"backup not found: {bak}")
+
+    target = install_dir()
+    redo_ts = int(time.time())
+    redo = target / f".bak-{redo_ts}"
+    restored = 0
+    saved = 0
+
+    items = [p for p in bak.iterdir() if p.name != ".telecode-version"]
+    for item in items:
+        dst = target / item.name
+        if dst.exists():
+            redo.mkdir(parents=True, exist_ok=True)
+            redo_target = redo / item.name
+            if not redo_target.exists():
+                shutil.move(str(dst), str(redo_target))
+                saved += 1
+            elif dst.is_dir():
+                shutil.rmtree(dst, ignore_errors=True)
+            else:
+                dst.unlink()
+        shutil.move(str(item), str(dst))
+        restored += 1
+
+    # Tag the redo-backup with the version we just displaced (the new build).
+    if saved and redo.is_dir():
+        try:
+            (redo / ".telecode-version").write_text(installed_version() or "",
+                                                    encoding="utf-8")
+        except Exception:
+            pass
+
+    # The drained backup dir is now (almost) empty — drop it.
+    shutil.rmtree(bak, ignore_errors=True)
+    return {
+        "ok": True,
+        "restored_from": str(bak),
+        "files_restored": restored,
+        "redo_backup": str(redo) if saved else None,
+        "restored_version": _backup_recorded_version(bak),
+    }
+
+
+def delete_backup(ts: str) -> None:
+    d = install_dir() / f".bak-{ts}"
+    if d.is_dir():
+        shutil.rmtree(d, ignore_errors=True)
