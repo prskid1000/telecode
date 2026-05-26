@@ -2100,11 +2100,30 @@ def _proxy_profiles_card() -> QFrame:
 
         # System instruction
         form_layout.addWidget(_section_header("System Instruction"))
-        si_le = QLineEdit(); si_le.setText(str(prof.get("system_instruction", "") or ""))
-        si_le.setPlaceholderText("system.md / office.md / (empty)")
-        si_le.editingFinished.connect(lambda: _patch("system_instruction", si_le.text() or None))
+        from pathlib import Path
+        instructions_dir = Path(__file__).resolve().parent.parent / "proxy" / "instructions"
+        instruction_options = [("(none)", "")]
+        if instructions_dir.is_dir():
+            for f in sorted(instructions_dir.iterdir()):
+                if f.is_file():
+                    instruction_options.append((f.name, f.name))
+        
+        cur_val = str(prof.get("system_instruction", "") or "")
+        if cur_val and not any(v == cur_val for _, v in instruction_options):
+            instruction_options.append((cur_val, cur_val))
+            
+        si_cb = QComboBox()
+        selected_idx = 0
+        for i, (disp, val) in enumerate(instruction_options):
+            si_cb.addItem(disp, val)
+            if cur_val == val:
+                selected_idx = i
+        si_cb.setCurrentIndex(selected_idx)
+        si_cb.currentIndexChanged.connect(lambda i: _patch("system_instruction", si_cb.itemData(i) or None))
+        
         form_layout.addWidget(_row(row_label("Instruction File",
-                                              "Filename in proxy/instructions/. Empty = no injection."), si_le))
+                                              "Filename in proxy/instructions/. Empty = no injection."),
+                                   _wrap_align(si_cb, Qt.AlignmentFlag.AlignLeft)))
 
         # Lists
         form_layout.addWidget(_section_header("Tool Lists"))
