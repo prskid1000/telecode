@@ -1026,9 +1026,12 @@ def _llama_updater_card(window) -> QWidget:
             if companions:
                 display += "\n  + " + "\n  + ".join(companions)
             asset_label.setText(display)
-            update_btn.setEnabled(True)
             cur = upd.installed_version()
-            if cur and build and cur == build and not companions:
+            already_latest = bool(cur and build and cur == build and not companions)
+            # Don't offer a re-install of the build that's already installed —
+            # there's nothing to update to.
+            update_btn.setEnabled(not already_latest)
+            if already_latest:
                 status_lbl.setText("Already on the latest build.")
             else:
                 msg = "New build available." if cur != build else ""
