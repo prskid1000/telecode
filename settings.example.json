@@ -188,7 +188,7 @@
     "cache_idle_slots": true,
     "context_shift": false,
     "warmup": true,
-    "cache_ram": 8192,
+    "cache_ram": 0,
     "swa_full": false,
     "ctx_checkpoints": 32,
     "checkpoint_every_n_tokens": 8192,
