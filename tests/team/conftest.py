@@ -89,6 +89,10 @@ def fake_task_queue(monkeypatch):
         }
 
     queue.register_handler("CLAUDE_CODE", fake_handler, description="(test) fake")
+    # Register the same fake under CODEX + ANTIGRAVITY so flow tests can
+    # exercise the engine_map plumbing without spawning real CLIs.
+    queue.register_handler("CODEX", fake_handler, description="(test) fake")
+    queue.register_handler("ANTIGRAVITY", fake_handler, description="(test) fake")
 
     class Wrapper:
         @property

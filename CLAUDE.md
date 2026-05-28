@@ -133,13 +133,39 @@ Logs: `data/logs/docgraph_host.log` + `data/logs/docgraph_index.log`.
 
 Recurring task fires against a permanent task-mode session. Independent of Team-Mode Heartbeat. **Manager runs inside the proxy aiohttp process** — bot-only deployments don't tick.
 
-- **Record:** `data/routines/<id>.json` — `{prompt, task_type ("CLAUDE_CODE"), schedule.every_seconds≥60, session_id, status, next_fire_at, last_fire_at, last_task_id, last_completed_*, total/skipped_runs}`. Atomic tmp+rename under per-routine `RLock`.
+- **Record:** `data/routines/<id>.json` — `{prompt, task_type ("CLAUDE_CODE" | "CODEX" | "ANTIGRAVITY"), schedule.every_seconds≥60, session_id, status, next_fire_at, last_fire_at, last_task_id, last_completed_*, total/skipped_runs}`. Atomic tmp+rename under per-routine `RLock`.
 - **Manager:** daemon thread inside `start_proxy_background()`. 60s loop; bootstrap-tick fires immediately so missed routines recover.
 - **Tick:** every routine → `_reconcile_completion(last_task_id)`. Active+due (`status=="active"` and `now ≥ next_fire_at`) → `fire_routine`.
 - **Fire:** skip-if-running (PENDING/RUNNING → record skipped, `next_fire_at` still advances). Heartbeat preface prepended (tick #, cadence, time-since-last-fire, "recurring wake-up — build on prior work"). Submits via `task_manager.submit_task(..., session_id=rec["session_id"])`; handlers resume the same session.
 - **Service:** `get_routine`/`list_routines`/`run_now` reconcile inline so UI's 5s poll catches terminal status within seconds.
 - **API:** `/api/routines` list/create, `/api/routines/<id>` get/patch/delete (`?delete_session=true`), `…/{pause,resume,run-now,runs}`.
 - **UI:** `proxy/static/index.html`. Left **Routines** tab (form + Save/Pause/Resume/Run-now/Delete); right **By routine** tab (collapsible per-routine task lists). Tab handler scoped per `.tabs` via `data-tab` vs `data-rtab`.
+
+---
+
+## Task engines (`services/task/handlers/`)
+
+Three CLIs are dispatched as task types, all sharing the **same handler signature** (`prompt, is_local, agent_id, agent, job, agent_files, job_files`) and the same `_agent_task_schema`. The executor / heartbeat scheduler / routine manager are engine-agnostic — they pick the task_type via the single shared map in `services/task/engine_map.py`:
+
+| engine string | task_type     | binary  | handler                                  |
+|---------------|---------------|---------|------------------------------------------|
+| `claude_code` | `CLAUDE_CODE` | `claude`| `services/task/handlers/claude_code.py`  |
+| `codex`       | `CODEX`       | `codex` | `services/task/handlers/codex.py`        |
+| `antigravity` | `ANTIGRAVITY` | `agy`   | `services/task/handlers/antigravity.py`  |
+
+**Per-engine specifics** (kept parallel to Claude on purpose so future Codex/Antigravity feature parity is a one-file patch):
+
+- **Claude Code** — `claude -p <prompt> --dangerously-skip-permissions --output-format stream-json --verbose --include-partial-messages [--resume <id>]`. Resume key: `last_claude_session_id`. Local mode env: `ANTHROPIC_BASE_URL=http://localhost:<proxy>/v1`, `ANTHROPIC_AUTH_TOKEN=local`, `ANTHROPIC_MODEL=<llama>`. Staging bridge: `AGENT.md ↔ CLAUDE.md`.
+- **Codex** — `codex exec [resume <SID>] --json --dangerously-bypass-approvals-and-sandbox --sandbox danger-full-access --skip-git-repo-check -C <dir> --output-last-message <path> [--model <m>] "<prompt>"`. Resume key: `last_codex_session_id` (captured from `thread.started` events). Local mode env: `OPENAI_BASE_URL=http://localhost:<proxy>/v1`, `OPENAI_API_KEY=local`, `CODEX_API_KEY=local`. Staging bridge: `AGENT.md ↔ AGENTS.md`. Event mapping: `thread.started → store sid`; `item.completed{assistant_message}/reasoning → narrative`; `item.completed{command_executed,file_change,mcp_tool_call,tool_use,patch} → tool`; `turn.completed.usage → done`. Final text falls back to the `--output-last-message` file when no JSON `result` is emitted.
+- **Antigravity (v1, plain text)** — `agy -p "<prompt>" --dangerously-skip-permissions --add-dir <dir> [--conversation <id>]`. Staging bridge: `AGENT.md ↔ AGENTS.md`. **Known gaps** (revisit when `agy` ships them): no structured JSON stream (community reports `--output-format json` is documented but not implemented), so tool calls are invisible — every stdout line becomes a `narrative` event; no conversation ID surfaces in `-p` mode, so resume is fresh-by-default (`-c` is process-global and unsafe across concurrent routines); no documented `--base-url` / `--model` flag, so `is_local=True` is accepted but warned-and-ignored. Token counts return zeros. The handler's external surface still mirrors the other two so the upgrade path is "rewrite the body of `_run_antigravity_subprocess`, nothing else."
+
+**Adding a fourth engine** = (1) new `services/task/handlers/<name>.py` matching the signature, (2) one entry in `AGENT_BRIDGE` (`services/task/staging.py`), (3) one entry in `ENGINE_TO_TASK_TYPE` (`services/task/engine_map.py`), (4) `register_handler(...)` in `task_registry.py`, (5) `<option>` in both `proxy/static/index.html` and `telecode.html`. No changes to executor / heartbeat / routine manager.
+
+**Shared caveat — subprocess lifecycle.** All three handlers spawn raw `subprocess.Popen(..., shell=True, creationflags=CREATE_NO_WINDOW)` and do **not** bind to the process-wide Windows Job Object set up in `process.py`. If telecode is killed mid-run, the CLI child may outlive it (and any grandchildren it spawned). Mitigation today: handlers call `proc.terminate()` → `proc.kill()` on cancel/exit. Follow-up: migrate all three to a shared helper that goes through `process.py` so `KILL_ON_JOB_CLOSE` covers them. The hole has been there for Claude Code since day one — adding Codex/Antigravity didn't make it worse, just wider.
+
+**Likelihood of upstream convergence:**
+- *Codex* — high. OpenAI explicitly tracks Claude's automation surface (`--dangerously-bypass-approvals-and-sandbox`, `--json`, `--output-schema`, resume subcommands). Expect the event schema to stay JSONL and grow rather than break; the defensive `usage` field reads in `codex.py` are there to absorb minor renames.
+- *Antigravity* — medium-low. Google copied `--dangerously-skip-permissions` verbatim but the headless story (JSON stream, conversation IDs, base-url, model selection) is incomplete in this release. Plan for plain-text scraping to be the reality for several months; treat any JSON arrival as a v2 upgrade rather than baseline.
 
 ---
 
