@@ -239,7 +239,11 @@ def fire_routine(rec: dict, *, source: str = "manager") -> Optional[str]:
     params: dict = {
         "prompt": heartbeat_preface + rec["prompt"],
     }
-    if task_type == "CLAUDE_CODE":
+    # is_local is meaningful for engines that can be redirected to the local
+    # llama.cpp proxy (Claude via ANTHROPIC_BASE_URL, Codex via OPENAI_BASE_URL).
+    # Antigravity has no documented base-url flag yet — its handler accepts but
+    # warns-and-ignores the param, so we still forward it for forward-compat.
+    if task_type in ("CLAUDE_CODE", "CODEX", "ANTIGRAVITY"):
         params["is_local"] = bool(rec.get("is_local", False))
     if rec.get("outputs_only"):
         params["outputs_only"] = True

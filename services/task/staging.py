@@ -25,8 +25,11 @@ logger = logging.getLogger("telecode.services.task.staging")
 PASSTHROUGH_FILES = ("SOUL.md", "USER.md", "MEMORY.md")
 
 # Engine → workspace-side filename for the agent's AGENT.md
+# Claude reads CLAUDE.md; Codex / Antigravity both read AGENTS.md by convention.
 AGENT_BRIDGE = {
     "claude": "CLAUDE.md",
+    "codex": "AGENTS.md",
+    "antigravity": "AGENTS.md",
 }
 
 # Per-workspace lock so two concurrent runs don't clobber each other's staged files.

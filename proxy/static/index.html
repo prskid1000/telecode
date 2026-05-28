@@ -112,6 +112,8 @@
       <label>task type</label>
       <select id="taskType" style="width:200px">
         <option value="CLAUDE_CODE">CLAUDE_CODE</option>
+        <option value="CODEX">CODEX</option>
+        <option value="ANTIGRAVITY">ANTIGRAVITY</option>
       </select>
       <label style="min-width:auto;margin-left:10px">
         <input type="checkbox" id="isLocal"/> local mode
@@ -193,6 +195,8 @@
         <label>task type</label>
         <select id="routineTaskType" style="width:160px">
           <option value="CLAUDE_CODE">CLAUDE_CODE</option>
+          <option value="CODEX">CODEX</option>
+          <option value="ANTIGRAVITY">ANTIGRAVITY</option>
         </select>
         <label style="min-width:auto;margin-left:10px"><input type="checkbox" id="routineIsLocal"/> local mode</label>
       </div>
@@ -416,7 +420,10 @@ $("submit").onclick = async () => {
   const isLocal = $("isLocal").checked;
   
   const params = taskType === "ECHO" ? { text: $("prompt").value } : { prompt: $("prompt").value };
-  if (taskType === "CLAUDE_CODE") {
+  // is_local is honored by CLAUDE_CODE + CODEX (proxy redirect); ANTIGRAVITY
+  // accepts but currently ignores it — forwarded so the field round-trips
+  // when agy gains a base-url flag in a future release.
+  if (["CLAUDE_CODE", "CODEX", "ANTIGRAVITY"].includes(taskType)) {
     params.is_local = isLocal;
   }
 

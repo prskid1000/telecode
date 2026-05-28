@@ -11,6 +11,8 @@ from services.run.executor import (
 
 def test_engine_mapping():
     assert _engine_to_task_type("claude_code") == "CLAUDE_CODE"
+    assert _engine_to_task_type("codex") == "CODEX"
+    assert _engine_to_task_type("antigravity") == "ANTIGRAVITY"
     assert _engine_to_task_type("") == "CLAUDE_CODE"   # safe default
     assert _engine_to_task_type("unknown") == "CLAUDE_CODE"
 

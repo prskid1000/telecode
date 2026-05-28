@@ -7,6 +7,8 @@ from typing import Any, Dict
 
 from services.task.task_manager import get_task_queue
 from services.task.handlers.claude_code import claude_code_task
+from services.task.handlers.codex import codex_task
+from services.task.handlers.antigravity import antigravity_task
 
 logger = logging.getLogger("telecode.services.task")
 
@@ -69,4 +71,20 @@ def register_default_tasks():
         params_schema=_agent_task_schema,
     )
 
-    logger.info("Task handlers registered (ECHO, CLAUDE_CODE)")
+    # 3. Codex Task — mirrors CLAUDE_CODE; same schema, different CLI.
+    queue.register_handler(
+        "CODEX",
+        codex_task,
+        description="Run OpenAI Codex (codex exec --json) in a stateful session folder",
+        params_schema=_agent_task_schema,
+    )
+
+    # 4. Antigravity Task — v1 plain-text stream; see handler docstring for gaps.
+    queue.register_handler(
+        "ANTIGRAVITY",
+        antigravity_task,
+        description="Run Google Antigravity (agy -p) in a stateful session folder",
+        params_schema=_agent_task_schema,
+    )
+
+    logger.info("Task handlers registered (ECHO, CLAUDE_CODE, CODEX, ANTIGRAVITY)")
