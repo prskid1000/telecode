@@ -649,6 +649,42 @@ def _format_functions_block(matched: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _toolsearch_select_guidance(
+    query: str,
+    matched: list[dict[str, Any]],
+    available_names: set[str],
+) -> str | None:
+    """For `select:` queries, rescue the model when it asks to load tools that
+    are ALREADY available (core/visible) — a common stall for small models that
+    ToolSearch a tool they could just call. Returns a guidance string, or None
+    to fall back to the default functions-block formatting.
+
+    Only fires when at least one requested name is already callable; genuinely
+    unknown selects still get the plain 'No matching tools' message.
+    """
+    if not query.startswith("select:"):
+        return None
+    requested = [n.strip() for n in query[len("select:"):].split(",") if n.strip()]
+    if not requested:
+        return None
+    matched_names = {m.get("name", "") for m in matched}
+    already = [n for n in requested if n in available_names and n not in matched_names]
+    if not already:
+        return None
+
+    parts: list[str] = []
+    if matched:
+        parts.append(_format_functions_block(matched))
+    lst = ", ".join(f"`{n}`" for n in already)
+    is_one = len(already) == 1
+    parts.append(
+        f"NOTE: {lst} {'is' if is_one else 'are'} ALREADY available in this "
+        f"conversation — you do NOT need ToolSearch for {'it' if is_one else 'them'}. "
+        f"Call {'it' if is_one else 'them'} directly by name."
+    )
+    return "\n\n".join(parts)
+
+
 async def _do_tool_search(
     deferred: list[dict[str, Any]],
     args: dict[str, Any],
@@ -997,11 +1033,14 @@ async def _run_streaming(
 
             if tool_name == "ToolSearch":
                 matched = await _do_tool_search(deferred, tool_input)
-                result_content = _format_functions_block(matched)
                 q = str(tool_input.get("query", ""))
+                guidance = _toolsearch_select_guidance(q, matched, core_visible_names)
+                result_content = guidance or _format_functions_block(matched)
                 if matched:
                     names = ", ".join(m.get("name", "") for m in matched[:5])
                     status_line = f'● ToolSearch("{q[:80]}")\n└  {len(matched)} schemas loaded: {names}'
+                elif guidance:
+                    status_line = f'● ToolSearch("{q[:80]}")\n└  Already available · told to call directly'
                 else:
                     status_line = f'● ToolSearch("{q[:80]}")\n└  No matches'
                 if _rid:
@@ -1253,11 +1292,13 @@ async def _run_non_streaming(
 
             if tool_name == "ToolSearch":
                 matched = await _do_tool_search(deferred, tool_input)
-                result_text = _format_functions_block(matched)
+                q = str(tool_input.get("query", ""))
+                guidance = _toolsearch_select_guidance(q, matched, core_visible_names)
+                result_text = guidance or _format_functions_block(matched)
                 if _rid:
                     request_log.append_intercept(_rid, {
                         "type": "tool_search",
-                        "query": str(tool_input.get("query", "")),
+                        "query": q,
                         "matched": [m.get("name", "") for m in matched],
                     })
 
