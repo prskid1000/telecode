@@ -1672,6 +1672,50 @@ async def handle_legacy_ui(request: web.Request) -> web.FileResponse:
 # App factory
 # ═══════════════════════════════════════════════════════════════════════
 
+def _header_log_path() -> Path:
+    """Resolve data/logs/request_headers.log next to telecode.log."""
+    import os
+    try:
+        from config import _settings_dir  # type: ignore[attr-defined]
+        base = _settings_dir()
+    except Exception:
+        base = Path(os.getcwd())
+    d = base / "data" / "logs"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return d / "request_headers.log"
+
+
+# Headers worth redacting so we never write credentials to disk.
+_REDACT_HEADERS = {"authorization", "x-api-key"}
+
+
+@web.middleware
+async def header_log_middleware(request: web.Request, handler):
+    """Diagnostic: append every request's method/path/headers as one JSON line
+    to data/logs/request_headers.log. Captures the full `anthropic-beta` set
+    (and the `?beta=true` query) that the body dumps in request_log don't show.
+    Secrets are redacted. Best-effort — never blocks the request on failure."""
+    try:
+        hdrs = {}
+        for k, v in request.headers.items():
+            lk = k.lower()
+            hdrs[lk] = "<redacted>" if lk in _REDACT_HEADERS else v
+        rec = {
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "method": request.method,
+            "path": request.path_qs,  # includes ?beta=true
+            "headers": hdrs,
+        }
+        with open(_header_log_path(), "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+    return await handler(request)
+
+
 @web.middleware
 async def cors_middleware(request: web.Request, handler):
     origins = proxy_config.cors_origins()
@@ -1698,7 +1742,7 @@ async def cors_middleware(request: web.Request, handler):
 
 
 def create_app() -> web.Application:
-    app = web.Application(middlewares=[cors_middleware])
+    app = web.Application(middlewares=[header_log_middleware, cors_middleware])
 
     protocols = set(proxy_config.protocols())
 
