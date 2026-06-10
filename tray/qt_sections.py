@@ -1259,18 +1259,47 @@ def _llama_version_manager_card(window) -> QWidget:
             return (str(binp) if binp else None, sel.get("version") or "")
         return (None, "")
 
-    def _refresh_info() -> None:
+    def _refresh_info(v: dict | None = None) -> None:
         try:
-            v = fa.detect_version()
+            if v is None:
+                v = fa.detect_version()
             info.setText(f"{fa.binary_path()}\nb{v['version'] or '?'} ({v['build'] or '?'})")
         except Exception as exc:
             info.setText(f"binary probe failed: {exc}")
 
-    def _reload_versions() -> None:
+    _last_backup_sig: list = [object()]
+
+    def _backup_sig() -> tuple:
+        """Cheap disk-only fingerprint of the backup set (no `--version`
+        probe). Used to skip the combobox rebuild on idle ticks so the
+        dropdown only re-populates when a `.bak-<ts>` is actually added,
+        removed, or restored."""
+        try:
+            return tuple(
+                (b["ts"], b.get("mtime"), b.get("file_count"),
+                 b.get("has_binary"), b.get("version"))
+                for b in upd.list_backups()
+            )
+        except Exception:
+            return ()
+
+    def _reload_versions(force: bool = False) -> None:
+        # Skip the rebuild (and the relatively expensive `--version` probe)
+        # when the on-disk backup set is unchanged — lets this run cheaply on
+        # every page tick so a backup created by an "Update Now" after this
+        # card was built still shows up without restarting telecode.
+        sig = _backup_sig()
+        if not force and sig == _last_backup_sig[0]:
+            return
+        _last_backup_sig[0] = sig
         version_box.blockSignals(True)
         prev = _selected()
         version_box.clear()
         av = fa.detect_version()
+        # The active binary changes exactly when the .bak-* set does (update /
+        # restore), so refresh the "Active" label here too — reuse this probe
+        # rather than spawning `--version` a second time.
+        _refresh_info(av)
         version_box.addItem(f"Active · b{av['version'] or '?'} ({av['build'] or '?'})",
                             {"kind": "active"})
         for b in upd.list_backups():
@@ -1399,8 +1428,9 @@ def _llama_version_manager_card(window) -> QWidget:
     delete_btn.clicked.connect(_on_delete)
     version_box.currentIndexChanged.connect(lambda _i: _sync_buttons())
 
-    _refresh_info()
-    _reload_versions()
+    _reload_versions(force=True)  # also populates the "Active" label via _refresh_info
+    # Let the owning page re-scan for new backups on its refresh tick.
+    card.reload_versions = _reload_versions  # type: ignore[attr-defined]
     return card
 
 
@@ -1500,7 +1530,8 @@ def _llama(window) -> QWidget:
 
     # ── Updater ──────────────────────────────────────────────────────
     layout.addWidget(_llama_updater_card(window))
-    layout.addWidget(_llama_version_manager_card(window))
+    version_manager_card = _llama_version_manager_card(window)
+    layout.addWidget(version_manager_card)
 
     # Server (binary + binding)
     srv_card, srv_body = _card("Server", "llamacpp.* — binary + binding (restart required)")
@@ -2164,6 +2195,11 @@ def _llama(window) -> QWidget:
         unload_btn.setEnabled(alive)
         restart_btn.setEnabled(alive)
         _update_prompt_cap()
+        # Pick up backups created after this page was first built (e.g. by an
+        # "Update Now") — cheap no-op unless the .bak-* set changed on disk.
+        reload_versions = getattr(version_manager_card, "reload_versions", None)
+        if callable(reload_versions):
+            reload_versions()
     scroll.refresh = refresh  # type: ignore[attr-defined]
     refresh()
     return scroll
