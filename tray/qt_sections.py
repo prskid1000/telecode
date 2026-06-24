@@ -25,6 +25,7 @@ from tray.qt_widgets import Toggle, NumberEditor, WrapLabel, row_label
 from tray.qt_helpers import (
     read_settings, get_path, patch_settings, remove_path, schedule,
     humanize, format_protocol, build_status, settings_bus,
+    tailscale_status, tailscale_funnel_url,
 )
 from tray.qt_theme import (
     FG, FG_DIM, FG_MUTE, BG, BG_ELEV, BG_CARD, BORDER, OK, WARN, ERR, ACCENT,
@@ -2295,11 +2296,88 @@ def _proxy(window) -> QWidget:
                             typed=False))
     layout.addWidget(master)
 
+    # Tailscale Funnel — public HTTPS URL for this machine + copy + live status
+    ts_card, ts_refresh = _tailscale_funnel_card()
+    layout.addWidget(ts_card)
+
     # Client profiles — picker + per-profile editor
     layout.addWidget(_proxy_profiles_card())
 
     layout.addStretch(1)
+    # Window calls refresh() every 1s; tailscale_status is TTL-cached so this is cheap.
+    scroll.refresh = lambda: ts_refresh(force=False)  # type: ignore[attr-defined]
     return scroll
+
+
+def _tailscale_funnel_card() -> tuple[QFrame, Any]:
+    """Proxy-tab card showing the Tailscale Funnel URL + Copy button + live status."""
+    from PySide6.QtWidgets import QApplication
+
+    card, body = _card("Tailscale Funnel",
+                       "Public HTTPS URL for this machine's proxy, served via Tailscale Funnel")
+
+    # Status row: colored dot + label + manual refresh
+    status_w = QWidget()
+    srow = QHBoxLayout(status_w)
+    srow.setContentsMargins(0, 0, 0, 0)
+    srow.setSpacing(8)
+    dot = QLabel("●")
+    status_lbl = QLabel("Checking…")
+    status_lbl.setProperty("class", "toggle_label")
+    refresh_btn = QPushButton("Refresh")
+    srow.addWidget(dot, 0, Qt.AlignmentFlag.AlignVCenter)
+    srow.addWidget(status_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+    srow.addStretch(1)
+    srow.addWidget(refresh_btn)
+    body.addWidget(status_w)
+
+    # URL row: read-only selectable field + Copy
+    url_w = QWidget()
+    urow = QHBoxLayout(url_w)
+    urow.setContentsMargins(0, 0, 0, 0)
+    urow.setSpacing(8)
+    url_le = QLineEdit()
+    url_le.setReadOnly(True)
+    url_le.setPlaceholderText("(unavailable — Tailscale not connected)")
+    copy_btn = QPushButton("Copy")
+    urow.addWidget(url_le, 1)
+    urow.addWidget(copy_btn)
+    body.addWidget(url_w)
+
+    def _copy() -> None:
+        txt = url_le.text().strip()
+        if not txt:
+            return
+        QApplication.clipboard().setText(txt)
+        copy_btn.setText("Copied!")
+        QTimer.singleShot(1200, lambda: copy_btn.setText("Copy"))
+
+    copy_btn.clicked.connect(_copy)
+
+    def refresh(force: bool = False) -> None:
+        st = tailscale_status(force=force)
+        dns = st.get("dns_name", "")
+        url = tailscale_funnel_url(dns, 443)  # proxy funnel = https 443
+        if url_le.text() != url:
+            url_le.setText(url)
+        copy_btn.setEnabled(bool(url))
+
+        proxy_enabled = bool(get_path(read_settings(), "proxy.enabled", False))
+        if st.get("connected"):
+            dot.setStyleSheet(f"color: {OK};")
+            status_lbl.setText("Connected — funnel live"
+                               if proxy_enabled
+                               else "Connected — enable the proxy to serve the funnel")
+        elif st.get("pending"):
+            dot.setStyleSheet(f"color: {WARN};")
+            status_lbl.setText("Checking…")
+        else:
+            dot.setStyleSheet(f"color: {ERR};")
+            status_lbl.setText(st.get("error") or "Not connected")
+
+    refresh_btn.clicked.connect(lambda: refresh(force=True))
+    refresh()
+    return card, refresh
 
 
 def _proxy_profiles_card() -> QFrame:
