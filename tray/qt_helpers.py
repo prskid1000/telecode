@@ -5,6 +5,11 @@ import asyncio
 import json
 import logging
 import os
+import shutil
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -293,3 +298,86 @@ def build_status() -> dict[str, Any]:
         "managed": managed, "sessions": sessions,
         "docgraph": docgraph,
     }
+
+
+# ── Tailscale Funnel status (TTL-cached, background refresh) ──────────
+# `tailscale status --json` spawns a subprocess (up to a 5s timeout), so it
+# must never run on the Qt thread. We cache the last result and refresh it in
+# a daemon thread when stale, returning the cached value immediately. Safe to
+# call from a 1s refresh loop — only one fetch is in flight at a time.
+_TS_LOCK = threading.Lock()
+_TS_CACHE: dict[str, Any] = {"fetched_at": 0.0, "data": None}
+_TS_FETCHING = False
+_TS_TTL_SEC = 15.0
+
+
+def _tailscale_fetch() -> dict[str, Any]:
+    """Blocking `tailscale status --json` → Self node summary."""
+    info: dict[str, Any] = {"connected": False, "dns_name": "", "ips": []}
+    if not shutil.which("tailscale"):
+        info["error"] = "Tailscale not on PATH"
+        return info
+    try:
+        kw: dict[str, Any] = dict(capture_output=True, text=True, timeout=5)
+        if sys.platform == "win32":
+            kw["creationflags"] = subprocess.CREATE_NO_WINDOW
+        result = subprocess.run(["tailscale", "status", "--json"], **kw)
+        if result.returncode != 0:
+            info["error"] = (result.stderr or "tailscale status failed").strip()[:200] or "tailscale status failed"
+            return info
+        status = json.loads(result.stdout or "{}")
+        self_node = status.get("Self", {}) or {}
+        dns = (self_node.get("DNSName") or "").rstrip(".")
+        backend = status.get("BackendState", "")
+        info["dns_name"] = dns
+        info["ips"] = list(self_node.get("TailscaleIPs", []) or [])
+        info["backend_state"] = backend
+        info["connected"] = bool(dns) and backend == "Running" and bool(self_node.get("Online", True))
+        if not info["connected"] and not info.get("error"):
+            info["error"] = f"Tailscale {backend or 'not running'}"
+    except Exception as exc:
+        info["error"] = f"{type(exc).__name__}: {exc}"[:200]
+    return info
+
+
+def tailscale_status(force: bool = False) -> dict[str, Any]:
+    """Cached Tailscale Self status: {connected, dns_name, ips, backend_state, error?}.
+
+    Returns the last cached value immediately; kicks off a background refresh
+    when the cache is stale (TTL ~15s) or `force` is set. Before the first
+    fetch lands, returns {connected: False, pending: True}."""
+    global _TS_FETCHING
+    now = time.time()
+    with _TS_LOCK:
+        data = _TS_CACHE["data"]
+        fresh = data is not None and (now - _TS_CACHE["fetched_at"]) < _TS_TTL_SEC
+        if fresh and not force:
+            return data
+        if _TS_FETCHING:
+            return data if data is not None else {"connected": False, "pending": True}
+        _TS_FETCHING = True
+
+    def _worker() -> None:
+        global _TS_FETCHING
+        res: dict[str, Any] = {"connected": False, "error": "fetch failed"}
+        try:
+            res = _tailscale_fetch()
+        finally:
+            with _TS_LOCK:
+                _TS_CACHE["data"] = res
+                _TS_CACHE["fetched_at"] = time.time()
+                _TS_FETCHING = False
+
+    threading.Thread(target=_worker, name="ts-status", daemon=True).start()
+    return data if data is not None else {"connected": False, "pending": True}
+
+
+def tailscale_funnel_url(dns_name: str, https_port: int = 443) -> str:
+    """Build the public funnel URL for a machine DNS name.
+
+    Mirrors main._start_tailscale_funnels: funnel runs at the root path, the
+    proxy on https 443 (no port suffix), the MCP server on 8443."""
+    if not dns_name:
+        return ""
+    suffix = "" if https_port == 443 else f":{https_port}"
+    return f"https://{dns_name}{suffix}"
