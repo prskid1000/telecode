@@ -239,13 +239,15 @@ async def run_speed_test(
         # request behavior. Greedy decoding (temp=0, top_k=1) hands
         # speculative draft models near-100% acceptance on this kind of
         # synthetic prompt and inflates reported tok/s.
-        infer = cfg.inference_for(cfg.default_model())
+        active_m = (sup.active_model() if (sup and sup.alive()) else "") or cfg.default_model()
+        infer = cfg.inference_for(active_m)
         payload: dict = {
             "prompt": prompt,
             "n_predict": int(n_predict),
             "cache_prompt": False,
             "stream": False,
             "seed": 0xC0FFEE,
+            "ignore_eos": True,
         }
         for src, dst in (
             ("temperature", "temperature"),
