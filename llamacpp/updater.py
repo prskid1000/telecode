@@ -105,7 +105,7 @@ def installed_version() -> Optional[str]:
             kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
         res = subprocess.run([str(binp), "--version"], **kwargs)
         out = (res.stdout or "") + (res.stderr or "")
-        for pat in (r"version:\s*(\d+)", r"\bbuild\b\s*[:=]\s*(\d+)", r"\bb(\d{3,6})\b"):
+        for pat in (r"\bbuild\b\s*[:=]?\s*(\d+)", r"\bversion:\s*b?(\d+)(?!\.\d)", r"\bb(\d{3,6})\b"):
             m = re.search(pat, out)
             if m:
                 return m.group(1)
