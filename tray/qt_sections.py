@@ -1448,23 +1448,47 @@ def _llama(window) -> QWidget:
 
     # Model swap dropdown
     model_box = QComboBox()
+    _last_models_sig: list = [None]
+    _user_selected_model: list[str | None] = [None]
+
     def _refresh_models() -> None:
-        model_box.blockSignals(True)
-        model_box.clear()
+        view = model_box.view()
+        if view and view.isVisible():
+            return
+
         models = list(get_path(read_settings(), "llamacpp.models", {}) or {})
         from process import _SUPERVISOR as sup
-        active = sup.active_model() if sup else ""
-        for m in models:
-            model_box.addItem(m, m)
-        if active in models:
-            model_box.setCurrentIndex(models.index(active))
-        model_box.blockSignals(False)
+        from llamacpp import config as cfg
+        active = sup.active_model() if (sup and sup.alive()) else ""
+        target_model = active or _user_selected_model[0] or cfg.default_model()
+
+        sig = (tuple(models), active, target_model)
+        if sig == _last_models_sig[0]:
+            return
+        _last_models_sig[0] = sig
+
+        current_items = [model_box.itemText(i) for i in range(model_box.count())]
+        if current_items != models:
+            model_box.blockSignals(True)
+            model_box.clear()
+            for m in models:
+                model_box.addItem(m, m)
+            model_box.blockSignals(False)
+
+        if target_model in models:
+            idx = models.index(target_model)
+            if model_box.currentIndex() != idx:
+                model_box.blockSignals(True)
+                model_box.setCurrentIndex(idx)
+                model_box.blockSignals(False)
+
     _refresh_models()
 
     def _on_model_chosen(_i: int) -> None:
         m = model_box.currentData()
         if not m:
             return
+        _user_selected_model[0] = m
         async def _do():
             from process import get_supervisor
             sup = await get_supervisor()
@@ -1489,7 +1513,8 @@ def _llama(window) -> QWidget:
             from process import get_supervisor
             from llamacpp import config as cfg
             sup = await get_supervisor()
-            await sup.ensure_model(cfg.default_model())
+            chosen = model_box.currentData() or cfg.default_model()
+            await sup.ensure_model(chosen)
         schedule(window.bot_loop, _do())
     def _unload():
         async def _do():
@@ -4045,13 +4070,14 @@ def _models(window) -> QWidget:
     picker = QComboBox(); picker.setMinimumWidth(240)
     add_btn = QPushButton("+ Add")
     add_btn.setProperty("class", "primary")
+    rename_btn = QPushButton("Rename")
     remove_btn = QPushButton("Remove")
     remove_btn.setProperty("class", "danger")
     set_default_btn = QPushButton("Set As Default")
     set_default_btn.setProperty("class", "ghost")
     default_lbl = QLabel(""); default_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
     top.addWidget(picker); top.addWidget(default_lbl); top.addStretch(1)
-    top.addWidget(set_default_btn); top.addWidget(add_btn); top.addWidget(remove_btn)
+    top.addWidget(set_default_btn); top.addWidget(rename_btn); top.addWidget(add_btn); top.addWidget(remove_btn)
     body.addLayout(top)
 
     # ── Form container ──────────────────────────────────────────────
@@ -4390,11 +4416,11 @@ def _models(window) -> QWidget:
 
     def _on_add():
         import copy
-        name, ok = QInputDialog.getText(content, "Add Model", "Model key (e.g. qwen3-30b):")
+        name, ok = QInputDialog.getText(content, "Add Model", "Model key (e.g. qwen3.8-27b):")
         if not ok:
             return
         name = name.strip()
-        valid, err = _valid_key(name)
+        valid, err = _valid_model_name(name)
         if not valid:
             QMessageBox.warning(content, "Invalid Name", err)
             return
@@ -4406,6 +4432,39 @@ def _models(window) -> QWidget:
         ename = name.replace(".", r"\.")
         patch_settings(f"llamacpp.models.{ename}", copy.deepcopy(_MODEL_DEFAULTS))
         _refresh_picker(preserve_key=name)
+
+    def _on_rename():
+        import copy
+        key = picker.currentData()
+        if not key:
+            return
+        new_name, ok = QInputDialog.getText(content, "Rename Model", "New model name / key (e.g. qwen3.8-27b):", text=key)
+        if not ok:
+            return
+        new_name = new_name.strip()
+        if not new_name or new_name == key:
+            return
+        valid, err = _valid_model_name(new_name)
+        if not valid:
+            QMessageBox.warning(content, "Invalid Name", err)
+            return
+        raw_settings = read_settings()
+        existing = get_path(raw_settings, "llamacpp.models", {}) or {}
+        if new_name in existing:
+            QMessageBox.warning(content, "Exists", f"Model '{new_name}' already exists.")
+            return
+
+        ek_old = key.replace(".", r"\.")
+        ek_new = new_name.replace(".", r"\.")
+        model_data = get_path(raw_settings, f"llamacpp.models.{ek_old}", {}) or {}
+
+        patch_settings(f"llamacpp.models.{ek_new}", copy.deepcopy(model_data))
+        remove_path(f"llamacpp.models.{ek_old}")
+
+        if get_path(read_settings(), "llamacpp.default_model") == key:
+            patch_settings("llamacpp.default_model", new_name)
+
+        _refresh_picker(preserve_key=new_name)
 
     def _on_remove():
         key = picker.currentData()
@@ -4428,6 +4487,7 @@ def _models(window) -> QWidget:
 
     picker.currentIndexChanged.connect(_on_pick)
     add_btn.clicked.connect(_on_add)
+    rename_btn.clicked.connect(_on_rename)
     remove_btn.clicked.connect(_on_remove)
     set_default_btn.clicked.connect(_on_set_default)
 
@@ -4477,6 +4537,19 @@ def _flush_pending(container) -> None:
         fn = getattr(te, "_commit_now", None)
         if callable(fn):
             fn()
+
+
+_MODEL_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def _valid_model_name(name: str) -> tuple[bool, str]:
+    """Validate model registry keys (e.g. 'qwen3.8-27b', 'qwen3.6-35b')."""
+    if not name:
+        return False, "Model name cannot be empty."
+    if not _MODEL_KEY_RE.match(name):
+        return False, ("Use letters, digits, '.', '_' or '-' only (must start with a letter or digit, "
+                       "max 64 chars). Colons, slashes, and spaces are not allowed.")
+    return True, ""
 
 
 _KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
