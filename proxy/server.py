@@ -359,7 +359,7 @@ async def _inject_system_prompt(
         return body
 
     injection = "\n\n".join(parts)
-    messages = body.get("messages", [])
+    messages = xlate._coalesce_system_messages(body.get("messages", []))
     if messages and messages[0].get("role") == "system":
         existing = messages[0].get("content", "")
         if isinstance(existing, str):
@@ -369,8 +369,9 @@ async def _inject_system_prompt(
             flat = "\n".join(p.get("text", "") for p in existing if isinstance(p, dict) and p.get("type") == "text")
             messages[0] = {**messages[0], "content": f"{injection}\n\n{flat}" if flat else injection}
     else:
-        body["messages"] = [{"role": "system", "content": injection}] + list(messages)
+        messages = [{"role": "system", "content": injection}] + list(messages)
 
+    body["messages"] = messages
     return body
 
 

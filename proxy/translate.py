@@ -53,6 +53,49 @@ def _gen_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:24]}"
 
 
+def _coalesce_system_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Ensure there is at most ONE system message and that it is placed at index 0.
+
+    Many LLM chat templates (e.g. Qwen 3.8 Jinja template) strictly enforce:
+        {% if message['role'] == 'system' and not loop.first %}
+            raise_exception('System message must be at the beginning.')
+
+    This function extracts all `system` role messages in `messages`, merges
+    their text content with `\n\n`, and places the single combined system message at index 0.
+    All non-system messages retain their relative order.
+    """
+    system_parts: list[str] = []
+    other_messages: list[dict[str, Any]] = []
+
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("role") == "system":
+            c = msg.get("content")
+            if isinstance(c, str):
+                if c.strip():
+                    system_parts.append(c.strip())
+            elif isinstance(c, list):
+                parts = []
+                for block in c:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        t = block.get("text", "").strip()
+                        if t:
+                            parts.append(t)
+                    elif isinstance(block, str) and block.strip():
+                        parts.append(block.strip())
+                if parts:
+                    system_parts.append("\n\n".join(parts))
+        else:
+            other_messages.append(msg)
+
+    if not system_parts:
+        return other_messages
+
+    merged_system_content = "\n\n".join(system_parts)
+    return [{"role": "system", "content": merged_system_content}, *other_messages]
+
+
 # ── Anthropic request → internal (OpenAI-shape) ──────────────────────────
 
 def _anthropic_content_to_openai(content: Any) -> Any:
@@ -511,6 +554,8 @@ def anthropic_request_to_internal(
             think_end=think_end,
         ))
 
+    messages = _coalesce_system_messages(messages)
+
     out: dict[str, Any] = {
         "model": body.get("model", ""),
         "messages": messages,
@@ -650,7 +695,7 @@ def openai_request_to_internal(
     _apply_model_chat_template_kwargs(body, defaults)
     sys_nudge = _apply_effort_entry(entry, body)
 
-    messages = body.get("messages") or []
+    messages = _coalesce_system_messages(body.get("messages") or [])
     if sys_nudge:
         if messages and messages[0].get("role") == "system":
             existing = messages[0].get("content", "")
@@ -658,7 +703,7 @@ def openai_request_to_internal(
                 messages[0] = {**messages[0], "content": f"{sys_nudge}\n\n{existing}" if existing else sys_nudge}
         else:
             messages = [{"role": "system", "content": sys_nudge}, *messages]
-        body["messages"] = messages
+    body["messages"] = messages
 
     def _fill(key: str, val: Any) -> None:
         if key not in body and val is not None:
