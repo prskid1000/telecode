@@ -100,12 +100,29 @@ def detect_version(binary: Optional[str] = None) -> dict[str, str]:
     raw = out.strip().splitlines()[0].strip() if out.strip() else ""
     ver = ""
     build = ""
-    m = re.search(r"version:\s*(\S+)", out)
-    if m:
-        ver = m.group(1)
-    m = re.search(r"\(([0-9a-fA-F]{6,})\)", out)
-    if m:
-        build = m.group(1)
+
+    # Build number (e.g. 10470 from "build 10470", or 9145 from "version: 9145")
+    m_build_num = re.search(r"\bbuild\b\s*[:=]?\s*(\d+)", out)
+    if m_build_num:
+        ver = m_build_num.group(1)
+    else:
+        m_ver = re.search(r"\bversion:\s*b?(\d+)(?!\.\d)", out)
+        if m_ver:
+            ver = m_ver.group(1)
+        else:
+            m_semver = re.search(r"\bversion:\s*(\S+)", out)
+            if m_semver:
+                ver = m_semver.group(1)
+
+    # Build/commit hash (e.g. 34af94cd9 from "commit 34af94cd9" or "(a1b2c3d)")
+    m_commit = re.search(r"\bcommit\s+([0-9a-fA-F]{6,})\b", out)
+    if m_commit:
+        build = m_commit.group(1)
+    else:
+        m_hash = re.search(r"\(([0-9a-fA-F]{6,})\)", out)
+        if m_hash:
+            build = m_hash.group(1)
+
     return {"version": ver, "build": build, "raw": raw}
 
 
