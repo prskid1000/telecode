@@ -312,6 +312,16 @@
       "max_tokens": null,
       "stop": [],
       "context_overflow": "truncate_middle",
+      "thinking_budget": { "enabled": false },
+      "reasoning_effort": {
+        "template_key": "reasoning_effort",
+        "allowed": ["low", "medium", "high"],
+        "map": {
+          "none": "low", "minimal": "low", "low": "low",
+          "medium": "medium", "adaptive": "medium",
+          "high": "high", "xhigh": "high", "max": "high"
+        }
+      },
       "drop_prior_thinking": true,
 
       "reasoning": {

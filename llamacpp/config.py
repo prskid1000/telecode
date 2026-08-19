@@ -148,6 +148,24 @@ _INFERENCE_DEFAULTS: dict[str, Any] = {
     "max_tokens": None,
     "stop": [],
     "context_overflow": "truncate_middle",
+    # Off by default: llama.cpp's own default is unrestricted thinking, and a
+    # cap that bites is a deliberate choice, not something to inherit silently.
+    "thinking_budget": {"enabled": False},
+    # Keys are Claude Code's effort vocabulary (what the proxy is built for);
+    # values are the MODEL's chat-template vocabulary. The default targets
+    # low/medium/high, the one trio valid across both families we care about:
+    # GPT-OSS takes it verbatim, and Qwen 3.8's template aliases high -> xhigh
+    # before its `not in ('xhigh','medium','low')` raise, so nothing here can
+    # trip it. Tighten `allowed` per model when the template is stricter.
+    "reasoning_effort": {
+        "template_key": "reasoning_effort",
+        "allowed": ["low", "medium", "high"],
+        "map": {
+            "none": "low", "minimal": "low", "low": "low",
+            "medium": "medium", "adaptive": "medium",
+            "high": "high", "xhigh": "high", "max": "high",
+        },
+    },
     "reasoning": {
         "enabled": True,
         "start": "<think>",

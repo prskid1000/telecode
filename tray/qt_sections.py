@@ -1810,9 +1810,6 @@ def _llama(window) -> QWidget:
                                    "Drop Prior-Turn Thinking",
                                    "On (default): strip thinking blocks from prior assistant turns before sending upstream — llama.cpp regenerates. "
                                    "Off: re-inject as <think>...</think> for trained-adaptive models that need prior reasoning for multi-turn coherence."))
-    pb_body.addWidget(_toggle_row("llamacpp.inference.disable_thinking",
-                                   "Disable Thinking (proxy override)",
-                                   "Force thinking off in the proxy regardless of model template — overrides per-model reasoning.enabled."))
     layout.addWidget(pb_card)
 
     # Structured output card
@@ -1837,9 +1834,19 @@ def _llama(window) -> QWidget:
     from PySide6.QtWidgets import QInputDialog as _QInputDialog, QMessageBox as _QMessageBox
     from tray.qt_theme import BG_ELEV as _BG_ELEV_MAP
 
-    map_card, map_body = _card("Reasoning Effort Map",
+    map_card, map_body = _card("Reasoning Effort Map (token budget)",
         "Per-request effort presets — selected when the client sends "
-        "reasoning_effort: \"low\"/\"medium\"/... Merged into chat_template_kwargs.")
+        "reasoning_effort: \"low\"/\"medium\"/... Sets llama.cpp's "
+        "thinking_budget_tokens (a server body param, model-agnostic). "
+        "It does NOT set the template's reasoning_effort string — that "
+        "vocabulary is model-specific, so it lives on the Models tab.")
+
+    map_body.addWidget(_toggle_row("llamacpp.inference.thinking_budget.enabled",
+        "Enable Token Budget",
+        "Off by default. When off, the proxy never sends thinking_budget_tokens "
+        "and llama.cpp's own default applies (unrestricted). Turn on only to "
+        "impose a hard cap on reasoning tokens per request. The presets below "
+        "have no effect while this is off."))
 
     rows_host = QWidget()
     rows_layout = QVBoxLayout(rows_host)
@@ -4340,6 +4347,42 @@ def _models(window) -> QWidget:
             _toggle_row(f"{rp}.emit_thinking_blocks", "Emit Thinking Blocks"),
             [f"{rp}.enabled"], _think_enabled))
 
+        form_layout.addWidget(_section_header("Disable Thinking (template switch)"))
+        dtp = f"{ip}.disable_thinking"
+        form_layout.addWidget(_toggle_row(f"{dtp}.enabled", "Disable Thinking",
+            "Stop the model generating reasoning at all, via its own chat-template "
+            "switch. Different from 'Parse <think> Blocks' above \u2014 that one only "
+            "controls whether the proxy surfaces thinking, while the model still "
+            "generates it and still pays the context for it."))
+        _dt_on = lambda en: bool(en)
+        form_layout.addWidget(_dependent(
+            _line_row(f"{dtp}.template_key", "Template Key", "enable_thinking",
+                      "Which chat-template variable to set. Qwen 3.x/3.8: "
+                      "`enable_thinking`. GPT-OSS has no boolean \u2014 use "
+                      "`reasoning_effort` with a low value below."),
+            [f"{dtp}.enabled"], _dt_on))
+        form_layout.addWidget(_dependent(
+            _line_row(f"{dtp}.disabled_value", "Disabled Value", "false",
+                      "JSON value written to that key when disabling. Qwen: `false`. "
+                      "GPT-OSS: `\"low\"`."),
+            [f"{dtp}.enabled"], _dt_on))
+
+        form_layout.addWidget(_section_header("Reasoning Effort (template string)"))
+        rep = f"{ip}.reasoning_effort"
+        form_layout.addWidget(_line_row(f"{rep}.template_key", "Template Key", "reasoning_effort",
+            "Chat-template variable carrying the effort string."))
+        form_layout.addWidget(_list_row(f"{rep}.allowed", "Allowed Values",
+            "Values this model's template accepts (one per line). Anything mapping "
+            "outside this set is dropped with a warning instead of being sent — "
+            "Qwen 3.8 raises a hard 500 on an unknown effort. Qwen 3.8: "
+            "xhigh / medium / low. GPT-OSS: low / medium / high. Leave empty to skip "
+            "the check.", "xhigh"))
+        form_layout.addWidget(_kv_row(f"{rep}.map", "Effort Map",
+            "client effort -> this model's template value, e.g. `high=xhigh`, "
+            "`max=xhigh`, `minimal=low`. Unmapped efforts emit nothing at all, "
+            "which is the safe default.",
+            typed=False))
+
         form_layout.addWidget(_section_header("Chat Template Kwargs"))
         form_layout.addWidget(_kv_row(f"{ip}.chat_template_kwargs",
             "Kwargs",
@@ -4407,6 +4450,11 @@ def _models(window) -> QWidget:
                                               "--reasoning-format: how the server tags think blocks. "
                                               "Telecode parses <think> in the proxy — pick 'none' if this "
                                               "model is consumed via the proxy."))
+        form_layout.addWidget(_toggle_row(f"{p}.reasoning_preserve", "Preserve Reasoning",
+            "--reasoning-preserve: keep the reasoning trace across the whole history, "
+            "not just the last assistant message. llama-server suggests this at startup "
+            "when the template supports it. Overlaps the proxy's 'Drop Prior-Turn "
+            "Thinking' — enabling both is contradictory, so pick one layer."))
 
     def _refresh_picker(preserve_key: str | None = None):
         picker.blockSignals(True)
