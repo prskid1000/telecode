@@ -159,7 +159,6 @@ _INFERENCE_DEFAULTS: dict[str, Any] = {
     # trip it. Tighten `allowed` per model when the template is stricter.
     "reasoning_effort": {
         "template_key": "reasoning_effort",
-        "allowed": ["low", "medium", "high"],
         "map": {
             "none": "low", "minimal": "low", "low": "low",
             "medium": "medium", "adaptive": "medium",
