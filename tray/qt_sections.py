@@ -4108,12 +4108,16 @@ def _models(window) -> QWidget:
     body.addLayout(top)
 
     # ── Form container ──────────────────────────────────────────────
+    # Sits at PAGE level, not inside the Models card, so the per-section cards
+    # built by _build_form are top-level siblings exactly like the llama.cpp
+    # page's Server / Spawn / Caching cards — rather than cards nested inside
+    # another card. Margins zero and spacing 18 to match _page()'s own layout.
+    layout.addWidget(card)
     form_host = QWidget()
     form_layout = QVBoxLayout(form_host)
-    form_layout.setContentsMargins(0, 4, 0, 0)
-    form_layout.setSpacing(10)
-    body.addWidget(form_host)
-    layout.addWidget(card)
+    form_layout.setContentsMargins(0, 0, 0, 0)
+    form_layout.setSpacing(18)
+    layout.addWidget(form_host)
     layout.addStretch(1)
 
     def _clear_form():
@@ -4141,11 +4145,13 @@ def _models(window) -> QWidget:
             return _b
 
         _sl = form_layout   # anything before the first card (there is none today)
-        _sl = _sec("Paths")
+        _sl = _sec("Paths",
+                    "llamacpp.models.<m>.path — GGUF file on disk")
         _sl.addWidget(_line_row(f"{p}.path",   "GGUF Path",
                                          "D:/models/foo.gguf",
                                          "Absolute path to the model .gguf file."))
-        _sl = _sec("Vision (mmproj — leave empty for text-only models)")
+        _sl = _sec("Vision",
+                    "llamacpp.models.<m>.mmproj — multimodal projector; leave empty for text-only models")
         _sl.addWidget(_line_row(f"{p}.mmproj", "mmproj Path",
                                          "D:/models/mmproj.gguf",
                                          "Optional — only needed for vision-capable GGUFs (Qwen-VL etc)."))
@@ -4164,7 +4170,8 @@ def _models(window) -> QWidget:
                          "--image-max-tokens: maximum tokens per image. 0 = read from model. Lower = less prefill compute."),
             [f"{p}.mmproj"], _has_mmproj))
 
-        _sl = _sec("Capacity")
+        _sl = _sec("Capacity",
+                    "llamacpp.models.<m>.* — context window and layer placement")
         _sl.addWidget(_number_row(f"{p}.ctx_size",     "Context Size",       512, 1048576, 256, 0, "tok"))
         # n_gpu_layers is greyed when fit is on — the auto-fitter aborts if it
         # sees a user-pinned ngl, so argv.build_argv() suppresses --n-gpu-layers
@@ -4180,7 +4187,8 @@ def _models(window) -> QWidget:
                                          "e.g. CUDA0,CUDA1 / Vulkan0 / none",
                                          "--device: explicit comma-separated device list. Empty = let llama-server pick (split-mode applies)."))
 
-        _sl = _sec("Context Fitting")
+        _sl = _sec("Context Fitting",
+                    "--fit — auto-shrink ctx_size to what the GPU can hold")
         _sl.addWidget(_toggle_row(f"{p}.fit",          "Fit Context",
                                            "--fit on: auto-shrink ctx_size to what the model + KV actually fits in available memory."))
         _fit_on = lambda f: bool(f)
@@ -4193,13 +4201,15 @@ def _models(window) -> QWidget:
                          "--fit-target: free VRAM/RAM (MB) to leave after fitting."),
             [f"{p}.fit"], _fit_on))
 
-        _sl = _sec("Cache")
+        _sl = _sec("Cache",
+                    "--cache-type-* — KV cache quantisation and reuse")
         _sl.addWidget(_enum_row_strs(f"{p}.cache_type_k", "Cache Type (K)", _CACHE_TYPES))
         _sl.addWidget(_enum_row_strs(f"{p}.cache_type_v", "Cache Type (V)", _CACHE_TYPES))
         _sl.addWidget(_number_row(f"{p}.cache_reuse",     "Cache Reuse",          0,   8192, 32, 0, "tok",
                                            "--cache-reuse: tokens to retain when reusing an existing slot."))
 
-        _sl = _sec("Flags")
+        _sl = _sec("Flags",
+                    "llamacpp.models.<m>.* — per-model llama-server switches")
         _sl.addWidget(_toggle_row(f"{p}.preload",       "Preload",
                                            "Load this model at telecode startup regardless of auto_start."))
         _sl.addWidget(_enum_row_strs(f"{p}.flash_attn", "Flash Attention",
@@ -4220,7 +4230,8 @@ def _models(window) -> QWidget:
                                          "/path/to/template.jinja",
                                          "--chat-template-file: load the jinja template from a file (alternative to the inline override above)."))
 
-        _sl = _sec("RoPE")
+        _sl = _sec("RoPE",
+                    "--rope-* — position-embedding scaling to stretch context past training length")
         _sl.addWidget(_enum_row(
             f"{p}.rope_scaling", "RoPE Scaling",
             [("Model default", ""), ("none", "none"), ("linear", "linear"), ("yarn", "yarn")],
@@ -4237,7 +4248,8 @@ def _models(window) -> QWidget:
                          "--rope-freq-scale. 0 = model default."),
             [f"{p}.rope_scaling"], _has_rope_scaling))
 
-        _sl = _sec("YaRN (only when RoPE Scaling = yarn)")
+        _sl = _sec("YaRN",
+                    "--yarn-* — only applied when RoPE Scaling is set to yarn")
         _sl.addWidget(_dependent(
             _number_row(f"{p}.yarn_orig_ctx",  "YaRN Orig Ctx",        0, 1048576, 1024, 0, "tok",
                          "--yarn-orig-ctx: original training context for YaRN scaling."),
@@ -4261,7 +4273,8 @@ def _models(window) -> QWidget:
                          "--yarn-beta-fast: low correction dim (beta). 0 = default."),
             [f"{p}.rope_scaling"], _yarn_active))
 
-        _sl = _sec("Draft Model (Speculative)")
+        _sl = _sec("Draft Model (Speculative)",
+                    "--spec-* / --draft-* — a small draft model proposes tokens the main model verifies")
         _sl.addWidget(_line_row(f"{p}.draft_model", "Draft Model (GGUF)",
                                          "D:/models/draft-0.6b.gguf",
                                          "--model-draft: separate small LM for draft tokens. "
@@ -4335,7 +4348,8 @@ def _models(window) -> QWidget:
 
         # Per-model Inference Defaults — proxy-applied per-request body fields.
         # Override hierarchy: request body > this > top-level llamacpp.inference.
-        _sl = _sec("Inference Defaults (proxy per-request)")
+        _sl = _sec("Inference Defaults",
+                    "inference_defaults.* — applied by the proxy to every request body; request values win")
         ip = f"{p}.inference_defaults"
         _sl.addWidget(_number_row(f"{ip}.temperature",       "Temperature",       0.0, 1.5, 0.05, 2))
         _sl.addWidget(_number_row(f"{ip}.top_p",             "Top-P",             0.0, 1.0, 0.01, 2))
@@ -4350,7 +4364,8 @@ def _models(window) -> QWidget:
                                          "Generation halts when any of these appears (one per line).",
                                          "</s>"))
 
-        _sl = _sec("Reasoning (proxy <think> parser)")
+        _sl = _sec("Reasoning Parser",
+                    "inference_defaults.reasoning.* — how the proxy detects and surfaces think blocks; does not change what the model generates")
         rp = f"{ip}.reasoning"
         _sl.addWidget(_toggle_row(f"{rp}.enabled",              "Parse <think> Blocks"))
         _think_enabled = lambda en: bool(en)
@@ -4364,7 +4379,8 @@ def _models(window) -> QWidget:
             _toggle_row(f"{rp}.emit_thinking_blocks", "Emit Thinking Blocks"),
             [f"{rp}.enabled"], _think_enabled))
 
-        _sl = _sec("Thinking (template switch)")
+        _sl = _sec("Thinking",
+                    "inference_defaults.thinking.* — the model's own on/off switch; empty key leaves it to the template")
         tkp = f"{ip}.thinking"
         _sl.addWidget(_line_row(f"{tkp}.template_key", "Template Key", "",
             "Which chat-template variable carries the on/off switch. Qwen 3.x / 3.8: "
@@ -4381,7 +4397,8 @@ def _models(window) -> QWidget:
                 "pays the context."),
             [f"{tkp}.template_key"], lambda k: bool(str(k or "").strip())))
 
-        _sl = _sec("Reasoning Effort (template string)")
+        _sl = _sec("Reasoning Effort",
+                    "inference_defaults.reasoning_effort.* — Claude Code effort level → this model's template vocabulary")
         rep = f"{ip}.reasoning_effort"
         _sl.addWidget(_line_row(f"{rep}.template_key", "Template Key", "reasoning_effort",
             "Which chat-template variable carries the effort string. Qwen 3.x / "
@@ -4538,7 +4555,8 @@ def _models(window) -> QWidget:
         _eff_add_btn.clicked.connect(_on_add_effort_key)
         _refresh_model_effort_map()
 
-        _sl = _sec("Chat Template Kwargs")
+        _sl = _sec("Chat Template Kwargs",
+                    "inference_defaults.chat_template_kwargs — arbitrary kwargs merged into every request")
         _sl.addWidget(_kv_row(f"{ip}.chat_template_kwargs",
             "Kwargs",
             "Merged into every request's chat_template_kwargs. Values are "
@@ -4546,7 +4564,8 @@ def _models(window) -> QWidget:
             "`budget=4096`. Anything the model's jinja template reads.",
             typed=True))
 
-        _sl = _sec("LoRA")
+        _sl = _sec("LoRA",
+                    "--lora — adapter applied on top of the base model")
         _sl.addWidget(_line_row(f"{p}.lora",        "LoRA Adapter (path)",
                                          "/path/to/adapter.gguf",
                                          "--lora: GGUF LoRA adapter file."))
@@ -4556,7 +4575,8 @@ def _models(window) -> QWidget:
                          "--lora-scaled: blend strength (1.0 = full)."),
             [f"{p}.lora"], lambda l: bool(str(l or "").strip())))
 
-        _sl = _sec("Grammar")
+        _sl = _sec("Grammar",
+                    "--grammar / --grammar-file — constrain generation with GBNF")
         _sl.addWidget(_code_row(f"{p}.grammar",       "GBNF Grammar (inline)",
                                          "(empty)",
                                          "--grammar: inline GBNF for constrained decoding.",
@@ -4565,7 +4585,8 @@ def _models(window) -> QWidget:
                                          "/path/to/grammar.gbnf",
                                          "--grammar-file: load GBNF from disk."))
 
-        _sl = _sec("Advanced Placement")
+        _sl = _sec("Advanced Placement",
+                    "--override-* / --device — tensor and KV placement overrides")
         _sl.addWidget(_line_row(f"{p}.override_tensor", "Override Tensor",
                                          "blk\\.[0-9]+\\.ffn_.*=CPU",
                                          "--override-tensor: per-tensor buffer placement. Pattern=buffer (regex), comma-separated. "
@@ -4574,12 +4595,14 @@ def _models(window) -> QWidget:
                                          "tokenizer.ggml.add_bos_token=bool:false",
                                          "--override-kv: override GGUF metadata at load. Format KEY=TYPE:VALUE, comma-separated."))
 
-        _sl = _sec("Extra CLI Args")
+        _sl = _sec("Extra CLI Args",
+                    "llamacpp.models.<m>.extra_args — raw flags appended to the spawn argv")
         _sl.addWidget(_pair_list_row(f"{p}.extra_args", "Extra Args",
             'Per-model escape hatch — one [flag, value] pair per row. '
             'Top-level llamacpp.extra_args is also appended.'))
 
-        _sl = _sec("Per-Model Reasoning Override")
+        _sl = _sec("Per-Model Reasoning Override",
+                    "--reasoning* — server-side reasoning flags for this model")
         _sl.addWidget(_enum_row_strs(f"{p}.reasoning", "Reasoning",
                                               [("(server default — auto)", ""),
                                                ("on",   "on"),
