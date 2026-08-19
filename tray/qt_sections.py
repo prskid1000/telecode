@@ -1848,11 +1848,17 @@ def _llama(window) -> QWidget:
         "impose a hard cap on reasoning tokens per request. The presets below "
         "have no effect while this is off."))
 
+    # The presets only mean anything while the budget layer is on, so grey the
+    # whole lot out with it. setEnabled propagates to children, so wrapping the
+    # two containers covers every row plus the add-bar.
+    _budget_path = "llamacpp.inference.thinking_budget.enabled"
+    _budget_on = lambda en: bool(en)
+
     rows_host = QWidget()
     rows_layout = QVBoxLayout(rows_host)
     rows_layout.setContentsMargins(0, 0, 0, 0)
     rows_layout.setSpacing(8)
-    map_body.addWidget(rows_host)
+    map_body.addWidget(_dependent(rows_host, [_budget_path], _budget_on))
 
     add_bar = QWidget()
     ab = QHBoxLayout(add_bar)
@@ -1867,7 +1873,7 @@ def _llama(window) -> QWidget:
     ab.addWidget(add_key_edit, 1)
     ab.addWidget(add_preset_btn)
     ab.addStretch(1)
-    map_body.addWidget(add_bar)
+    map_body.addWidget(_dependent(add_bar, [_budget_path], _budget_on))
 
     from config import STANDARD_EFFORT_KEYS as _STD_EFFORT_KEYS
 
@@ -4370,18 +4376,63 @@ def _models(window) -> QWidget:
         form_layout.addWidget(_section_header("Reasoning Effort (template string)"))
         rep = f"{ip}.reasoning_effort"
         form_layout.addWidget(_line_row(f"{rep}.template_key", "Template Key", "reasoning_effort",
-            "Chat-template variable carrying the effort string."))
+            "Which chat-template variable carries the effort string. Qwen 3.x / "
+            "GPT-OSS both call it `reasoning_effort`."))
+        # One framed row per Claude Code effort level, styled to match the token
+        # budget card on the llama.cpp page so the two maps read identically.
+        # Values are seeded by config._ensure_model_effort_maps, never blank.
+        from config import STANDARD_EFFORT_KEYS as _STD_EFFORT_KEYS_M
+
+        def _build_model_effort_row(ekey: str, path: str) -> QWidget:
+            row = QFrame()
+            row.setStyleSheet(
+                f"QFrame {{ background: {BG_ELEV}; border: 1px solid {BORDER};"
+                f" border-radius: 6px; }}"
+            )
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(10, 6, 10, 6)
+            rl.setSpacing(10)
+
+            head = QLabel(
+                f"<b style='color:{FG}'>{ekey}</b>"
+                f" <span style='color:{FG_MUTE}; font-weight:normal; font-size:10.5px;'>"
+                f"· claude code</span>"
+            )
+            head.setTextFormat(Qt.TextFormat.RichText)
+            head.setMinimumWidth(140)
+            rl.addWidget(head)
+
+            arrow = QLabel("→")
+            arrow.setStyleSheet(f"color: {FG_DIM};")
+            rl.addWidget(arrow)
+
+            ed = QLineEdit()
+            ed.setPlaceholderText("(unset — emits nothing)")
+            cur = get_path(read_settings(), path)
+            ed.setText("" if cur is None else str(cur))
+            ed.setToolTip(
+                f"Template value this model expects when the client asks for "
+                f"effort '{ekey}'. Empty sends nothing for that level."
+            )
+            rl.addWidget(ed, 1)
+
+            def _commit(e=ed, pth=path):
+                txt = e.text().strip()
+                if txt:
+                    patch_settings(pth, txt)
+                else:
+                    remove_path(pth)
+            ed.editingFinished.connect(_commit)
+            return row
+
+        for _ek in _STD_EFFORT_KEYS_M:
+            form_layout.addWidget(_build_model_effort_row(_ek, f"{rep}.map.{_ek}"))
         form_layout.addWidget(_list_row(f"{rep}.allowed", "Allowed Values",
-            "Values this model's template accepts (one per line). Anything mapping "
-            "outside this set is dropped with a warning instead of being sent — "
-            "Qwen 3.8 raises a hard 500 on an unknown effort. Qwen 3.8: "
-            "xhigh / medium / low. GPT-OSS: low / medium / high. Leave empty to skip "
-            "the check.", "xhigh"))
-        form_layout.addWidget(_kv_row(f"{rep}.map", "Effort Map",
-            "client effort -> this model's template value, e.g. `high=xhigh`, "
-            "`max=xhigh`, `minimal=low`. Unmapped efforts emit nothing at all, "
-            "which is the safe default.",
-            typed=False))
+            "Guard: values this model's template accepts (one per line). Anything "
+            "mapping outside this set is dropped with a warning instead of being "
+            "sent — Qwen 3.8 raises a hard 500 on an unknown effort. Qwen 3.8 takes "
+            "xhigh / medium / low (and aliases high→xhigh); GPT-OSS takes "
+            "low / medium / high. Empty = skip the check.", "low"))
 
         form_layout.addWidget(_section_header("Chat Template Kwargs"))
         form_layout.addWidget(_kv_row(f"{ip}.chat_template_kwargs",
