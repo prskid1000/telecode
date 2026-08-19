@@ -467,8 +467,8 @@ def _apply_reasoning_effort_template(body: dict[str, Any],
         }
 
     Map keys are Claude Code effort levels; values are whatever this model
-    template expects. An unmapped effort emits nothing at all -- the safe
-    default. Values are not validated: they are per-model and visible in the
+    template expects. An empty `template_key` disables the mapping outright,
+    and an unmapped or empty value emits nothing -- both safe defaults. Values are not validated: they are per-model and visible in the
     tray, so an unusable value is a visible configuration error rather than
     something to guard against here.
     """
@@ -477,11 +477,17 @@ def _apply_reasoning_effort_template(body: dict[str, Any],
     cfg = defaults.get("reasoning_effort")
     if not isinstance(cfg, dict):
         return
+    key = str(cfg.get("template_key") or "").strip()
+    if not key:
+        # Same rule as `thinking`: the KEY gates this. Clearing it is how you
+        # switch the whole mapping off for a model whose template has no such
+        # variable — Qwen 3.6, for one, defines enable_thinking and
+        # preserve_thinking but no reasoning_effort at all.
+        return
     value = (cfg.get("map") or {}).get(str(effort).lower())
     if value is None or value == "":
         return
-    _merge_chat_template_kwargs(
-        body, {str(cfg.get("template_key") or "reasoning_effort"): value})
+    _merge_chat_template_kwargs(body, {key: value})
 
 
 def _apply_thinking_mode(body: dict[str, Any],
