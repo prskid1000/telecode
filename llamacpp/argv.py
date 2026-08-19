@@ -290,6 +290,11 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("reasoning_budget",         "--reasoning-budget",         "value"),
     ("reasoning_budget_message", "--reasoning-budget-message", "value"),
     ("reasoning_format",         "--reasoning-format",         "value"),
+    # llama-server nags for this one at every startup when the template
+    # supports it: "chat template supports preserving reasoning, consider
+    # enabling it via --reasoning-preserve". Server-side twin of Qwen's
+    # `preserve_thinking` template var and of proxy drop_prior_thinking.
+    ("reasoning_preserve", ("--reasoning-preserve", "--no-reasoning-preserve"), "bool_pair"),
 
     # Advanced placement
     ("override_tensor",  "--override-tensor",  "value"),

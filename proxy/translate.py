@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -34,6 +35,9 @@ from typing import Any, Iterable
 
 
 # ── Utilities ────────────────────────────────────────────────────────────
+
+
+log = logging.getLogger("telecode.proxy.translate")
 
 def drop_cache_control(obj: Any) -> Any:
     """Recursively strip `cache_control` keys from dicts/lists.
@@ -386,6 +390,7 @@ def _merge_chat_template_kwargs(out_body: dict[str, Any], patch: dict[str, Any])
 def _apply_effort_entry(
     entry: dict[str, Any],
     out_body: dict[str, Any],
+    defaults: dict[str, Any] | None = None,
 ) -> str:
     """Apply one reasoning_effort_map entry to the outgoing body.
 
@@ -415,7 +420,9 @@ def _apply_effort_entry(
     Returns the system_nudge (may be "") so the caller can handle prompt-level
     injection in its own flow.
     """
-    if "thinking_budget_tokens" in entry:
+    budget_cfg = (defaults or {}).get("thinking_budget")
+    budget_on = bool(budget_cfg.get("enabled")) if isinstance(budget_cfg, dict) else bool(budget_cfg)
+    if budget_on and "thinking_budget_tokens" in entry:
         try:
             n = int(entry["thinking_budget_tokens"])
         except (TypeError, ValueError):
@@ -429,6 +436,105 @@ def _apply_effort_entry(
             out_body["max_tokens"] = new
 
     return str(entry.get("system_nudge", "") or "")
+
+
+def _apply_reasoning_effort_template(body: dict[str, Any],
+                                    defaults: dict[str, Any],
+                                    effort: str | None) -> None:
+    """Translate the request's effort level into the MODEL's own template value.
+
+    Deliberately per-model and separate from `reasoning_effort_map`, because the
+    two live on different layers:
+
+      reasoning_effort_map   -> `thinking_budget_tokens`, a llama.cpp body param.
+                                Model-agnostic, so it stays global.
+      this                   -> `reasoning_effort`, a chat-template string whose
+                                vocabulary each model defines itself.
+
+    The vocabularies genuinely disagree, and getting it wrong is not a soft
+    failure. Qwen 3.8's template:
+
+        {%- if resolved_reasoning_effort not in ('xhigh', 'medium', 'low') %}
+            {{- raise_exception('Unexpected reasoning effort ...') }}
+
+    so feeding it the global map's `none` / `minimal` / `adaptive` / `max` is a
+    hard 500. GPT-OSS wants low|medium|high. llama.cpp's own --reasoning-effort
+    accepts minimal|low|medium|high|xhigh|max. One global list cannot serve them.
+
+    Config (per model, under inference_defaults):
+
+        "reasoning_effort": {
+            "template_key": "reasoning_effort",
+            "allowed": ["xhigh", "medium", "low"],
+            "map": {"none": "low", "minimal": "low", "low": "low",
+                    "medium": "medium", "high": "xhigh", "xhigh": "xhigh",
+                    "max": "xhigh", "adaptive": "medium"}
+        }
+
+    Absent config emits nothing at all — the safe default, and what the proxy did
+    before this existed. A value that survives the map but is not in `allowed` is
+    dropped with a warning rather than forwarded into a raise.
+    """
+    if not effort:
+        return
+    cfg = defaults.get("reasoning_effort")
+    if not isinstance(cfg, dict):
+        return
+    mapping = cfg.get("map") or {}
+    value = mapping.get(str(effort).lower())
+    if value is None:
+        return
+    allowed = cfg.get("allowed")
+    if isinstance(allowed, list) and allowed and value not in allowed:
+        log.warning(
+            "reasoning_effort: %r -> %r is not in the model's allowed set %s — "
+            "omitting rather than risking a template raise", effort, value, allowed,
+        )
+        return
+    _merge_chat_template_kwargs(body, {str(cfg.get("template_key") or "reasoning_effort"): value})
+
+
+def _apply_disable_thinking(body: dict[str, Any],
+                            defaults: dict[str, Any]) -> None:
+    """Force thinking off via the model's own chat-template switch.
+
+    Per-model, not global, because the switch is model-specific:
+
+      Qwen 3.x / 3.8   `enable_thinking: false`  -> template prefills an empty
+                       `<think>\n\n</think>` block, so the model emits no
+                       reasoning at all.
+      GPT-OSS          `reasoning_effort: "low"` -> no boolean; effort is the
+                       only lever.
+
+    So the config carries BOTH the toggle and the key it drives:
+
+        "disable_thinking": {
+            "enabled": true,
+            "template_key": "enable_thinking",
+            "disabled_value": false
+        }
+
+    A bare `true` is accepted as shorthand for the Qwen form. The resulting
+    kwarg is merged into `chat_template_kwargs`, which llama.cpp forwards to
+    the Jinja template verbatim.
+
+    Deliberately NOT the same thing as `reasoning.enabled`: that one only tells
+    the proxy whether to parse and surface `<think>` blocks. The model still
+    generates them and they still cost context. This switch stops generation.
+    """
+    cfg = defaults.get("disable_thinking")
+    if not cfg:
+        return
+    if cfg is True:
+        key, value = "enable_thinking", False
+    elif isinstance(cfg, dict):
+        if not cfg.get("enabled"):
+            return
+        key = str(cfg.get("template_key") or "enable_thinking")
+        value = cfg.get("disabled_value", False)
+    else:
+        return
+    _merge_chat_template_kwargs(body, {key: value})
 
 
 def _apply_model_chat_template_kwargs(body: dict[str, Any],
@@ -626,7 +732,9 @@ def anthropic_request_to_internal(
     # Merge the model's configured chat_template_kwargs FIRST so per-request
     # effort resolution can still override individual keys.
     _apply_model_chat_template_kwargs(out, defaults)
-    nudge = _apply_effort_entry(entry, out)
+    _apply_disable_thinking(out, defaults)
+    _apply_reasoning_effort_template(out, defaults, effort)
+    nudge = _apply_effort_entry(entry, out, defaults)
     # direct budget from client overrides whatever the map said
     if direct_budget is not None:
         out["thinking_budget_tokens"] = direct_budget
@@ -755,7 +863,9 @@ def openai_request_to_internal(
 
     entry = _resolve_reasoning_effort(effort, defaults)
     _apply_model_chat_template_kwargs(body, defaults)
-    sys_nudge = _apply_effort_entry(entry, body)
+    _apply_disable_thinking(body, defaults)
+    _apply_reasoning_effort_template(body, defaults, effort)
+    sys_nudge = _apply_effort_entry(entry, body, defaults)
 
     messages = _normalize_system_messages(body.get("messages") or [], system_mode)
     if sys_nudge:

@@ -607,6 +607,12 @@ async def _prepare_internal_body(
     if use_strip_reminders:
         internal["messages"] = _strip_reminders_from_internal(internal.get("messages", []))
 
+    # 8. Context overflow — last, so it sees the final prepared body.
+    internal = await _apply_context_overflow(
+        internal, active_model,
+        str(_pget("context_overflow", inference.get("context_overflow", "error")) or "error"),
+    )
+
     managed_intercept = {
         _MGR[n].name for n in managed_inject if n in _MGR
     }
@@ -628,6 +634,149 @@ async def _prepare_internal_body(
         "reasoning_cfg": reasoning_cfg,
         "profile": profile,
     }
+
+
+# ── Context overflow ─────────────────────────────────────────────────────
+#
+# llama.cpp has NO server-side prompt truncation. `--context-shift` covers a
+# different case entirely (generation running past the context, mid-stream) and
+# is disabled outright for many models. An oversized *prompt* is rejected at
+# admission with `exceed_context_size_error`, deliberately, so the client picks
+# what history to lose. That client is us.
+
+_MIN_TAIL_MESSAGES = 2      # always keep the final exchange intact
+_OVERFLOW_SAFETY = 64       # slack for template scaffolding we can't predict
+
+
+def _is_tool_protocol(msg: dict[str, Any]) -> bool:
+    return bool(msg.get("tool_calls") or msg.get("tool_call_id")
+                or msg.get("role") == "tool")
+
+
+def _drop_indices(messages: list[dict[str, Any]], policy: str) -> list[int]:
+    """Indices eligible for dropping, in the order we should drop them.
+
+    Never the leading system block, and never the last `_MIN_TAIL_MESSAGES`
+    (the current question would be lost). Order encodes the policy:
+
+      truncate_middle  outward from the centre — keeps both the oldest turns
+                       (which the model treats as standing context) and the
+                       most recent ones. Also the only cache-friendly choice:
+                       the head stays byte-identical, so llama.cpp's prefix
+                       cache survives everything before the cut.
+      truncate_left    oldest first
+      truncate_right   newest-eligible first
+    """
+    first = 1 if (messages and messages[0].get("role") == "system") else 0
+    last = max(first, len(messages) - _MIN_TAIL_MESSAGES)
+    eligible = list(range(first, last))
+    if not eligible:
+        return []
+    if policy == "truncate_left":
+        return eligible
+    if policy == "truncate_right":
+        return list(reversed(eligible))
+    mid = len(eligible) // 2
+    out: list[int] = []
+    for off in range(len(eligible)):
+        lo, hi = mid - off - 1, mid + off
+        if hi < len(eligible):
+            out.append(eligible[hi])
+        if lo >= 0:
+            out.append(eligible[lo])
+    return out
+
+
+async def _apply_context_overflow(
+    internal: dict[str, Any],
+    active_model: str,
+    policy: str,
+) -> dict[str, Any]:
+    """Trim the prepared body so it fits the model's context window.
+
+    Implements `llamacpp.inference.context_overflow`. Returns the body
+    unchanged when it already fits, when the policy is "error" (let llama.cpp
+    reject it, which is the pre-existing behaviour), or when we cannot
+    establish a budget.
+
+    Whole messages are dropped, never fragments: a partial message would
+    orphan a `tool_calls` from its `role:"tool"` result and break the chat
+    template. Tool-protocol messages are dropped together with the assistant
+    turn that owns them.
+    """
+    if policy not in ("truncate_middle", "truncate_left", "truncate_right"):
+        return internal
+
+    ctx = int((llama_cfg.model_cfg(active_model) or {}).get("ctx_size") or 0)
+    if ctx <= 0:
+        return internal
+
+    reserve = internal.get("max_tokens")
+    try:
+        reserve = int(reserve)
+    except (TypeError, ValueError):
+        reserve = 0
+    budget = ctx - max(reserve, 0) - _OVERFLOW_SAFETY
+    if budget <= 0:
+        budget = ctx - _OVERFLOW_SAFETY
+
+    messages = list(internal.get("messages") or [])
+    if not messages:
+        return internal
+
+    try:
+        used = await toks.count_tokens(messages)
+    except Exception as exc:
+        log.warning("context_overflow: token count failed (%s) — forwarding as-is", exc)
+        return internal
+    if used <= 0 or used <= budget:
+        return internal
+
+    order = _drop_indices(messages, policy)
+    dropped: set[int] = set()
+    for idx in order:
+        if used <= budget:
+            break
+        if idx in dropped:
+            continue
+        # Drop the message plus any tool-protocol run bound to it, so a
+        # tool_calls turn never loses its results (or vice versa).
+        group = {idx}
+        if messages[idx].get("tool_calls"):
+            j = idx + 1
+            while j < len(messages) and messages[j].get("role") == "tool":
+                group.add(j)
+                j += 1
+        elif messages[idx].get("role") == "tool":
+            j = idx - 1
+            while j >= 0 and messages[j].get("role") == "tool":
+                j -= 1
+            if j >= 0 and messages[j].get("tool_calls"):
+                group.add(j)
+                k = j + 1
+                while k < len(messages) and messages[k].get("role") == "tool":
+                    group.add(k)
+                    k += 1
+        dropped |= group
+        kept = [m for i, m in enumerate(messages) if i not in dropped]
+        try:
+            used = await toks.count_tokens(kept)
+        except Exception as exc:
+            log.warning("context_overflow: token count failed mid-trim (%s)", exc)
+            return internal
+
+    if not dropped:
+        return internal
+
+    kept = [m for i, m in enumerate(messages) if i not in dropped]
+    log.warning(
+        "context_overflow(%s): dropped %d/%d messages to fit %s "
+        "(ctx=%d reserve=%d budget=%d, now %d tokens)",
+        policy, len(dropped), len(messages), active_model,
+        ctx, reserve, budget, used,
+    )
+    internal["messages"] = kept
+    return internal
 
 
 def _strip_reminders_from_internal(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
