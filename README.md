@@ -562,7 +562,8 @@ Sits between Claude Code (or any Anthropic-API client) and LM Studio / Ollama / 
 | `max_roundtrips` | Max intercept round-trips per request before giving up (default `15`). Each ToolSearch / managed tool / auto-load / unloaded-guard consumes one. |
 | `tool_search` | Split incoming tools into core (always forwarded) + deferred (searchable via ToolSearch) |
 | `sort_tools` | Sort `body.tools` alphabetically before forwarding — stabilises the prompt prefix for cache-friendliness |
-| `strip_reminders` | Drop `<system-reminder>` blocks from messages |
+| `strip_reminders` | Drop `<system-reminder>` blocks and per-turn `<total_tokens>` budget lines from messages |
+| `mid_system_messages` | What to do with a `system` message arriving mid-conversation: `demote` (default — keep position, re-role to `user`), `strip`, `merge_top` (legacy hoist, pins the prompt cache) or `keep` |
 | `auto_load_tools` | Auto-load a deferred tool's schema the first time the model calls it blindly |
 | `lift_tool_result_images` | Lift images out of array-form `tool_result` content — LM Studio workaround |
 | `location` | User location for the date/location system-reminder (empty = auto-detect via IP) |
@@ -632,7 +633,8 @@ Match requests by header substring and apply per-client transforms. First match 
 | `system_instruction` | Markdown file in `proxy/instructions/` — prepended to the client's system prompt |
 | `tool_search` | Split tools into core + deferred, inject ToolSearch, intercept its calls. Self-contained feature |
 | `inject_date_location` | Add the date/location `<system-reminder>` |
-| `strip_reminders` | Strip `<system-reminder>` blocks from messages |
+| `strip_reminders` | Strip `<system-reminder>` blocks and per-turn `<total_tokens>` budget lines from messages |
+| `mid_system_messages` | What to do with a `system` message arriving mid-conversation: `demote` (default — keep position, re-role to `user`), `strip`, `merge_top` (legacy hoist, pins the prompt cache) or `keep` |
 | `lift_tool_result_images` | Lift image blocks out of array-form tool_results (LM Studio workaround) |
 | `auto_load_tools` | When `tool_search` defers tools: if `true`, auto-load a deferred tool's schema on first blind call; if `false`, deferred tools must be loaded via ToolSearch first |
 | `core_tools` | Tool names that stay core when splitting. Falls back to `proxy.core_tools` |

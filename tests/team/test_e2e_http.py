@@ -78,6 +78,17 @@ def _wait_run(run_id, predicate, deadline_s=20):
     return rr.get("run") or {}
 
 
+def _sessions_assigned(run):
+    """True once every step has both left `pending` AND had its session_id
+    persisted. Status alone is not enough — the executor flips a step to
+    `running` a beat before the session id lands, so a predicate that only
+    watched status could return a run whose session_id was still None."""
+    steps = run.get("steps") or []
+    return bool(steps) and all(
+        s.get("status") != "pending" and s.get("session_id") for s in steps
+    )
+
+
 def _cleanup(agents=(), jobs=(), workspaces=()):
     for jid in jobs:
         req("DELETE", f"/api/jobs/{jid}", None, timeout=5)
@@ -154,8 +165,9 @@ def test_run_starts_and_cancels_cleanly():
     job_id = j["job"]["id"]
     sc, r = req("POST", f"/api/jobs/{job_id}/runs", {"is_local": True, "source": "user"})
     run_id = r["run"]["run_id"]
-    # Wait until step assigned a session_id (i.e. moved to running)
-    final = _wait_run(run_id, lambda rr: rr["steps"][0]["status"] != "pending", deadline_s=15)
+    # Wait until step assigned a session_id. Checking `status != pending` alone
+    # races: a step leaves `pending` a moment before session_id is persisted.
+    final = _wait_run(run_id, lambda rr: _sessions_assigned(rr), deadline_s=15)
     assert final["steps"][0]["session_id"] == ws    # single-step runs in job ws
     sc, _ = req("POST", f"/api/jobs/{job_id}/runs/{run_id}/cancel", {})
     assert sc == 200
@@ -175,7 +187,7 @@ def test_parallel_run_uses_distinct_ephemeral_sessions():
     job_id = j["job"]["id"]
     sc, r = req("POST", f"/api/jobs/{job_id}/runs", {"is_local": True, "source": "user"})
     run_id = r["run"]["run_id"]
-    final = _wait_run(run_id, lambda rr: all(s["status"] != "pending" for s in rr["steps"]), deadline_s=15)
+    final = _wait_run(run_id, lambda rr: _sessions_assigned(rr), deadline_s=15)
     sids = [s["session_id"] for s in final["steps"]]
     assert len(set(sids)) == 2                       # distinct
     assert all(sid != ws for sid in sids)            # not the job ws
@@ -199,7 +211,7 @@ def test_custom_phase_topology_starts_phase_zero_in_workspace():
     job_id = j["job"]["id"]
     sc, r = req("POST", f"/api/jobs/{job_id}/runs", {"is_local": True, "source": "user"})
     run_id = r["run"]["run_id"]
-    final = _wait_run(run_id, lambda rr: rr["steps"][0]["status"] != "pending", deadline_s=15)
+    final = _wait_run(run_id, lambda rr: _sessions_assigned(rr), deadline_s=15)
     # Phase-0 step started in the job workspace
     assert final["steps"][0]["session_id"] == ws
     # Later phases still pending

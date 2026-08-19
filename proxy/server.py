@@ -332,19 +332,33 @@ async def _inject_system_prompt(
     body: dict[str, Any],
     profile: dict | None,
     inject_date_location: bool,
+    system_mode: str | None = None,
 ) -> dict[str, Any]:
-    """Prepend profile system_instruction and/or date+location to body.
+    """Add the profile system_instruction and/or date+location to body.
 
-    body is in INTERNAL (OpenAI) shape — we modify the first system message
-    or prepend a new one.
+    body is in INTERNAL (OpenAI) shape — we extend the first system message,
+    or create one if there is none.
+
+    `system_instruction` goes at the HEAD (it is the system prompt).
+    Date/location goes at the TAIL, as plain text, for two reasons:
+
+      * Plain text, not a <system-reminder> block. `strip_reminders` removes
+        every reminder block it does not explicitly preserve, so a wrapped
+        injection was deleted again a couple of steps later — the flag was a
+        silent no-op for any profile with strip_reminders on.
+      * At the tail, because the date rolls over once a day. Anything after
+        the injection point has to be re-prefilled when it changes; putting it
+        last means that is only the conversation, not the whole system prompt
+        and tool listing ahead of it.
     """
-    parts: list[str] = []
+    head_parts: list[str] = []
+    tail_parts: list[str] = []
 
     system_md = profile.get("system_instruction") if profile else None
     if system_md:
         instruction = proxy_system_instruction(system_md)
         if instruction:
-            parts.append(instruction)
+            head_parts.append(instruction)
 
     if inject_date_location:
         from datetime import datetime
@@ -353,23 +367,28 @@ async def _inject_system_prompt(
         segs = [f"Current date: {date_str}."]
         if location:
             segs.append(f"User location: {location}.")
-        parts.append("<system-reminder>\n" + " ".join(segs) + "\n</system-reminder>")
+        tail_parts.append(" ".join(segs))
 
-    if not parts:
+    if not head_parts and not tail_parts:
         return body
 
-    injection = "\n\n".join(parts)
-    messages = xlate._coalesce_system_messages(body.get("messages", []))
+    head = "\n\n".join(head_parts)
+    tail = "\n\n".join(tail_parts)
+
+    messages = xlate._normalize_system_messages(body.get("messages", []), system_mode)
     if messages and messages[0].get("role") == "system":
         existing = messages[0].get("content", "")
-        if isinstance(existing, str):
-            messages[0] = {**messages[0], "content": f"{injection}\n\n{existing}" if existing else injection}
-        elif isinstance(existing, list):
+        if isinstance(existing, list):
             # Re-emit as string (llama.cpp handles both but string is cheaper)
-            flat = "\n".join(p.get("text", "") for p in existing if isinstance(p, dict) and p.get("type") == "text")
-            messages[0] = {**messages[0], "content": f"{injection}\n\n{flat}" if flat else injection}
+            existing = "\n".join(p.get("text", "") for p in existing
+                                 if isinstance(p, dict) and p.get("type") == "text")
+        elif not isinstance(existing, str):
+            existing = ""
+        merged = "\n\n".join(part for part in (head, existing, tail) if part)
+        messages[0] = {**messages[0], "content": merged}
     else:
-        messages = [{"role": "system", "content": injection}] + list(messages)
+        merged = "\n\n".join(part for part in (head, tail) if part)
+        messages = [{"role": "system", "content": merged}] + list(messages)
 
     body["messages"] = messages
     return body
@@ -537,19 +556,24 @@ async def _prepare_internal_body(
 
     inference = llama_cfg.inference_for(active_model)
 
-    # 2. Client body → internal (OpenAI) body
-    if inbound_protocol == "anthropic":
-        internal = xlate.anthropic_request_to_internal(body, inference_defaults=inference)
-    else:
-        internal = xlate.openai_request_to_internal(body, inference_defaults=inference)
-
-    internal["model"] = active_model
-
-    # 3. Profile-driven feature flags
+    # 2. Profile-driven feature flags (resolved first — translation needs the
+    #    mid-conversation system-message policy).
     def _pget(key: str, default):
         if profile and key in profile:
             return profile[key]
         return default
+
+    system_mode = _pget("mid_system_messages", proxy_config.mid_system_messages())
+
+    # 3. Client body → internal (OpenAI) body
+    if inbound_protocol == "anthropic":
+        internal = xlate.anthropic_request_to_internal(
+            body, inference_defaults=inference, system_mode=system_mode)
+    else:
+        internal = xlate.openai_request_to_internal(
+            body, inference_defaults=inference, system_mode=system_mode)
+
+    internal["model"] = active_model
 
     use_tool_search = _pget("tool_search", proxy_config.tool_search())
     inject_date_loc = _pget("inject_date_location", True)
@@ -558,7 +582,7 @@ async def _prepare_internal_body(
     use_sort_tools = _pget("sort_tools", proxy_config.sort_tools())
 
     # 4. System-prompt injection
-    internal = await _inject_system_prompt(internal, profile, inject_date_loc)
+    internal = await _inject_system_prompt(internal, profile, inject_date_loc, system_mode)
 
     # 5. Tool transforms (split into core/deferred, inject managed)
     from proxy.managed_tools import _REGISTRY as _MGR
@@ -607,27 +631,32 @@ async def _prepare_internal_body(
 
 
 def _strip_reminders_from_internal(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Re-use the Anthropic-shape reminder stripper. The content we care
-    about is just the text inside messages — role labels are irrelevant."""
-    # Wrap each message's content into Anthropic-shape, strip, unwrap
-    adapted = []
+    """Re-use the Anthropic-shape reminder stripper on the internal history.
+
+    The content we care about is just the text inside messages — role labels
+    are irrelevant, and `strip_all_reminders` already carries every other key
+    through via `{**msg, ...}`.
+
+    Stripped one message at a time on purpose: the stripper DROPS messages
+    whose text empties out (common now that `<total_tokens>` bookkeeping is
+    stripped — those messages are nothing else), and a batch call would then
+    return a shorter list that no longer lines up index-for-index with the
+    input. Tool-protocol messages are never dropped: losing an assistant
+    `tool_calls` turn or its `role:"tool"` result would break the pairing the
+    chat template requires, so they survive with empty content instead.
+    """
+    out: list[dict[str, Any]] = []
     for msg in messages:
-        c = msg.get("content")
-        if isinstance(c, str):
-            adapted.append({"role": msg.get("role", "user"), "content": c})
-        elif isinstance(c, list):
-            adapted.append({"role": msg.get("role", "user"), "content": c})
-        else:
-            adapted.append(msg)
-    stripped = strip_all_reminders(adapted)
-    # Merge back any metadata keys we might have dropped (tool_calls, tool_call_id, name)
-    out = []
-    by_role: dict[int, dict[str, Any]] = {}
-    for i, s in enumerate(stripped):
-        original = messages[i] if i < len(messages) else {}
-        merged = {**original, **s}
-        out.append(merged)
-        by_role[i] = merged
+        is_protocol = bool(
+            msg.get("tool_calls")
+            or msg.get("tool_call_id")
+            or msg.get("role") == "tool"
+        )
+        cleaned = strip_all_reminders([msg])
+        if cleaned:
+            out.append(cleaned[0])
+        elif is_protocol:
+            out.append({**msg, "content": ""})
     return out
 
 
