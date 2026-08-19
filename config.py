@@ -113,9 +113,8 @@ def _ensure_model_effort_maps(data: dict[str, Any]) -> bool:
         if "template_key" not in eff:
             eff["template_key"] = "reasoning_effort"
             changed = True
-        if "allowed" not in eff:
-            eff["allowed"] = ["low", "medium", "high"]
-            changed = True
+        if eff.pop("allowed", None) is not None:
+            changed = True   # superseded: values are per-model and visible now
         mapping = eff.get("map")
         if not isinstance(mapping, dict):
             mapping = {}

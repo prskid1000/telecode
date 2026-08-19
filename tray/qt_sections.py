@@ -4130,128 +4130,139 @@ def _models(window) -> QWidget:
         # Escape dots in the model name so get_path/patch_settings doesn't split it
         ek = key.replace(".", r"\.")
         p = f"llamacpp.models.{ek}"
-        form_layout.addWidget(_section_header("Paths"))
-        form_layout.addWidget(_line_row(f"{p}.path",   "GGUF Path",
+
+        # Each _section_header used to be a bare label in one long flat form.
+        # They are cards now, matching the llama.cpp page: _sec() opens one and
+        # returns its body layout, which _sl then points at, so every row after
+        # it lands inside that card without touching the ~90 addWidget calls.
+        def _sec(title: str, sub: str = ""):
+            _c, _b = _card(title, sub)
+            form_layout.addWidget(_c)
+            return _b
+
+        _sl = form_layout   # anything before the first card (there is none today)
+        _sl = _sec("Paths")
+        _sl.addWidget(_line_row(f"{p}.path",   "GGUF Path",
                                          "D:/models/foo.gguf",
                                          "Absolute path to the model .gguf file."))
-        form_layout.addWidget(_section_header("Vision (mmproj — leave empty for text-only models)"))
-        form_layout.addWidget(_line_row(f"{p}.mmproj", "mmproj Path",
+        _sl = _sec("Vision (mmproj — leave empty for text-only models)")
+        _sl.addWidget(_line_row(f"{p}.mmproj", "mmproj Path",
                                          "D:/models/mmproj.gguf",
                                          "Optional — only needed for vision-capable GGUFs (Qwen-VL etc)."))
         _has_mmproj = lambda v: bool(str(v or "").strip())
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _toggle_row(f"{p}.mmproj_offload",  "mmproj on GPU",
                          "--mmproj-offload / --no-mmproj-offload: keep the vision projector in VRAM (default enabled). "
                          "Disable to save ~1 GiB VRAM at the cost of slower per-image prefill."),
             [f"{p}.mmproj"], _has_mmproj))
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _number_row(f"{p}.image_min_tokens", "Image Min Tokens",  0, 16384, 64, 0, "tok",
                          "--image-min-tokens: minimum tokens each image consumes (dynamic-resolution vision models). 0 = read from model."),
             [f"{p}.mmproj"], _has_mmproj))
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _number_row(f"{p}.image_max_tokens", "Image Max Tokens",  0, 16384, 64, 0, "tok",
                          "--image-max-tokens: maximum tokens per image. 0 = read from model. Lower = less prefill compute."),
             [f"{p}.mmproj"], _has_mmproj))
 
-        form_layout.addWidget(_section_header("Capacity"))
-        form_layout.addWidget(_number_row(f"{p}.ctx_size",     "Context Size",       512, 1048576, 256, 0, "tok"))
+        _sl = _sec("Capacity")
+        _sl.addWidget(_number_row(f"{p}.ctx_size",     "Context Size",       512, 1048576, 256, 0, "tok"))
         # n_gpu_layers is greyed when fit is on — the auto-fitter aborts if it
         # sees a user-pinned ngl, so argv.build_argv() suppresses --n-gpu-layers
         # in that case. This dependency mirrors that suppression in the UI.
         _fit_off = lambda f: not bool(f)
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _number_row(f"{p}.n_gpu_layers", "GPU Layers",         0,   200,     1,   0, "",
                                                "Layers offloaded to GPU. Higher = faster, more VRAM."),
             [f"{p}.fit"], _fit_off))
-        form_layout.addWidget(_number_row(f"{p}.n_cpu_moe",    "CPU MoE Layers",     0,   200,     1,   0, "",
+        _sl.addWidget(_number_row(f"{p}.n_cpu_moe",    "CPU MoE Layers",     0,   200,     1,   0, "",
                                            "MoE experts kept on CPU. 0 = all on GPU."))
-        form_layout.addWidget(_line_row(f"{p}.device",         "Devices",
+        _sl.addWidget(_line_row(f"{p}.device",         "Devices",
                                          "e.g. CUDA0,CUDA1 / Vulkan0 / none",
                                          "--device: explicit comma-separated device list. Empty = let llama-server pick (split-mode applies)."))
 
-        form_layout.addWidget(_section_header("Context Fitting"))
-        form_layout.addWidget(_toggle_row(f"{p}.fit",          "Fit Context",
+        _sl = _sec("Context Fitting")
+        _sl.addWidget(_toggle_row(f"{p}.fit",          "Fit Context",
                                            "--fit on: auto-shrink ctx_size to what the model + KV actually fits in available memory."))
         _fit_on = lambda f: bool(f)
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _number_row(f"{p}.fit_ctx",      "Fit Ctx Ceiling",    0,   2097152, 1024, 0, "tok",
                          "--fit-ctx: max ctx the fitter is allowed to grow to. 0 = use ctx_size."),
             [f"{p}.fit"], _fit_on))
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _number_row(f"{p}.fit_target",   "Fit Target Headroom", 0,  16384,   16,   0, "MB",
                          "--fit-target: free VRAM/RAM (MB) to leave after fitting."),
             [f"{p}.fit"], _fit_on))
 
-        form_layout.addWidget(_section_header("Cache"))
-        form_layout.addWidget(_enum_row_strs(f"{p}.cache_type_k", "Cache Type (K)", _CACHE_TYPES))
-        form_layout.addWidget(_enum_row_strs(f"{p}.cache_type_v", "Cache Type (V)", _CACHE_TYPES))
-        form_layout.addWidget(_number_row(f"{p}.cache_reuse",     "Cache Reuse",          0,   8192, 32, 0, "tok",
+        _sl = _sec("Cache")
+        _sl.addWidget(_enum_row_strs(f"{p}.cache_type_k", "Cache Type (K)", _CACHE_TYPES))
+        _sl.addWidget(_enum_row_strs(f"{p}.cache_type_v", "Cache Type (V)", _CACHE_TYPES))
+        _sl.addWidget(_number_row(f"{p}.cache_reuse",     "Cache Reuse",          0,   8192, 32, 0, "tok",
                                            "--cache-reuse: tokens to retain when reusing an existing slot."))
 
-        form_layout.addWidget(_section_header("Flags"))
-        form_layout.addWidget(_toggle_row(f"{p}.preload",       "Preload",
+        _sl = _sec("Flags")
+        _sl.addWidget(_toggle_row(f"{p}.preload",       "Preload",
                                            "Load this model at telecode startup regardless of auto_start."))
-        form_layout.addWidget(_enum_row_strs(f"{p}.flash_attn", "Flash Attention",
+        _sl.addWidget(_enum_row_strs(f"{p}.flash_attn", "Flash Attention",
                                               [("Auto (default)", "auto"),
                                                ("On", "on"),
                                                ("Off", "off")],
                                               "--flash-attn: set Flash Attention use ('on', 'off', or 'auto')."))
-        form_layout.addWidget(_toggle_row(f"{p}.cpu_moe",       "CPU MoE (all experts)",
+        _sl.addWidget(_toggle_row(f"{p}.cpu_moe",       "CPU MoE (all experts)",
                                            "--cpu-moe: keep ALL MoE expert layers on CPU (overrides n_cpu_moe)."))
-        form_layout.addWidget(_toggle_row(f"{p}.jinja",         "Jinja Chat Template",
+        _sl.addWidget(_toggle_row(f"{p}.jinja",         "Jinja Chat Template",
                                            "Use the built-in tokenizer chat template (required for tools)."))
-        form_layout.addWidget(_code_row(f"{p}.chat_template",   "Chat Template Override",
+        _sl.addWidget(_code_row(f"{p}.chat_template",   "Chat Template Override",
                                          "(empty = use model's built-in)",
                                          "--chat-template: override the GGUF's chat template by name "
                                          "or paste an inline jinja template.",
                                          height=200, highlighter=_JinjaHighlighter))
-        form_layout.addWidget(_line_row(f"{p}.chat_template_file", "Chat Template File",
+        _sl.addWidget(_line_row(f"{p}.chat_template_file", "Chat Template File",
                                          "/path/to/template.jinja",
                                          "--chat-template-file: load the jinja template from a file (alternative to the inline override above)."))
 
-        form_layout.addWidget(_section_header("RoPE"))
-        form_layout.addWidget(_enum_row(
+        _sl = _sec("RoPE")
+        _sl.addWidget(_enum_row(
             f"{p}.rope_scaling", "RoPE Scaling",
             [("Model default", ""), ("none", "none"), ("linear", "linear"), ("yarn", "yarn")],
             "--rope-scaling. Empty = model default.",
             max_width=360))
         _has_rope_scaling = lambda rs: bool(str(rs or "").strip()) and str(rs).strip().lower() != "none"
         _yarn_active = lambda rs: str(rs or "").strip().lower() == "yarn"
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _number_row(f"{p}.rope_freq_base", "RoPE Freq Base",       0, 10000000, 1000, 0, "",
                          "--rope-freq-base. 0 = model default."),
             [f"{p}.rope_scaling"], _has_rope_scaling))
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _number_row(f"{p}.rope_freq_scale","RoPE Freq Scale",      0, 4.0, 0.05, 2, "",
                          "--rope-freq-scale. 0 = model default."),
             [f"{p}.rope_scaling"], _has_rope_scaling))
 
-        form_layout.addWidget(_section_header("YaRN (only when RoPE Scaling = yarn)"))
-        form_layout.addWidget(_dependent(
+        _sl = _sec("YaRN (only when RoPE Scaling = yarn)")
+        _sl.addWidget(_dependent(
             _number_row(f"{p}.yarn_orig_ctx",  "YaRN Orig Ctx",        0, 1048576, 1024, 0, "tok",
                          "--yarn-orig-ctx: original training context for YaRN scaling."),
             [f"{p}.rope_scaling"], _yarn_active))
         # YaRN fine-tuning — defaults are -1.0 (auto) upstream; 0 here means
         # "skip flag emission, use server default".
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _number_row(f"{p}.yarn_ext_factor",  "YaRN Ext Factor",  -1.0, 4.0, 0.05, 2, "",
                          "--yarn-ext-factor: extrapolation mix factor. 0 = use server default (auto)."),
             [f"{p}.rope_scaling"], _yarn_active))
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _number_row(f"{p}.yarn_attn_factor", "YaRN Attn Factor", -1.0, 4.0, 0.05, 2, "",
                          "--yarn-attn-factor: scale sqrt(t) or attention magnitude. 0 = default."),
             [f"{p}.rope_scaling"], _yarn_active))
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _number_row(f"{p}.yarn_beta_slow",   "YaRN Beta Slow",   -1.0, 4.0, 0.05, 2, "",
                          "--yarn-beta-slow: high correction dim (alpha). 0 = default."),
             [f"{p}.rope_scaling"], _yarn_active))
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _number_row(f"{p}.yarn_beta_fast",   "YaRN Beta Fast",   -1.0, 64.0, 0.5, 2, "",
                          "--yarn-beta-fast: low correction dim (beta). 0 = default."),
             [f"{p}.rope_scaling"], _yarn_active))
 
-        form_layout.addWidget(_section_header("Draft Model (Speculative)"))
-        form_layout.addWidget(_line_row(f"{p}.draft_model", "Draft Model (GGUF)",
+        _sl = _sec("Draft Model (Speculative)")
+        _sl.addWidget(_line_row(f"{p}.draft_model", "Draft Model (GGUF)",
                                          "D:/models/draft-0.6b.gguf",
                                          "--model-draft: separate small LM for draft tokens. "
                                          "Leave empty + Spec Type=ngram-simple for prompt-lookup self-speculation, "
@@ -4260,62 +4271,62 @@ def _models(window) -> QWidget:
         # spec strategy is active (draft-mtp uses model's own heads, no draft GGUF).
         _draft_knobs_active = lambda dm, st: bool(str(dm or "").strip()) or _has_spec(st, "draft-simple", "draft-eagle3", "draft-mtp")
         _draft_paths = [f"{p}.draft_model", "llamacpp.spec_type"]
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _number_row(f"{p}.n_gpu_layers_draft", "Draft GPU Layers", 0, 200, 1, 0, "",
                          "--n-gpu-layers-draft / -ngld: layers of the draft model on GPU."),
             _draft_paths, _draft_knobs_active))
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _enum_row_strs(f"{p}.cache_type_k_draft", "Draft Cache (K)", [("(default)", "")] + _CACHE_TYPES,
                             "--cache-type-k-draft: K-cache dtype for the draft model."),
             _draft_paths, _draft_knobs_active))
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _enum_row_strs(f"{p}.cache_type_v_draft", "Draft Cache (V)", [("(default)", "")] + _CACHE_TYPES,
                             "--cache-type-v-draft: V-cache dtype for the draft model."),
             _draft_paths, _draft_knobs_active))
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _line_row(f"{p}.device_draft",         "Draft Devices",
                        "e.g. CUDA0,CUDA1",
                        "--device-draft / -devd: comma-separated device list for draft offload."),
             _draft_paths, _draft_knobs_active))
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _toggle_row(f"{p}.cpu_moe_draft",      "Draft CPU MoE (all)",
                          "--cpu-moe-draft: keep ALL MoE expert layers of the draft model on CPU (mirrors --cpu-moe)."),
             _draft_paths, _draft_knobs_active))
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _number_row(f"{p}.n_cpu_moe_draft",    "Draft CPU MoE Layers", 0, 200, 1, 0, "",
                          "--n-cpu-moe-draft: first N MoE layers of the draft model on CPU. 0 = all on GPU."),
             _draft_paths, _draft_knobs_active))
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _number_row(f"{p}.draft_n",     "Draft Max Tokens",  0, 32,   1,    0, "",
                          "--spec-draft-n-max: max draft tokens per step. v9243 default 3 (was 16)."),
             _draft_paths, _draft_knobs_active))
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _number_row(f"{p}.draft_n_min", "Draft Min Tokens",  0, 32,   1,    0, "",
                          "--spec-draft-n-min: minimum draft length before accepting. Typical: 0–2."),
             _draft_paths, _draft_knobs_active))
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _number_row(f"{p}.draft_p_min", "Draft Min Probability", 0.0, 1.0, 0.05, 2, "",
                          "--spec-draft-p-min: reject draft tokens below this probability. "
                          "v9243 default 0.00 (was 0.75). Draft-model: 0.5–0.75. N-gram: 0.1."),
             _draft_paths, _draft_knobs_active))
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _number_row(f"{p}.draft_p_split", "Draft P-Split", 0.0, 1.0, 0.05, 2, "",
                          "--spec-draft-p-split: speculative decoding split probability (default 0.10)."),
             _draft_paths, _draft_knobs_active))
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _line_row(f"{p}.spec_draft_override_tensor", "Draft Tensor Override",
                        "blk\\.[0-9]+\\.ffn_.*=CPU",
                        "--spec-draft-override-tensor: per-tensor buffer override for the draft model. Pattern=buffer (regex)."),
             _draft_paths, _draft_knobs_active))
         # Lookup caches only matter for spec_type=ngram-cache.
         _ngram_cache_active = lambda st: _has_spec(st, "ngram-cache")
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _line_row(f"{p}.lookup_cache_static", "Lookup Cache (static)",
                        "./data/lookup-static.bin",
                        "--lookup-cache-static. Only used when Spec Type = ngram-cache. "
                        "Precomputed via llama-lookup-create; read-only at runtime."),
             ["llamacpp.spec_type"], _ngram_cache_active))
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _line_row(f"{p}.lookup_cache_dynamic", "Lookup Cache (dynamic)",
                        "./data/lookup-dyn.bin",
                        "--lookup-cache-dynamic. Only loaded when Spec Type = ngram-cache. "
@@ -4324,44 +4335,44 @@ def _models(window) -> QWidget:
 
         # Per-model Inference Defaults — proxy-applied per-request body fields.
         # Override hierarchy: request body > this > top-level llamacpp.inference.
-        form_layout.addWidget(_section_header("Inference Defaults (proxy per-request)"))
+        _sl = _sec("Inference Defaults (proxy per-request)")
         ip = f"{p}.inference_defaults"
-        form_layout.addWidget(_number_row(f"{ip}.temperature",       "Temperature",       0.0, 1.5, 0.05, 2))
-        form_layout.addWidget(_number_row(f"{ip}.top_p",             "Top-P",             0.0, 1.0, 0.01, 2))
-        form_layout.addWidget(_number_row(f"{ip}.top_k",             "Top-K",             0,   200, 1,    0))
-        form_layout.addWidget(_number_row(f"{ip}.min_p",             "Min-P",             0.0, 1.0, 0.01, 2))
-        form_layout.addWidget(_number_row(f"{ip}.presence_penalty",  "Presence Penalty",  0.0, 2.0, 0.05, 2))
-        form_layout.addWidget(_number_row(f"{ip}.repeat_penalty",    "Repeat Penalty",    0.5, 2.0, 0.01, 2))
-        form_layout.addWidget(_number_row(f"{ip}.frequency_penalty", "Frequency Penalty", 0.0, 2.0, 0.05, 2))
-        form_layout.addWidget(_number_row(f"{ip}.max_tokens",        "Max Tokens",       -1,   1048576, 64, 0, "tok",
+        _sl.addWidget(_number_row(f"{ip}.temperature",       "Temperature",       0.0, 1.5, 0.05, 2))
+        _sl.addWidget(_number_row(f"{ip}.top_p",             "Top-P",             0.0, 1.0, 0.01, 2))
+        _sl.addWidget(_number_row(f"{ip}.top_k",             "Top-K",             0,   200, 1,    0))
+        _sl.addWidget(_number_row(f"{ip}.min_p",             "Min-P",             0.0, 1.0, 0.01, 2))
+        _sl.addWidget(_number_row(f"{ip}.presence_penalty",  "Presence Penalty",  0.0, 2.0, 0.05, 2))
+        _sl.addWidget(_number_row(f"{ip}.repeat_penalty",    "Repeat Penalty",    0.5, 2.0, 0.01, 2))
+        _sl.addWidget(_number_row(f"{ip}.frequency_penalty", "Frequency Penalty", 0.0, 2.0, 0.05, 2))
+        _sl.addWidget(_number_row(f"{ip}.max_tokens",        "Max Tokens",       -1,   1048576, 64, 0, "tok",
                                            "Hard cap on generated tokens. -1 = unlimited / model-default."))
-        form_layout.addWidget(_list_row(f"{ip}.stop", "Stop Strings",
+        _sl.addWidget(_list_row(f"{ip}.stop", "Stop Strings",
                                          "Generation halts when any of these appears (one per line).",
                                          "</s>"))
 
-        form_layout.addWidget(_section_header("Reasoning (proxy <think> parser)"))
+        _sl = _sec("Reasoning (proxy <think> parser)")
         rp = f"{ip}.reasoning"
-        form_layout.addWidget(_toggle_row(f"{rp}.enabled",              "Parse <think> Blocks"))
+        _sl.addWidget(_toggle_row(f"{rp}.enabled",              "Parse <think> Blocks"))
         _think_enabled = lambda en: bool(en)
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _line_row(f"{rp}.start",                  "Start Tag", "<think>"),
             [f"{rp}.enabled"], _think_enabled))
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _line_row(f"{rp}.end",                    "End Tag",   "</think>"),
             [f"{rp}.enabled"], _think_enabled))
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _toggle_row(f"{rp}.emit_thinking_blocks", "Emit Thinking Blocks"),
             [f"{rp}.enabled"], _think_enabled))
 
-        form_layout.addWidget(_section_header("Thinking (template switch)"))
+        _sl = _sec("Thinking (template switch)")
         tkp = f"{ip}.thinking"
-        form_layout.addWidget(_line_row(f"{tkp}.template_key", "Template Key", "",
+        _sl.addWidget(_line_row(f"{tkp}.template_key", "Template Key", "",
             "Which chat-template variable carries the on/off switch. Qwen 3.x / 3.8: "
             "enable_thinking. LEAVE EMPTY to send nothing and let the template decide "
             "- the toggle below only takes effect once a key is set. Models whose lever "
             "is an effort string rather than a boolean are handled by the Reasoning "
             "Effort map below."))
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _toggle_row(f"{tkp}.enabled", "Thinking",
                 "On sends <key>=true, off sends <key>=false. Sets the model own "
                 "chat-template switch, so off actually stops reasoning being generated "
@@ -4370,9 +4381,9 @@ def _models(window) -> QWidget:
                 "pays the context."),
             [f"{tkp}.template_key"], lambda k: bool(str(k or "").strip())))
 
-        form_layout.addWidget(_section_header("Reasoning Effort (template string)"))
+        _sl = _sec("Reasoning Effort (template string)")
         rep = f"{ip}.reasoning_effort"
-        form_layout.addWidget(_line_row(f"{rep}.template_key", "Template Key", "reasoning_effort",
+        _sl.addWidget(_line_row(f"{rep}.template_key", "Template Key", "reasoning_effort",
             "Which chat-template variable carries the effort string. Qwen 3.x / "
             "GPT-OSS both call it `reasoning_effort`."))
         # Dynamic list, same affordances as the token budget card on the
@@ -4386,7 +4397,7 @@ def _models(window) -> QWidget:
         _eff_rows_layout = QVBoxLayout(_eff_rows_host)
         _eff_rows_layout.setContentsMargins(0, 0, 0, 0)
         _eff_rows_layout.setSpacing(8)
-        form_layout.addWidget(_eff_rows_host)
+        _sl.addWidget(_eff_rows_host)
 
         _eff_add_bar = QWidget()
         _eab = QHBoxLayout(_eff_add_bar)
@@ -4401,7 +4412,7 @@ def _models(window) -> QWidget:
         _eab.addWidget(_eff_add_key, 1)
         _eab.addWidget(_eff_add_btn)
         _eab.addStretch(1)
-        form_layout.addWidget(_eff_add_bar)
+        _sl.addWidget(_eff_add_bar)
 
         def _build_model_effort_row(ekey: str, value) -> QWidget:
             path = f"{rep}.map.{ekey}"
@@ -4526,56 +4537,50 @@ def _models(window) -> QWidget:
 
         _eff_add_btn.clicked.connect(_on_add_effort_key)
         _refresh_model_effort_map()
-        form_layout.addWidget(_list_row(f"{rep}.allowed", "Allowed Values",
-            "Guard: values this model's template accepts (one per line). Anything "
-            "mapping outside this set is dropped with a warning instead of being "
-            "sent — Qwen 3.8 raises a hard 500 on an unknown effort. Qwen 3.8 takes "
-            "xhigh / medium / low (and aliases high→xhigh); GPT-OSS takes "
-            "low / medium / high. Empty = skip the check.", "low"))
 
-        form_layout.addWidget(_section_header("Chat Template Kwargs"))
-        form_layout.addWidget(_kv_row(f"{ip}.chat_template_kwargs",
+        _sl = _sec("Chat Template Kwargs")
+        _sl.addWidget(_kv_row(f"{ip}.chat_template_kwargs",
             "Kwargs",
             "Merged into every request's chat_template_kwargs. Values are "
             "JSON-parsed — use `enable_thinking=false`, `reasoning_effort=low`, "
             "`budget=4096`. Anything the model's jinja template reads.",
             typed=True))
 
-        form_layout.addWidget(_section_header("LoRA"))
-        form_layout.addWidget(_line_row(f"{p}.lora",        "LoRA Adapter (path)",
+        _sl = _sec("LoRA")
+        _sl.addWidget(_line_row(f"{p}.lora",        "LoRA Adapter (path)",
                                          "/path/to/adapter.gguf",
                                          "--lora: GGUF LoRA adapter file."))
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _number_row(f"{p}.lora_scale", "LoRA Scale",
                          0.0, 4.0, 0.05, 2, "",
                          "--lora-scaled: blend strength (1.0 = full)."),
             [f"{p}.lora"], lambda l: bool(str(l or "").strip())))
 
-        form_layout.addWidget(_section_header("Grammar"))
-        form_layout.addWidget(_code_row(f"{p}.grammar",       "GBNF Grammar (inline)",
+        _sl = _sec("Grammar")
+        _sl.addWidget(_code_row(f"{p}.grammar",       "GBNF Grammar (inline)",
                                          "(empty)",
                                          "--grammar: inline GBNF for constrained decoding.",
                                          height=180, highlighter=_GbnfHighlighter))
-        form_layout.addWidget(_line_row(f"{p}.grammar_file",  "Grammar File",
+        _sl.addWidget(_line_row(f"{p}.grammar_file",  "Grammar File",
                                          "/path/to/grammar.gbnf",
                                          "--grammar-file: load GBNF from disk."))
 
-        form_layout.addWidget(_section_header("Advanced Placement"))
-        form_layout.addWidget(_line_row(f"{p}.override_tensor", "Override Tensor",
+        _sl = _sec("Advanced Placement")
+        _sl.addWidget(_line_row(f"{p}.override_tensor", "Override Tensor",
                                          "blk\\.[0-9]+\\.ffn_.*=CPU",
                                          "--override-tensor: per-tensor buffer placement. Pattern=buffer (regex), comma-separated. "
                                          "Common use: pin specific layer weights to CPU/GPU."))
-        form_layout.addWidget(_line_row(f"{p}.override_kv", "Override KV",
+        _sl.addWidget(_line_row(f"{p}.override_kv", "Override KV",
                                          "tokenizer.ggml.add_bos_token=bool:false",
                                          "--override-kv: override GGUF metadata at load. Format KEY=TYPE:VALUE, comma-separated."))
 
-        form_layout.addWidget(_section_header("Extra CLI Args"))
-        form_layout.addWidget(_pair_list_row(f"{p}.extra_args", "Extra Args",
+        _sl = _sec("Extra CLI Args")
+        _sl.addWidget(_pair_list_row(f"{p}.extra_args", "Extra Args",
             'Per-model escape hatch — one [flag, value] pair per row. '
             'Top-level llamacpp.extra_args is also appended.'))
 
-        form_layout.addWidget(_section_header("Per-Model Reasoning Override"))
-        form_layout.addWidget(_enum_row_strs(f"{p}.reasoning", "Reasoning",
+        _sl = _sec("Per-Model Reasoning Override")
+        _sl.addWidget(_enum_row_strs(f"{p}.reasoning", "Reasoning",
                                               [("(server default — auto)", ""),
                                                ("on",   "on"),
                                                ("off",  "off"),
@@ -4583,15 +4588,15 @@ def _models(window) -> QWidget:
                                               "--reasoning: master toggle for thinking. 'auto' detects from template."))
         # Budgets are meaningless once thinking is forced off.
         _reason_not_off = lambda r: str(r or "").strip().lower() != "off"
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _number_row(f"{p}.reasoning_budget",        "Reasoning Budget",   -1, 1048576, 256, 0, "tok",
                          "--reasoning-budget. -1 = unlimited, 0 = disable thinking."),
             [f"{p}.reasoning"], _reason_not_off))
-        form_layout.addWidget(_dependent(
+        _sl.addWidget(_dependent(
             _number_row(f"{p}.reasoning_budget_message","Reasoning Budget (per message)", -1, 1048576, 256, 0, "tok",
                          "--reasoning-budget-message. Per-turn cap."),
             [f"{p}.reasoning"], _reason_not_off))
-        form_layout.addWidget(_enum_row_strs(f"{p}.reasoning_format", "Reasoning Format",
+        _sl.addWidget(_enum_row_strs(f"{p}.reasoning_format", "Reasoning Format",
                                               [("(model default)", ""),
                                                ("none — keep <think> inline", "none"),
                                                ("deepseek — split into reasoning_content", "deepseek"),
@@ -4600,7 +4605,7 @@ def _models(window) -> QWidget:
                                               "--reasoning-format: how the server tags think blocks. "
                                               "Telecode parses <think> in the proxy — pick 'none' if this "
                                               "model is consumed via the proxy."))
-        form_layout.addWidget(_toggle_row(f"{p}.reasoning_preserve", "Preserve Reasoning",
+        _sl.addWidget(_toggle_row(f"{p}.reasoning_preserve", "Preserve Reasoning",
             "--reasoning-preserve: keep the reasoning trace across the whole history, "
             "not just the last assistant message. llama-server suggests this at startup "
             "when the template supports it. Overlaps the proxy's 'Drop Prior-Turn "

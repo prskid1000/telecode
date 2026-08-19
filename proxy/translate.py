@@ -441,57 +441,47 @@ def _apply_effort_entry(
 def _apply_reasoning_effort_template(body: dict[str, Any],
                                     defaults: dict[str, Any],
                                     effort: str | None) -> None:
-    """Translate the request's effort level into the MODEL's own template value.
+    """Translate the request effort level into the MODEL own template value.
 
-    Deliberately per-model and separate from `reasoning_effort_map`, because the
-    two live on different layers:
+    Deliberately per-model and separate from `reasoning_effort_map`, because
+    the two live on different layers:
 
-      reasoning_effort_map   -> `thinking_budget_tokens`, a llama.cpp body param.
-                                Model-agnostic, so it stays global.
-      this                   -> `reasoning_effort`, a chat-template string whose
-                                vocabulary each model defines itself.
+      reasoning_effort_map   -> `thinking_budget_tokens`, a llama.cpp body
+                                param. Model-agnostic, so it stays global.
+      this                   -> `reasoning_effort`, a chat-template string
+                                whose vocabulary each model defines itself.
 
-    The vocabularies genuinely disagree, and getting it wrong is not a soft
-    failure. Qwen 3.8's template:
-
-        {%- if resolved_reasoning_effort not in ('xhigh', 'medium', 'low') %}
-            {{- raise_exception('Unexpected reasoning effort ...') }}
-
-    so feeding it the global map's `none` / `minimal` / `adaptive` / `max` is a
-    hard 500. GPT-OSS wants low|medium|high. llama.cpp's own --reasoning-effort
-    accepts minimal|low|medium|high|xhigh|max. One global list cannot serve them.
+    The vocabularies genuinely disagree: Qwen 3.8 takes xhigh|medium|low
+    (aliasing high->xhigh) and raise_exception's on anything else, GPT-OSS
+    wants low|medium|high, and llama.cpp own --reasoning-effort accepts
+    minimal|low|medium|high|xhigh|max. One global list cannot serve them, which
+    is why the mapping is per-model.
 
     Config (per model, under inference_defaults):
 
         "reasoning_effort": {
             "template_key": "reasoning_effort",
-            "allowed": ["xhigh", "medium", "low"],
             "map": {"none": "low", "minimal": "low", "low": "low",
-                    "medium": "medium", "high": "xhigh", "xhigh": "xhigh",
-                    "max": "xhigh", "adaptive": "medium"}
+                    "medium": "medium", "adaptive": "medium",
+                    "high": "high", "max": "high"}
         }
 
-    Absent config emits nothing at all — the safe default, and what the proxy did
-    before this existed. A value that survives the map but is not in `allowed` is
-    dropped with a warning rather than forwarded into a raise.
+    Map keys are Claude Code effort levels; values are whatever this model
+    template expects. An unmapped effort emits nothing at all -- the safe
+    default. Values are not validated: they are per-model and visible in the
+    tray, so an unusable value is a visible configuration error rather than
+    something to guard against here.
     """
     if not effort:
         return
     cfg = defaults.get("reasoning_effort")
     if not isinstance(cfg, dict):
         return
-    mapping = cfg.get("map") or {}
-    value = mapping.get(str(effort).lower())
-    if value is None:
+    value = (cfg.get("map") or {}).get(str(effort).lower())
+    if value is None or value == "":
         return
-    allowed = cfg.get("allowed")
-    if isinstance(allowed, list) and allowed and value not in allowed:
-        log.warning(
-            "reasoning_effort: %r -> %r is not in the model's allowed set %s — "
-            "omitting rather than risking a template raise", effort, value, allowed,
-        )
-        return
-    _merge_chat_template_kwargs(body, {str(cfg.get("template_key") or "reasoning_effort"): value})
+    _merge_chat_template_kwargs(
+        body, {str(cfg.get("template_key") or "reasoning_effort"): value})
 
 
 def _apply_thinking_mode(body: dict[str, Any],
