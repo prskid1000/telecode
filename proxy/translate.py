@@ -494,47 +494,51 @@ def _apply_reasoning_effort_template(body: dict[str, Any],
     _merge_chat_template_kwargs(body, {str(cfg.get("template_key") or "reasoning_effort"): value})
 
 
-def _apply_disable_thinking(body: dict[str, Any],
-                            defaults: dict[str, Any]) -> None:
-    """Force thinking off via the model's own chat-template switch.
+def _apply_thinking_mode(body: dict[str, Any],
+                         defaults: dict[str, Any]) -> None:
+    """Turn the model thinking on or off through its own template switch.
 
-    Per-model, not global, because the switch is model-specific:
+    Config (per model, under inference_defaults):
 
-      Qwen 3.x / 3.8   `enable_thinking: false`  -> template prefills an empty
-                       `<think>\n\n</think>` block, so the model emits no
-                       reasoning at all.
-      GPT-OSS          `reasoning_effort: "low"` -> no boolean; effort is the
-                       only lever.
+        "thinking": {"template_key": "enable_thinking", "enabled": true}
 
-    So the config carries BOTH the toggle and the key it drives:
+    The KEY gates this, not the toggle. An empty or absent `template_key`
+    emits nothing at all and the template decides for itself -- the safe
+    default, and what the proxy did before this existed. Once a key IS set the
+    toggle picks the value: on -> true, off -> false. So a plain boolean is
+    enough; "leave it alone" is simply "no key", which is why this is not a
+    three-way control.
 
-        "disable_thinking": {
-            "enabled": true,
-            "template_key": "enable_thinking",
-            "disabled_value": false
-        }
+    Per-model because the switch is model-specific: Qwen 3.x/3.8 read
+    `enable_thinking`, and false makes the template prefill an empty
+    <think></think> so no reasoning is generated at all. Models whose lever is
+    an effort string rather than a boolean are served by `reasoning_effort`
+    instead -- that is what it is for.
 
-    A bare `true` is accepted as shorthand for the Qwen form. The resulting
-    kwarg is merged into `chat_template_kwargs`, which llama.cpp forwards to
-    the Jinja template verbatim.
+    Deliberately NOT the same as `reasoning.enabled`, which only decides
+    whether the proxy PARSES think blocks; the model still generates them and
+    still pays the context.
 
-    Deliberately NOT the same thing as `reasoning.enabled`: that one only tells
-    the proxy whether to parse and surface `<think>` blocks. The model still
-    generates them and they still cost context. This switch stops generation.
+    The superseded `disable_thinking` shape is still honoured so existing
+    configs keep working.
     """
-    cfg = defaults.get("disable_thinking")
-    if not cfg:
-        return
-    if cfg is True:
-        key, value = "enable_thinking", False
-    elif isinstance(cfg, dict):
-        if not cfg.get("enabled"):
+    cfg = defaults.get("thinking")
+    if isinstance(cfg, dict):
+        key = str(cfg.get("template_key") or "").strip()
+        if not key:
             return
-        key = str(cfg.get("template_key") or "enable_thinking")
-        value = cfg.get("disabled_value", False)
-    else:
+        _merge_chat_template_kwargs(body, {key: bool(cfg.get("enabled"))})
         return
-    _merge_chat_template_kwargs(body, {key: value})
+
+    legacy = defaults.get("disable_thinking")
+    if legacy is True:
+        _merge_chat_template_kwargs(body, {"enable_thinking": False})
+        return
+    if isinstance(legacy, dict) and legacy.get("enabled"):
+        key = str(legacy.get("template_key") or "").strip()
+        if not key:
+            return
+        _merge_chat_template_kwargs(body, {key: legacy.get("disabled_value", False)})
 
 
 def _apply_model_chat_template_kwargs(body: dict[str, Any],
@@ -732,7 +736,7 @@ def anthropic_request_to_internal(
     # Merge the model's configured chat_template_kwargs FIRST so per-request
     # effort resolution can still override individual keys.
     _apply_model_chat_template_kwargs(out, defaults)
-    _apply_disable_thinking(out, defaults)
+    _apply_thinking_mode(out, defaults)
     _apply_reasoning_effort_template(out, defaults, effort)
     nudge = _apply_effort_entry(entry, out, defaults)
     # direct budget from client overrides whatever the map said
@@ -863,7 +867,7 @@ def openai_request_to_internal(
 
     entry = _resolve_reasoning_effort(effort, defaults)
     _apply_model_chat_template_kwargs(body, defaults)
-    _apply_disable_thinking(body, defaults)
+    _apply_thinking_mode(body, defaults)
     _apply_reasoning_effort_template(body, defaults, effort)
     sys_nudge = _apply_effort_entry(entry, body, defaults)
 

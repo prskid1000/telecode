@@ -4353,37 +4353,59 @@ def _models(window) -> QWidget:
             _toggle_row(f"{rp}.emit_thinking_blocks", "Emit Thinking Blocks"),
             [f"{rp}.enabled"], _think_enabled))
 
-        form_layout.addWidget(_section_header("Disable Thinking (template switch)"))
-        dtp = f"{ip}.disable_thinking"
-        form_layout.addWidget(_toggle_row(f"{dtp}.enabled", "Disable Thinking",
-            "Stop the model generating reasoning at all, via its own chat-template "
-            "switch. Different from 'Parse <think> Blocks' above \u2014 that one only "
-            "controls whether the proxy surfaces thinking, while the model still "
-            "generates it and still pays the context for it."))
-        _dt_on = lambda en: bool(en)
+        form_layout.addWidget(_section_header("Thinking (template switch)"))
+        tkp = f"{ip}.thinking"
+        form_layout.addWidget(_line_row(f"{tkp}.template_key", "Template Key", "",
+            "Which chat-template variable carries the on/off switch. Qwen 3.x / 3.8: "
+            "enable_thinking. LEAVE EMPTY to send nothing and let the template decide "
+            "- the toggle below only takes effect once a key is set. Models whose lever "
+            "is an effort string rather than a boolean are handled by the Reasoning "
+            "Effort map below."))
         form_layout.addWidget(_dependent(
-            _line_row(f"{dtp}.template_key", "Template Key", "enable_thinking",
-                      "Which chat-template variable to set. Qwen 3.x/3.8: "
-                      "`enable_thinking`. GPT-OSS has no boolean \u2014 use "
-                      "`reasoning_effort` with a low value below."),
-            [f"{dtp}.enabled"], _dt_on))
-        form_layout.addWidget(_dependent(
-            _line_row(f"{dtp}.disabled_value", "Disabled Value", "false",
-                      "JSON value written to that key when disabling. Qwen: `false`. "
-                      "GPT-OSS: `\"low\"`."),
-            [f"{dtp}.enabled"], _dt_on))
+            _toggle_row(f"{tkp}.enabled", "Thinking",
+                "On sends <key>=true, off sends <key>=false. Sets the model own "
+                "chat-template switch, so off actually stops reasoning being generated "
+                "- unlike Parse <think> Blocks above, which only controls whether the "
+                "proxy surfaces thinking while the model still generates it and still "
+                "pays the context."),
+            [f"{tkp}.template_key"], lambda k: bool(str(k or "").strip())))
 
         form_layout.addWidget(_section_header("Reasoning Effort (template string)"))
         rep = f"{ip}.reasoning_effort"
         form_layout.addWidget(_line_row(f"{rep}.template_key", "Template Key", "reasoning_effort",
             "Which chat-template variable carries the effort string. Qwen 3.x / "
             "GPT-OSS both call it `reasoning_effort`."))
-        # One framed row per Claude Code effort level, styled to match the token
-        # budget card on the llama.cpp page so the two maps read identically.
-        # Values are seeded by config._ensure_model_effort_maps, never blank.
+        # Dynamic list, same affordances as the token budget card on the
+        # llama.cpp page: framed row per entry, inline value, Remove, and an
+        # Add bar for custom effort keys. Standard Claude Code keys are seeded
+        # by config._ensure_model_effort_maps and cannot be deleted or renamed;
+        # anything else is a custom key the user added.
         from config import STANDARD_EFFORT_KEYS as _STD_EFFORT_KEYS_M
 
-        def _build_model_effort_row(ekey: str, path: str) -> QWidget:
+        _eff_rows_host = QWidget()
+        _eff_rows_layout = QVBoxLayout(_eff_rows_host)
+        _eff_rows_layout.setContentsMargins(0, 0, 0, 0)
+        _eff_rows_layout.setSpacing(8)
+        form_layout.addWidget(_eff_rows_host)
+
+        _eff_add_bar = QWidget()
+        _eab = QHBoxLayout(_eff_add_bar)
+        _eab.setContentsMargins(0, 4, 0, 0)
+        _eab.setSpacing(8)
+        _eff_add_key = QLineEdit()
+        _eff_add_key.setPlaceholderText("custom effort key (e.g. ultra)")
+        _eff_add_key.setMinimumWidth(300)
+        _eff_add_btn = QPushButton("+ Add")
+        _eff_add_btn.setProperty("class", "primary")
+        _eff_add_btn.setMaximumWidth(80)
+        _eab.addWidget(_eff_add_key, 1)
+        _eab.addWidget(_eff_add_btn)
+        _eab.addStretch(1)
+        form_layout.addWidget(_eff_add_bar)
+
+        def _build_model_effort_row(ekey: str, value) -> QWidget:
+            path = f"{rep}.map.{ekey}"
+            is_std = ekey.lower() in _STD_EFFORT_KEYS_M
             row = QFrame()
             row.setStyleSheet(
                 f"QFrame {{ background: {BG_ELEV}; border: 1px solid {BORDER};"
@@ -4393,13 +4415,46 @@ def _models(window) -> QWidget:
             rl.setContentsMargins(10, 6, 10, 6)
             rl.setSpacing(10)
 
-            head = QLabel(
-                f"<b style='color:{FG}'>{ekey}</b>"
-                f" <span style='color:{FG_MUTE}; font-weight:normal; font-size:10.5px;'>"
-                f"· claude code</span>"
-            )
-            head.setTextFormat(Qt.TextFormat.RichText)
-            head.setMinimumWidth(140)
+            if is_std:
+                head = QLabel(
+                    f"<b style='color:{FG}'>{ekey}</b>"
+                    f" <span style='color:{FG_MUTE}; font-weight:normal;"
+                    f" font-size:10.5px;'>&#183; claude code</span>"
+                )
+                head.setTextFormat(Qt.TextFormat.RichText)
+                head.setMinimumWidth(140)
+            else:
+                head = QLineEdit(ekey)
+                head.setMinimumWidth(140)
+                head.setMaximumWidth(180)
+                head.setStyleSheet(
+                    f"QLineEdit {{ background: transparent;"
+                    f" border: 1px solid transparent; color: {FG};"
+                    f" font-weight: bold; padding: 2px 4px; }}"
+                    f" QLineEdit:focus {{ border: 1px solid {BORDER};"
+                    f" background: {BG_ELEV}; }}"
+                )
+                head.setToolTip("Custom effort key - edit to rename.")
+
+                def _rename(old=ekey, e=head):
+                    new_k = e.text().strip()
+                    if not new_k or new_k == old:
+                        e.setText(old)
+                        return
+                    if new_k.lower() in _STD_EFFORT_KEYS_M:
+                        QMessageBox.warning(content, "Reserved", f"{new_k} is a standard key.")
+                        e.setText(old)
+                        return
+                    cur = get_path(read_settings(), f"{rep}.map", {}) or {}
+                    if new_k in cur:
+                        QMessageBox.warning(content, "Exists", f"{new_k} already exists.")
+                        e.setText(old)
+                        return
+                    val = cur.get(old, "")
+                    remove_path(f"{rep}.map.{old}")
+                    patch_settings(f"{rep}.map.{new_k}", val)
+                    _refresh_model_effort_map()
+                head.editingFinished.connect(_rename)
             rl.addWidget(head)
 
             arrow = QLabel("→")
@@ -4407,26 +4462,70 @@ def _models(window) -> QWidget:
             rl.addWidget(arrow)
 
             ed = QLineEdit()
-            ed.setPlaceholderText("(unset — emits nothing)")
-            cur = get_path(read_settings(), path)
-            ed.setText("" if cur is None else str(cur))
-            ed.setToolTip(
-                f"Template value this model expects when the client asks for "
-                f"effort '{ekey}'. Empty sends nothing for that level."
-            )
-            rl.addWidget(ed, 1)
+            ed.setPlaceholderText("(empty - emits nothing for this level)")
+            ed.setText("" if value is None else str(value))
+            ed.setToolTip(f"Template value this model expects when the client asks for effort {ekey}.")
 
             def _commit(e=ed, pth=path):
-                txt = e.text().strip()
-                if txt:
-                    patch_settings(pth, txt)
-                else:
-                    remove_path(pth)
+                patch_settings(pth, e.text().strip())
             ed.editingFinished.connect(_commit)
+            rl.addWidget(ed, 1)
+
+            rm = QPushButton("Remove")
+            rm.setProperty("class", "danger")
+            rm.setMaximumWidth(90)
+            if is_std:
+                rm.setEnabled(False)
+                rm.setToolTip("Standard Claude Code effort key - cannot be deleted. Clear the value to emit nothing.")
+            else:
+                def _remove(_c=False, k=ekey):
+                    ans = QMessageBox.question(content, "Remove", f"Delete effort key {k}?")
+                    if ans != QMessageBox.StandardButton.Yes:
+                        return
+                    remove_path(f"{rep}.map.{k}")
+                    _refresh_model_effort_map()
+                rm.clicked.connect(_remove)
+            rl.addWidget(rm)
             return row
 
-        for _ek in _STD_EFFORT_KEYS_M:
-            form_layout.addWidget(_build_model_effort_row(_ek, f"{rep}.map.{_ek}"))
+        _EFF_ORDER = {k: i for i, k in enumerate(_STD_EFFORT_KEYS_M)}
+
+        def _refresh_model_effort_map() -> None:
+            while _eff_rows_layout.count():
+                it = _eff_rows_layout.takeAt(0)
+                w = it.widget()
+                if w is not None:
+                    w.deleteLater()
+            emap = get_path(read_settings(), f"{rep}.map", {}) or {}
+            if not isinstance(emap, dict) or not emap:
+                lbl = QLabel("No effort keys - add one below.")
+                lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11.5px; padding: 6px;")
+                _eff_rows_layout.addWidget(lbl)
+                return
+
+            def _sk(k: str):
+                kl = k.lower()
+                return (0, _EFF_ORDER[kl]) if kl in _EFF_ORDER else (1, kl)
+            for k in sorted(emap.keys(), key=_sk):
+                _eff_rows_layout.addWidget(_build_model_effort_row(k, emap.get(k)))
+
+        def _on_add_effort_key() -> None:
+            k = (_eff_add_key.text() or "").strip()
+            if not k:
+                return
+            if not re.match(r"^[A-Za-z0-9_-]+$", k):
+                QMessageBox.warning(content, "Invalid Key", "Use letters, digits, underscore, or dash only.")
+                return
+            cur = get_path(read_settings(), f"{rep}.map", {}) or {}
+            if k in cur:
+                QMessageBox.warning(content, "Exists", f"{k} already exists.")
+                return
+            patch_settings(f"{rep}.map.{k}", "")
+            _eff_add_key.clear()
+            _refresh_model_effort_map()
+
+        _eff_add_btn.clicked.connect(_on_add_effort_key)
+        _refresh_model_effort_map()
         form_layout.addWidget(_list_row(f"{rep}.allowed", "Allowed Values",
             "Guard: values this model's template accepts (one per line). Anything "
             "mapping outside this set is dropped with a warning instead of being "
