@@ -1808,8 +1808,14 @@ def _llama(window) -> QWidget:
                                  "What to do when the prompt exceeds ctx_size."))
     pb_body.addWidget(_toggle_row("llamacpp.inference.drop_prior_thinking",
                                    "Drop Prior-Turn Thinking",
-                                   "On (default): strip thinking blocks from prior assistant turns before sending upstream — llama.cpp regenerates. "
-                                   "Off: re-inject as <think>...</think> for trained-adaptive models that need prior reasoning for multi-turn coherence."))
+                                   "LAYER 1 of 3, and the one that wins. On (default): strip thinking blocks "
+                                   "from prior assistant turns before the request leaves the proxy, so llama.cpp "
+                                   "never sees them and regenerates instead. Off: keep them, re-injected as "
+                                   "<think>...</think> for models that need prior reasoning for multi-turn "
+                                   "coherence." "\n\n" "While this is ON the other two layers have nothing to "
+                                   "act on: the model's Preserve Reasoning toggle (layer 3) greys out, and a "
+                                   "preserve_thinking chat-template kwarg (layer 2) is asking the template to "
+                                   "re-render content that was already deleted here."))
     layout.addWidget(pb_card)
 
     # Structured output card
@@ -1817,13 +1823,19 @@ def _llama(window) -> QWidget:
     so_body.addWidget(_toggle_row("llamacpp.inference.structured_output.enabled",
                                    "Enabled",
                                    "Force JSON schema or GBNF grammar on every generation."))
-    so_body.addWidget(_json_row("llamacpp.inference.structured_output.schema",
+    # Inert unless structured output is enabled.
+    so_body.addWidget(_dependent(
+        _json_row("llamacpp.inference.structured_output.schema",
                                  "JSON Schema", default=None, height=140,
-                                 help_text="JSON Schema object — overrides response shape via response_format."))
-    so_body.addWidget(_code_row("llamacpp.inference.structured_output.grammar",
+                                 help_text="JSON Schema object — overrides response shape via response_format."),
+        ["llamacpp.inference.structured_output.enabled"], lambda e: bool(e)))
+    # Inert unless structured output is enabled.
+    so_body.addWidget(_dependent(
+        _code_row("llamacpp.inference.structured_output.grammar",
                                  "GBNF Grammar", "(empty)",
                                  "Inline GBNF — alternative to JSON Schema.",
-                                 height=180, highlighter=_GbnfHighlighter))
+                                 height=180, highlighter=_GbnfHighlighter),
+        ["llamacpp.inference.structured_output.enabled"], lambda e: bool(e)))
     layout.addWidget(so_card)
 
     # (Reasoning card removed — its drop_prior_thinking toggle moved into the
@@ -2296,8 +2308,11 @@ def _proxy(window) -> QWidget:
     body.addWidget(_section_header("Behavior"))
     body.addWidget(_toggle_row("proxy.tool_search", "Tool Search (BM25)",
                                 "Split client tools into core + deferred; deferred retrievable via ToolSearch."))
-    body.addWidget(_toggle_row("proxy.auto_load_tools", "Auto-Load Tool Schemas",
-                                "First blind call to a deferred tool injects its schema automatically."))
+    # Auto-load acts on DEFERRED tools, which only exist when Tool Search splits them out.
+    body.addWidget(_dependent(
+        _toggle_row("proxy.auto_load_tools", "Auto-Load Tool Schemas",
+                                "First blind call to a deferred tool injects its schema automatically."),
+        ["proxy.tool_search"], lambda t: bool(t)))
     body.addWidget(_enum_row(
         "proxy.mid_system_messages", "Mid-Session System Messages",
         [("Demote to user, keep position (recommended)", "demote"),
@@ -2333,10 +2348,13 @@ def _proxy(window) -> QWidget:
                               "Appended to system prompt when inject_date_location=true. Empty = auto-detect."))
 
     body.addWidget(_section_header("Tool Set"))
-    body.addWidget(_list_row("proxy.core_tools", "Core Tools",
+    # The core/deferred split only happens under Tool Search.
+    body.addWidget(_dependent(
+        _list_row("proxy.core_tools", "Core Tools",
                               "Names that stay always-loaded for clients (one per line). "
                               "Everything else becomes deferred and goes through ToolSearch.",
-                              "Bash"))
+                              "Bash"),
+        ["proxy.tool_search"], lambda t: bool(t)))
     body.addWidget(_list_row("proxy.cors_origins", "CORS Origins",
                               "Allowed origins for the proxy HTTP server (one per line).",
                               "https://example.com"))
@@ -2933,11 +2951,20 @@ def _mcp(window) -> QWidget:
                                 "Streamable HTTP MCP server for external clients. Restart required."))
 
     body.addWidget(_section_header("Network"))
-    body.addWidget(_line_row("mcp_server.host", "Host", "127.0.0.1"))
-    body.addWidget(_number_row("mcp_server.port", "Port", 1024, 65535, 1, 0))
-    body.addWidget(_list_row("mcp_server.cors_origins", "CORS Origins",
+    # Nothing is bound while the MCP server is off.
+    body.addWidget(_dependent(
+        _line_row("mcp_server.host", "Host", "127.0.0.1"),
+        ["mcp_server.enabled"], lambda e: bool(e)))
+    # Nothing is bound while the MCP server is off.
+    body.addWidget(_dependent(
+        _number_row("mcp_server.port", "Port", 1024, 65535, 1, 0),
+        ["mcp_server.enabled"], lambda e: bool(e)))
+    # Nothing is bound while the MCP server is off.
+    body.addWidget(_dependent(
+        _list_row("mcp_server.cors_origins", "CORS Origins",
                               "Allowed origins for the MCP HTTP server (one per line). Empty = no CORS.",
-                              "https://example.com"))
+                              "https://example.com"),
+        ["mcp_server.enabled"], lambda e: bool(e)))
 
     body.addWidget(_section_header("Registered Tools"))
     tools_wrap = QWidget()
@@ -3352,18 +3379,30 @@ def _telegram(window) -> QWidget:
                          "heartbeat.* — periodic agent job firing from HEARTBEAT.md entries")
     hb.addWidget(_toggle_row("heartbeat.enabled", "Enabled",
                               "Run the heartbeat tick loop. When off, no HEARTBEAT.md entries fire."))
-    hb.addWidget(_number_row("heartbeat.tick_seconds", "Tick Interval",
+    # Only ticks while Heartbeat is enabled.
+    hb.addWidget(_dependent(
+        _number_row("heartbeat.tick_seconds", "Tick Interval",
                               10, 3600, 10, 0, "s",
-                              "How often the scheduler checks each agent's HEARTBEAT.md for due entries."))
-    hb.addWidget(_number_row("heartbeat.ephemeral_ttl_seconds", "Ephemeral TTL",
+                              "How often the scheduler checks each agent's HEARTBEAT.md for due entries."),
+        ["heartbeat.enabled"], lambda e: bool(e)))
+    # Only ticks while Heartbeat is enabled.
+    hb.addWidget(_dependent(
+        _number_row("heartbeat.ephemeral_ttl_seconds", "Ephemeral TTL",
                               60, 86400, 60, 0, "s",
-                              "Seconds after which fired ephemeral entries are auto-deleted."))
-    hb.addWidget(_number_row("heartbeat.max_concurrent_fires", "Max Concurrent",
+                              "Seconds after which fired ephemeral entries are auto-deleted."),
+        ["heartbeat.enabled"], lambda e: bool(e)))
+    # Only ticks while Heartbeat is enabled.
+    hb.addWidget(_dependent(
+        _number_row("heartbeat.max_concurrent_fires", "Max Concurrent",
                               1, 20, 1, 0, "",
-                              "Maximum heartbeat entries allowed to fire simultaneously per tick."))
-    hb.addWidget(_number_row("heartbeat.min_fire_gap_seconds", "Min Fire Gap",
+                              "Maximum heartbeat entries allowed to fire simultaneously per tick."),
+        ["heartbeat.enabled"], lambda e: bool(e)))
+    # Only ticks while Heartbeat is enabled.
+    hb.addWidget(_dependent(
+        _number_row("heartbeat.min_fire_gap_seconds", "Min Fire Gap",
                               0, 3600, 10, 0, "s",
-                              "Minimum seconds between consecutive fires of the same heartbeat entry."))
+                              "Minimum seconds between consecutive fires of the same heartbeat entry."),
+        ["heartbeat.enabled"], lambda e: bool(e)))
     layout.addWidget(hb_card)
 
     layout.addStretch(1)
@@ -3391,11 +3430,14 @@ def _audio(window) -> QWidget:
                                         "No background probing — status only changes when a voice message is processed."),
                              _wrap_align(stt_pill, Qt.AlignmentFlag.AlignLeft)))
 
-    stt_body.addWidget(_line_row("voice.stt.base_url", "Endpoint",
+    # No endpoint to talk to while STT is off.
+    stt_body.addWidget(_dependent(
+        _line_row("voice.stt.base_url", "Endpoint",
                                    "http://127.0.0.1:6600/v1",
                                    "Host + port of the STT server (VoxType by default). "
                                    "VoxType picks the STT model from its own settings — "
-                                   "telecode only addresses the endpoint."))
+                                   "telecode only addresses the endpoint."),
+        ["voice.stt.enabled"], lambda e: bool(e)))
 
     # STT Test button
     from voice.stt import transcribe as _stt_transcribe, HELLO_WORLD_AUDIO
@@ -3438,11 +3480,14 @@ def _audio(window) -> QWidget:
                                         "Updated by real /v1/audio/speech calls. No background probing."),
                              _wrap_align(tts_pill, Qt.AlignmentFlag.AlignLeft)))
 
-    tts_body.addWidget(_line_row("voice.tts.base_url", "Endpoint",
+    # No endpoint to talk to while TTS is off.
+    tts_body.addWidget(_dependent(
+        _line_row("voice.tts.base_url", "Endpoint",
                                    "http://127.0.0.1:6600/v1",
                                    "Host + port of the TTS server (VoxType by default). "
                                    "VoxType picks the TTS model + voice from its own "
-                                   "settings — telecode only addresses the endpoint."))
+                                   "settings — telecode only addresses the endpoint."),
+        ["voice.tts.enabled"], lambda e: bool(e)))
 
     # TTS Test button — synthesizes a short phrase and stores the WAV.
     from voice.tts import synthesize as _tts_synthesize, HELLO_WORLD_TEXT
@@ -4414,7 +4459,13 @@ def _models(window) -> QWidget:
         _eff_rows_layout = QVBoxLayout(_eff_rows_host)
         _eff_rows_layout.setContentsMargins(0, 0, 0, 0)
         _eff_rows_layout.setSpacing(8)
-        _sl.addWidget(_eff_rows_host)
+        # An empty Template Key disables the whole mapping in the translator
+        # (proxy/translate.py::_apply_reasoning_effort_template), so grey the
+        # rows out with it rather than let them look live. Qwen 3.6, for one,
+        # has no reasoning_effort variable at all — clearing the key is how you
+        # switch this off for such a model.
+        _eff_key_set = lambda k: bool(str(k or "").strip())
+        _sl.addWidget(_dependent(_eff_rows_host, [f"{rep}.template_key"], _eff_key_set))
 
         _eff_add_bar = QWidget()
         _eab = QHBoxLayout(_eff_add_bar)
@@ -4429,7 +4480,7 @@ def _models(window) -> QWidget:
         _eab.addWidget(_eff_add_key, 1)
         _eab.addWidget(_eff_add_btn)
         _eab.addStretch(1)
-        _sl.addWidget(_eff_add_bar)
+        _sl.addWidget(_dependent(_eff_add_bar, [f"{rep}.template_key"], _eff_key_set))
 
         def _build_model_effort_row(ekey: str, value) -> QWidget:
             path = f"{rep}.map.{ekey}"
@@ -4560,8 +4611,12 @@ def _models(window) -> QWidget:
         _sl.addWidget(_kv_row(f"{ip}.chat_template_kwargs",
             "Kwargs",
             "Merged into every request's chat_template_kwargs. Values are "
-            "JSON-parsed — use `enable_thinking=false`, `reasoning_effort=low`, "
-            "`budget=4096`. Anything the model's jinja template reads.",
+            "JSON-parsed -- anything the model's jinja template reads." "\n\n"
+            "Prefer the dedicated controls where they exist: Thinking for "
+            "enable_thinking, Reasoning Effort for reasoning_effort, and Preserve "
+            "Reasoning (Per-Model Reasoning Override card) for preserve_thinking -- "
+            "that last one is layer 2 of the prior-reasoning chain, overridden by both "
+            "the --reasoning-preserve flag and the proxy's Drop Prior-Turn Thinking.",
             typed=True))
 
         _sl = _sec("LoRA",
@@ -4619,7 +4674,9 @@ def _models(window) -> QWidget:
             _number_row(f"{p}.reasoning_budget_message","Reasoning Budget (per message)", -1, 1048576, 256, 0, "tok",
                          "--reasoning-budget-message. Per-turn cap."),
             [f"{p}.reasoning"], _reason_not_off))
-        _sl.addWidget(_enum_row_strs(f"{p}.reasoning_format", "Reasoning Format",
+        # Same --reasoning gate as the budget rows above.
+        _sl.addWidget(_dependent(
+            _enum_row_strs(f"{p}.reasoning_format", "Reasoning Format",
                                               [("(model default)", ""),
                                                ("none — keep <think> inline", "none"),
                                                ("deepseek — split into reasoning_content", "deepseek"),
@@ -4627,12 +4684,26 @@ def _models(window) -> QWidget:
                                                ("auto", "auto")],
                                               "--reasoning-format: how the server tags think blocks. "
                                               "Telecode parses <think> in the proxy — pick 'none' if this "
-                                              "model is consumed via the proxy."))
-        _sl.addWidget(_toggle_row(f"{p}.reasoning_preserve", "Preserve Reasoning",
-            "--reasoning-preserve: keep the reasoning trace across the whole history, "
-            "not just the last assistant message. llama-server suggests this at startup "
-            "when the template supports it. Overlaps the proxy's 'Drop Prior-Turn "
-            "Thinking' — enabling both is contradictory, so pick one layer."))
+                                              "model is consumed via the proxy."),
+            [f"{p}.reasoning"], _reason_not_off))
+        # Layer 3 of the prior-reasoning chain. Layer 1 (the proxy's
+        # drop_prior_thinking) strips the content before llama.cpp ever sees it,
+        # so while that is on this switch has nothing to preserve -- grey it out
+        # rather than let it look effective.
+        _sl.addWidget(_dependent(
+            _toggle_row(f"{p}.reasoning_preserve", "Preserve Reasoning",
+                "LAYER 3 of 3 -- the server-side lever. --reasoning-preserve keeps the "
+                "reasoning trace across the whole history, not just the last assistant "
+                "message. llama-server suggests it at startup when the template "
+                "advertises supports_preserve_reasoning." "\n\n" "Prefer this over "
+                "setting a preserve_thinking chat-template kwarg by hand (layer 2): this "
+                "flag drives that same template variable, and its default is whatever "
+                "the template says. Note the templates disagree -- Qwen 3.8 preserves "
+                "when the variable is undefined, Qwen 3.6 drops unless it is explicitly "
+                "true." "\n\n" "Requires Drop Prior-Turn Thinking (layer 1, Proxy "
+                "Behavior card) to be OFF, otherwise there is no prior reasoning left "
+                "to keep."),
+            ["llamacpp.inference.drop_prior_thinking"], lambda d: not bool(d)))
 
     def _refresh_picker(preserve_key: str | None = None):
         picker.blockSignals(True)
