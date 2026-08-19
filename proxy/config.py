@@ -85,6 +85,32 @@ def strip_reminders() -> bool:
     return bool(app_config.get_nested("proxy.strip_reminders", False))
 
 
+# What to do with a `system` message that arrives AFTER the conversation has
+# started. Chat templates like Qwen's refuse a system message that is not
+# first, so something has to give.
+MID_SYSTEM_MODES = ("demote", "strip", "merge_top", "keep")
+
+
+def mid_system_messages() -> str:
+    """Policy for mid-conversation system messages.
+
+      demote     keep its position, re-role it to `user` (default). The only
+                 mode that is both template-safe and cache-safe: the prompt
+                 prefix stays append-only.
+      strip      drop it entirely.
+      merge_top  hoist it into the leading system block. Template-safe but
+                 it PINS llama.cpp's prefix cache — clients that emit one
+                 system message per turn append to the front block every
+                 turn, shifting the whole conversation. Legacy behaviour;
+                 only pick it for a model that genuinely needs the content
+                 to carry system role.
+      keep       leave it untouched, in place. Will 500 on templates that
+                 enforce system-first.
+    """
+    mode = str(app_config.get_nested("proxy.mid_system_messages", "demote") or "demote")
+    return mode if mode in MID_SYSTEM_MODES else "demote"
+
+
 def auto_load_tools() -> bool:
     return bool(app_config.get_nested("proxy.auto_load_tools", False))
 

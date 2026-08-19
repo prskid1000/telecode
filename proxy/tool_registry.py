@@ -182,13 +182,33 @@ _DEFERRED_KEEP_RE = re.compile(
     re.DOTALL,
 )
 
+# Per-turn token-budget bookkeeping the client re-emits after EVERY turn
+# (Claude Code: `<total_tokens>15000000 tokens left</total_tokens>`). Pure
+# noise for a local model with a fixed context, and one more duplicate copy
+# accumulates per turn. Covered by the same `strip_reminders` switch.
+# Eating the adjacent whitespace stops the surrounding text from growing
+# blank lines, so stripping does not itself perturb the prompt prefix.
+_TOKEN_BUDGET_RE = re.compile(
+    r"[ \t]*\n{0,2}<total_tokens>.*?</total_tokens>[ \t]*",
+    re.DOTALL,
+)
+
 
 def _strip_reminders_except_preserved(text: str) -> str:
-    """Strip all system-reminder blocks EXCEPT skills listings and our deferred listing."""
+    """Strip client bookkeeping from `text`.
+
+    Removed: every <system-reminder> block, and every <total_tokens> budget
+    line. Kept: skills listings and our deferred-tools listing — re-appended
+    at the end in a fixed order, so the result stays byte-identical turn over
+    turn. (Proxy-authored context that must survive is emitted as plain text
+    rather than added here — see server.py::_inject_system_prompt.)
+    """
     # Extract blocks we want to keep
-    preserved = _SKILLS_REMINDER_RE.findall(text) + _DEFERRED_KEEP_RE.findall(text)
-    # Strip all reminders
+    preserved = (_SKILLS_REMINDER_RE.findall(text)
+                 + _DEFERRED_KEEP_RE.findall(text))
+    # Strip all reminders + per-turn token-budget noise
     text = _ALL_REMINDERS_RE.sub("", text)
+    text = _TOKEN_BUDGET_RE.sub("", text)
     # Re-append preserved blocks
     if preserved:
         text = text.rstrip() + "\n\n" + "\n\n".join(preserved)

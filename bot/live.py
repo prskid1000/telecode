@@ -61,6 +61,32 @@ def fire(coro: Awaitable) -> asyncio.Task:
     return task
 
 
+def _scheduling_loop() -> asyncio.AbstractEventLoop:
+    """The loop used to schedule debounced edits / frame sends.
+
+    Not simply ``asyncio.get_event_loop()``: under Python 3.12 that raises
+    ``RuntimeError`` once anything in the process has been through
+    ``asyncio.run`` (the policy remembers a loop was set, then cleared), so
+    constructing a ``LiveMessage`` or ``FrameSender`` outside a running loop
+    blew up rather than returning a loop.
+
+    Inside the bot there is always a running loop, so the first branch is the
+    one that fires in production. The fallbacks exist for sync construction
+    (tests, and any sync call site) — the loop only has to be a valid target
+    for ``call_later``.
+    """
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    try:
+        return asyncio.get_event_loop_policy().get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop
+
+
 # ── Flood-control backoff (per-chat) ──────────────────────────────────────────
 # Telegram rate limits apply per chat, so we track backoff per chat_id rather
 # than globally — a flood in one group should not throttle edits in another.
@@ -241,7 +267,7 @@ class LiveMessage:
         self._edit_scheduled = False
         self._edit_handle: asyncio.TimerHandle | None = None
         self._final_retry_done = False
-        self._loop = asyncio.get_event_loop()
+        self._loop = _scheduling_loop()
         self._typing: "TypingPinger | None" = TypingPinger(bot, chat_id, thread_id)
         self._typing.start()
 
@@ -488,7 +514,7 @@ class FrameSender:
         self._pending_frame: bytes | None = None
         self._send_scheduled = False
         self._send_handle: asyncio.TimerHandle | None = None
-        self._loop = asyncio.get_event_loop()
+        self._loop = _scheduling_loop()
         self._controls_kb = controls_kb_factory
         self._track_controls = track_controls
 

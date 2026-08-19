@@ -350,6 +350,7 @@
     "strip_reminders": false,
     "auto_load_tools": false,
     "sort_tools": false,
+    "mid_system_messages": "demote",
     "location": "",
     "max_roundtrips": 15,
     "ping_interval": 10,

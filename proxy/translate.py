@@ -53,47 +53,107 @@ def _gen_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:24]}"
 
 
-def _coalesce_system_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Ensure there is at most ONE system message and that it is placed at index 0.
+def _system_content_to_text(content: Any) -> str:
+    """Flatten a system message's content (str | Anthropic block list) to text."""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                t = block.get("text", "").strip()
+                if t:
+                    parts.append(t)
+            elif isinstance(block, str) and block.strip():
+                parts.append(block.strip())
+        return "\n\n".join(parts)
+    return ""
 
-    Many LLM chat templates (e.g. Qwen 3.8 Jinja template) strictly enforce:
+
+def _normalize_system_messages(
+    messages: list[dict[str, Any]],
+    mode: str | None = None,
+) -> list[dict[str, Any]]:
+    """Guarantee at most ONE system message, at index 0 — WITHOUT relocating
+    anything that was not already at the front.
+
+    Templates like Qwen 3.8's refuse a system message that is not first:
         {% if message['role'] == 'system' and not loop.first %}
             raise_exception('System message must be at the beginning.')
 
-    This function extracts all `system` role messages in `messages`, merges
-    their text content with `\n\n`, and places the single combined system message at index 0.
-    All non-system messages retain their relative order.
+    The obvious fix — hoist every system message into one merged block at
+    index 0 — silently destroys prompt caching. Clients (Claude Code) emit a
+    fresh system message after *every* turn (`<total_tokens>…`), so each
+    request appends to the TAIL of that front block and shifts the entire
+    conversation a few tokens along. llama.cpp's longest-common-prefix match
+    then stops dead at the end of the system block and re-prefills the whole
+    history, every turn, forever.
+
+    So: merge only the LEADING run of system messages — the real system
+    prompt plus our own injections, which is the only content that legitimately
+    belongs at the front. A system message that shows up after the conversation
+    has started keeps its exact position and is demoted to `user`: template-safe,
+    and the prompt prefix stays strictly append-only.
+
+    One exception to "keeps its exact position": a demoted message that would
+    land between an assistant `tool_calls` turn and its `role:"tool"` results
+    is held back until the tool run closes. Qwen renders the split fine, but
+    stricter templates require that pairing to be adjacent. The hold-back is
+    computed identically every turn, so the prefix stays append-only.
+
+    `mode` selects what happens to those mid-conversation system messages —
+    "demote" (above, the default), "strip", "merge_top" (the legacy
+    cache-pinning hoist) or "keep" (no-op). None reads `proxy.mid_system_messages`.
+    See proxy/config.py::mid_system_messages for the full trade-offs.
     """
-    system_parts: list[str] = []
-    other_messages: list[dict[str, Any]] = []
+    if mode is None:
+        from proxy.config import mid_system_messages
+        mode = mid_system_messages()
+    if mode == "keep":
+        return [m for m in messages if isinstance(m, dict)]
+
+    lead: list[str] = []
+    rest: list[dict[str, Any]] = []
+    held: list[dict[str, Any]] = []
+    started = False
 
     for msg in messages:
         if not isinstance(msg, dict):
             continue
-        if msg.get("role") == "system":
-            c = msg.get("content")
-            if isinstance(c, str):
-                if c.strip():
-                    system_parts.append(c.strip())
-            elif isinstance(c, list):
-                parts = []
-                for block in c:
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        t = block.get("text", "").strip()
-                        if t:
-                            parts.append(t)
-                    elif isinstance(block, str) and block.strip():
-                        parts.append(block.strip())
-                if parts:
-                    system_parts.append("\n\n".join(parts))
-        else:
-            other_messages.append(msg)
+        role = msg.get("role")
+        if role != "system":
+            started = True
+            if role != "tool":
+                # Any tool run is over — safe to land what we held back.
+                rest.extend(held)
+                held.clear()
+            rest.append(msg)
+            continue
+        text = _system_content_to_text(msg.get("content"))
+        if not started:
+            if text:
+                lead.append(text)
+            continue
+        if not text:
+            continue
+        if mode == "strip":
+            continue
+        if mode == "merge_top":
+            # Legacy hoist. Kept only as an escape hatch — see the docstring
+            # for why this destroys the prefix cache.
+            lead.append(text)
+            continue
+        demoted = {"role": "user", "content": text}
+        in_tool_run = bool(rest) and bool(
+            rest[-1].get("tool_calls") or rest[-1].get("role") == "tool"
+        )
+        (held if in_tool_run else rest).append(demoted)
 
-    if not system_parts:
-        return other_messages
+    rest.extend(held)
 
-    merged_system_content = "\n\n".join(system_parts)
-    return [{"role": "system", "content": merged_system_content}, *other_messages]
+    if not lead:
+        return rest
+    return [{"role": "system", "content": "\n\n".join(lead)}, *rest]
 
 
 # ── Anthropic request → internal (OpenAI-shape) ──────────────────────────
@@ -460,6 +520,7 @@ def anthropic_request_to_internal(
     body: dict[str, Any],
     *,
     inference_defaults: dict[str, Any] | None = None,
+    system_mode: str | None = None,
 ) -> dict[str, Any]:
     """Translate an Anthropic /v1/messages body to an internal (OpenAI-shape) body.
 
@@ -554,7 +615,7 @@ def anthropic_request_to_internal(
             think_end=think_end,
         ))
 
-    messages = _coalesce_system_messages(messages)
+    messages = _normalize_system_messages(messages, system_mode)
 
     out: dict[str, Any] = {
         "model": body.get("model", ""),
@@ -670,6 +731,7 @@ def openai_request_to_internal(
     body: dict[str, Any],
     *,
     inference_defaults: dict[str, Any] | None = None,
+    system_mode: str | None = None,
 ) -> dict[str, Any]:
     """Normalize an OpenAI /v1/chat/completions body for llama.cpp.
 
@@ -695,7 +757,7 @@ def openai_request_to_internal(
     _apply_model_chat_template_kwargs(body, defaults)
     sys_nudge = _apply_effort_entry(entry, body)
 
-    messages = _coalesce_system_messages(body.get("messages") or [])
+    messages = _normalize_system_messages(body.get("messages") or [], system_mode)
     if sys_nudge:
         if messages and messages[0].get("role") == "system":
             existing = messages[0].get("content", "")

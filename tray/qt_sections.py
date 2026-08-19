@@ -2285,8 +2285,22 @@ def _proxy(window) -> QWidget:
                                 "Split client tools into core + deferred; deferred retrievable via ToolSearch."))
     body.addWidget(_toggle_row("proxy.auto_load_tools", "Auto-Load Tool Schemas",
                                 "First blind call to a deferred tool injects its schema automatically."))
-    body.addWidget(_toggle_row("proxy.strip_reminders", "Strip System Reminders",
-                                "Remove <system-reminder> blocks from message history before forwarding."))
+    body.addWidget(_enum_row(
+        "proxy.mid_system_messages", "Mid-Session System Messages",
+        [("Demote to user, keep position (recommended)", "demote"),
+         ("Strip them", "strip"),
+         ("Merge into top system block (legacy \u2014 breaks prompt cache)", "merge_top"),
+         ("Leave untouched (may 500 on strict templates)", "keep")],
+        "What to do with a `system` message that arrives after the conversation has started. "
+        "Chat templates like Qwen's refuse a system message that is not first. Demote is the only "
+        "option that is both template-safe and cache-safe \u2014 merging them at the top makes the "
+        "front block grow every turn, which pins llama.cpp's prefix cache and re-prefills the whole "
+        "history on every request.",
+        max_width=430))
+    body.addWidget(_toggle_row("proxy.strip_reminders", "Strip Client Bookkeeping",
+                                "Remove <system-reminder> blocks and per-turn <total_tokens> budget lines "
+                                "from message history before forwarding. Skills listings, the deferred-tool "
+                                "listing and our own date/location injection are kept."))
     body.addWidget(_toggle_row("proxy.sort_tools", "Sort Tools Alphabetically",
                                 "Sort body.tools by name before forwarding. Stabilises the prompt prefix when "
                                 "a client reorders its tool list (cache-friendly), at the cost of overriding "
@@ -2489,7 +2503,7 @@ def _proxy_profiles_card() -> QFrame:
         for field, label, hlp in [
             ("tool_search",          "Tool Search",         "BM25 tool retrieval for this client."),
             ("auto_load_tools",      "Auto-Load Tools",     "First blind call injects schema."),
-            ("strip_reminders",      "Strip Reminders",     "Drop <system-reminder> blocks."),
+            ("strip_reminders",      "Strip Reminders",     "Drop <system-reminder> blocks + <total_tokens> lines."),
             ("sort_tools",           "Sort Tools",          "Sort body.tools alphabetically (cache-stable)."),
             ("inject_date_location", "Inject Date/Location","Append today's date + location to system prompt."),
         ]:
