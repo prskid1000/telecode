@@ -71,6 +71,63 @@ _STANDARD_EFFORT_DEFAULTS: dict[str, dict[str, Any]] = {
 }
 
 
+# Per-model twin of _STANDARD_EFFORT_DEFAULTS, for the *template* string
+# rather than the token budget. Keys are Claude Code's effort levels; values
+# are what the model's chat template expects. low/medium/high is the one trio
+# valid across both families we care about — GPT-OSS takes it verbatim, and
+# Qwen 3.8 aliases high -> xhigh before its raise check.
+_STANDARD_EFFORT_TEMPLATE_DEFAULTS: dict[str, str] = {
+    "none":     "low",
+    "minimal":  "low",
+    "low":      "low",
+    "medium":   "medium",
+    "high":     "high",
+    "adaptive": "medium",
+    "max":      "high",
+}
+
+
+def _ensure_model_effort_maps(data: dict[str, Any]) -> bool:
+    """Seed each model's inference_defaults.reasoning_effort.
+
+    Same contract as _ensure_standard_effort_map: fill only what is missing,
+    never overwrite. Without this the tray renders empty boxes for a mapping
+    that is actually in force via _INFERENCE_DEFAULTS — the "looks unset but
+    isn't" trap that makes a settings UI untrustworthy.
+    """
+    models = data.get("llamacpp", {}).get("models")
+    if not isinstance(models, dict):
+        return False
+    changed = False
+    for _name, model in models.items():
+        if not isinstance(model, dict):
+            continue
+        inf = model.setdefault("inference_defaults", {})
+        if not isinstance(inf, dict):
+            continue
+        eff = inf.get("reasoning_effort")
+        if not isinstance(eff, dict):
+            eff = {}
+            inf["reasoning_effort"] = eff
+            changed = True
+        if "template_key" not in eff:
+            eff["template_key"] = "reasoning_effort"
+            changed = True
+        if "allowed" not in eff:
+            eff["allowed"] = ["low", "medium", "high"]
+            changed = True
+        mapping = eff.get("map")
+        if not isinstance(mapping, dict):
+            mapping = {}
+            eff["map"] = mapping
+            changed = True
+        for k, v in _STANDARD_EFFORT_TEMPLATE_DEFAULTS.items():
+            if k not in mapping:
+                mapping[k] = v
+                changed = True
+    return changed
+
+
 def _ensure_standard_effort_map(data: dict[str, Any]) -> bool:
     """Seed any missing STANDARD_EFFORT_KEYS into the reasoning_effort_map.
 
@@ -95,14 +152,14 @@ def _ensure_standard_effort_map(data: dict[str, Any]) -> bool:
 
 
 _raw: dict[str, Any] = _load()
-if _ensure_standard_effort_map(_raw):
+if _ensure_standard_effort_map(_raw) | _ensure_model_effort_maps(_raw):
     _save(_raw)
 
 
 def reload() -> None:
     global _raw
     _raw = _load()
-    if _ensure_standard_effort_map(_raw):
+    if _ensure_standard_effort_map(_raw) | _ensure_model_effort_maps(_raw):
         _save(_raw)
 
 
