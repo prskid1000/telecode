@@ -47,6 +47,14 @@ log = logging.getLogger("telecode.proxy")
 
 _HEARTBEAT_INTERVAL = 2.0
 
+# Upstream (llama.cpp) request timeout. aiohttp's default is total=300, which
+# silently kills any generation running longer than 5 minutes — the slot is
+# cancelled mid-stream and the client gets a 500 with an empty message
+# (asyncio.TimeoutError stringifies to ""). Cap the wall clock at 1 hour and
+# rely on sock_read to catch a genuinely hung upstream: during streaming,
+# tokens arrive continuously so the read timer never trips.
+_UPSTREAM_TIMEOUT = aiohttp.ClientTimeout(total=3600, sock_connect=10, sock_read=300)
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # SSE utilities
@@ -946,7 +954,7 @@ async def _run_upstream_round(
     supervisor = await get_supervisor()
     await supervisor.begin_request()
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=_UPSTREAM_TIMEOUT) as session:
         async with session.post(url, json=internal_body, headers=headers) as upstream_resp:
             if upstream_resp.status != 200:
                 errtext = await upstream_resp.text()
@@ -1427,7 +1435,7 @@ async def _run_non_streaming(
     summaries: list[str] = []
 
     for _rt in range(max_roundtrips):
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=_UPSTREAM_TIMEOUT) as session:
             async with session.post(url, json=body, headers=headers) as upstream_resp:
                 if upstream_resp.status != 200:
                     errtext = await upstream_resp.text()
