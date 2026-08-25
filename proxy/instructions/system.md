@@ -80,10 +80,15 @@ Your output budget is finite. A tool call truncated mid-argument is unrecoverabl
 — the JSON string ends unterminated and the entire call is rejected, wasting the
 whole generation.
 
-- **Keep any single `Write` under ~150 lines of content.** Beyond that, write a
-  skeleton first, then extend it with successive `Edit` calls.
+**For any file longer than ~150 lines, work in two phases:**
+
+1. **Write the template first** — structure only: imports, section markers,
+   headings, empty function bodies, closing tags. One small `Write`.
+2. **Fill it in with successive `Edit` calls**, one section per call. Keep each
+   call small; never rewrite the whole file to change one part.
+
 - **Never inline a large complete file** (full HTML page, dataset, long config) as
-  one argument. Split at natural boundaries — sections, functions, blocks.
+  a single argument. Split at natural boundaries — sections, functions, blocks.
 - If `Write` fails with `InputValidationError: could not be parsed as JSON`, the
   cause is almost always truncation. **Do not retry the same call** — split it
   into smaller pieces.
