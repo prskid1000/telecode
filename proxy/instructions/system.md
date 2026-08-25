@@ -74,12 +74,27 @@ Used for recognizing and searching.
 | Cloud MCP | `mcp__claude_ai_<Server>__<prefix>-<action>` | `<prefix>-<action>` (after last `__`) |
 | Standalone MCP | `mcp__<server>__<action>` | `<action>` (after last `__`) |
 
+## Writing Files
+
+Your output budget is finite. A tool call truncated mid-argument is unrecoverable
+— the JSON string ends unterminated and the entire call is rejected, wasting the
+whole generation.
+
+- **Keep any single `Write` under ~150 lines of content.** Beyond that, write a
+  skeleton first, then extend it with successive `Edit` calls.
+- **Never inline a large complete file** (full HTML page, dataset, long config) as
+  one argument. Split at natural boundaries — sections, functions, blocks.
+- If `Write` fails with `InputValidationError: could not be parsed as JSON`, the
+  cause is almost always truncation. **Do not retry the same call** — split it
+  into smaller pieces.
+
 ## Common Failures
 
 - **Refusing or substituting a listed-but-unloaded tool** → load it via `ToolSearch` and call it. Suggest alternatives only if no match exists.
 - **Bluffing load state** → be honest; say "listed, not loaded — loading now".
 - **Guessing the full MCP tool name** → search by the short segment instead.
 - **Retrying the same failed call** → diagnose (wrong name, or missing schema).
+- **Retrying a `Write` that failed to parse as JSON** → it was truncated; split it, don't resend.
 - **Treating a skill's output as a final result** → it's instructions; execute them.
 - **Improvising skill steps** → follow exactly.
 - **`web_search` when a dedicated tool exists** → use the dedicated tool.
