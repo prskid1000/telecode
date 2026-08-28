@@ -194,18 +194,252 @@ _TOKEN_BUDGET_RE = re.compile(
 )
 
 
-def _strip_reminders_except_preserved(text: str) -> str:
+# ── Client system-prompt noise (always removed, no setting) ────────────────
+#
+# Three blocks Claude Code puts in its system prompt that are pure cost in
+# front of a local model. Offsets below are measured on a real `say hi` from
+# Claude Code 2.1.250 in this repo, into the 59,105-char rendered prompt; a
+# change at offset N invalidates every token after N.
+#
+#   x-anthropic-billing-header:  offset 28. Telemetry for Anthropic's billing,
+#                                meaningless to llama.cpp. Carries the CLI
+#                                version, so every `claude update` invalidates
+#                                100% of the prefix cache.
+#   # Environment                offset 5,022. cwd / platform / shell / OS.
+#   gitStatus:                   offset 5,955. A snapshot taken at session
+#                                start, so it is stale by definition, and it
+#                                changes on every commit, branch switch and
+#                                dirty-file edit — invalidating ~90% of the
+#                                prompt, CLAUDE.md included, each time. The
+#                                model can run `git status` for live state.
+#
+# All three live in the LEADING system message and nowhere else, so the
+# stripper is only ever applied there. A user pasting `# Environment` into a
+# prompt, or a tool result containing a `gitStatus:` line, is out of scope by
+# construction rather than by luck of the regex.
+
+# Anchored on Claude Code's exact adjacent wording, not just the heading.
+# These three strips are unconditional — no flag gates them — and the same
+# `_prepare_internal_body` serves every client, plain OpenAI apps included.
+# `# Environment` is a heading anyone might legitimately write, so matching the
+# bare heading would silently eat a third party's system prompt. The
+# lookaheads make that essentially impossible while still matching every
+# Claude Code request.
+_BILLING_HEADER_RE = re.compile(r"^x-anthropic-billing-header:.*$\n?", re.M)
+_ENV_BLOCK_RE = re.compile(
+    r"^# Environment$(?=\nYou have been invoked in the following environment)", re.M)
+_GIT_STATUS_RE = re.compile(r"^gitStatus:(?=[ \t]*This is the git status)", re.M)
+_TOP_HEADING_RE = re.compile(r"^# \S", re.M)
+
+
+def _cut_to_next_heading(text: str, start_re: re.Pattern[str]) -> str:
+    """Remove each `start_re` match through to the next top-level heading."""
+    out = text
+    for _ in range(8):
+        m = start_re.search(out)
+        if not m:
+            break
+        nxt = _TOP_HEADING_RE.search(out, m.end())
+        end = nxt.start() if nxt else len(out)
+        head, tail = out[:m.start()], out[end:]
+        if head.strip() and tail.strip():
+            out = head.rstrip() + "\n\n" + tail.lstrip()
+        else:
+            out = (head + tail).strip()
+    return out
+
+
+def strip_client_system_noise(text: str) -> str:
+    """Drop the billing header, `# Environment` and `gitStatus:` blocks."""
+    text = _BILLING_HEADER_RE.sub("", text)
+    text = _cut_to_next_heading(text, _ENV_BLOCK_RE)
+    text = _cut_to_next_heading(text, _GIT_STATUS_RE)
+    return text.strip()
+
+
+# ── Per-turn context blocks ────────────────────────────────────────────────
+#
+# Claude Code sends the agent-type roster, the skills catalogue and the MCP
+# server instructions as mid-conversation `role:"system"` messages (an
+# official Messages API feature, appended at the tail so they do not
+# invalidate the cached prefix before them). They are NOT <system-reminder>
+# blocks, so `strip_reminders` never reaches them. Measured at 1,546 / 8,518 /
+# 523 chars.
+#
+#   agent types  removed unconditionally — the Agent tool's subagent menu is
+#                dead weight for a local model driving one CLI.
+#   skills       toggle. Strip it and the model can no longer pick a skill by
+#                name.
+#   mcp          toggle. This one carries real operating instructions the MCP
+#                servers themselves supplied, so it is off by default.
+#
+# `mid_system_messages: "strip"` is the whole-message lever that subsumes all
+# three; these are the surgical version, and unlike `strip` they leave
+# anything unrecognised alone.
+#
+# Scoped to messages AFTER the leading system message. With the default
+# `mid_system_messages: "demote"` these arrive re-roled to `user` by the time
+# we see them, so position — not role — is what identifies them.
+
+_AGENT_TYPES_RE = re.compile(r"^Available agent types for the Agent tool:", re.M)
+_SKILLS_LISTING_RE = re.compile(r"^The following skills are available", re.M)
+_MCP_INSTRUCTIONS_RE = re.compile(
+    r"^(?:# MCP Server Instructions$"
+    r"|The following MCP servers are configured but failed to connect)", re.M)
+
+# A block runs to the next of these. Generous on purpose: over-shooting a
+# boundary would delete a sibling block, which is the failure mode worth
+# engineering against.
+_TURN_BOUNDARY_RE = re.compile(
+    r"^Available agent types for the Agent tool:"
+    r"|^The following skills are available"
+    r"|^The following MCP servers are configured but failed to connect"
+    r"|^# MCP Server Instructions$"
+    r"|^The following deferred tools are now available"
+    r"|^Unloaded tools \(call ToolSearch"
+    r"|^While bypass permissions mode is active:"
+    r"|</system-reminder>",
+    re.M,
+)
+
+
+def _cut_to_boundary(text: str, start_re: "re.Pattern[str]") -> str:
+    out = text
+    for _ in range(8):
+        m = start_re.search(out)
+        if not m:
+            break
+        nxt = _TURN_BOUNDARY_RE.search(out, m.end())
+        end = nxt.start() if nxt else len(out)
+        head, tail = out[:m.start()], out[end:]
+        if head.strip() and tail.strip():
+            out = head.rstrip() + "\n\n" + tail.lstrip()
+        else:
+            out = (head + tail).strip()
+    return out
+
+
+def strip_turn_context(text: str, *, skills: bool = False,
+                       mcp: bool = False) -> str:
+    """Remove the agent-type roster (always) plus any toggled-on listings."""
+    text = _cut_to_boundary(text, _AGENT_TYPES_RE)
+    if skills:
+        text = _cut_to_boundary(text, _SKILLS_LISTING_RE)
+    if mcp:
+        text = _cut_to_boundary(text, _MCP_INSTRUCTIONS_RE)
+    return text.strip()
+
+
+# ── CLAUDE.md document limiter ─────────────────────────────────────────────
+#
+# `# claudeMd` is not one document. It is every CLAUDE.md on the path
+# concatenated — managed policy, then `~/.claude/CLAUDE.md`, then the project
+# file, then nested ones, then MEMORY.md — each headed by a
+# `Contents of <path> (<why>):` line, in that load order. Measured on a bare
+# `say hi` in this repo: 7,182 + 33,102 + 733 chars.
+#
+# It rides INSIDE the <system-reminder> on the first user turn (Claude Code
+# delivers CLAUDE.md as a user message, not as part of the system prompt), so
+# `strip_reminders` takes the whole thing with it. `keep_claude_md` is the
+# exclusion: keep the first N documents and drop the rest, whether or not
+# reminders are being stripped.
+#
+#   -1  leave it alone (default)
+#    0  drop the block outright
+#    N  keep the first N documents
+
+_CLAUDE_MD_START_RE = re.compile(r"^# claudeMd$", re.M)
+_DOC_HEADER_RE = re.compile(r"^Contents of .+:$", re.M)
+
+# What ends the `# claudeMd` section. Claude Code's sibling context headers are
+# a single camelCase token (`# currentDate`, `# userEmail`, `# gitStatus`);
+# headings inside a user's own CLAUDE.md do not collide because they either
+# contain a space (`# Memory Index`) or start with a capital.
+_CTX_BOUNDARY_RE = re.compile(
+    r"^# [a-z][A-Za-z0-9]*$"
+    r"|^[ \t]*IMPORTANT: this context may or may not be relevant"
+    r"|</system-reminder>",
+    re.M,
+)
+
+
+def _claude_md_span(text: str) -> tuple[int, int] | None:
+    m = _CLAUDE_MD_START_RE.search(text)
+    if not m:
+        return None
+    nxt = _CTX_BOUNDARY_RE.search(text, m.end())
+    return m.start(), (nxt.start() if nxt else len(text))
+
+
+def _claude_md_trimmed(section: str, keep: int) -> str:
+    """`section` cut down to its first `keep` `Contents of …:` documents."""
+    docs = list(_DOC_HEADER_RE.finditer(section))
+    if len(docs) <= keep:
+        return section
+    return section[:docs[keep].start()]
+
+
+def extract_claude_md(text: str, keep: int) -> str:
+    """The first `keep` CLAUDE.md documents, re-wrapped as a reminder.
+
+    Used to carry the block through `strip_reminders`, which would otherwise
+    delete the wrapper it lives in.
+    """
+    if keep <= 0:
+        return ""
+    span = _claude_md_span(text)
+    if not span:
+        return ""
+    section = _claude_md_trimmed(text[span[0]:span[1]], keep).rstrip()
+    if not section:
+        return ""
+    return f"<system-reminder>\n{section}\n</system-reminder>"
+
+
+def limit_claude_md_text(text: str, keep: int) -> str:
+    """Trim the block in place — for when reminders are NOT being stripped.
+
+    The surviving head stays byte-identical, so llama.cpp's prefix cache only
+    has to refill from the cut.
+    """
+    if keep < 0:
+        return text
+    span = _claude_md_span(text)
+    if not span:
+        return text
+    start, end = span
+    if keep == 0:
+        cut_at = start
+    else:
+        docs = list(_DOC_HEADER_RE.finditer(text[start:end]))
+        if len(docs) <= keep:
+            return text
+        cut_at = start + docs[keep].start()
+    head, tail = text[:cut_at], text[end:]
+    if head.strip() and tail.strip():
+        return head.rstrip() + "\n\n" + tail.lstrip()
+    return (head + tail).strip()
+
+
+def _strip_reminders_except_preserved(text: str, keep_claude_md: int = -1) -> str:
     """Strip client bookkeeping from `text`.
 
     Removed: every <system-reminder> block, and every <total_tokens> budget
-    line. Kept: skills listings and our deferred-tools listing — re-appended
-    at the end in a fixed order, so the result stays byte-identical turn over
-    turn. (Proxy-authored context that must survive is emitted as plain text
-    rather than added here — see server.py::_inject_system_prompt.)
+    line. Kept: the first `keep_claude_md` CLAUDE.md documents, skills
+    listings and our deferred-tools listing — re-appended at the end in a
+    fixed order, so the result stays byte-identical turn over turn.
+    (Proxy-authored context that must survive is emitted as plain text rather
+    than added here — see server.py::_inject_system_prompt.)
     """
-    # Extract blocks we want to keep
-    preserved = (_SKILLS_REMINDER_RE.findall(text)
-                 + _DEFERRED_KEEP_RE.findall(text))
+    # Extract blocks we want to keep. CLAUDE.md goes first: it is the
+    # highest-priority instruction in the request, and a fixed order is what
+    # keeps the result byte-stable.
+    preserved: list[str] = []
+    kept_md = extract_claude_md(text, keep_claude_md)
+    if kept_md:
+        preserved.append(kept_md)
+    preserved += (_SKILLS_REMINDER_RE.findall(text)
+                  + _DEFERRED_KEEP_RE.findall(text))
     # Strip all reminders + per-turn token-budget noise
     text = _ALL_REMINDERS_RE.sub("", text)
     text = _TOKEN_BUDGET_RE.sub("", text)
@@ -244,10 +478,26 @@ def _apply_to_messages(
     return cleaned
 
 
-def strip_all_reminders(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Strip system-reminder blocks from messages, preserving skills listings."""
+def strip_all_reminders(messages: list[dict[str, Any]],
+                        keep_claude_md: int = -1) -> list[dict[str, Any]]:
+    """Strip system-reminder blocks, preserving skills + `keep_claude_md` docs."""
     return _apply_to_messages(
-        messages, lambda t: _strip_reminders_except_preserved(t).strip()
+        messages,
+        lambda t: _strip_reminders_except_preserved(t, keep_claude_md).strip(),
+    )
+
+
+def limit_claude_md(messages: list[dict[str, Any]],
+                    keep: int) -> list[dict[str, Any]]:
+    """Trim the CLAUDE.md block in place, reminders left intact.
+
+    The other half of `keep_claude_md`: used when `strip_reminders` is off, so
+    the dial still limits how many documents get through.
+    """
+    if keep < 0:
+        return messages
+    return _apply_to_messages(
+        messages, lambda t: limit_claude_md_text(t, keep).strip()
     )
 
 

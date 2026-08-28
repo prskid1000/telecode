@@ -85,6 +85,50 @@ def strip_reminders() -> bool:
     return bool(app_config.get_nested("proxy.strip_reminders", False))
 
 
+def strip_skills() -> bool:
+    """Drop the `The following skills are available…` catalogue.
+
+    Arrives in a mid-conversation `role:"system"` message, NOT a
+    <system-reminder>, so `strip_reminders` never reaches it. Measured at
+    8,518 chars. Strip it and the model can no longer pick a skill by name.
+    Per-profile `strip_skills` overrides this.
+    """
+    return bool(app_config.get_nested("proxy.strip_skills", False))
+
+
+def strip_mcp_instructions() -> bool:
+    """Drop the `# MCP Server Instructions` block.
+
+    Same carrier as the skills catalogue. Off by default because, unlike the
+    listings, this one is operating guidance the MCP servers themselves
+    supplied — stripping it makes the model use those tools blind.
+    Per-profile `strip_mcp_instructions` overrides this.
+    """
+    return bool(app_config.get_nested("proxy.strip_mcp_instructions", False))
+
+
+def keep_claude_md() -> int:
+    """How many CLAUDE.md documents to let through, in load order.
+
+    `# claudeMd` is every CLAUDE.md on the path concatenated — managed policy,
+    user (`~/.claude/CLAUDE.md`), project, nested, then MEMORY.md — so this is
+    a count, not a switch.
+
+      -1  leave the block alone (default)
+       0  drop it entirely
+       N  keep the first N documents
+
+    Doubles as the exclusion from `strip_reminders`: the block rides inside
+    the <system-reminder> on the first user turn, so stripping reminders would
+    otherwise take it whatever this is set to. Any value >= 0 is honoured in
+    both modes. Per-profile `keep_claude_md` overrides this.
+    """
+    try:
+        return int(app_config.get_nested("proxy.keep_claude_md", -1))
+    except (TypeError, ValueError):
+        return -1
+
+
 # What to do with a `system` message that arrives AFTER the conversation has
 # started. Chat templates like Qwen's refuse a system message that is not
 # first, so something has to give.

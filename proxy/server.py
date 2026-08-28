@@ -38,6 +38,9 @@ from proxy import api_runs
 from proxy.tool_registry import (
     proxy_system_instruction,
     strip_all_reminders,
+    limit_claude_md,
+    strip_client_system_noise,
+    strip_turn_context,
 )
 from proxy.tool_search import BM25Index
 from llamacpp import config as llama_cfg
@@ -538,6 +541,47 @@ def _inject_deferred_reminder(
     return body
 
 
+def _drop_empty_turns(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove turns that the strippers above emptied out.
+
+    A message whose text is now blank contributes nothing but chat-template
+    scaffolding (`<|im_start|>user
+<|im_end|>`) — tokens spent on an empty
+    turn, and a shape some templates handle badly.
+
+    Two exemptions. Tool-protocol turns are never dropped: losing an assistant
+    `tool_calls` turn or its `role:"tool"` reply breaks the pairing the
+    template requires. And a turn carrying non-text content (an image) is kept
+    with its remaining blocks, since only the text went away.
+
+    Dropping an emptied LEADING system message is safe and deliberate: this
+    runs before `_inject_system_prompt`, which prepends a fresh system message
+    when there is none to extend.
+    """
+    out: list[dict[str, Any]] = []
+    for msg in messages:
+        if (msg.get("tool_calls") or msg.get("tool_call_id")
+                or msg.get("role") == "tool"):
+            out.append(msg)
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            if content.strip():
+                out.append(msg)
+            continue
+        if isinstance(content, list):
+            kept = [b for b in content
+                    if not (isinstance(b, dict) and b.get("type") == "text"
+                            and not (b.get("text") or "").strip())]
+            if kept:
+                out.append({**msg, "content": kept})
+            continue
+        out.append(msg)
+    # Never hand upstream an empty conversation — if everything emptied, the
+    # request is malformed and the original is the more useful error.
+    return out or messages
+
+
 async def _prepare_internal_body(
     body: dict[str, Any],
     request: web.Request,
@@ -583,6 +627,55 @@ async def _prepare_internal_body(
 
     internal["model"] = active_model
 
+    # 3b. Always-on system-prompt cleanup — billing header, `# Environment`
+    #     and the `gitStatus:` snapshot. No setting: none of the three is
+    #     useful to a local model, and gitStatus in particular sits early in
+    #     the prompt and changes on every commit / dirty-file edit, so it
+    #     invalidates ~90% of the prefix cache (CLAUDE.md included) every time
+    #     the working tree moves. Scoped to the LEADING system message, which
+    #     is the only place they occur, so nothing in the conversation can be
+    #     caught by it. Runs before every injection of ours.
+    _sys_msgs = internal.get("messages", [])
+    if _sys_msgs and _sys_msgs[0].get("role") == "system":
+        _c = _sys_msgs[0].get("content")
+        if isinstance(_c, str):
+            _sys_msgs[0] = {**_sys_msgs[0], "content": strip_client_system_noise(_c)}
+        elif isinstance(_c, list):
+            _sys_msgs[0] = {**_sys_msgs[0], "content": [
+                {**b, "text": strip_client_system_noise(b.get("text", ""))}
+                if isinstance(b, dict) and b.get("type") == "text" else b
+                for b in _c
+            ]}
+
+    # 3c. Per-turn context blocks. The agent-type roster goes unconditionally;
+    #     skills and MCP instructions are toggles. These arrive in
+    #     mid-conversation system messages which `strip_reminders` cannot
+    #     reach, and with the default `mid_system_messages: "demote"` they are
+    #     already re-roled to `user` by now — so they are identified by
+    #     POSITION (anything after the leading system block), never by role.
+    _strip_skills = bool(_pget("strip_skills", proxy_config.strip_skills()))
+    _strip_mcp = bool(_pget("strip_mcp_instructions",
+                            proxy_config.strip_mcp_instructions()))
+    _msgs = internal.get("messages", [])
+    _first = 1 if (_msgs and _msgs[0].get("role") == "system") else 0
+    for _i in range(_first, len(_msgs)):
+        _m = _msgs[_i]
+        if _m.get("tool_calls") or _m.get("tool_call_id") or _m.get("role") == "tool":
+            continue  # never touch tool-protocol turns
+        _c = _m.get("content")
+        if isinstance(_c, str):
+            _msgs[_i] = {**_m, "content": strip_turn_context(
+                _c, skills=_strip_skills, mcp=_strip_mcp)}
+        elif isinstance(_c, list):
+            _msgs[_i] = {**_m, "content": [
+                {**b, "text": strip_turn_context(
+                    b.get("text", ""), skills=_strip_skills, mcp=_strip_mcp)}
+                if isinstance(b, dict) and b.get("type") == "text" else b
+                for b in _c
+            ]}
+
+    internal["messages"] = _drop_empty_turns(internal.get("messages", []))
+
     use_tool_search = _pget("tool_search", proxy_config.tool_search())
     inject_date_loc = _pget("inject_date_location", True)
     use_strip_reminders = _pget("strip_reminders", proxy_config.strip_reminders())
@@ -611,9 +704,20 @@ async def _prepare_internal_body(
     if deferred:
         internal = _inject_deferred_reminder(internal, deferred)
 
-    # 7. Strip reminders (after our own injection, so keep ours)
+    # 7. Strip reminders (after our own injection, so keep ours).
+    #    `keep_claude_md` is the exclusion: the CLAUDE.md block lives inside
+    #    the reminder, so stripping would take it regardless. Any value >= 0
+    #    is honoured in both modes — as an exclusion here, as a plain limit
+    #    below.
+    try:
+        keep_md = int(_pget("keep_claude_md", proxy_config.keep_claude_md()))
+    except (TypeError, ValueError):
+        keep_md = -1
     if use_strip_reminders:
-        internal["messages"] = _strip_reminders_from_internal(internal.get("messages", []))
+        internal["messages"] = _strip_reminders_from_internal(
+            internal.get("messages", []), keep_md)
+    elif keep_md >= 0:
+        internal["messages"] = limit_claude_md(internal.get("messages", []), keep_md)
 
     # 8. Context overflow — last, so it sees the final prepared body.
     internal = await _apply_context_overflow(
@@ -787,7 +891,8 @@ async def _apply_context_overflow(
     return internal
 
 
-def _strip_reminders_from_internal(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _strip_reminders_from_internal(messages: list[dict[str, Any]],
+                                   keep_claude_md: int = -1) -> list[dict[str, Any]]:
     """Re-use the Anthropic-shape reminder stripper on the internal history.
 
     The content we care about is just the text inside messages — role labels
@@ -809,7 +914,7 @@ def _strip_reminders_from_internal(messages: list[dict[str, Any]]) -> list[dict[
             or msg.get("tool_call_id")
             or msg.get("role") == "tool"
         )
-        cleaned = strip_all_reminders([msg])
+        cleaned = strip_all_reminders([msg], keep_claude_md)
         if cleaned:
             out.append(cleaned[0])
         elif is_protocol:
