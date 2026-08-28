@@ -2547,6 +2547,58 @@ def _proxy_profiles_card() -> QFrame:
             t.stateChanged.connect(_make())
             form_layout.addWidget(_row(row_label(label, hlp), _wrap_align(t, Qt.AlignmentFlag.AlignLeft)))
 
+        # Client context — what we REMOVE from what the client sent.
+        # The billing header, `# Environment`, `gitStatus:` and the agent-type
+        # roster are stripped unconditionally and have no rows here.
+        form_layout.addWidget(_section_header("Client Context"))
+
+        # CLAUDE.md is a count, not a switch: `# claudeMd` is every CLAUDE.md
+        # on the path concatenated, in load order. It also doubles as the
+        # exclusion from Strip Reminders — the block rides inside the reminder,
+        # so any value >= 0 is honoured whether reminders are stripped or not.
+        try:
+            _cur_keep = int(prof.get("keep_claude_md", -1))
+        except (TypeError, ValueError):
+            _cur_keep = -1
+        keep_cb = QComboBox()
+        _keep_opts: list[tuple[str, int]] = [
+            ("All (no limit)", -1), ("None — drop the block", 0)]
+        _keep_opts += [(f"Keep first {n}", n) for n in range(1, 7)]
+        for _txt, _val in _keep_opts:
+            keep_cb.addItem(_txt, _val)
+        keep_cb.setCurrentIndex(
+            next((i for i, (_, v) in enumerate(_keep_opts) if v == _cur_keep), 0))
+        keep_cb.currentIndexChanged.connect(
+            lambda _i: _patch("keep_claude_md", int(keep_cb.currentData())))
+        form_layout.addWidget(_row(
+            row_label("Keep CLAUDE.md Files",
+                      "How many of the concatenated CLAUDE.md documents to keep, "
+                      "in load order — user-global, then project, then nested, "
+                      "then MEMORY.md. Also the exclusion from Strip Reminders, "
+                      "which would otherwise take the whole block."),
+            keep_cb))
+
+        for field, label, hlp in [
+            ("strip_skills", "Strip Skills Listing",
+             "Drop the `The following skills are available…` catalogue "
+             "(~8.5KB). Arrives in a per-turn system message, so Strip "
+             "Reminders never reaches it. The model can no longer pick a "
+             "skill by name."),
+            ("strip_mcp_instructions", "Strip MCP Instructions",
+             "Drop `# MCP Server Instructions`. Same carrier as the skills "
+             "catalogue. This one is guidance your MCP servers supplied — "
+             "stripping it makes the model use those tools blind."),
+        ]:
+            cur_val = bool(prof.get(field, False))
+            t = Toggle(); t.setChecked(cur_val)
+            def _make_cc(field=field, widget=t):
+                def _h(_s: int):
+                    _patch(field, bool(widget.isChecked()))
+                return _h
+            t.stateChanged.connect(_make_cc())
+            form_layout.addWidget(_row(row_label(label, hlp),
+                                       _wrap_align(t, Qt.AlignmentFlag.AlignLeft)))
+
         # System instruction
         form_layout.addWidget(_section_header("System Instruction"))
         from pathlib import Path
@@ -2882,6 +2934,9 @@ def _proxy_profiles_card() -> QFrame:
             "strip_reminders": False,
             "sort_tools": False,
             "inject_date_location": False,
+            "keep_claude_md": -1,
+            "strip_skills": False,
+            "strip_mcp_instructions": False,
             "inject_managed": [],
             "core_tools": [],
             "strip_tool_names": [],
