@@ -2579,6 +2579,12 @@ def _proxy_profiles_card() -> QFrame:
             keep_cb))
 
         for field, label, hlp in [
+            ("strip_client_system_prompt", "Strip Client System Prompt",
+             "Drop the client's own system prompt and let the System "
+             "Instruction below stand in its place. Applies to EVERY request "
+             "this profile matches — including Claude Code's session-title "
+             "call, whose whole instruction lives in that block. With no "
+             "System Instruction set, the model gets no system prompt at all."),
             ("strip_skills", "Strip Skills Listing",
              "Drop the `The following skills are available…` catalogue "
              "(~8.5KB). Arrives in a per-turn system message, so Strip "
@@ -2935,6 +2941,7 @@ def _proxy_profiles_card() -> QFrame:
             "sort_tools": False,
             "inject_date_location": False,
             "keep_claude_md": -1,
+            "strip_client_system_prompt": False,
             "strip_skills": False,
             "strip_mcp_instructions": False,
             "inject_managed": [],
