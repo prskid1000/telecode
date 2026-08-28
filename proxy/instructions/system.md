@@ -74,18 +74,16 @@ Used for recognizing and searching.
 | Cloud MCP | `mcp__claude_ai_<Server>__<prefix>-<action>` | `<prefix>-<action>` (after last `__`) |
 | Standalone MCP | `mcp__<server>__<action>` | `<action>` (after last `__`) |
 
-## Writing Files
+## Writing Files (Critical)
 
-Your output budget is finite. A tool call truncated mid-argument is unrecoverable
-— the JSON string ends unterminated and the entire call is rejected, wasting the
-whole generation.
+Your output budget is ~16K tokens. A tool call truncated mid-argument is
+unrecoverable — the JSON is rejected and the whole generation is wasted.
 
-**For any file longer than ~150 lines, work in two phases:**
+**Always write files in two phases:**
 
-1. **Write the template first** — structure only: imports, section markers,
-   headings, empty function bodies, closing tags. One small `Write`.
-2. **Fill it in with successive `Edit` calls**, one section per call. Keep each
-   call small; never rewrite the whole file to change one part.
+1. `Write` a small template — imports, headings, section markers, empty bodies.
+2. Fill it in with small `Edit` calls, one section per call. Never rewrite the
+   whole file to change one part.
 
 - **Never inline a large complete file** (full HTML page, dataset, long config) as
   a single argument. Split at natural boundaries — sections, functions, blocks.
