@@ -85,6 +85,25 @@ def strip_reminders() -> bool:
     return bool(app_config.get_nested("proxy.strip_reminders", False))
 
 
+def strip_client_system_prompt() -> bool:
+    """Drop the client's own system prompt and rely on `system_instruction`.
+
+    Removes the LEADING system message wholesale — for Claude Code that is the
+    billing header, the SDK identity line and the built-in agent prompt, 6,754
+    chars flattened into one block. `_inject_system_prompt` then prepends ours
+    in its place.
+
+    Only sensible with a `system_instruction` set: with neither, the model
+    gets no system prompt at all. It also applies to EVERY request the profile
+    matches, including Claude Code's session-title call, whose entire
+    instruction ("You are naming a coding session… return JSON with a single
+    title field") lives in that block — strip it and titles stop working.
+
+    Per-profile `strip_client_system_prompt` overrides this.
+    """
+    return bool(app_config.get_nested("proxy.strip_client_system_prompt", False))
+
+
 def strip_skills() -> bool:
     """Drop the `The following skills are available…` catalogue.
 

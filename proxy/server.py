@@ -635,17 +635,34 @@ async def _prepare_internal_body(
     #     the working tree moves. Scoped to the LEADING system message, which
     #     is the only place they occur, so nothing in the conversation can be
     #     caught by it. Runs before every injection of ours.
+    #     `strip_client_system_prompt` is the all-or-nothing version: drop the
+    #     leading block entirely and let `system_instruction` stand in its
+    #     place. Emptied here rather than removed, so `_drop_empty_turns`
+    #     below does the removal and `_inject_system_prompt` prepends a fresh
+    #     system message.
+    _drop_client_sys = bool(_pget("strip_client_system_prompt",
+                                  proxy_config.strip_client_system_prompt()))
+    if _drop_client_sys and not (profile or {}).get("system_instruction"):
+        log.warning(
+            "strip_client_system_prompt is on for profile %r but it has no "
+            "system_instruction — this request goes upstream with no system "
+            "prompt at all.",
+            (profile or {}).get("name", "<none>"))
+
     _sys_msgs = internal.get("messages", [])
     if _sys_msgs and _sys_msgs[0].get("role") == "system":
-        _c = _sys_msgs[0].get("content")
-        if isinstance(_c, str):
-            _sys_msgs[0] = {**_sys_msgs[0], "content": strip_client_system_noise(_c)}
-        elif isinstance(_c, list):
-            _sys_msgs[0] = {**_sys_msgs[0], "content": [
-                {**b, "text": strip_client_system_noise(b.get("text", ""))}
-                if isinstance(b, dict) and b.get("type") == "text" else b
-                for b in _c
-            ]}
+        if _drop_client_sys:
+            _sys_msgs[0] = {**_sys_msgs[0], "content": ""}
+        else:
+            _c = _sys_msgs[0].get("content")
+            if isinstance(_c, str):
+                _sys_msgs[0] = {**_sys_msgs[0], "content": strip_client_system_noise(_c)}
+            elif isinstance(_c, list):
+                _sys_msgs[0] = {**_sys_msgs[0], "content": [
+                    {**b, "text": strip_client_system_noise(b.get("text", ""))}
+                    if isinstance(b, dict) and b.get("type") == "text" else b
+                    for b in _c
+                ]}
 
     # 3c. Per-turn context blocks. The agent-type roster goes unconditionally;
     #     skills and MCP instructions are toggles. These arrive in
