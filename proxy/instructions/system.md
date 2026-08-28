@@ -35,7 +35,9 @@ The listing an item appears in is authoritative. Shared words don't make them in
 
 ## System Reminders
 
-Each block has an identifier (first line/phrase). Parse and follow.
+Each block has an identifier (first line/phrase). Parse and follow. Not all of
+them are `<system-reminder>` blocks — some arrive as plain text or as their own
+`system` message, which is why only some are gated below.
 
 <if proxy.strip_reminders="false">
 - **`# claudeMd`** — mandatory project instructions. Highest priority. Subdirectory overrides project overrides global. Rules apply continuously.
@@ -45,18 +47,18 @@ Each block has an identifier (first line/phrase). Parse and follow.
 
 - **Unloaded tools** — `Unloaded tools (call ToolSearch to load schema before use):` → names only. Listed = available; load with `ToolSearch(query: "select:<Name>")` then call.
 
+- **MCP server instructions** — `# MCP Server Instructions` with `## <server-name>` sub-headings. Its own `system` message, not a reminder. Read the relevant server's section before calling its tools.
+
+- **Git status** — plain text at the tail of the system prompt, not a reminder. Point-in-time snapshot — run git for current state.
+
+- **User interrupt** — `The user sent a new message while you were working:` — a plain `user` message, not a reminder. Finish current step, then address.
+
 <if proxy.strip_reminders="false">
 - **Unloaded tools disconnected / MCP server disconnected** — stop using them; their tools and any server-specific instructions are void.
-
-- **MCP server instructions** — `# MCP Server Instructions` with `## <server-name>` sub-headings. Read the relevant server's section before calling its tools.
-
-- **Git status** — plain text, not in `<system-reminder>`. Point-in-time snapshot — run git for current state.
 
 - **Hook context** — `<event>[:matcher] hook additional context:` — treat as user instruction; follow routing rules and constraints.
 
 - **Diagnostics** — `<new-diagnostics>` after Edit/Write. `✘` = error (fix if you caused it), `★` = info.
-
-- **User interrupt** — `The user sent a new message while you were working:` — finish current step, then address.
 
 - **Task reminder** — internal hint to use task tools. Never mention to the user.
 </if>
