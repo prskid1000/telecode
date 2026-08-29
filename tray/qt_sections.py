@@ -1623,6 +1623,23 @@ def _llama(window) -> QWidget:
                                       "--keep: tokens from prompt always kept when truncating."))
 
     spawn_body.addWidget(_section_header("Scheduling"))
+    spawn_body.addWidget(_line_row("llamacpp.cpu_mask", "CPU Mask",
+                                    "hex, e.g. c03c03 — empty = all cores",
+                                    "--cpu-mask: hex affinity mask for the generation thread pool. Bit 0 = CPU 0. "
+                                    "On hybrid Intel CPUs the P-cores are not contiguous, so a mask is needed where "
+                                    "a range won't do. Empty = every core."))
+    spawn_body.addWidget(_line_row("llamacpp.cpu_range", "CPU Range",
+                                    "lo-hi, e.g. 0-7",
+                                    "--cpu-range: contiguous CPU range for the generation pool. Complements CPU Mask; "
+                                    "leave empty if using a mask."))
+    spawn_body.addWidget(_line_row("llamacpp.cpu_mask_batch", "CPU Mask (batch)",
+                                    "hex — empty = same as CPU Mask",
+                                    "--cpu-mask-batch: affinity mask for the prompt-processing pool. "
+                                    "WARNING: llama-server defaults this to --cpu-mask. If CPU Mask pins generation to "
+                                    "P-cores only, set this explicitly (e.g. ffffff) or prefill loses the E-cores too."))
+    spawn_body.addWidget(_line_row("llamacpp.cpu_range_batch", "CPU Range (batch)",
+                                    "lo-hi, e.g. 0-23",
+                                    "--cpu-range-batch: contiguous CPU range for the prompt-processing pool."))
     spawn_body.addWidget(_toggle_row("llamacpp.cpu_strict", "CPU Strict",
                                       "--cpu-strict <0|1>: pin threads strictly to selected cores (default 0)."))
     spawn_body.addWidget(_toggle_row("llamacpp.cpu_strict_batch", "CPU Strict (batch)",

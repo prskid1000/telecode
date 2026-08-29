@@ -46,6 +46,16 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("cont_batching",    "--cont-batching",   "flag"),
 
     # Scheduler / OS scheduling
+    # cpu_mask / cpu_range select which logical CPUs the thread pools may run
+    # on. Hybrid Intel parts (P + E cores) enumerate the two classes
+    # interleaved, so a mask is usually required where a range won't do.
+    # NOTE: llama-server defaults --cpu-mask-batch to --cpu-mask. If cpu_mask
+    # restricts generation to the P-cores, set cpu_mask_batch explicitly (e.g.
+    # all-cores) or prompt processing inherits the same restriction.
+    ("cpu_mask",         "--cpu-mask",         "value"),
+    ("cpu_range",        "--cpu-range",        "value"),
+    ("cpu_mask_batch",   "--cpu-mask-batch",   "value"),
+    ("cpu_range_batch",  "--cpu-range-batch",  "value"),
     ("cpu_strict",       "--cpu-strict",       "value"),
     ("cpu_strict_batch", "--cpu-strict-batch", "value"),
     ("prio",             "--prio",             "value"),

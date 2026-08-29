@@ -143,6 +143,10 @@
     "parallel": -1,
     "cont_batching": true,
 
+    "cpu_mask": "",
+    "cpu_range": "",
+    "cpu_mask_batch": "",
+    "cpu_range_batch": "",
     "cpu_strict": 0,
     "cpu_strict_batch": 0,
     "prio": 0,
