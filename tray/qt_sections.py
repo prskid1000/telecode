@@ -2396,15 +2396,13 @@ def _proxy(window) -> QWidget:
     # Collapsing absent and [] would make "no managed tools at all" unreachable,
     # so the mode combo carries the distinction and the grid only appears for
     # the explicit case.
-    def _global_inject_managed() -> QWidget:
+    def _add_global_inject_managed(dest: QVBoxLayout) -> None:
         from proxy import managed_tools as _mt
         PATH = "proxy.inject_managed"
 
-        box = QWidget()
-        bl = QVBoxLayout(box)
-        bl.setContentsMargins(0, 0, 0, 0)
-        bl.setSpacing(4)
-
+        # Added straight into the card layout, exactly like _enum_row's output.
+        # Wrapping the pair in a QWidget+QVBoxLayout indented the whole row out
+        # of line with its neighbours.
         grid_host = QWidget()
         grid_layout = QVBoxLayout(grid_host)
         grid_layout.setContentsMargins(18, 2, 0, 2)
@@ -2460,17 +2458,17 @@ def _proxy(window) -> QWidget:
         mode_cb.setCurrentIndex(max(0, mode_cb.findData(_mode_now())))
         mode_cb.currentIndexChanged.connect(_on_mode)
 
-        bl.addWidget(_row(row_label(
+        dest.addWidget(_row(row_label(
             "Inject Managed",
             "Which proxy-handled tools to inject for requests matching NO client "
             "profile. 'All' leaves the key unset so new tools are picked up "
             "automatically; 'Custom' pins an explicit list. A profile's own "
-            "Inject Managed overrides this.", PATH), mode_cb))
-        bl.addWidget(grid_host)
+            "Inject Managed overrides this.", PATH),
+            _wrap_align(mode_cb, Qt.AlignmentFlag.AlignLeft)))
+        dest.addWidget(grid_host)
         _rebuild_grid()
-        return box
 
-    body.addWidget(_global_inject_managed())
+    _add_global_inject_managed(body)
 
     body.addWidget(_section_header("Limits"))
     body.addWidget(_number_row("proxy.max_roundtrips", "Max Round-Trips",
