@@ -271,7 +271,7 @@
         "lookup_cache_dynamic": "",
 
         "_comment_reasoning":
-          "reasoning: 'on'|'off'|'auto'|'' (empty = use server default which is 'auto'). reasoning_budget caps the number of thinking tokens. reasoning_format controls how thoughts are returned (none / deepseek / deepseek-legacy).",
+          "reasoning: 'on'|'off'|'auto'|'' (empty = use server default which is 'auto'). reasoning_budget caps the number of thinking tokens. reasoning_format controls how thoughts are returned (none / deepseek / deepseek-legacy) — the proxy reads both the inline <think> and the separate reasoning_content shape, so either is safe.",
         "reasoning": "",
         "reasoning_budget": -1,
         "reasoning_budget_message": -1,

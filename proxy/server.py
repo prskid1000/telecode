@@ -213,13 +213,22 @@ class ClientAdapter:
     def end_stream(self) -> bytes:
         raise NotImplementedError
 
+    def close_open_block(self) -> bytes:
+        """Close whatever content block the round left open. Only protocols
+        with explicit block framing need this; the rest return nothing."""
+        return b""
+
 
 class AnthropicAdapter(ClientAdapter):
     protocol = "anthropic"
 
     def __init__(self, client_model: str) -> None:
         super().__init__(client_model)
-        self.status_emitted = 0
+        # Content-block indices are message-scoped, not round-scoped: a round
+        # that ends in an intercept can still have streamed a thinking block,
+        # so the counter has to survive into the next round's stream state or
+        # the two would collide on the same index.
+        self._next_index = 0
         self.state: xlate.AnthropicStreamState | None = None
         # Shared across rounds so start_message/end_stream fire exactly once.
         self._message_id = f"msg_{uuid.uuid4().hex[:24]}"
@@ -249,11 +258,10 @@ class AnthropicAdapter(ClientAdapter):
         ).encode()
 
     def emit_status(self, text: str) -> bytes:
-        """Status = synthetic text content block. Indices start at 0 and
-        increment per status, before any real content blocks (which start
-        at `status_emitted` and go up from there)."""
-        frame = xlate.emit_anthropic_status_block(text, self.status_emitted)
-        self.status_emitted += 1
+        """Status = synthetic text content block, taking the next index in
+        the same sequence as real content blocks."""
+        frame = xlate.emit_anthropic_status_block(text, self._next_index)
+        self._next_index += 1
         return frame
 
     def reset_state(self, reasoning_cfg: dict[str, Any]) -> None:
@@ -271,14 +279,29 @@ class AnthropicAdapter(ClientAdapter):
             ),
             client_model=self.client_model,
         )
-        state._next_index = self.status_emitted
+        state._next_index = self._next_index
         state._message_started = True  # initial_frame already sent it
         state._message_id = self._message_id
         self.state = state
 
     def translate_openai_chunk(self, chunk: dict[str, Any]) -> bytes:
         assert self.state is not None
-        return self.state.step(chunk)
+        out = self.state.step(chunk)
+        # Pull the counter back so the next round (and any status block
+        # emitted between the two) continues where this one stopped.
+        self._next_index = self.state._next_index
+        return out
+
+    def close_open_block(self) -> bytes:
+        """Close the block this round left open.
+
+        Needed only when a round ends in an intercept: the finishing chunk is
+        consumed by the intercept path and never reaches the stream state, so
+        its `content_block_stop` would otherwise never be sent.
+        """
+        if self.state is None:
+            return b""
+        return self.state._close_current()
 
     def end_stream(self) -> bytes:
         return b""  # message_stop emitted by state on finish_reason
@@ -1073,6 +1096,22 @@ async def _run_upstream_round(
 
     adapter.reset_state(reasoning_cfg)
 
+    # Thinking is NOT a decision signal. llama.cpp's `--reasoning-format none`
+    # inlines <think>…</think> into `delta.content`, so a rule of "any content
+    # ⇒ passthrough" fires on the model's first THOUGHT token — before any
+    # tool call exists — and every call in that turn then goes straight to the
+    # client, ToolSearch and the managed tools included, which the client has
+    # never heard of. This mirror of the adapter's own ReasoningState tells
+    # real output apart from thinking; it is a separate instance so the two
+    # tag buffers cannot disturb each other. (`reasoning_content` needs no
+    # such care — it is thinking by construction and never reaches here.)
+    decide_think = xlate.ReasoningState(
+        start_tag=reasoning_cfg.get("start", "<think>"),
+        end_tag=reasoning_cfg.get("end", "</think>"),
+        emit_thinking=True,
+        enabled=reasoning_cfg.get("enabled", True),
+    )
+
     # Mark this round as in-flight so the supervisor's idle-unload watcher
     # never tears down llama-server mid-stream. We end-request just before
     # each return path below (there are 4: 502 from upstream, [DONE],
@@ -1170,15 +1209,38 @@ async def _run_upstream_round(
                                         decided = "passthrough"
                                     just_decided = True
                                 # else still waiting for full name
-                            elif content or choices[0].get("finish_reason"):
+                            elif choices[0].get("finish_reason"):
                                 decided = "passthrough"
                                 just_decided = True
+                            elif content:
+                                # Only text that lands OUTSIDE a think block
+                                # settles the round.
+                                if any(k == "text" for k, _ in decide_think.push(content)):
+                                    decided = "passthrough"
+                                    just_decided = True
 
                     # ── Post-decision handling ──────────────────────────
                     # If decision flipped THIS event, we already consumed the
                     # tool-call fragment in the pre-decision branch; don't
                     # re-append name/arguments below.
-                    if decided == "passthrough":
+                    if decided is None:
+                        # Still undecided ⇒ what we have so far is thinking.
+                        # Write it now rather than buffering: on a long think
+                        # it is the only thing the user has to look at, and it
+                        # belongs to the message whichever way the round goes.
+                        # If this turns out to be an intercept, the block is
+                        # closed below and the next round appends to the same
+                        # message.
+                        #
+                        # Except a tool-call fragment: undecided here means the
+                        # name is still arriving in pieces, and a tool_use block
+                        # opened on half a name cannot be taken back.
+                        _d = (event.get("choices") or [{}])[0].get("delta", {}) or {}
+                        if not _d.get("tool_calls"):
+                            async with write_lock:
+                                await _ensure_prepared(resp, request)
+                                await resp.write(adapter.translate_openai_chunk(event))
+                    elif decided == "passthrough":
                         async with write_lock:
                             await _ensure_prepared(resp, request)
                             await resp.write(adapter.translate_openai_chunk(event))
@@ -1202,6 +1264,14 @@ async def _run_upstream_round(
                                 # Stream ended — return the captured call
                                 first_idx = tool_order[0]
                                 entry = tool_parts[first_idx]
+                                # This chunk never reaches the stream state, so
+                                # any thinking block opened above would be left
+                                # without its content_block_stop.
+                                tail = adapter.close_open_block()
+                                if tail:
+                                    async with write_lock:
+                                        await _ensure_prepared(resp, request)
+                                        await resp.write(tail)
                                 await supervisor.end_request()
                                 return InterceptedToolCall(
                                     id=entry["id"] or f"call_{uuid.uuid4().hex[:12]}",
