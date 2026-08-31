@@ -2350,6 +2350,35 @@ def _proxy(window) -> QWidget:
     body.addWidget(_toggle_row("proxy.debug", "Debug Logging",
                                 "Dump full request/response JSON under data/logs/proxy_full_*.json."))
 
+    # Client-context strippers. These already had globals in proxy/config.py
+    # and were already honoured by _pget as the fallback — they just had no
+    # row here, so the only way to reach them was to hand-edit settings.json.
+    # Each is the default for requests matching NO client profile, and the
+    # fallback for a profile that omits it; a profile's own toggle wins.
+    body.addWidget(_section_header("Client Context"))
+    body.addWidget(_toggle_row("proxy.strip_client_system_prompt", "Strip Client System Prompt",
+                                "Drop the client's own system prompt and let the System Instruction stand "
+                                "in its place. Applies to EVERY matching request — including Claude Code's "
+                                "session-title call, whose whole instruction lives in that block. With no "
+                                "System Instruction set, the model gets no system prompt at all. "
+                                "Per-profile setting overrides this."))
+    body.addWidget(_toggle_row("proxy.strip_skills", "Strip Skills Listing",
+                                "Drop the `The following skills are available…` catalogue (~8.5KB). Arrives "
+                                "in a per-turn system message, so Strip Client Bookkeeping never reaches it. "
+                                "The model can no longer pick a skill by name. "
+                                "Per-profile setting overrides this."))
+    body.addWidget(_toggle_row("proxy.strip_mcp_instructions", "Strip MCP Instructions",
+                                "Drop `# MCP Server Instructions`. Same carrier as the skills catalogue. "
+                                "This one is guidance your MCP servers supplied — stripping it makes the "
+                                "model use those tools blind. Per-profile setting overrides this."))
+    body.addWidget(_number_row("proxy.keep_claude_md", "Keep CLAUDE.md Files",
+                                -1, 6, 1, 0, "",
+                                "How many of the concatenated CLAUDE.md documents to keep, in load order — "
+                                "user-global, then project, then nested, then MEMORY.md. -1 = all (leave "
+                                "the block alone), 0 = drop it entirely. Also the exclusion from Strip "
+                                "Client Bookkeeping: the block rides inside the <system-reminder>, so any "
+                                "value >= 0 is honoured either way. Per-profile setting overrides this."))
+
     body.addWidget(_section_header("Limits"))
     body.addWidget(_number_row("proxy.max_roundtrips", "Max Round-Trips",
                                 1, 50, 1, 0, "",
