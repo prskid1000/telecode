@@ -187,36 +187,6 @@ def sort_tools() -> bool:
     return bool(app_config.get_nested("proxy.sort_tools", False))
 
 
-def inject_date_location() -> bool:
-    """Append today's date + location to the tail of the system block.
-
-    Default True, matching the literal fallback this replaced — requests
-    that match no client_profile previously had no way to turn this off,
-    because it was the only per-profile switch with no global twin.
-    """
-    return bool(app_config.get_nested("proxy.inject_date_location", True))
-
-
-def system_instruction() -> str:
-    """Markdown file prepended to the system block. Empty = none.
-
-    Per-profile `system_instruction` overrides this. Relevant mainly to
-    requests matching no profile, which otherwise get no instruction at
-    all — and get none *at all* if strip_client_system_prompt is on.
-    """
-    return str(app_config.get_nested("proxy.system_instruction", "") or "")
-
-
-def inject_managed() -> list[str] | None:
-    """Managed tools to inject. None = inject the whole registry.
-
-    None and [] are different: absent means "every registered tool" (the
-    historical default), while an explicit empty list injects nothing.
-    """
-    val = app_config.get_nested("proxy.inject_managed", None)
-    return val if isinstance(val, list) else None
-
-
 def location() -> str:
     """User's location for context injection. Empty = omit."""
     return str(app_config.get_nested("proxy.location", "") or "")
