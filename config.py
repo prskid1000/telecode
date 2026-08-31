@@ -51,39 +51,62 @@ def _save(data: dict[str, Any]) -> None:
         f.write("\n")
 
 
-# Standard effort presets that mirror Claude Code (Anthropic 4.6+) and
-# OpenAI Responses API. Auto-seeded into reasoning_effort_map on load so
-# clients sending `low`/`medium`/`high`/`max`/`adaptive`/`minimal`/`none`
-# always hit a real entry. Users can edit values freely but the tray
-# blocks deletion of these keys.
+# Standard effort presets. Auto-seeded into reasoning_effort_map on load so
+# every value a client can send hits a real entry. Users edit values freely
+# but the tray blocks deletion of these keys.
+#
+# The list is the union of three sources, not one vocabulary:
+#   Claude Code's effort slider  low | medium | high | xhigh | max
+#   OpenAI Responses API         minimal | low | medium | high | xhigh | none
+#   Anthropic `thinking.type`    disabled -> none, adaptive -> adaptive
+#                                (resolved in translate.py, never sent as an
+#                                 effort string by the client itself)
+# So `minimal` is OpenAI-only and `adaptive`/`none` are proxy-internal —
+# none of them are droppable just because Claude Code's slider lacks them.
+#
+# Order is the tray's render + sort order (`_EFF_ORDER`), so it must read as
+# ascending effort. `adaptive` is last because it is not a level at all: it
+# hands the decision to the model.
 STANDARD_EFFORT_KEYS: tuple[str, ...] = (
-    "none", "minimal", "low", "medium", "high", "adaptive", "max",
+    "none", "minimal", "low", "medium", "high", "xhigh", "max", "adaptive",
 )
 
+# Ladder is capped at 4096 at `max`. Note this makes `max` a real cap rather
+# than the "key absent -> unlimited" case it used to be; nothing here is
+# unlimited any more. Remove a key entirely to get unlimited back.
 _STANDARD_EFFORT_DEFAULTS: dict[str, dict[str, Any]] = {
     "none":     {"thinking_budget_tokens": 1},
-    "minimal":  {"thinking_budget_tokens": 1},
-    "low":      {"thinking_budget_tokens": 1024},
-    "medium":   {"thinking_budget_tokens": 4096},
-    "high":     {"thinking_budget_tokens": 16384},
-    "max":      {},
-    "adaptive": {"thinking_budget_tokens": 16384},
+    "minimal":  {"thinking_budget_tokens": 256},
+    "low":      {"thinking_budget_tokens": 512},
+    "medium":   {"thinking_budget_tokens": 1024},
+    "high":     {"thinking_budget_tokens": 2048},
+    "xhigh":    {"thinking_budget_tokens": 3072},
+    "max":      {"thinking_budget_tokens": 4096},
+    "adaptive": {"thinking_budget_tokens": 2048},
 }
 
 
 # Per-model twin of _STANDARD_EFFORT_DEFAULTS, for the *template* string
-# rather than the token budget. Keys are Claude Code's effort levels; values
-# are what the model's chat template expects. low/medium/high is the one trio
+# rather than the token budget. Keys are the effort levels above; values are
+# what the model's chat template expects. low/medium/high is the one trio
 # valid across both families we care about — GPT-OSS takes it verbatim, and
-# Qwen 3.8 aliases high -> xhigh before its raise check.
+# Qwen 3.8 aliases high -> xhigh before its raise check, which is why `xhigh`
+# and `max` map to "high" rather than to "xhigh": the alias is portable, the
+# literal is not (GPT-OSS rejects "xhigh").
+#
+# Consequence worth knowing when tuning a Qwen 3.8 model: high/xhigh/max all
+# land on the template's top tier, so the top three levels are one level in
+# practice. Override per model if you want them to differ. Qwen 3.8's tiers
+# are prompt text, not budgets — `medium` injects no instruction at all.
 _STANDARD_EFFORT_TEMPLATE_DEFAULTS: dict[str, str] = {
     "none":     "low",
     "minimal":  "low",
     "low":      "low",
     "medium":   "medium",
     "high":     "high",
-    "adaptive": "medium",
+    "xhigh":    "high",
     "max":      "high",
+    "adaptive": "medium",
 }
 
 
