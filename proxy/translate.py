@@ -1049,6 +1049,12 @@ class AnthropicStreamState:
     })
     _extra_meta: dict[str, Any] = field(default_factory=dict)
 
+    # Set once `reasoning_content` has been seen. `deepseek-legacy` is
+    # documented as emitting BOTH shapes; this build sends only the separate
+    # field, but if one ever sends both, the inline copy is a duplicate of
+    # thinking we have already emitted, not a second thought.
+    _saw_reasoning_field: bool = False
+
     # Content block bookkeeping
     _next_index: int = 0
     _current_kind: str = ""   # "" | "text" | "thinking" | "tool_use"
@@ -1227,10 +1233,12 @@ class AnthropicStreamState:
         # bypasses ReasoningState rather than being parsed by it. Handling
         # both is what makes the proxy indifferent to `reasoning_format`.
         rc = delta.get("reasoning_content")
-        if isinstance(rc, str) and rc and self.reasoning.emit_thinking:
-            if self._current_kind == "tool_use":
-                out += self._close_current()
-            out += self._emit_text_like("thinking", rc)
+        if isinstance(rc, str) and rc:
+            self._saw_reasoning_field = True
+            if self.reasoning.emit_thinking:
+                if self._current_kind == "tool_use":
+                    out += self._close_current()
+                out += self._emit_text_like("thinking", rc)
 
         # ── Handle text content delta ───────────────────────────────────
         content = delta.get("content")
@@ -1240,6 +1248,8 @@ class AnthropicStreamState:
                 out += self._close_current()
 
             for kind, text in self.reasoning.push(content):
+                if kind == "thinking" and self._saw_reasoning_field:
+                    continue  # already emitted from reasoning_content
                 out += self._emit_text_like(kind, text)
 
         # ── Handle finish_reason ────────────────────────────────────────
@@ -1378,7 +1388,8 @@ def openai_response_to_anthropic(
     # field, already split — no <think> parsing needed. Emitted before the
     # text so the thinking block leads, as it does in the inlined shape.
     rc = message.get("reasoning_content")
-    if isinstance(rc, str) and rc and reasoning.emit_thinking:
+    saw_reasoning_field = isinstance(rc, str) and bool(rc)
+    if saw_reasoning_field and reasoning.emit_thinking:
         content_blocks.append({"type": "thinking", "thinking": rc, "signature": ""})
 
     # Text content — run through reasoning state machine to split thinking/text
@@ -1397,7 +1408,7 @@ def openai_response_to_anthropic(
                 think_buf += chunk
             else:
                 text_buf += chunk
-        if think_buf:
+        if think_buf and not saw_reasoning_field:
             content_blocks.append({"type": "thinking", "thinking": think_buf, "signature": ""})
         if text_buf:
             content_blocks.append({"type": "text", "text": text_buf})
