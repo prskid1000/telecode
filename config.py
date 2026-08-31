@@ -110,6 +110,30 @@ _STANDARD_EFFORT_TEMPLATE_DEFAULTS: dict[str, str] = {
 }
 
 
+# The two default tables above are seeded into two different places — the
+# budget one into llamacpp.inference.reasoning_effort_map, the template one
+# into every model's inference_defaults.reasoning_effort.map — and both must
+# offer the same key set or the tray shows a key in one map and not the
+# other. Letting them drift is exactly how `xhigh` ended up missing from the
+# code while present in settings.example.json. Fail loudly at import rather
+# than silently seeding a half-populated map.
+def _assert_effort_tables_agree() -> None:
+    canonical = set(STANDARD_EFFORT_KEYS)
+    for name, table in (("_STANDARD_EFFORT_DEFAULTS", _STANDARD_EFFORT_DEFAULTS),
+                        ("_STANDARD_EFFORT_TEMPLATE_DEFAULTS",
+                         _STANDARD_EFFORT_TEMPLATE_DEFAULTS)):
+        missing = canonical - set(table)
+        extra = set(table) - canonical
+        if missing or extra:
+            raise RuntimeError(
+                f"{name} disagrees with STANDARD_EFFORT_KEYS: "
+                f"missing={sorted(missing)} extra={sorted(extra)}"
+            )
+
+
+_assert_effort_tables_agree()
+
+
 def _ensure_model_effort_maps(data: dict[str, Any]) -> bool:
     """Seed each model's inference_defaults.reasoning_effort.
 
@@ -143,9 +167,13 @@ def _ensure_model_effort_maps(data: dict[str, Any]) -> bool:
             mapping = {}
             eff["map"] = mapping
             changed = True
-        for k, v in _STANDARD_EFFORT_TEMPLATE_DEFAULTS.items():
+        # Iterate STANDARD_EFFORT_KEYS, not the defaults dict — the canonical
+        # list is the single source of truth for *which* keys exist, so this
+        # map and llamacpp.inference.reasoning_effort_map can never disagree
+        # about its key set.
+        for k in STANDARD_EFFORT_KEYS:
             if k not in mapping:
-                mapping[k] = v
+                mapping[k] = _STANDARD_EFFORT_TEMPLATE_DEFAULTS[k]
                 changed = True
     return changed
 
