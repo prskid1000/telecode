@@ -365,8 +365,7 @@ async def _inject_system_prompt(
     head_parts: list[str] = []
     tail_parts: list[str] = []
 
-    system_md = (profile.get("system_instruction") if profile and "system_instruction" in profile
-                 else proxy_config.system_instruction())
+    system_md = profile.get("system_instruction") if profile else None
     if system_md:
         instruction = proxy_system_instruction(system_md)
         if instruction:
@@ -695,7 +694,7 @@ async def _prepare_internal_body(
     internal["messages"] = _drop_empty_turns(internal.get("messages", []))
 
     use_tool_search = _pget("tool_search", proxy_config.tool_search())
-    inject_date_loc = _pget("inject_date_location", proxy_config.inject_date_location())
+    inject_date_loc = _pget("inject_date_location", True)
     use_strip_reminders = _pget("strip_reminders", proxy_config.strip_reminders())
     use_auto_load = _pget("auto_load_tools", proxy_config.auto_load_tools())
     use_sort_tools = _pget("sort_tools", proxy_config.sort_tools())
@@ -706,12 +705,9 @@ async def _prepare_internal_body(
     # 5. Tool transforms (split into core/deferred, inject managed)
     from proxy.managed_tools import _REGISTRY as _MGR
     from proxy.runtime_state import is_managed_enabled as _is_enabled
-    # Profile > global > whole registry. The global returns None (not []) when
-    # unset, so "inject nothing" stays expressible as an explicit empty list.
-    _mi_global = proxy_config.inject_managed()
     managed_inject_raw: list[str] = (
         profile.get("inject_managed") if profile and "inject_managed" in profile
-        else (_mi_global if _mi_global is not None else list(_MGR.keys()))
+        else list(_MGR.keys())
     ) or []
     # Honor live runtime toggles set via the control panel
     managed_inject: list[str] = [n for n in managed_inject_raw if _is_enabled(n)]
