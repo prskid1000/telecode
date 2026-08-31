@@ -321,8 +321,8 @@
         "template_key": "reasoning_effort",
         "map": {
           "none": "low", "minimal": "low", "low": "low",
-          "medium": "medium", "adaptive": "medium",
-          "high": "high", "xhigh": "high", "max": "high"
+          "medium": "medium", "high": "high",
+          "xhigh": "high", "max": "high", "adaptive": "medium"
         }
       },
       "drop_prior_thinking": true,
@@ -335,15 +335,15 @@
       },
 
       "reasoning_effort_map": {
-        "_doc":     "thinking_budget_tokens: key present -> cap thinking at that many tokens (auto-clamped to >=1). Key absent -> unlimited thinking (model decides). Matches Anthropic/OpenAI body conventions.",
+        "_doc":     "thinking_budget_tokens: key present -> cap thinking at that many tokens (auto-clamped to >=1). Remove a key entirely for unlimited thinking (model decides). Ladder below is capped at 4096 at max, so nothing is unlimited by default. Order is ascending effort (none < minimal < low < medium < high < xhigh < max); adaptive is not a level - it hands the choice to the model - so it sorts last. Sources differ: Claude Code's slider is low|medium|high|xhigh|max, minimal is OpenAI-only, none/adaptive are derived from Anthropic thinking.type.",
         "none":     {"thinking_budget_tokens": 1},
-        "minimal":  {"thinking_budget_tokens": 1},
-        "low":      {"thinking_budget_tokens": 1024},
-        "medium":   {"thinking_budget_tokens": 4096},
-        "high":     {"thinking_budget_tokens": 16384},
-        "xhigh":    {"thinking_budget_tokens": 65536},
-        "max":      {},
-        "adaptive": {"thinking_budget_tokens": 16384}
+        "minimal":  {"thinking_budget_tokens": 256},
+        "low":      {"thinking_budget_tokens": 512},
+        "medium":   {"thinking_budget_tokens": 1024},
+        "high":     {"thinking_budget_tokens": 2048},
+        "xhigh":    {"thinking_budget_tokens": 3072},
+        "max":      {"thinking_budget_tokens": 4096},
+        "adaptive": {"thinking_budget_tokens": 2048}
       },
 
       "structured_output": { "enabled": false, "schema": null, "grammar": null }
