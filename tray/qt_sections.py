@@ -2439,11 +2439,20 @@ def _proxy(window) -> QWidget:
                 patch_settings(PATH, [n for n in names if toggles[n].isChecked()])
 
             for n in names:
+                registered = n in _mt._REGISTRY
                 t = Toggle()
                 t.setChecked(n in cur)
+                t.setEnabled(registered)
                 t.toggled.connect(lambda _c: _commit())
                 toggles[n] = t
-                grid_layout.addWidget(_row(row_label(humanize(n), "", n), t))
+                grid_layout.addWidget(_row(
+                    row_label(humanize(n),
+                              "" if registered else
+                              "Saved here but not in the live registry, so it cannot be "
+                              "injected. DocGraph tools appear only while the DocGraph "
+                              "host is running.",
+                              n if registered else f"{n}  · not registered"),
+                    _wrap_align(t, Qt.AlignmentFlag.AlignLeft)))
 
         def _on_mode(_i: int) -> None:
             val = mode_cb.currentData()
@@ -2895,10 +2904,20 @@ def _proxy_profiles_card() -> QFrame:
                 """One (label-stack | toggle) cell."""
                 from proxy.runtime_state import is_managed_enabled
                 globally_on = is_managed_enabled(name)
+                # A name saved in this profile but absent from the live
+                # registry — e.g. every docgraph_* tool while the DocGraph
+                # host is stopped, since the bridge registers them on start.
+                # Kept visible so saving the profile doesn't silently drop
+                # them, but it must not look like an available tool: without
+                # this it renders as a normal enabled row for something that
+                # cannot be injected, and is indistinguishable from a tool
+                # merely switched off in the Managed section.
+                registered = name in _mt._REGISTRY
+                live = globally_on and registered
 
                 t = Toggle()
                 t.setChecked(name in current_set)
-                t.setEnabled(globally_on)   # greyed-out when disabled in Managed section
+                t.setEnabled(live)   # greyed when disabled in Managed, or unregistered
                 toggles_map[name] = t
 
                 def _on(_s: int, _n=name, _t=t):
@@ -2906,11 +2925,16 @@ def _proxy_profiles_card() -> QFrame:
 
                 t.stateChanged.connect(_on)
 
-                fg = FG if globally_on else FG_MUTE
+                fg = FG if live else FG_MUTE
                 lbl = QLabel(display)
                 lbl.setStyleSheet(f"color: {fg}; font-size: 12px;")
-                sub = QLabel(key_hint)
+                sub = QLabel(key_hint if registered else f"{key_hint}  · not registered")
                 sub.setStyleSheet(f"color: {FG_MUTE}; font-size: 10px;")
+                if not registered:
+                    sub.setToolTip(
+                        "Saved in this profile but not in the live managed-tool "
+                        "registry, so it cannot be injected. DocGraph tools appear "
+                        "only while the DocGraph host is running.")
 
                 lstack = QWidget()
                 ll = QVBoxLayout(lstack)
