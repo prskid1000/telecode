@@ -2054,23 +2054,20 @@ def _llama(window) -> QWidget:
             rows_layout.addWidget(empty_lbl)
             return
         
-        # Sort standard keys logically with 'max' at the end, and custom keys alphabetically after standard keys
-        sort_order = {
-            "none": 0,
-            "minimal": 1,
-            "low": 2,
-            "medium": 3,
-            "high": 4,
-            "adaptive": 5,
-            "max": 6,
-        }
-        
+        # Standard keys in canonical (ascending-effort) order, custom keys
+        # alphabetically after them. Derived from STANDARD_EFFORT_KEYS rather
+        # than hardcoded: a literal copy here went stale when `xhigh` was
+        # added, dropping it into the unknown-key bucket so it rendered after
+        # `max` instead of before it.
+        sort_order = {k: i for i, k in enumerate(_STD_EFFORT_KEYS)}
+
         def _sort_key(k: str):
             k_low = k.lower()
             if k_low in sort_order:
                 return (0, sort_order[k_low])
             return (1, k_low)
-            
+
+
         sorted_keys = sorted(emap.keys(), key=_sort_key)
         for k in sorted_keys:
             v = emap[k]
