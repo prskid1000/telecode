@@ -2389,6 +2389,89 @@ def _proxy(window) -> QWidget:
                                 "Client Bookkeeping: the block rides inside the <system-reminder>, so any "
                                 "value >= 0 is honoured either way. Per-profile setting overrides this."))
 
+    # inject_managed is tri-state and a plain checkbox grid cannot express it:
+    #   key absent  -> None -> inject the whole live registry (the default)
+    #   []          -> inject nothing
+    #   [names]     -> inject exactly these
+    # Collapsing absent and [] would make "no managed tools at all" unreachable,
+    # so the mode combo carries the distinction and the grid only appears for
+    # the explicit case.
+    def _global_inject_managed() -> QWidget:
+        from proxy import managed_tools as _mt
+        PATH = "proxy.inject_managed"
+
+        box = QWidget()
+        bl = QVBoxLayout(box)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(4)
+
+        grid_host = QWidget()
+        grid_layout = QVBoxLayout(grid_host)
+        grid_layout.setContentsMargins(18, 2, 0, 2)
+        grid_layout.setSpacing(1)
+
+        mode_cb = QComboBox()
+        mode_cb.setMaximumWidth(320)
+        for _txt, _val in (("All registered tools (default)", "all"),
+                           ("None — inject nothing", "none"),
+                           ("Custom — pick below", "custom")):
+            mode_cb.addItem(_txt, _val)
+
+        def _mode_now() -> str:
+            cur = get_path(read_settings(), PATH, None)
+            if cur is None:
+                return "all"
+            return "none" if not cur else "custom"
+
+        def _rebuild_grid() -> None:
+            while grid_layout.count():
+                it = grid_layout.takeAt(0)
+                w = it.widget()
+                if w is not None:
+                    w.deleteLater()
+            if _mode_now() != "custom":
+                return
+            cur = set(get_path(read_settings(), PATH, []) or [])
+            # Union so a name saved here but missing from the live registry
+            # (an MCP server that is down) still renders instead of vanishing.
+            names = sorted(set(_mt._REGISTRY.keys()) | cur)
+            toggles: dict[str, Toggle] = {}
+
+            def _commit() -> None:
+                patch_settings(PATH, [n for n in names if toggles[n].isChecked()])
+
+            for n in names:
+                t = Toggle()
+                t.setChecked(n in cur)
+                t.toggled.connect(lambda _c: _commit())
+                toggles[n] = t
+                grid_layout.addWidget(_row(row_label(humanize(n), "", n), t))
+
+        def _on_mode(_i: int) -> None:
+            val = mode_cb.currentData()
+            if val == "all":
+                remove_path(PATH)
+            elif val == "none":
+                patch_settings(PATH, [])
+            elif not (get_path(read_settings(), PATH, None) or []):
+                patch_settings(PATH, sorted(_mt._REGISTRY.keys()))
+            _rebuild_grid()
+
+        mode_cb.setCurrentIndex(max(0, mode_cb.findData(_mode_now())))
+        mode_cb.currentIndexChanged.connect(_on_mode)
+
+        bl.addWidget(_row(row_label(
+            "Inject Managed",
+            "Which proxy-handled tools to inject for requests matching NO client "
+            "profile. 'All' leaves the key unset so new tools are picked up "
+            "automatically; 'Custom' pins an explicit list. A profile's own "
+            "Inject Managed overrides this.", PATH), mode_cb))
+        bl.addWidget(grid_host)
+        _rebuild_grid()
+        return box
+
+    body.addWidget(_global_inject_managed())
+
     body.addWidget(_section_header("Limits"))
     body.addWidget(_number_row("proxy.max_roundtrips", "Max Round-Trips",
                                 1, 50, 1, 0, "",
