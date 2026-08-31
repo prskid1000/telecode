@@ -3055,25 +3055,15 @@ def _proxy_profiles_card() -> QFrame:
                         pair = []
                 if pair:
                     _flush_pair_row(pair, shl)
+                # Never shown. There is nothing to do with an unregistered tool
+                # — its toggle is disabled either way — and it reappears in the
+                # grid by itself once its server registers again.
+                #
+                # Still added to the layout rather than left dangling: the only
+                # Python reference is toggles_map, which holds the Toggles, not
+                # this container. Without a parent in the widget tree Qt is free
+                # to destroy it, taking the toggles _commit() depends on.
                 stale_host.setVisible(False)
-
-                stale_btn = QPushButton(f"Show {len(unregistered)} not registered")
-                stale_btn.setProperty("class", "ghost")
-                stale_btn.setMaximumWidth(240)
-                stale_btn.setToolTip(
-                    "Saved in this profile but missing from the live managed-tool "
-                    "registry, so they cannot be injected right now. Kept so the "
-                    "selection returns when their server does — DocGraph tools "
-                    "register only while the DocGraph host is running.")
-
-                def _toggle_stale(_c=False, _h=stale_host, _b=stale_btn,
-                                  _n=len(unregistered)) -> None:
-                    show = not _h.isVisible()
-                    _h.setVisible(show)
-                    _b.setText(f"{'Hide' if show else 'Show'} {_n} not registered")
-
-                stale_btn.clicked.connect(_toggle_stale)
-                vl.addWidget(_wrap_align(stale_btn, Qt.AlignmentFlag.AlignLeft))
                 vl.addWidget(stale_host)
 
             scroll = QScrollArea()
