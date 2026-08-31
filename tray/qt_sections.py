@@ -2951,7 +2951,7 @@ def _proxy_profiles_card() -> QFrame:
                 cl.addWidget(_wrap_align(t, Qt.AlignmentFlag.AlignLeft), 0)
                 return cell
 
-            def _flush_pair_row(pair: list) -> None:
+            def _flush_pair_row(pair: list, dest=None) -> None:
                 row_w = QWidget()
                 hl = QHBoxLayout(row_w)
                 hl.setContentsMargins(0, 0, 0, 0)
@@ -2960,13 +2960,29 @@ def _proxy_profiles_card() -> QFrame:
                     hl.addWidget(cell, 1)
                 if len(pair) < 2:
                     hl.addWidget(QWidget(), 1)
-                vl.addWidget(row_w)
+                (dest if dest is not None else vl).addWidget(row_w)
+
+            # Names saved in this profile but absent from the live registry —
+            # every docgraph_* while the DocGraph host is stopped. They are kept
+            # in the profile so turning the host back on restores the selection,
+            # but rendering 15 dead rows buries the tools that do exist. They go
+            # into a collapsed block instead.
+            #
+            # Their toggles are still CREATED (just inside a hidden container),
+            # because _commit() writes back only names present in toggles_map —
+            # skipping the widgets would silently drop them from settings.json
+            # on the next edit, which is the opposite of keeping them for later.
+            # NB: `all_names` must NOT be reassigned — _commit() closes over it
+            # by name, so narrowing it here would make every unregistered tool
+            # disappear from settings.json the next time any toggle is touched.
+            unregistered = [n for n in all_names if n not in _mt._REGISTRY]
+            live_names = [n for n in all_names if n in _mt._REGISTRY]
 
             seen_groups: set[str] = set()
 
             # --- grouped pass: render each group as 2-col rows ---
             for prefix in sorted(group_prefixes):
-                group_names = [n for n in all_names if n.startswith(prefix + "_")]
+                group_names = [n for n in live_names if n.startswith(prefix + "_")]
                 if not group_names:
                     continue
                 seen_groups.add(prefix)
@@ -3012,7 +3028,7 @@ def _proxy_profiles_card() -> QFrame:
                     _flush_pair_row(pair)
 
             # --- flat tools (no group) ---
-            flat_names = [n for n in all_names
+            flat_names = [n for n in live_names
                           if n.split("_", 1)[0] not in group_prefixes or "_" not in n]
             pair = []
             for name in flat_names:
@@ -3024,6 +3040,42 @@ def _proxy_profiles_card() -> QFrame:
             if pair:
                 _flush_pair_row(pair)
 
+            # --- collapsed block: saved here, not in the live registry ---
+            if unregistered:
+                stale_host = QWidget()
+                shl = QVBoxLayout(stale_host)
+                shl.setContentsMargins(0, 0, 0, 0)
+                shl.setSpacing(2)
+                pair = []
+                for name in unregistered:
+                    cell = _make_cell(name, humanize(name), name)
+                    pair.append(cell)
+                    if len(pair) == 2:
+                        _flush_pair_row(pair, shl)
+                        pair = []
+                if pair:
+                    _flush_pair_row(pair, shl)
+                stale_host.setVisible(False)
+
+                stale_btn = QPushButton(f"Show {len(unregistered)} not registered")
+                stale_btn.setProperty("class", "ghost")
+                stale_btn.setMaximumWidth(240)
+                stale_btn.setToolTip(
+                    "Saved in this profile but missing from the live managed-tool "
+                    "registry, so they cannot be injected right now. Kept so the "
+                    "selection returns when their server does — DocGraph tools "
+                    "register only while the DocGraph host is running.")
+
+                def _toggle_stale(_c=False, _h=stale_host, _b=stale_btn,
+                                  _n=len(unregistered)) -> None:
+                    show = not _h.isVisible()
+                    _h.setVisible(show)
+                    _b.setText(f"{'Hide' if show else 'Show'} {_n} not registered")
+
+                stale_btn.clicked.connect(_toggle_stale)
+                vl.addWidget(_wrap_align(stale_btn, Qt.AlignmentFlag.AlignLeft))
+                vl.addWidget(stale_host)
+
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
             scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -3034,11 +3086,11 @@ def _proxy_profiles_card() -> QFrame:
             # height: header rows + child pair rows + flat pair rows, ~44px each
             n_groups = len(group_prefixes)
             n_group_children = sum(
-                -(-len([n for n in all_names if n.startswith(p + "_")]) // 2)
+                -(-len([n for n in live_names if n.startswith(p + "_")]) // 2)
                 for p in group_prefixes
             )
-            flat_names_count = len(all_names) - sum(
-                len([n for n in all_names if n.startswith(p + "_")])
+            flat_names_count = len(live_names) - sum(
+                len([n for n in live_names if n.startswith(p + "_")])
                 for p in group_prefixes
             )
             n_flat_rows = -(-(flat_names_count) // 2)
