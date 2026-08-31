@@ -2347,6 +2347,16 @@ def _proxy(window) -> QWidget:
                                 "Sort body.tools by name before forwarding. Stabilises the prompt prefix when "
                                 "a client reorders its tool list (cache-friendly), at the cost of overriding "
                                 "any deliberate primacy ordering. Off by default."))
+    body.addWidget(_toggle_row("proxy.inject_date_location", "Inject Date/Location",
+                                "Append today's date + location to the tail of the system block. "
+                                "Default on. This is the global default — a client profile's own "
+                                "Inject Date/Location overrides it for requests that match that profile."))
+    body.addWidget(_line_row("proxy.system_instruction", "System Instruction",
+                                "e.g. system.md",
+                                "Markdown file prepended to the system block for requests matching NO "
+                                "client profile. Empty = none. Profiles override it with their own. "
+                                "Matters most with Strip Client System Prompt on, where an unmatched "
+                                "request would otherwise get no system prompt at all."))
     body.addWidget(_toggle_row("proxy.debug", "Debug Logging",
                                 "Dump full request/response JSON under data/logs/proxy_full_*.json."))
 
