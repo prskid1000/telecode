@@ -1220,6 +1220,18 @@ class AnthropicStreamState:
                     "delta": {"type": "input_json_delta", "partial_json": fn["arguments"]},
                 })
 
+        # ── Handle separated reasoning delta ────────────────────────────
+        # llama.cpp's default `--reasoning-format deepseek` puts the model's
+        # thinking HERE instead of inlining <think> tags in `content`. Same
+        # destination either way; this shape just arrives pre-split, so it
+        # bypasses ReasoningState rather than being parsed by it. Handling
+        # both is what makes the proxy indifferent to `reasoning_format`.
+        rc = delta.get("reasoning_content")
+        if isinstance(rc, str) and rc and self.reasoning.emit_thinking:
+            if self._current_kind == "tool_use":
+                out += self._close_current()
+            out += self._emit_text_like("thinking", rc)
+
         # ── Handle text content delta ───────────────────────────────────
         content = delta.get("content")
         if content is not None and content != "":
@@ -1361,6 +1373,13 @@ def openai_response_to_anthropic(
     message = choice.get("message", {}) or {}
 
     content_blocks: list[dict[str, Any]] = []
+
+    # Separated reasoning (`--reasoning-format deepseek`) arrives in its own
+    # field, already split — no <think> parsing needed. Emitted before the
+    # text so the thinking block leads, as it does in the inlined shape.
+    rc = message.get("reasoning_content")
+    if isinstance(rc, str) and rc and reasoning.emit_thinking:
+        content_blocks.append({"type": "thinking", "thinking": rc, "signature": ""})
 
     # Text content — run through reasoning state machine to split thinking/text
     text = message.get("content") or ""

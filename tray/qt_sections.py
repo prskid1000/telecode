@@ -4945,8 +4945,8 @@ def _models(window) -> QWidget:
                                                ("deepseek-legacy — both", "deepseek-legacy"),
                                                ("auto", "auto")],
                                               "--reasoning-format: how the server tags think blocks. "
-                                              "Telecode parses <think> in the proxy — pick 'none' if this "
-                                              "model is consumed via the proxy."),
+                                              "The proxy reads both shapes — inline <think> and a separate "
+                                              "reasoning_content field — so this is free to set."),
             [f"{p}.reasoning"], _reason_not_off))
         # Layer 3 of the prior-reasoning chain. Layer 1 (the proxy's
         # drop_prior_thinking) strips the content before llama.cpp ever sees it,
