@@ -1727,6 +1727,29 @@ def _llama(window) -> QWidget:
         ["llamacpp.embedding"], lambda e: bool(e)))
     layout.addWidget(sm_card)
 
+    # Video input card — llama-server decodes video through ffmpeg into frames
+    # and runs them past the vision projector. Needs a vision model + mmproj.
+    # NOTE: these reach llama-server only. proxy/translate.py has no video
+    # handling, so a video content block sent through the proxy is dropped —
+    # these matter for clients talking to llama-server directly.
+    vid_card, vid_body = _card("Video Input",
+                                "llamacpp.video_* — decode video via ffmpeg into frames for a vision model "
+                                "(not routed by the proxy yet)")
+    vid_body.addWidget(_number_row("llamacpp.video_fps", "Frame Rate", 0, 60, 1, 1, "fps",
+                                    "--video-fps: how many frames per second to sample from the video. "
+                                    "0 = server default (4.0). Every frame costs vision tokens, so this is "
+                                    "the main lever on context use."))
+    vid_body.addWidget(_number_row("llamacpp.video_timestamp_interval", "Timestamp Interval",
+                                    0, 60000, 500, 0, "ms",
+                                    "--video-timestamp-interval: how often to interleave a text timestamp "
+                                    "between frames, so the model can reason about when something happened. "
+                                    "0 = server default (5000)."))
+    vid_body.addWidget(_line_row("llamacpp.video_ffmpeg_dir", "ffmpeg Directory",
+                                  "(search PATH)",
+                                  "--video-ffmpeg-dir: directory containing ffmpeg and ffprobe. Leave empty "
+                                  "to search PATH."))
+    layout.addWidget(vid_card)
+
     # Caching policy card — server-wide
     cache_card, cache_body = _card("Caching",
                                     "llamacpp.* — KV cache & slot / checkpoint policy")
@@ -1737,6 +1760,13 @@ def _llama(window) -> QWidget:
         _toggle_row("llamacpp.kv_unified",     "Unified KV",
                      "--kv-unified / --no-kv-unified: single KV buffer shared across all slots."),
         ["llamacpp.parallel"], lambda p: int(p or 1) != 1))
+    # Only meaningful once the KV buffer is actually shared.
+    cache_body.addWidget(_dependent(
+        _number_row("llamacpp.kv_unified_per_slot", "Unified KV per Slot", 0, 1048576, 1024, 0, "tok",
+                     "--kv-unified-per-slot: cap the context each parallel slot may take out of the "
+                     "shared KV buffer. 0 = unset, behaviour unchanged. Stops one long conversation "
+                     "starving the others."),
+        ["llamacpp.kv_unified"], lambda u: bool(u)))
     cache_body.addWidget(_toggle_row("llamacpp.cache_prompt",   "Cache Prompt",
                                       "--cache-prompt / --no-cache-prompt: reuse KV across requests with shared prefixes."))
     # cache_idle_slots needs unified KV AND a positive cache_ram.
@@ -1786,6 +1816,19 @@ def _llama(window) -> QWidget:
         ["llamacpp.spec_type"],
         lambda st: not _spec_value_is_active(st),
     ))
+    # Synthetic acceptance: a benchmarking aid, not a speed knob. It fakes the
+    # accept/reject pattern of a draft model so spec-decode overhead can be
+    # measured without one. Leave at 0 / empty for normal use.
+    spec_body.addWidget(_number_row("llamacpp.spec_synth_len", "Synthetic Accept Length", 0, 64, 1, 0, "tok",
+                                     "--spec-synth-len: target mean synthetic acceptance length, including "
+                                     "the target token. 0 = off."))
+    spec_body.addWidget(_dependent(
+        _line_row("llamacpp.spec_synth_rates", "Synthetic Accept Rates",
+                   "0.8,0.6,0.4",
+                   "--spec-synth-rates: comma-separated per-position acceptance probabilities. "
+                   "Only read when Synthetic Accept Length is set."),
+        ["llamacpp.spec_synth_len"], lambda v: bool(v)))
+
     # The three rows below feed --spec-ngram-{simple,map-k,map-k4v}-{size-n,size-m,min-hits}
     # — argv.build_argv() picks the per-mode flag from the chosen Spec Type.
     # ngram-mod has its own (n-min, n-max, n-match) shape — separate rows below.

@@ -145,7 +145,16 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("rerank",                   "--rerank",               "flag"),
     ("pooling",                  "--pooling",              "value"),
 
-    # Video input (b10733+)
+    # Video input (b10733+). llama-server shells out to ffmpeg/ffprobe to decode
+    # a video into frames at video_fps and runs them through the vision
+    # projector, interleaving text timestamps so the model can reason about
+    # when something happened. Needs a vision model + mmproj, and ffmpeg on
+    # PATH (or video_ffmpeg_dir).
+    #
+    # NOTE: these configure llama-server only. telecode's proxy does not
+    # translate video content blocks -- proxy/translate.py handles images and
+    # would drop a video block silently -- so today these matter for clients
+    # talking to llama-server directly, not through the proxy.
     ("video_fps",                "--video-fps",                "value_nz"),
     ("video_timestamp_interval", "--video-timestamp-interval", "value_nz"),
     ("video_ffmpeg_dir",         "--video-ffmpeg-dir",         "path"),
