@@ -2534,7 +2534,7 @@ def _proxy(window) -> QWidget:
                   "Where the model is told it is running. Empty = auto-detect."),
         ["proxy.inject_date_location"], lambda v: bool(v)))
     body.addWidget(_toggle_row("proxy.debug", "Debug Logging",
-                                "Dump full request/response JSON under data/logs/proxy_full_*.json."))
+                                "Write a record of every finished request to data/logs/requests/req_*.json — headers, model, timing, and the intercepts the proxy performed. This is where to look when ToolSearch or a managed tool did not fire. Note the directory is cleared on every telecode start, so reproduce the problem before restarting."))
 
     # What we REMOVE from what the client sent. Each of these has a matching
     # per-profile row below, built from the same _PROXY_SETTING_COPY entry.
