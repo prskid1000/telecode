@@ -29,8 +29,14 @@ from llamacpp import config as cfg
 log = logging.getLogger("telecode.llamacpp.updater")
 
 
-GITHUB_API = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
+GITHUB_RELEASES = "https://api.github.com/repos/ggml-org/llama.cpp/releases"
 USER_AGENT = "telecode-llamacpp-updater/1.0"
+
+# How far back to walk the release list looking for one that ships binaries.
+# The build we want is normally the first or second entry; the allowance is
+# for a run of asset-less stable tags at the top (see fetch_latest_release).
+_PAGE_SIZE = 100
+_MAX_PAGES = 2
 
 
 # Per-platform variant catalog. Each entry: (key, [name-substrings, all required], label).
@@ -116,13 +122,50 @@ def installed_version() -> Optional[str]:
 
 # ── GitHub release lookup ────────────────────────────────────────────
 
+def _ships_binaries(release: dict[str, Any]) -> bool:
+    """True when the release carries the `llama-b<n>-bin-*` archives we install.
+
+    Same prefix `pick_asset` filters on, so a release that passes here is one
+    a variant can actually match against (cudart-only or `nightly-tag.txt`
+    releases do not).
+    """
+    return any(str(a.get("name") or "").lower().startswith("llama-b")
+               for a in release.get("assets") or [])
+
+
 async def fetch_latest_release() -> dict[str, Any]:
+    """The newest release that actually ships binaries.
+
+    Deliberately NOT `/releases/latest`. Since 2026-08-21 upstream marks
+    every `b####` nightly `prerelease: true` and publishes semver stable
+    tags (`v0.2.0`, `v0.3.0`) whose only asset is a `nightly-tag.txt`
+    pointer. `/releases/latest` skips prereleases by contract, so it returns
+    that pointer release — no build number in the tag, and no archive for
+    any variant to match. Walk the list instead and take the newest `b####`
+    tag with binaries attached, which is what `/releases/latest` gave us
+    before the change.
+    """
     headers = {"User-Agent": USER_AGENT,
                "Accept": "application/vnd.github+json"}
+    timeout = aiohttp.ClientTimeout(total=30)
     async with aiohttp.ClientSession() as session:
-        async with session.get(GITHUB_API, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as r:
-            r.raise_for_status()
-            return await r.json()
+        for page in range(1, _MAX_PAGES + 1):
+            url = f"{GITHUB_RELEASES}?per_page={_PAGE_SIZE}&page={page}"
+            async with session.get(url, headers=headers, timeout=timeout) as r:
+                r.raise_for_status()
+                releases = await r.json()
+            if not releases:
+                break
+            for rel in releases:
+                if rel.get("draft"):
+                    continue
+                if not build_from_tag(str(rel.get("tag_name") or "")):
+                    continue
+                if _ships_binaries(rel):
+                    return rel
+    raise RuntimeError(
+        f"No llama.cpp release with downloadable binaries in the "
+        f"{_MAX_PAGES * _PAGE_SIZE} most recent releases.")
 
 
 def build_from_tag(tag: str) -> Optional[str]:
