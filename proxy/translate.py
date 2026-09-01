@@ -28,6 +28,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -160,6 +161,73 @@ def _normalize_system_messages(
     return [{"role": "system", "content": "\n\n".join(lead)}, *rest]
 
 
+# ── Video ────────────────────────────────────────────────────────────────
+#
+# llama.cpp accepts video on /v1/chat/completions as
+#     {"type": "input_video", "input_video": {"data": "<base64>"}}
+# which its own README calls "an extension from OAI schema. For now, it only
+# accepts base64 input". Two consequences drive everything below:
+#
+#   1. Base64 only. There is no URL form, so a client that sends a URL cannot
+#      be satisfied without the proxy fetching it — which would make the proxy
+#      an SSRF vector against whatever it can reach. We refuse instead, with a
+#      message that says why.
+#   2. llama.cpp REJECTS unknown content types outright
+#      (`throw std::invalid_argument("unsupported content[].type")`), so a
+#      passthrough of OpenAI's own `video_url` part is a hard 400. It has to be
+#      renamed, not forwarded.
+#
+# Video also requires an mmproj; without one llama.cpp answers "video input is
+# not supported - hint: ... you may need to provide the mmproj".
+
+_DATA_URI_RE = re.compile(r"^data:([^;,]*);base64,(.*)$", re.S)
+
+
+class VideoInputError(ValueError):
+    """A video block that cannot be represented to llama.cpp."""
+
+
+def _video_part_from_b64(data: str) -> dict[str, Any]:
+    return {"type": "input_video", "input_video": {"data": data}}
+
+
+def _video_part_from_url(url: str) -> dict[str, Any]:
+    """Accept a base64 data: URI; refuse a remote URL.
+
+    Fetching would turn the proxy into a request forwarder for arbitrary URLs
+    on behalf of any client, so the refusal is deliberate rather than a TODO.
+    """
+    m = _DATA_URI_RE.match(url or "")
+    if not m:
+        raise VideoInputError(
+            "video must be supplied as a base64 data URI — llama.cpp accepts "
+            "only base64 for input_video, and the proxy does not fetch remote "
+            "URLs on a client's behalf"
+        )
+    return _video_part_from_b64(m.group(2))
+
+
+def _normalize_video_parts(messages: list[Any]) -> None:
+    """Rewrite OpenAI video parts in place into llama.cpp's `input_video`.
+
+    OpenAI spells video `{"type": "video_url", "video_url": {"url": ...}}`;
+    llama.cpp only knows `input_video` and throws on anything it does not
+    recognise, so forwarding the OpenAI spelling is a guaranteed 400. A client
+    already sending `input_video` is left alone.
+    """
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for i, part in enumerate(content):
+            if not isinstance(part, dict) or part.get("type") != "video_url":
+                continue
+            url = (part.get("video_url") or {}).get("url", "")
+            content[i] = _video_part_from_url(url)
+
+
 # ── Anthropic request → internal (OpenAI-shape) ──────────────────────────
 
 def _anthropic_content_to_openai(content: Any) -> Any:
@@ -196,6 +264,16 @@ def _anthropic_content_to_openai(content: Any) -> Any:
                     "type": "image_url",
                     "image_url": {"url": src.get("url", "")},
                 })
+        elif btype == "video":
+            # NOT in Anthropic's Messages API — it has no video content block.
+            # This mirrors the shape of Anthropic's own `image` block so a
+            # client that wants video through the Anthropic surface has one
+            # obvious spelling, and is documented as a telecode extension.
+            src = block.get("source", {}) or {}
+            if src.get("type") == "url":
+                parts.append(_video_part_from_url(src.get("url", "")))
+            else:
+                parts.append(_video_part_from_b64(src.get("data", "")))
         elif btype == "document":
             # llama.cpp doesn't have native PDF — surface as text if provided
             src = block.get("source", {}) or {}
@@ -866,6 +944,8 @@ def openai_request_to_internal(
     _apply_thinking_mode(body, defaults)
     _apply_reasoning_effort_template(body, defaults, effort)
     sys_nudge = _apply_effort_entry(entry, body, defaults)
+
+    _normalize_video_parts(body.get("messages") or [])
 
     messages = _normalize_system_messages(body.get("messages") or [], system_mode)
     if sys_nudge:

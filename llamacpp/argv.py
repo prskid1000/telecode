@@ -151,10 +151,8 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     # when something happened. Needs a vision model + mmproj, and ffmpeg on
     # PATH (or video_ffmpeg_dir).
     #
-    # NOTE: these configure llama-server only. telecode's proxy does not
-    # translate video content blocks -- proxy/translate.py handles images and
-    # would drop a video block silently -- so today these matter for clients
-    # talking to llama-server directly, not through the proxy.
+    # The proxy routes video too: proxy/translate.py maps an Anthropic `video`
+    # block and OpenAI's `video_url` part onto llama.cpp's `input_video`.
     ("video_fps",                "--video-fps",                "value_nz"),
     ("video_timestamp_interval", "--video-timestamp-interval", "value_nz"),
     ("video_ffmpeg_dir",         "--video-ffmpeg-dir",         "path"),
