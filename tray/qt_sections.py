@@ -2274,19 +2274,135 @@ def _llama(window) -> QWidget:
 # Proxy
 # ══════════════════════════════════════════════════════════════════════
 
+# ── Shared proxy setting copy ────────────────────────────────────────
+#
+# Every key here exists twice: globally as `proxy.<key>`, and on each
+# client profile as `client_profiles[].<key>`, where `_pget` in
+# proxy/server.py resolves profile-then-global. They are one setting at
+# two scopes, so the two rows must not drift — they used to, badly:
+# `strip_reminders` was "Strip Client Bookkeeping" globally and "Strip
+# Reminders" per profile, with two unrelated descriptions, so the same
+# switch looked like two different features.
+#
+# One entry per setting: (label, what it does). The scope sentence is
+# appended by _proxy_copy() so each side says who it applies to without
+# restating the behaviour.
+_PROXY_SETTING_COPY: dict[str, tuple[str, str]] = {
+    "tool_search": (
+        "Tool Search (BM25)",
+        "Split the client's tools into a core set that stays loaded and a "
+        "deferred set the model retrieves on demand through ToolSearch."),
+    "auto_load_tools": (
+        "Auto-Load Tool Schemas",
+        "A blind first call to a deferred tool injects that tool's schema "
+        "automatically instead of failing."),
+    "strip_reminders": (
+        "Strip Client Bookkeeping",
+        "Remove <system-reminder> blocks and per-turn <total_tokens> budget "
+        "lines from the message history before forwarding. Skills listings, "
+        "the deferred-tool listing and our own date/location injection are "
+        "kept."),
+    "sort_tools": (
+        "Sort Tools Alphabetically",
+        "Sort body.tools by name before forwarding. Stabilises the prompt "
+        "prefix when a client reorders its tool list (cache-friendly), at the "
+        "cost of overriding any deliberate primacy ordering."),
+    "inject_date_location": (
+        "Inject Date/Location",
+        "Append today's date and the configured location to the tail of the "
+        "system block."),
+    "strip_client_system_prompt": (
+        "Strip Client System Prompt",
+        "Drop the client's own system prompt and let the System Instruction "
+        "stand in its place. Applies to EVERY matching request — including "
+        "Claude Code's session-title call, whose whole instruction lives in "
+        "that block. With no System Instruction set, the model gets no system "
+        "prompt at all."),
+    "strip_skills": (
+        "Strip Skills Listing",
+        "Drop the `The following skills are available…` catalogue (~8.5KB). "
+        "It arrives in a per-turn system message, so Strip Client Bookkeeping "
+        "never reaches it. The model can no longer pick a skill by name."),
+    "strip_mcp_instructions": (
+        "Strip MCP Instructions",
+        "Drop `# MCP Server Instructions`. Same carrier as the skills "
+        "catalogue. This one is guidance your MCP servers supplied — "
+        "stripping it makes the model use those tools blind."),
+    "keep_claude_md": (
+        "Keep CLAUDE.md Files",
+        "How many of the concatenated CLAUDE.md documents to keep, in load "
+        "order — user-global, then project, then nested, then MEMORY.md. Also "
+        "the exclusion from Strip Client Bookkeeping: the block rides inside "
+        "the <system-reminder>, so anything but 'All' is honoured either way."),
+    "system_instruction": (
+        "Instruction File",
+        "Markdown file from proxy/instructions/ prepended to the system "
+        "block. Matters most with Strip Client System Prompt on, where the "
+        "request would otherwise reach the model with no system prompt."),
+    "inject_managed": (
+        "Inject Managed Tools",
+        "Which proxy-handled tools (web_search, code_execution, DocGraph, …) "
+        "to advertise to the client."),
+    "core_tools": (
+        "Core Tools",
+        "Names that stay always-loaded, one per line. Everything else becomes "
+        "deferred and is reachable only through ToolSearch."),
+}
+
+_PROXY_SCOPE_NOTE = {
+    "global": "Default for requests matching no client profile, and the "
+              "fallback for any profile that leaves it unset.",
+    "profile": "Applies to requests this profile matches, overriding the "
+               "global Proxy setting of the same name.",
+}
+
+
+def _proxy_copy(key: str, scope: str) -> tuple[str, str]:
+    """(label, help) for a setting that exists both globally and per profile."""
+    label, what = _PROXY_SETTING_COPY[key]
+    return label, f"{what} {_PROXY_SCOPE_NOTE[scope]}"
+
+
+def _instruction_options(current: str = "") -> list[tuple[str, str]]:
+    """[(display, value)] of the files in proxy/instructions/, '(none)' first.
+
+    Shared by the global row and the per-profile row so the two offer the
+    same list — the global one used to be a free-text path box. `current` is
+    appended when it names something not in the directory, so a hand-edited
+    value stays visible and selected instead of silently reading as '(none)'.
+    """
+    from pathlib import Path as _Path
+    opts: list[tuple[str, str]] = [("(none)", "")]
+    d = _Path(__file__).resolve().parent.parent / "proxy" / "instructions"
+    if d.is_dir():
+        opts += [(f.name, f.name) for f in sorted(d.iterdir()) if f.is_file()]
+    if current and not any(v == current for _, v in opts):
+        opts.append((current, current))
+    return opts
+
+
 def _proxy(window) -> QWidget:
     scroll, _, layout = _page()
 
-    master, body = _card("Proxy", "Anthropic + OpenAI HTTP surface")
+    # One card per group, matching the llama.cpp pages and the per-profile
+    # editor below. This page used to be a single "Proxy" card with eight
+    # bare section-header labels inside it.
+    def _sec(title: str, sub: str = "") -> QVBoxLayout:
+        _c, _b = _card(title, sub)
+        layout.addWidget(_c)
+        return _b
+
+    master, body = _card("Proxy", "proxy.enabled — Anthropic + OpenAI HTTP surface")
     body.addWidget(_toggle_row("proxy.enabled", "Enabled",
                                 "Serves /v1/messages and /v1/chat/completions. Port change needs restart."))
 
-    body.addWidget(_section_header("Network"))
+    layout.addWidget(master)
+
+    body = _sec("Network", "proxy.host / proxy.port / proxy.protocols — where the proxy listens")
     body.addWidget(_line_row("proxy.host", "Host", "127.0.0.1"))
     body.addWidget(_number_row("proxy.port", "Port", 1024, 65535, 1, 0))
 
     # Protocols — multi-checkbox
-    body.addWidget(_section_header("Protocols"))
     proto_row = QWidget()
     prl = QHBoxLayout(proto_row)
     prl.setContentsMargins(0, 0, 0, 0)
@@ -2317,15 +2433,19 @@ def _proxy(window) -> QWidget:
         cl.addWidget(lbl)
         prl.addWidget(cell)
     prl.addStretch(1)
-    body.addWidget(proto_row)
+    body.addWidget(_row(row_label("Protocols",
+                                  "Which client APIs to serve. Anthropic is /v1/messages, "
+                                  "OpenAI is /v1/chat/completions.", "proxy.protocols"),
+                        proto_row))
+    body.addWidget(_list_row("proxy.cors_origins", "CORS Origins",
+                              "Allowed origins for the proxy HTTP server (one per line).",
+                              "https://example.com"))
 
-    body.addWidget(_section_header("Behavior"))
-    body.addWidget(_toggle_row("proxy.tool_search", "Tool Search (BM25)",
-                                "Split client tools into core + deferred; deferred retrievable via ToolSearch."))
+    body = _sec("Behavior", "proxy.* — how a request is transformed on its way upstream")
+    body.addWidget(_toggle_row("proxy.tool_search", *_proxy_copy("tool_search", "global")))
     # Auto-load acts on DEFERRED tools, which only exist when Tool Search splits them out.
     body.addWidget(_dependent(
-        _toggle_row("proxy.auto_load_tools", "Auto-Load Tool Schemas",
-                                "First blind call to a deferred tool injects its schema automatically."),
+        _toggle_row("proxy.auto_load_tools", *_proxy_copy("auto_load_tools", "global")),
         ["proxy.tool_search"], lambda t: bool(t)))
     body.addWidget(_enum_row(
         "proxy.mid_system_messages", "Mid-Session System Messages",
@@ -2339,59 +2459,46 @@ def _proxy(window) -> QWidget:
         "front block grow every turn, which pins llama.cpp's prefix cache and re-prefills the whole "
         "history on every request.",
         max_width=430))
-    body.addWidget(_toggle_row("proxy.strip_reminders", "Strip Client Bookkeeping",
-                                "Remove <system-reminder> blocks and per-turn <total_tokens> budget lines "
-                                "from message history before forwarding. Skills listings, the deferred-tool "
-                                "listing and our own date/location injection are kept."))
-    body.addWidget(_toggle_row("proxy.sort_tools", "Sort Tools Alphabetically",
-                                "Sort body.tools by name before forwarding. Stabilises the prompt prefix when "
-                                "a client reorders its tool list (cache-friendly), at the cost of overriding "
-                                "any deliberate primacy ordering. Off by default."))
-    body.addWidget(_toggle_row("proxy.inject_date_location", "Inject Date/Location",
-                                "Append today's date + location to the tail of the system block. "
-                                "Default on. This is the global default — a client profile's own "
-                                "Inject Date/Location overrides it for requests that match that profile."))
-    body.addWidget(_line_row("proxy.system_instruction", "System Instruction",
-                                "e.g. system.md",
-                                "Markdown file prepended to the system block for requests matching NO "
-                                "client profile. Empty = none. Profiles override it with their own. "
-                                "Matters most with Strip Client System Prompt on, where an unmatched "
-                                "request would otherwise get no system prompt at all."))
+    body.addWidget(_toggle_row("proxy.strip_reminders", *_proxy_copy("strip_reminders", "global")))
+    body.addWidget(_toggle_row("proxy.sort_tools", *_proxy_copy("sort_tools", "global")))
+    body.addWidget(_toggle_row("proxy.inject_date_location",
+                                *_proxy_copy("inject_date_location", "global")))
+    # Only read when Inject Date/Location is on — it is the location half.
+    body.addWidget(_dependent(
+        _line_row("proxy.location", "Location",
+                  "auto via ip-api.com",
+                  "Where the model is told it is running. Empty = auto-detect."),
+        ["proxy.inject_date_location"], lambda v: bool(v)))
     body.addWidget(_toggle_row("proxy.debug", "Debug Logging",
                                 "Dump full request/response JSON under data/logs/proxy_full_*.json."))
 
-    # Client-context strippers. These already had globals in proxy/config.py
-    # and were already honoured by _pget as the fallback — they just had no
-    # row here, so the only way to reach them was to hand-edit settings.json.
-    # Each is the default for requests matching NO client profile, and the
-    # fallback for a profile that omits it; a profile's own toggle wins.
-    body.addWidget(_section_header("Client Context"))
-    body.addWidget(_toggle_row("proxy.strip_client_system_prompt", "Strip Client System Prompt",
-                                "Drop the client's own system prompt and let the System Instruction stand "
-                                "in its place. Applies to EVERY matching request — including Claude Code's "
-                                "session-title call, whose whole instruction lives in that block. With no "
-                                "System Instruction set, the model gets no system prompt at all. "
-                                "Per-profile setting overrides this."))
-    body.addWidget(_toggle_row("proxy.strip_skills", "Strip Skills Listing",
-                                "Drop the `The following skills are available…` catalogue (~8.5KB). Arrives "
-                                "in a per-turn system message, so Strip Client Bookkeeping never reaches it. "
-                                "The model can no longer pick a skill by name. "
-                                "Per-profile setting overrides this."))
-    body.addWidget(_toggle_row("proxy.strip_mcp_instructions", "Strip MCP Instructions",
-                                "Drop `# MCP Server Instructions`. Same carrier as the skills catalogue. "
-                                "This one is guidance your MCP servers supplied — stripping it makes the "
-                                "model use those tools blind. Per-profile setting overrides this."))
-    # Same control as the per-profile row (Client Context) — a named-option
-    # dropdown, not a spinner: -1 and 0 are modes ("all" / "drop it"), not
-    # points on a scale, and a bare number cannot say which is which.
-    body.addWidget(_enum_row("proxy.keep_claude_md", "Keep CLAUDE.md Files",
+    # What we REMOVE from what the client sent. Each of these has a matching
+    # per-profile row below, built from the same _PROXY_SETTING_COPY entry.
+    # The billing header, `# Environment`, `gitStatus:` and the agent-type
+    # roster are stripped unconditionally and have no row on either side.
+    body = _sec("Client Context",
+                "proxy.strip_* / proxy.keep_claude_md — what to drop from what the client sent")
+    body.addWidget(_toggle_row("proxy.strip_client_system_prompt",
+                                *_proxy_copy("strip_client_system_prompt", "global")))
+    body.addWidget(_toggle_row("proxy.strip_skills", *_proxy_copy("strip_skills", "global")))
+    body.addWidget(_toggle_row("proxy.strip_mcp_instructions",
+                                *_proxy_copy("strip_mcp_instructions", "global")))
+    # A named-option dropdown, not a spinner: -1 and 0 are modes ("all" /
+    # "drop it"), not points on a scale, and a bare number cannot say which
+    # is which. Same control and same options as the per-profile row.
+    _keep_label, _keep_help = _proxy_copy("keep_claude_md", "global")
+    body.addWidget(_enum_row("proxy.keep_claude_md", _keep_label,
                                 [("All (no limit)", -1), ("None — drop the block", 0)]
                                 + [(f"Keep first {n}", n) for n in range(1, 7)],
-                                "How many of the concatenated CLAUDE.md documents to keep, in load order — "
-                                "user-global, then project, then nested, then MEMORY.md. Also the "
-                                "exclusion from Strip Client Bookkeeping: the block rides inside the "
-                                "<system-reminder>, so anything but 'All' is honoured either way. "
-                                "Per-profile setting overrides this."))
+                                _keep_help))
+
+    body = _sec("System Instruction",
+                "proxy.system_instruction — markdown prepended to the system block")
+    _si_label, _si_help = _proxy_copy("system_instruction", "global")
+    body.addWidget(_enum_row(
+        "proxy.system_instruction", _si_label,
+        _instruction_options(str(get_path(read_settings(), "proxy.system_instruction", "") or "")),
+        _si_help))
 
     # inject_managed is tri-state and a plain checkbox grid cannot express it:
     #   key absent  -> None -> inject the whole live registry (the default)
@@ -2471,47 +2578,36 @@ def _proxy(window) -> QWidget:
         mode_cb.setCurrentIndex(max(0, mode_cb.findData(_mode_now())))
         mode_cb.currentIndexChanged.connect(_on_mode)
 
+        _im_label, _im_help = _proxy_copy("inject_managed", "global")
         dest.addWidget(_row(row_label(
-            "Inject Managed",
-            "Which proxy-handled tools to inject for requests matching NO client "
-            "profile. 'All' leaves the key unset so new tools are picked up "
-            "automatically; 'Custom' pins an explicit list. A profile's own "
-            "Inject Managed overrides this.", PATH),
+            _im_label,
+            _im_help + " 'All' leaves the key unset so newly registered tools "
+                       "are picked up automatically; 'Custom' pins an explicit list.",
+            PATH),
             _wrap_align(mode_cb, Qt.AlignmentFlag.AlignLeft)))
         dest.addWidget(grid_host)
         _rebuild_grid()
 
+    body = _sec("Tool Set", "proxy.inject_managed / proxy.core_tools — which tools the model sees")
     _add_global_inject_managed(body)
+    # The core/deferred split only happens under Tool Search.
+    body.addWidget(_dependent(
+        _list_row("proxy.core_tools", *_proxy_copy("core_tools", "global"), "Bash"),
+        ["proxy.tool_search"], lambda t: bool(t)))
 
-    body.addWidget(_section_header("Limits"))
+    body = _sec("Limits", "proxy.max_roundtrips / proxy.ping_interval — per-request ceilings")
     body.addWidget(_number_row("proxy.max_roundtrips", "Max Round-Trips",
                                 1, 50, 1, 0, "",
                                 "How many intercept/tool rounds before giving up per request."))
     body.addWidget(_number_row("proxy.ping_interval", "Ping Interval",
                                 1, 60, 1, 0, "s",
                                 "Anthropic `event: ping` frame cadence during long generations."))
-    body.addWidget(_line_row("proxy.location", "Location",
-                              "auto via ip-api.com",
-                              "Appended to system prompt when inject_date_location=true. Empty = auto-detect."))
 
-    body.addWidget(_section_header("Tool Set"))
-    # The core/deferred split only happens under Tool Search.
-    body.addWidget(_dependent(
-        _list_row("proxy.core_tools", "Core Tools",
-                              "Names that stay always-loaded for clients (one per line). "
-                              "Everything else becomes deferred and goes through ToolSearch.",
-                              "Bash"),
-        ["proxy.tool_search"], lambda t: bool(t)))
-    body.addWidget(_list_row("proxy.cors_origins", "CORS Origins",
-                              "Allowed origins for the proxy HTTP server (one per line).",
-                              "https://example.com"))
-
-    body.addWidget(_section_header("Model Mapping"))
+    body = _sec("Model Mapping", "proxy.model_mapping — rewrite body.model on each request")
     body.addWidget(_kv_row("proxy.model_mapping", "Aliases",
-                            "Rewrites body.model on each request (one ALIAS=target per line). "
-                            "Useful for tricking Claude/OpenAI clients into pointing at your local model.",
+                            "One ALIAS=target per line. Useful for pointing Claude/OpenAI "
+                            "clients at your local model without changing the client.",
                             typed=False))
-    layout.addWidget(master)
 
     # Tailscale Funnel — public HTTPS URL for this machine + copy + live status
     ts_card, ts_refresh = _tailscale_funnel_card()
@@ -2658,51 +2754,60 @@ def _proxy_profiles_card() -> QFrame:
                 ps[idx]["match"] = m
                 _save_profiles(ps)
 
+        # Cards, not bare section labels — same grouping and the same group
+        # names as the global Proxy page above, so a setting sits in the same
+        # place at both scopes.
+        def _sec(title: str, sub: str = "") -> QVBoxLayout:
+            _c, _b = _card(title, sub)
+            form_layout.addWidget(_c)
+            return _b
+
+        def _toggle_field(dest: QVBoxLayout, field: str) -> None:
+            """Bool row for a profile field, labelled from _PROXY_SETTING_COPY."""
+            label, hlp = _proxy_copy(field, "profile")
+            t = Toggle(); t.setChecked(bool(prof.get(field, False)))
+            def _h(_s: int, field=field, widget=t):
+                _patch(field, bool(widget.isChecked()))
+            t.stateChanged.connect(_h)
+            dest.addWidget(_row(row_label(label, hlp, field),
+                                _wrap_align(t, Qt.AlignmentFlag.AlignLeft)))
+
         # Identity
-        form_layout.addWidget(_section_header("Identity"))
+        sl = _sec("Identity", "name — how this profile is listed above")
         name_le = QLineEdit(); name_le.setText(str(prof.get("name", "")))
         name_le.editingFinished.connect(lambda: _patch("name", name_le.text()))
-        form_layout.addWidget(_row(row_label("Name", "Display name (must be unique)."), name_le))
+        sl.addWidget(_row(row_label("Name", "Display name (must be unique).", "name"), name_le))
 
         # Match rule
-        form_layout.addWidget(_section_header("Match Rule"))
+        sl = _sec("Match Rule", "match.header / match.contains — which requests this profile claims")
         hdr_le = QLineEdit(); hdr_le.setText(str((prof.get("match") or {}).get("header", "")))
         hdr_le.setPlaceholderText("User-Agent")
         hdr_le.editingFinished.connect(lambda: _patch_match("header", hdr_le.text()))
-        form_layout.addWidget(_row(row_label("Match Header", "HTTP request header name to inspect."), hdr_le))
+        sl.addWidget(_row(row_label("Match Header", "HTTP request header name to inspect.",
+                                    "match.header"), hdr_le))
 
         cont_le = QLineEdit(); cont_le.setText(str((prof.get("match") or {}).get("contains", "")))
         cont_le.setPlaceholderText("substring")
         cont_le.editingFinished.connect(lambda: _patch_match("contains", cont_le.text()))
-        form_layout.addWidget(_row(row_label("Contains", "Substring required in the header value."), cont_le))
+        sl.addWidget(_row(row_label("Contains", "Substring required in the header value.",
+                                    "match.contains"), cont_le))
 
-        # Behavior toggles
-        form_layout.addWidget(_section_header("Behavior"))
-        for field, label, hlp in [
-            ("tool_search",          "Tool Search",         "BM25 tool retrieval for this client."),
-            ("auto_load_tools",      "Auto-Load Tools",     "First blind call injects schema."),
-            ("strip_reminders",      "Strip Reminders",     "Drop <system-reminder> blocks + <total_tokens> lines."),
-            ("sort_tools",           "Sort Tools",          "Sort body.tools alphabetically (cache-stable)."),
-            ("inject_date_location", "Inject Date/Location","Append today's date + location to system prompt."),
-        ]:
-            cur_val = bool(prof.get(field, False))
-            t = Toggle(); t.setChecked(cur_val)
-            def _make(field=field, widget=t):
-                def _h(_s: int):
-                    _patch(field, bool(widget.isChecked()))
-                return _h
-            t.stateChanged.connect(_make())
-            form_layout.addWidget(_row(row_label(label, hlp), _wrap_align(t, Qt.AlignmentFlag.AlignLeft)))
+        # Behavior — same rows, same order as the global Behavior card.
+        sl = _sec("Behavior", "how a request from this client is transformed on its way upstream")
+        for _f in ("tool_search", "auto_load_tools", "strip_reminders",
+                   "sort_tools", "inject_date_location"):
+            _toggle_field(sl, _f)
 
         # Client context — what we REMOVE from what the client sent.
         # The billing header, `# Environment`, `gitStatus:` and the agent-type
         # roster are stripped unconditionally and have no rows here.
-        form_layout.addWidget(_section_header("Client Context"))
+        sl = _sec("Client Context", "what to drop from what this client sent")
+        for _f in ("strip_client_system_prompt", "strip_skills", "strip_mcp_instructions"):
+            _toggle_field(sl, _f)
 
         # CLAUDE.md is a count, not a switch: `# claudeMd` is every CLAUDE.md
-        # on the path concatenated, in load order. It also doubles as the
-        # exclusion from Strip Reminders — the block rides inside the reminder,
-        # so any value >= 0 is honoured whether reminders are stripped or not.
+        # on the path concatenated, in load order. Same dropdown as the global
+        # row, built from the same option list.
         try:
             _cur_keep = int(prof.get("keep_claude_md", -1))
         except (TypeError, ValueError):
@@ -2717,70 +2822,27 @@ def _proxy_profiles_card() -> QFrame:
             next((i for i, (_, v) in enumerate(_keep_opts) if v == _cur_keep), 0))
         keep_cb.currentIndexChanged.connect(
             lambda _i: _patch("keep_claude_md", int(keep_cb.currentData())))
-        form_layout.addWidget(_row(
-            row_label("Keep CLAUDE.md Files",
-                      "How many of the concatenated CLAUDE.md documents to keep, "
-                      "in load order — user-global, then project, then nested, "
-                      "then MEMORY.md. Also the exclusion from Strip Reminders, "
-                      "which would otherwise take the whole block."),
-            keep_cb))
-
-        for field, label, hlp in [
-            ("strip_client_system_prompt", "Strip Client System Prompt",
-             "Drop the client's own system prompt and let the System "
-             "Instruction below stand in its place. Applies to EVERY request "
-             "this profile matches — including Claude Code's session-title "
-             "call, whose whole instruction lives in that block. With no "
-             "System Instruction set, the model gets no system prompt at all."),
-            ("strip_skills", "Strip Skills Listing",
-             "Drop the `The following skills are available…` catalogue "
-             "(~8.5KB). Arrives in a per-turn system message, so Strip "
-             "Reminders never reaches it. The model can no longer pick a "
-             "skill by name."),
-            ("strip_mcp_instructions", "Strip MCP Instructions",
-             "Drop `# MCP Server Instructions`. Same carrier as the skills "
-             "catalogue. This one is guidance your MCP servers supplied — "
-             "stripping it makes the model use those tools blind."),
-        ]:
-            cur_val = bool(prof.get(field, False))
-            t = Toggle(); t.setChecked(cur_val)
-            def _make_cc(field=field, widget=t):
-                def _h(_s: int):
-                    _patch(field, bool(widget.isChecked()))
-                return _h
-            t.stateChanged.connect(_make_cc())
-            form_layout.addWidget(_row(row_label(label, hlp),
-                                       _wrap_align(t, Qt.AlignmentFlag.AlignLeft)))
+        sl.addWidget(_row(
+            row_label(*_proxy_copy("keep_claude_md", "profile"), "keep_claude_md"),
+            _wrap_align(keep_cb, Qt.AlignmentFlag.AlignLeft)))
 
         # System instruction
-        form_layout.addWidget(_section_header("System Instruction"))
-        from pathlib import Path
-        instructions_dir = Path(__file__).resolve().parent.parent / "proxy" / "instructions"
-        instruction_options = [("(none)", "")]
-        if instructions_dir.is_dir():
-            for f in sorted(instructions_dir.iterdir()):
-                if f.is_file():
-                    instruction_options.append((f.name, f.name))
-        
+        sl = _sec("System Instruction", "system_instruction — markdown prepended to the system block")
         cur_val = str(prof.get("system_instruction", "") or "")
-        if cur_val and not any(v == cur_val for _, v in instruction_options):
-            instruction_options.append((cur_val, cur_val))
-            
         si_cb = QComboBox()
         selected_idx = 0
-        for i, (disp, val) in enumerate(instruction_options):
+        for i, (disp, val) in enumerate(_instruction_options(cur_val)):
             si_cb.addItem(disp, val)
             if cur_val == val:
                 selected_idx = i
         si_cb.setCurrentIndex(selected_idx)
         si_cb.currentIndexChanged.connect(lambda i: _patch("system_instruction", si_cb.itemData(i) or None))
-        
-        form_layout.addWidget(_row(row_label("Instruction File",
-                                              "Filename in proxy/instructions/. Empty = no injection."),
-                                   _wrap_align(si_cb, Qt.AlignmentFlag.AlignLeft)))
+        sl.addWidget(_row(row_label(*_proxy_copy("system_instruction", "profile"),
+                                    "system_instruction"),
+                          _wrap_align(si_cb, Qt.AlignmentFlag.AlignLeft)))
 
-        # Lists
-        form_layout.addWidget(_section_header("Tool Lists"))
+        # Tool set — same card name as the global page.
+        tool_sl = _sec("Tool Set", "which tools this client sees")
         from PySide6.QtWidgets import QPlainTextEdit
         def _list_editor(field: str, label: str, hlp: str) -> QWidget:
             from tray.qt_theme import BG_ELEV as _BG_ELEV
@@ -2862,7 +2924,7 @@ def _proxy_profiles_card() -> QFrame:
                     pass
             add_btn.clicked.connect(_on_add)
 
-            return _row(row_label(label, hlp), host)
+            return _row(row_label(label, hlp, field), host)
 
         def _managed_checklist(field: str, label: str, hlp: str) -> QWidget:
             """Styled inject_managed selector matching the Managed Tools layout.
@@ -3094,14 +3156,17 @@ def _proxy_profiles_card() -> QFrame:
                 f"QScrollArea {{ background: {BG_ELEV}; border: 1px solid {BORDER};"
                 f" border-radius: 6px; }}"
             )
-            return _row(row_label(label, hlp), scroll)
+            return _row(row_label(label, hlp, field), scroll)
 
-        form_layout.addWidget(_managed_checklist("inject_managed", "Inject Managed",
-                                                  "Managed tools to inject for this client."))
-        form_layout.addWidget(_list_editor("core_tools", "Core Tools (override)",
-                                            "Override the global proxy.core_tools for this client. Empty = inherit."))
-        form_layout.addWidget(_list_editor("strip_tool_names", "Strip Tool Names",
-                                            "Tool names to remove from the client-supplied tool set."))
+        tool_sl.addWidget(_managed_checklist(
+            "inject_managed", *_proxy_copy("inject_managed", "profile")))
+        _ct_label, _ct_help = _proxy_copy("core_tools", "profile")
+        tool_sl.addWidget(_list_editor(
+            "core_tools", _ct_label, _ct_help + " Empty = inherit the global list."))
+        tool_sl.addWidget(_list_editor(
+            "strip_tool_names", "Strip Tool Names",
+            "Tool names to remove from the client-supplied tool set. "
+            "No global equivalent — this one is profile-only."))
 
     def _refresh_picker(preserve_idx: int | None = None):
         picker.blockSignals(True)
