@@ -64,17 +64,22 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("poll_batch",       "--poll-batch",       "value"),
     ("threads_http",     "--threads-http",     "value_nz"),
 
-    # Memory policy
-    ("mlock",            "--mlock",           "flag"),
-    ("no_mmap",          "--no-mmap",         "flag"),
-    ("direct_io",        "--direct-io",       "flag"),
+    # Memory policy.
+    # load_mode replaces --mlock / --no-mmap / --direct-io, all three of which
+    # upstream deprecated in favour of a single --load-mode. The accepted values
+    # are a closed set (probed against b10733): auto, none, mmap, mlock,
+    # mmap+mlock, dio. Arbitrary combinations are REJECTED -- "mlock+dio" and
+    # "mmap+mlock+dio" both fail to parse -- so this is a choice, not a bitmask.
+    # Emitted via _emit_load_mode() so legacy settings keep working.
     ("no_host",          "--no-host",         "flag"),
+    ("lazy_mode",        "--lazy-mode",       "value"),
     ("repack",           ("--repack", "--no-repack"),           "bool_pair"),
     ("op_offload",       ("--op-offload", "--no-op-offload"),   "bool_pair"),
     ("check_tensors",    "--check-tensors",   "flag"),
 
     # Hardware layout
     ("main_gpu",         "--main-gpu",        "value"),
+    ("mmproj_device",    "--mmproj-device",   "value"),
     ("tensor_split",     "--tensor-split",    "value"),
     ("split_mode",       "--split-mode",      "value"),
     ("numa",             "--numa",            "value"),
@@ -86,6 +91,7 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     # Caching policy
     ("kv_offload",       ("--kv-offload", "--no-kv-offload"),   "bool_pair"),
     ("kv_unified",       ("--kv-unified", "--no-kv-unified"),   "bool_pair"),
+    ("kv_unified_per_slot", "--kv-unified-per-slot",           "value_nz"),
     ("cache_prompt",     ("--cache-prompt", "--no-cache-prompt"), "bool_pair"),
     # renamed from --clear-idle/--no-clear-idle in upstream commit 9d49acb
     ("cache_idle_slots", ("--cache-idle-slots", "--no-cache-idle-slots"), "bool_pair"),
@@ -118,6 +124,8 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     #   it when spec_type is meaningfully set (the two are mutually
     #   exclusive — set one or the other, not both).
     ("spec_default",             "--spec-default",         "flag"),
+    ("spec_synth_len",           "--spec-synth-len",       "value_nz"),
+    ("spec_synth_rates",         "--spec-synth-rates",     "value"),
     ("threads_draft",            "--threads-draft",        "value_nz"),
     ("threads_batch_draft",      "--threads-batch-draft",  "value_nz"),
 
@@ -136,6 +144,11 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("embedding",                "--embedding",            "flag"),
     ("rerank",                   "--rerank",               "flag"),
     ("pooling",                  "--pooling",              "value"),
+
+    # Video input (b10733+)
+    ("video_fps",                "--video-fps",                "value_nz"),
+    ("video_timestamp_interval", "--video-timestamp-interval", "value_nz"),
+    ("video_ffmpeg_dir",         "--video-ffmpeg-dir",         "path"),
 
     # Diagnostic / debug
     ("skip_chat_parsing",        "--skip-chat-parsing",    "flag"),
@@ -168,6 +181,35 @@ def _spec_types(gcfg: dict) -> list[str]:
         return []
     out = [s.strip() for s in raw.split(",") if s.strip()]
     return [s for s in out if s.lower() != "none"]
+
+
+def _emit_load_mode(argv: list[str], gcfg: dict) -> None:
+    """Emit --load-mode, migrating the three flags it replaced.
+
+    Upstream deprecated --mlock / --no-mmap / --direct-io in favour of one
+    --load-mode taking a closed set of values (probed against b10733): auto,
+    none, mmap, mlock, mmap+mlock, dio. Combinations beyond mmap+mlock are
+    rejected by the parser, so a config that had mlock AND direct_io cannot be
+    expressed exactly -- mlock wins, because it governs runtime residency while
+    DirectIO only affects load speed.
+
+    An explicit load_mode always wins. Otherwise the legacy keys are translated
+    so existing settings.json files keep behaving as they did.
+    """
+    mode = str(gcfg.get("load_mode", "") or "").strip()
+    if not mode:
+        mlock = bool(gcfg.get("mlock", False))
+        mmap  = not bool(gcfg.get("no_mmap", False))
+        if mlock and mmap:
+            mode = "mmap+mlock"
+        elif mlock:
+            mode = "mlock"
+        elif bool(gcfg.get("direct_io", False)):
+            mode = "dio"
+        elif not mmap:
+            mode = "none"
+    if mode:
+        argv += ["--load-mode", mode]
 
 
 def _emit_spec_type(argv: list[str], gcfg: dict) -> None:
@@ -422,6 +464,7 @@ def build_argv(model_name: str) -> list[str]:
         if k in suppressed_global:
             continue
         _emit_flag(argv, gcfg, k, flag, kind)
+    _emit_load_mode(argv, gcfg)
     _emit_spec_type(argv, gcfg)
     _emit_spec_ngram(argv, gcfg)
 
