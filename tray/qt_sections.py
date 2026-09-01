@@ -2381,13 +2381,17 @@ def _proxy(window) -> QWidget:
                                 "Drop `# MCP Server Instructions`. Same carrier as the skills catalogue. "
                                 "This one is guidance your MCP servers supplied — stripping it makes the "
                                 "model use those tools blind. Per-profile setting overrides this."))
-    body.addWidget(_number_row("proxy.keep_claude_md", "Keep CLAUDE.md Files",
-                                -1, 6, 1, 0, "",
+    # Same control as the per-profile row (Client Context) — a named-option
+    # dropdown, not a spinner: -1 and 0 are modes ("all" / "drop it"), not
+    # points on a scale, and a bare number cannot say which is which.
+    body.addWidget(_enum_row("proxy.keep_claude_md", "Keep CLAUDE.md Files",
+                                [("All (no limit)", -1), ("None — drop the block", 0)]
+                                + [(f"Keep first {n}", n) for n in range(1, 7)],
                                 "How many of the concatenated CLAUDE.md documents to keep, in load order — "
-                                "user-global, then project, then nested, then MEMORY.md. -1 = all (leave "
-                                "the block alone), 0 = drop it entirely. Also the exclusion from Strip "
-                                "Client Bookkeeping: the block rides inside the <system-reminder>, so any "
-                                "value >= 0 is honoured either way. Per-profile setting overrides this."))
+                                "user-global, then project, then nested, then MEMORY.md. Also the "
+                                "exclusion from Strip Client Bookkeeping: the block rides inside the "
+                                "<system-reminder>, so anything but 'All' is honoured either way. "
+                                "Per-profile setting overrides this."))
 
     # inject_managed is tri-state and a plain checkbox grid cannot express it:
     #   key absent  -> None -> inject the whole live registry (the default)
