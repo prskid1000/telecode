@@ -155,14 +155,19 @@
     "poll_batch": 50,
     "threads_http": -1,
 
-    "mlock": false,
-    "no_mmap": false,
-    "direct_io": false,
+    "_comment_load_mode": "--load-mode replaces the deprecated mlock / no_mmap / direct_io. Closed set, verified by probing the binary: auto | none | mmap | mlock | mmap+mlock | dio. Combinations beyond mmap+mlock are REJECTED, so this is a choice, not a bitmask. Empty = server default (auto). The old three keys are still honoured and translated automatically if load_mode is unset.",
+    "load_mode": "",
+    "lazy_mode": "",
     "no_host": false,
     "repack": true,
     "op_offload": true,
     "check_tensors": false,
     "skip_chat_parsing": false,
+
+    "_comment_video": "Video input (b10733+). All optional; 0 / empty means the server default.",
+    "video_fps": 0,
+    "video_timestamp_interval": 0,
+    "video_ffmpeg_dir": "",
 
     "n_predict": -1,
     "timeout": 600,
@@ -179,6 +184,7 @@
     "pooling": "",
 
     "main_gpu": 0,
+    "mmproj_device": "",
     "tensor_split": "",
     "split_mode": "layer",
     "numa": "",
@@ -188,6 +194,7 @@
 
     "kv_offload": true,
     "kv_unified": false,
+    "kv_unified_per_slot": 0,
     "cache_prompt": true,
     "cache_idle_slots": true,
     "context_shift": false,
@@ -203,6 +210,8 @@
       "spec_type accepts a comma-separated list (v9243+). Values: none, draft-simple, draft-eagle3, draft-mtp, ngram-simple, ngram-map-k, ngram-map-k4v, ngram-mod, ngram-cache. Set spec_default=true instead to let the server auto-pick based on model heads.",
     "spec_type": "",
     "spec_default": false,
+    "spec_synth_len": 0,
+    "spec_synth_rates": "",
 
     "_comment_spec_ngram":
       "Per-mode ngram knobs. spec_ngram_size_n/_m/_min_hits feed the (lookup-N, draft-M, min-hits) triplet of ngram-simple / ngram-map-k / ngram-map-k4v. spec_ngram_mod_* feed ngram-mod's (n-min, n-max, n-match) which has different semantics. 0 = use server default.",
