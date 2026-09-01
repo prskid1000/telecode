@@ -4958,17 +4958,11 @@ def _models(window) -> QWidget:
         # rather than let it look effective.
         _sl.addWidget(_dependent(
             _toggle_row(f"{p}.reasoning_preserve", "Preserve Reasoning",
-                "LAYER 3 of 3 -- the server-side lever. --reasoning-preserve keeps the "
-                "reasoning trace across the whole history, not just the last assistant "
-                "message. llama-server suggests it at startup when the template "
-                "advertises supports_preserve_reasoning." "\n\n" "Prefer this over "
-                "setting a preserve_thinking chat-template kwarg by hand (layer 2): this "
-                "flag drives that same template variable, and its default is whatever "
-                "the template says. Note the templates disagree -- Qwen 3.8 preserves "
-                "when the variable is undefined, Qwen 3.6 drops unless it is explicitly "
-                "true." "\n\n" "Requires Drop Prior-Turn Thinking (layer 1, Proxy "
-                "Behavior card) to be OFF, otherwise there is no prior reasoning left "
-                "to keep."),
+                "--reasoning-preserve: keep the reasoning trace across the whole "
+                "history, not just the last assistant message. It drives the "
+                "template's preserve_thinking variable, so prefer it over setting "
+                "that kwarg by hand." "\n\n" "Needs Drop Prior-Turn Thinking (Proxy "
+                "Behavior card) OFF — otherwise nothing is left to keep."),
             ["llamacpp.inference.drop_prior_thinking"], lambda d: not bool(d)))
 
     def _refresh_picker(preserve_key: str | None = None):
