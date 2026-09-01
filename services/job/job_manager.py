@@ -215,21 +215,50 @@ class JobManager:
                 })
         return result
 
+    @staticmethod
+    def _resolve_in(files_dir: Path, filename: str) -> Path:
+        """Resolve `filename` inside `files_dir`, refusing to escape it.
+
+        Callers pass names straight from HTTP -- an upload part's filename, or
+        a JSON field -- so `files_dir / filename` alone is an arbitrary-write
+        primitive: "../../../x" walks out of the job directory, and save_file
+        even creates the parents on the way. Containment is enforced here, at
+        the one place every caller goes through, rather than in each handler.
+        """
+        if not filename:
+            raise ValueError("filename is required")
+        # Reject absolute paths and drive letters outright; on Windows
+        # "C:/x" and "\host\share" both survive a naive join.
+        candidate = Path(filename)
+        if candidate.is_absolute() or candidate.drive or candidate.anchor:
+            raise ValueError(f"unsafe filename: {filename!r}")
+        base = files_dir.resolve()
+        dest = (base / candidate).resolve()
+        if dest != base and base not in dest.parents:
+            raise ValueError(f"unsafe filename: {filename!r}")
+        return dest
+
     def save_file(self, job_id: str, filename: str, content: bytes):
         files_dir = self._get_job_files_dir(job_id)
         files_dir.mkdir(parents=True, exist_ok=True)
-        dest = files_dir / filename
+        dest = self._resolve_in(files_dir, filename)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(content)
 
     def get_file_path(self, job_id: str, filename: str) -> Optional[Path]:
-        p = self._get_job_files_dir(job_id) / filename
+        try:
+            p = self._resolve_in(self._get_job_files_dir(job_id), filename)
+        except ValueError:
+            return None
         if p.exists() and p.is_file():
             return p
         return None
 
     def delete_file(self, job_id: str, filename: str) -> bool:
-        p = self._get_job_files_dir(job_id) / filename
+        try:
+            p = self._resolve_in(self._get_job_files_dir(job_id), filename)
+        except ValueError:
+            return False
         if p.exists() and p.is_file():
             p.unlink()
             return True

@@ -6,7 +6,11 @@ import logging
 import aiohttp
 from aiohttp import web
 from pathlib import Path
+from proxy.media_fetch import MediaFetchError, fetch_media_bytes
 from services.job.job_manager import get_job_manager
+
+# Job attachments are documents, not media — a far smaller cap than video.
+MAX_JOB_FILE_BYTES = 64 * 1024 * 1024
 
 logger = logging.getLogger("telecode.proxy.api_jobs")
 
@@ -86,16 +90,25 @@ async def fetch_job_file(request: web.Request) -> web.Response:
     if not url or not name:
         return web.json_response({"error": "URL and Name are required"}, status=400)
     
+    # Fetched through media_fetch, not a bare session.get: this endpoint takes a
+    # URL from an unauthenticated caller and the proxy runs on the user's
+    # machine, so an unguarded fetch reaches localhost, the LAN and cloud
+    # metadata on their behalf. media_fetch enforces the scheme, rejects
+    # non-public addresses on every DNS answer and every redirect hop, and caps
+    # the body while streaming.
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=30) as resp:
-                if resp.status != 200:
-                    return web.json_response({"error": f"Failed to fetch URL: {resp.status}"}, status=400)
-                content = await resp.read()
-                get_job_manager().save_file(job_id, name, content)
-                return web.json_response({"success": True})
-    except Exception as e:
-        return web.json_response({"error": f"Error fetching URL: {str(e)}"}, status=500)
+        content = await fetch_media_bytes(url, max_bytes=MAX_JOB_FILE_BYTES)
+    except MediaFetchError as e:
+        return web.json_response({"error": f"URL rejected: {e}"}, status=400)
+    except Exception as e:  # noqa: BLE001 - surface anything unexpected as 500
+        return web.json_response({"error": f"Error fetching URL: {e}"}, status=500)
+
+    try:
+        get_job_manager().save_file(job_id, name, content)
+    except ValueError as e:
+        # Path containment — `name` is caller-supplied.
+        return web.json_response({"error": str(e)}, status=400)
+    return web.json_response({"success": True})
 
 async def get_job_file(request: web.Request) -> web.Response:
     job_id = request.match_info["job_id"]

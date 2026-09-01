@@ -7,10 +7,10 @@ here and inlined.
 
 Fetching a URL chosen by whoever is talking to the proxy is an SSRF primitive:
 the proxy sits on the user's machine and can reach localhost, the LAN, and any
-cloud metadata endpoint the client cannot. Nothing else in this codebase guards
-that today — `proxy/api_jobs.py` will fetch any URL it is handed with no checks
-at all, and `web_search.py` is only safe by accident because its URLs come from
-search results rather than from the caller. So the checks live here:
+cloud metadata endpoint the client cannot. So the checks live here, and every
+caller-supplied URL in the codebase goes through them — the video path and
+`proxy/api_jobs.py`'s fetch-by-URL. (`web_search.py` fetches too, but its URLs
+come from search results rather than from the caller.)
 
   * scheme must be http/https — no file://, no data: (handled before this), no
     gopher/ftp redirect tricks
@@ -80,6 +80,11 @@ def _check_url(url: str) -> None:
 
 async def fetch_media_b64(url: str, *, max_bytes: int = MAX_BYTES) -> str:
     """Fetch `url` and return its bytes base64-encoded. Raises MediaFetchError."""
+    return base64.b64encode(await fetch_media_bytes(url, max_bytes=max_bytes)).decode("ascii")
+
+
+async def fetch_media_bytes(url: str, *, max_bytes: int = MAX_BYTES) -> bytes:
+    """Fetch `url` and return its bytes. Raises MediaFetchError."""
     seen = 0
     current = url
     timeout = aiohttp.ClientTimeout(total=TIMEOUT_SEC)
@@ -114,4 +119,4 @@ async def fetch_media_b64(url: str, *, max_bytes: int = MAX_BYTES) -> str:
                 raise MediaFetchError(f"fetch timed out after {TIMEOUT_SEC:.0f}s") from exc
 
             log.info("media_fetch: %d bytes from %s", len(body), current)
-            return base64.b64encode(body).decode("ascii")
+            return body
