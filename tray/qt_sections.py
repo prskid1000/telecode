@@ -1607,12 +1607,29 @@ def _llama(window) -> QWidget:
                                       "--parallel: number of concurrent request slots."))
     spawn_body.addWidget(_toggle_row("llamacpp.cont_batching",  "Continuous Batching",
                                       "--cont-batching: process multiple requests in one batch."))
-    spawn_body.addWidget(_toggle_row("llamacpp.mlock",          "Mlock",
-                                      "--mlock: force the OS to keep model pages in RAM."))
-    spawn_body.addWidget(_toggle_row("llamacpp.no_mmap",        "No mmap",
-                                      "--no-mmap: load the model fully into RAM instead of memory-mapping it."))
+    # One setting replaces --mlock / --no-mmap / --direct-io, all three of which
+    # upstream deprecated. The values are a closed set, verified by probing the
+    # binary: combinations beyond mmap+mlock are rejected outright, so this is a
+    # choice rather than a set of switches.
+    spawn_body.addWidget(_enum_row_strs("llamacpp.load_mode", "Load Mode",
+                                      [("(server default — auto)", ""),
+                                       ("auto — mmap unless unsupported", "auto"),
+                                       ("mmap — memory-map the model", "mmap"),
+                                       ("mlock — pin in RAM, no mmap", "mlock"),
+                                       ("mmap+mlock — both", "mmap+mlock"),
+                                       ("dio — DirectIO during load", "dio"),
+                                       ("none — no special handling", "none")],
+                                      "--load-mode: how the model is read and held. Replaces the "
+                                      "deprecated Mlock / No mmap / Direct I/O toggles. mlock keeps the "
+                                      "weights resident so they are never paged out; dio bypasses the OS "
+                                      "page cache during load and is mutually exclusive with mlock. "
+                                      "Existing settings using the old keys are migrated automatically."))
     spawn_body.addWidget(_number_row("llamacpp.main_gpu",       "Main GPU",          0,  16,  1, 0, "",
                                       "--main-gpu: index of the primary CUDA/ROCm device."))
+    spawn_body.addWidget(_line_row("llamacpp.mmproj_device",   "mmproj Device",
+                                      "none",
+                                      "--mmproj-device: which device runs the multimodal projector. "
+                                      "'none' keeps it off the GPU entirely."))
     spawn_body.addWidget(_line_row("llamacpp.tensor_split",     "Tensor Split",
                                     "e.g. 0.5,0.5",
                                     "--tensor-split: comma-separated weights for multi-GPU split."))
@@ -1658,8 +1675,10 @@ def _llama(window) -> QWidget:
     spawn_body.addWidget(_section_header("Memory / Offload"))
     spawn_body.addWidget(_toggle_row("llamacpp.no_host",          "No Host Buffer",
                                       "--no-host: skip host (CPU) buffer allocations so secondary buffers can be used. Advanced."))
-    spawn_body.addWidget(_toggle_row("llamacpp.direct_io",        "Direct I/O",
-                                      "--direct-io: use O_DIRECT during load (bypasses OS page cache). Useful on fast NVMe with --no-mmap."))
+    spawn_body.addWidget(_line_row("llamacpp.lazy_mode",          "Lazy Mode",
+                                      "e.g. per-layer-embd",
+                                      "--lazy-mode: read certain tensors on demand rather than up front "
+                                      "(per-layer embeddings, for instance). Empty = off."))
     spawn_body.addWidget(_toggle_row("llamacpp.repack",           "Weight Repack",
                                       "--repack / --no-repack: pack weights for faster CPU kernels (default enabled)."))
     spawn_body.addWidget(_toggle_row("llamacpp.op_offload",       "Op Offload",
