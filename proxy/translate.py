@@ -168,10 +168,12 @@ def _normalize_system_messages(
 # which its own README calls "an extension from OAI schema. For now, it only
 # accepts base64 input". Two consequences drive everything below:
 #
-#   1. Base64 only. There is no URL form, so a client that sends a URL cannot
-#      be satisfied without the proxy fetching it — which would make the proxy
-#      an SSRF vector against whatever it can reach. We refuse instead, with a
-#      message that says why.
+#   1. Base64 only. There is no URL form, so a remote URL has to be fetched by
+#      someone. server.py's _inline_video_urls does it before translation,
+#      through proxy/media_fetch's SSRF guards — the proxy can reach localhost
+#      and the LAN on behalf of a caller who cannot. By the time a body reaches
+#      here every video is inline, so the refusal below is a backstop for a
+#      caller that bypassed that path, not the policy itself.
 #   2. llama.cpp REJECTS unknown content types outright
 #      (`throw std::invalid_argument("unsupported content[].type")`), so a
 #      passthrough of OpenAI's own `video_url` part is a hard 400. It has to be
@@ -192,17 +194,19 @@ def _video_part_from_b64(data: str) -> dict[str, Any]:
 
 
 def _video_part_from_url(url: str) -> dict[str, Any]:
-    """Accept a base64 data: URI; refuse a remote URL.
+    """Accept a base64 data: URI; refuse anything else.
 
-    Fetching would turn the proxy into a request forwarder for arbitrary URLs
-    on behalf of any client, so the refusal is deliberate rather than a TODO.
+    Remote URLs are resolved upstream by server.py's _inline_video_urls, so a
+    non-data URI arriving here means that pass was skipped. Refusing is the
+    safe failure: this function cannot await, and guessing would either block
+    the event loop or fetch unguarded.
     """
     m = _DATA_URI_RE.match(url or "")
     if not m:
         raise VideoInputError(
-            "video must be supplied as a base64 data URI — llama.cpp accepts "
-            "only base64 for input_video, and the proxy does not fetch remote "
-            "URLs on a client's behalf"
+            "video must be inline base64 by this point — llama.cpp accepts only "
+            "base64 for input_video, and remote URLs are resolved earlier by "
+            "server.py's _inline_video_urls"
         )
     return _video_part_from_b64(m.group(2))
 

@@ -606,6 +606,51 @@ def _drop_empty_turns(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out or messages
 
 
+async def _inline_video_urls(body: dict[str, Any], inbound_protocol: str) -> None:
+    """Replace video-by-URL with inline base64, in place.
+
+    Anthropic shape:  {"type": "video",     "source": {"type": "url", "url": ...}}
+    OpenAI shape:     {"type": "video_url", "video_url": {"url": ...}}
+
+    A data: URI is left alone — translate.py decodes those. Only a real remote
+    URL is fetched, through media_fetch's guards, because the proxy can reach
+    localhost and the LAN on behalf of a caller who cannot.
+    """
+    from proxy.media_fetch import MediaFetchError, fetch_media_b64
+
+    for msg in body.get("messages") or []:
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            url = None
+            if inbound_protocol == "anthropic" and block.get("type") == "video":
+                src = block.get("source") or {}
+                if src.get("type") == "url":
+                    url = src.get("url", "")
+            elif block.get("type") == "video_url":
+                url = (block.get("video_url") or {}).get("url", "")
+
+            if not url or url.startswith("data:"):
+                continue
+            try:
+                data = await fetch_media_b64(url)
+            except MediaFetchError as exc:
+                # A refused or unreachable URL is the client's problem, and a
+                # silent drop would look like the model ignoring the video.
+                raise web.HTTPBadRequest(reason=f"video URL rejected: {exc}") from exc
+
+            if block.get("type") == "video":
+                block["source"] = {"type": "base64", "media_type": "video/mp4",
+                                   "data": data}
+            else:
+                block["video_url"] = {"url": f"data:video/mp4;base64,{data}"}
+
+
 async def _prepare_internal_body(
     body: dict[str, Any],
     request: web.Request,
@@ -640,6 +685,13 @@ async def _prepare_internal_body(
         return default
 
     system_mode = _pget("mid_system_messages", proxy_config.mid_system_messages())
+
+    # 2b. Inline any video supplied by URL. llama.cpp's input_video takes
+    #     base64 only, so a URL has to be fetched by someone — images get away
+    #     with passing the URL through because llama.cpp fetches those itself.
+    #     Done here rather than in translate.py because it needs to await, and
+    #     translate.py is deliberately synchronous and pure.
+    await _inline_video_urls(body, inbound_protocol)
 
     # 3. Client body → internal (OpenAI) body
     if inbound_protocol == "anthropic":
