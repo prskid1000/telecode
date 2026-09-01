@@ -1729,12 +1729,11 @@ def _llama(window) -> QWidget:
 
     # Video input card — llama-server decodes video through ffmpeg into frames
     # and runs them past the vision projector. Needs a vision model + mmproj.
-    # NOTE: these reach llama-server only. proxy/translate.py has no video
-    # handling, so a video content block sent through the proxy is dropped —
-    # these matter for clients talking to llama-server directly.
+    # The proxy routes video as well — proxy/translate.py maps Anthropic
+    # `video` blocks and OpenAI `video_url` parts onto llama.cpp's
+    # base64-only `input_video`.
     vid_card, vid_body = _card("Video Input",
-                                "llamacpp.video_* — decode video via ffmpeg into frames for a vision model "
-                                "(not routed by the proxy yet)")
+                                "llamacpp.video_* — decode video via ffmpeg into frames for a vision model")
     vid_body.addWidget(_number_row("llamacpp.video_fps", "Frame Rate", 0, 60, 1, 1, "fps",
                                     "--video-fps: how many frames per second to sample from the video. "
                                     "0 = server default (4.0). Every frame costs vision tokens, so this is "

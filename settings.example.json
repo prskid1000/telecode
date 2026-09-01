@@ -164,7 +164,7 @@
     "check_tensors": false,
     "skip_chat_parsing": false,
 
-    "_comment_video": "Video input (b10733+). llama-server decodes video via ffmpeg/ffprobe into frames at video_fps and feeds them through the vision projector, interleaving text timestamps every video_timestamp_interval ms. Needs a vision model + mmproj, and ffmpeg on PATH (or set video_ffmpeg_dir). All optional; 0 / empty = server default (4.0 fps, 5000 ms). NOTE: these reach llama-server only -- the proxy does not translate video content blocks yet, so they apply to clients hitting llama-server directly.",
+    "_comment_video": "Video input (b10733+). llama-server decodes video via ffmpeg/ffprobe into frames at video_fps and feeds them through the vision projector, interleaving text timestamps every video_timestamp_interval ms. Needs a vision model + mmproj, and ffmpeg on PATH (or set video_ffmpeg_dir). All optional; 0 / empty = server default (4.0 fps, 5000 ms). The proxy routes video as well, mapping Anthropic `video` blocks and OpenAI `video_url` parts onto llama.cpp's base64-only `input_video`.",
     "video_fps": 0,
     "video_timestamp_interval": 0,
     "video_ffmpeg_dir": "",
