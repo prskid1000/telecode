@@ -1213,9 +1213,16 @@ async def _run_upstream_round(
                                 decided = "passthrough"
                                 just_decided = True
                             elif content:
-                                # Only text that lands OUTSIDE a think block
-                                # settles the round.
-                                if any(k == "text" for k, _ in decide_think.push(content)):
+                                # Only NON-BLANK text outside a think block
+                                # settles the round. llama.cpp emits a bare
+                                # "\n\n" between </think> and the first
+                                # tool_call delta; counting that as an answer
+                                # committed the round to passthrough, so every
+                                # tool call after it escaped to the client
+                                # ("No such tool available: ToolSearch").
+                                # Whitespace is not an answer — keep watching.
+                                if any(k == "text" and t.strip()
+                                       for k, t in decide_think.push(content)):
                                     decided = "passthrough"
                                     just_decided = True
 
