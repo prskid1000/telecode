@@ -2406,8 +2406,11 @@ _PROXY_SETTING_COPY: dict[str, tuple[str, str]] = {
         "to advertise to the client."),
     "core_tools": (
         "Core Tools",
-        "Names that stay always-loaded, one per line. Everything else becomes "
-        "deferred and is reachable only through ToolSearch."),
+        "Of the tools the client sends, the ones that stay always-loaded — one "
+        "per line. Everything else becomes deferred and is reachable only "
+        "through ToolSearch. This is a filter, not a source: naming a tool here "
+        "cannot conjure it if the client never sent it, so a name the client "
+        "omits stays absent."),
 }
 
 _PROXY_SCOPE_NOTE = {
