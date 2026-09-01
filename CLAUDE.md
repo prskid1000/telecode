@@ -47,7 +47,13 @@ Routines (Task Mode, separate): data/routines/<id>.json, 60s tick in proxy, fire
 - `docgraph/{config,process,bridge}.py` — settings / one `HostSupervisor` / MCP-client → managed_tools registration. `docgraph/{stats,index,wiki,progress}_state.py` — TTL'd tray caches.
 - `proxy/server.py` — dual-protocol aiohttp proxy + intercept loop. `proxy/translate.py` — Anthropic↔OpenAI shape, `ReasoningState` `<think>` machine, `AnthropicStreamState` rebuilds events from OpenAI SSE.
 - `proxy/{tokenizer,tool_search,tool_registry,managed_tools,runtime_state}.py` — tokenize wrapper / BM25 / `ToolSearch` meta-tool / proxy-handled tools (WebSearch/speak/transcribe + auto-bridged MCP) / overrides JSON.
-- `proxy/api_{sessions,tasks,agents,jobs,runs,routines}.py` — REST surface (no auth).
+- `proxy/api_{sessions,tasks,agents,jobs,runs,routines}.py` — REST surface (no auth). Any caller-supplied
+  URL goes through `proxy/media_fetch.py`, and any caller-supplied filename through
+  `JobManager._resolve_in` — the surface has no auth, so neither may be trusted.
+- `proxy/media_fetch.py` — guarded fetch for caller-supplied URLs: http/https only, every resolved
+  address must be public (loopback / private / link-local incl. `169.254.169.254` refused), redirects
+  re-validated per hop, byte cap enforced while streaming. The proxy runs on the user's machine and
+  can reach hosts the caller cannot, so this is the SSRF boundary.
 - `services/task/staging.py` — `stage_for_run()` ctx-mgr: copy in, diff on exit, write back. Per-workspace `Lock`. HEARTBEAT.md NOT staged.
 - `services/routine/*` — JSON store (atomic, per-routine `RLock`, `MIN_ROUTINE_INTERVAL_SECONDS=60`) / 60s daemon tick / CRUD with inline reconcile.
 - `services/run/executor.py` — pipeline driver per Run. Single-step phase = job workspace; multi-step = ephemeral session per step. Threads outputs via `<previous_output(s)>`.
@@ -171,7 +177,11 @@ Three CLIs are dispatched as task types, all sharing the **same handler signatur
 
 ## llama.cpp supervisor (`llamacpp/`)
 
-Tracks llama-server **v9243** — `--no-ui` (not `--no-webui`), `draft-mtp` in `--spec-type`, `--spec-default`, `--direct-io`, etc. `LlamaSupervisor.start_default()` runs in `_post_init` BEFORE the proxy; stdout+stderr → `data/logs/llama.log`. Shutdown (SIGTERM, 4s wait, kill) runs AFTER the proxy.
+Tracks llama-server **b10733** — `--no-ui` (not `--no-webui`), `draft-mtp` in `--spec-type`,
+`--spec-default`, `--load-mode`, etc. `--mlock` / `--no-mmap` / `--direct-io` are **deprecated upstream**
+and no longer emitted: `_emit_load_mode()` maps them onto `--load-mode`, whose accepted values are a
+closed set verified by probing the binary — `auto | none | mmap | mlock | mmap+mlock | dio`. Wider
+combinations (`mlock+dio`, `mmap+mlock+dio`) are rejected by the parser, so it is a choice, not a bitmask. `LlamaSupervisor.start_default()` runs in `_post_init` BEFORE the proxy; stdout+stderr → `data/logs/llama.log`. Shutdown (SIGTERM, 4s wait, kill) runs AFTER the proxy.
 
 - **argv builder** (`argv.py`): table-driven `settings_key → --cli-flag` with per-row `kind` (`flag`/`onoff`/`bool_pair`/`value`/`value_nz`/`path`). `value_nz` skips zero (0 = "use default"); `value` emits literal 0 (0 = "disable"). Two tables: `_GLOBAL_FLAG_SPECS` (`llamacpp.*`), `_MODEL_FLAG_SPECS` (`llamacpp.models.<m>.*`). `spec_type` is comma-separated (v9243+); `ngram-mod` has its own `(n-min, n-max, n-match)` flags distinct from `(size-n, size-m, min-hits)` shared by other ngram strategies.
 - **Model swap:** `ensure_model(name)` resolves via `llamacpp.models` → `proxy.model_mapping` → `default_model`. Different = stop + respawn + `/health` poll.
@@ -179,7 +189,8 @@ Tracks llama-server **v9243** — `--no-ui` (not `--no-webui`), `draft-mtp` in `
 - **Version Manager** (`updater.py` + `flag_audit.py`, on-demand from the tray llama.cpp page's "Version Manager" card). Units are real binaries: the active `llama-server` plus every `.bak-<ts>/` the updater left behind (each a runnable previous build, tagged with `.telecode-version`). `flag_audit.probe(binary)` parses `--help` into `{flag → {aliases, takes_value, allowed, removed, deprecated}}`. **Test** = `audit_config(binary)` cross-checks every flag `build_argv` emits across all models against that build (unknown/removed flags + out-of-range enum values). **Compare** = `compare()` diffs the active build's flag surface vs a selected one (added/removed/changed). **Restore** = `updater.restore_backup(ts)` reverse-overlays a backup into the install dir (supervisor stopped first; displaced files become a fresh reversible backup). Probes run the real binary, falling back to a spec cached under `data/cli-audit/specs/b<ver>.json` when an old backup can't relaunch — the updater calls `flag_audit.record_version_spec()` before+after each install to populate that cache. Reports append to `data/logs/cli_audit.log` (in the Logs viewer allowlist). This is the guard that catches flag churn like the v9243 `--checkpoint-every-n-tokens` → `--checkpoint-min-step` rename before it breaks spawn.
 
 **Settings layout (no duplicates):**
-- `llamacpp.*` — server-wide CLI flags (threads, batch, mlock, kv_*, spec_type, cache_ram, endpoints, server-mode, timeout, api_prefix).
+- `llamacpp.*` — server-wide CLI flags (threads, batch, load_mode, kv_*, spec_type, cache_ram, endpoints,
+  server-mode, timeout, api_prefix, video_*).
 - `llamacpp.models.<m>.*` — per-model flags re-taking effect on respawn (ctx_size, n_gpu_layers, n_cpu_moe, mmproj, rope_*, yarn_*, draft_*, lora, grammar, reasoning_*, override_*, device, chat_template).
 - `llamacpp.models.<m>.inference_defaults.*` — proxy-applied request-body fields (temperature, top_p, max_tokens, stop, reasoning.*, chat_template_kwargs).
 - `llamacpp.inference.*` — proxy-applied global fallbacks. Hierarchy: request body > per-model > top-level. "Proxy Behavior" card exposes only keys without per-model equivalent (`context_overflow`, `drop_prior_thinking`, `structured_output.*`, `reasoning_effort_map.*`).
@@ -215,7 +226,16 @@ Dual-protocol middleware in front of llama.cpp. Both Anthropic `/v1/messages` an
    `_drop_empty_turns()` then prunes turns the strippers emptied — an empty turn is pure chat-template scaffolding (`<|im_start|>user\n<|im_end|>`). Tool-protocol turns (`tool_calls` / `role:"tool"`) are exempt from every stripper and from the prune, so the pairing templates require is never broken; turns carrying an image keep their remaining blocks.
 6. **Intercept loop:** OpenAI internal shape. `_run_upstream_round` branches on first content signal. Tool_call → assemble → `InterceptedToolCall`. Otherwise stream live via adapter. `_start_heartbeat`: Anthropic gets `: keepalive` + `event: ping` every `proxy.ping_interval`; OpenAI gets `: keepalive` only. Up to `proxy.max_roundtrips` (default 15).
 7. **Adapters** (`AnthropicAdapter`/`OpenAIAdapter`): per-round `*StreamState`. Status lines = synthetic content blocks at indices `0..status_emitted-1`. `<think>` openers across delta boundaries via max-tag-length lookahead. `thinking_delta` when `emit_thinking_blocks=true`.
-8. **`count_tokens`:** full prepare → `/apply-template` → `/tokenize`. **`/v1/embeddings`:** forwarded verbatim. **CORS:** `cors_origins`; streaming gets headers via `_apply_cors_to_stream()` before `prepare()`.
+8. **Multimodal.** Images pass through as `image_url` — llama.cpp fetches a remote one itself. **Video does
+   not**: llama.cpp accepts only `{"type": "input_video", "input_video": {"data": "<base64>"}}`, its README
+   calling that "an extension from OAI schema", and it *throws* on any content type it does not recognise
+   (`unsupported content[].type`). So OpenAI's own `video_url` part must be **renamed, not forwarded**, and
+   an Anthropic `video` block — which Anthropic itself has no such thing as, this is a telecode extension
+   mirroring its `image` block — maps onto the same. Base64 only, so `server.py::_inline_video_urls` resolves
+   a remote URL through `media_fetch` *before* translation (translate.py is deliberately sync and pure);
+   a refused URL becomes a 400 rather than a silent drop. Needs an mmproj, and ffmpeg/ffprobe for
+   `--video-fps` / `--video-timestamp-interval` decoding.
+9. **`count_tokens`:** full prepare → `/apply-template` → `/tokenize`. **`/v1/embeddings`:** forwarded verbatim. **CORS:** `cors_origins`; streaming gets headers via `_apply_cors_to_stream()` before `prepare()`.
 
 To use: `llamacpp.enabled` + `proxy.enabled`, fill `llamacpp.binary` + `llamacpp.models.<name>.path`, point clients at `http://localhost:1235`.
 
