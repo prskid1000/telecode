@@ -708,6 +708,8 @@ def install(progress: Progress = _noop) -> dict[str, Any]:
     digests: dict[str, str] = {}
 
     def _rollback(reason: str) -> None:
+        log.warning("patched install rolled back (%s): restoring %d copied + "
+                    "%d quarantined file(s)", reason, len(copied), len(quarantined))
         progress(f"!! {reason} — rolling back {len(copied)} file(s)")
         for name in copied + quarantined:
             b = backup / name
@@ -723,6 +725,8 @@ def install(progress: Progress = _noop) -> dict[str, Any]:
             f.unlink()
             quarantined.append(f.name)
         if quarantined:
+            log.info("patched install: quarantined %d stale file(s) into %s: %s",
+                     len(quarantined), backup.name, ", ".join(quarantined))
             progress(f"moved {len(quarantined)} stale file(s) into the backup: "
                      + ", ".join(quarantined[:6])
                      + ("…" if len(quarantined) > 6 else ""))
@@ -746,6 +750,8 @@ def install(progress: Progress = _noop) -> dict[str, Any]:
         _rollback(f"copy failed: {exc}")
         return {"ok": False, "error": f"install failed: {exc}. Nothing was changed."}
 
+    log.info("patched install: replaced %d file(s) in %s; originals in %s",
+             len(copied), target, backup.name)
     progress(f"installed {len(copied)} files: " + ", ".join(copied))
 
     # Verify by running it. The failure this catches is specific and was real:
@@ -787,5 +793,8 @@ def install(progress: Progress = _noop) -> dict[str, Any]:
     except OSError as exc:
         progress(f"!! could not write {MARKER}: {exc}")
 
+    log.info("patched install complete: b%s (%s), backup kept at %s — "
+             "Version Manager -> Restore reverses this",
+             _git_out(["describe", "--tags", "--always"]), got, backup)
     return {"ok": True, "installed": copied, "quarantined": quarantined,
             "backup": str(backup)}
