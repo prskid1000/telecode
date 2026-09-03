@@ -127,6 +127,7 @@
     "_comment_custom_build": "Tray -> llama.cpp -> Patched Build. Checks out llama.cpp at an upstream tag, applies patches/llama.cpp/*.patch, builds, and overlays the result onto the release binary (leaving a .bak-<ts> so Version Manager -> Restore undoes it). For verifying a patch before proposing it upstream, not for maintaining a fork. Note an Update Now silently replaces a custom build.",
     "custom_build": {
       "source_dir": "",
+      "_comment_source_dir": "Empty = ~/Projects/llama.cpp. A checkout is several GB of upstream source, so it defaults outside the settings dir. Every Build Patched hard-resets this tree to the target tag - keep nothing of your own in it.",
       "tag": "",
       "cuda": true
     },
