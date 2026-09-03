@@ -101,7 +101,25 @@ def install_dir() -> Path:
 
 
 def installed_version() -> Optional[str]:
-    """Run `<binary> --version` and parse the build number. None on failure."""
+    """Build number of the installed binary. None on failure.
+
+    A locally built llama.cpp derives its build number from `git rev-list
+    --count`, which in the shallow/blobless checkout the patched-build card
+    uses comes out as e.g. 30 rather than 10775 — so a patched b10775 install
+    would report b30 and look like it needs a huge update. When the patch
+    marker vouches for the installed files, trust its tag instead of the
+    binary's self-report.
+    """
+    try:                                    # lazy: patcher imports this module
+        from llamacpp import patcher as _patcher
+        info = _patcher.installed_patch_info()
+        if info.get("patched"):
+            v = build_from_tag(str(info.get("tag") or ""))
+            if v:
+                return v
+    except Exception as exc:
+        log.debug("patch-marker version lookup failed: %s", exc)
+
     binp = _binary_path()
     if not binp.exists() and shutil.which(str(binp)) is None:
         return None
