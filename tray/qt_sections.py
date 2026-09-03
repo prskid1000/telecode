@@ -945,7 +945,11 @@ def _llama_updater_card(window) -> QWidget:
     cur_label = QLabel("—")
     cur_label.setStyleSheet(f"color: {FG}; font-family: 'JetBrains Mono', Consolas, monospace;")
     body.addWidget(_row(row_label("Installed",
-                                   "Build number reported by `llama-server --version`."),
+                                   "Build number of the installed binary, and whether "
+                                   "it carries telecode's patches. A patched build "
+                                   "reports the same b-number as the release it was "
+                                   "built from — and Update Now replaces it with the "
+                                   "stock release."),
                         cur_label))
 
     latest_label = QLabel("—")
@@ -1008,8 +1012,22 @@ def _llama_updater_card(window) -> QWidget:
 
     def _refresh_installed() -> None:
         v = upd.installed_version()
+        # A patched build reports the same b-number as the stock release it was
+        # built from, so the number alone cannot distinguish them — say which.
+        # It matters here specifically because Update Now REPLACES a patched
+        # build with the stock release, silently reverting the custom binary.
+        suffix = ""
+        try:
+            from llamacpp import patcher as _patcher
+            info = _patcher.installed_patch_info()
+            if info.get("patched"):
+                names = ", ".join(n.split("-", 1)[-1].replace(".patch", "")
+                                  for n in info.get("patches") or []) or "custom"
+                suffix = f"   ·  PATCHED ({names})"
+        except Exception as exc:
+            log.debug("patch-state lookup for updater card failed: %s", exc)
         if v:
-            cur_label.setText(f"b{v}")
+            cur_label.setText(f"b{v}{suffix}")
         else:
             cur_label.setText("(unknown — run `llama-server --version` to check)")
         install_dir_label.setText(str(upd.install_dir()))
