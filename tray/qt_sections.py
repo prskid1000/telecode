@@ -130,10 +130,15 @@ def _row(left: QWidget, right: QWidget) -> QWidget:
 
 def _toggle_row(path: str, label: str, help_text: str = "",
                 enabled_fn: Callable[[], bool] | None = None,
-                cli: str = "") -> QWidget:
-    """Boolean toggle row. Writes settings.json + config.reload on change."""
+                cli: str = "", default: bool = False) -> QWidget:
+    """Boolean toggle row. Writes settings.json + config.reload on change.
+
+    `default` is what an ABSENT key shows. It has to be passed explicitly for
+    any setting whose code-side default is True, otherwise a fresh install
+    renders the toggle off while the code behaves as on.
+    """
     t = Toggle()
-    t.setChecked(bool(get_path(read_settings(), path, False)))
+    t.setChecked(bool(get_path(read_settings(), path, default)))
     if enabled_fn:
         t.setEnabled(enabled_fn())
 
@@ -1482,8 +1487,10 @@ def _llama_patch_build_card(window) -> QWidget:
         "considers current, so a patched build matches the release it replaces."))
     body.addWidget(_toggle_row(
         "llamacpp.custom_build.cuda", "CUDA",
-        "Build with GGML_CUDA=ON. Defaults to whatever variant the updater "
-        "would have installed."))
+        "Build with GGML_CUDA=ON. On by default — a CPU-only build of a CUDA "
+        "install is a silent, large performance regression. Turn off only for "
+        "a deliberately CPU-only build.",
+        default=True))
 
     status = QLabel("…")
     status.setWordWrap(True)
