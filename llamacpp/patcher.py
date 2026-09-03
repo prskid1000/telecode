@@ -386,9 +386,13 @@ def build(progress: Progress = _noop, *, cuda: Optional[bool] = None,
         return {"ok": False, "error": f"toolchain incomplete: {tc}"}
 
     if cuda is None:
+        # Absent key means ON. A CPU-only build silently installed over a CUDA
+        # release is a large, hard-to-notice regression, so the safe default is
+        # the expensive one; the updater's variant only decides when there is
+        # no GPU to build for at all.
         cfg_cuda = app_config.get_nested("llamacpp.custom_build.cuda", None)
         if cfg_cuda is None:
-            cuda = "cuda" in (updater.detect_variant() or "")
+            cuda = True
         else:
             cuda = bool(cfg_cuda)
     if not jobs:
