@@ -671,13 +671,38 @@ def install(progress: Progress = _noop) -> dict[str, Any]:
 
     copied: list[str] = []
     digests: dict[str, str] = {}
-    for f in artifacts:
-        d = target / f.name
-        if d.is_file():
-            shutil.copy2(d, backup / f.name)
-        shutil.copy2(f, d)
-        copied.append(f.name)
-        digests[f.name] = _sha256(d)
+
+    def _rollback(reason: str) -> None:
+        progress(f"!! {reason} — rolling back {len(copied)} file(s)")
+        for name in copied:
+            b = backup / name
+            if b.is_file():
+                shutil.copy2(b, target / name)
+            else:
+                (target / name).unlink(missing_ok=True)
+        shutil.rmtree(backup, ignore_errors=True)
+
+    try:
+        for f in artifacts:
+            d = target / f.name
+            if d.is_file():
+                shutil.copy2(d, backup / f.name)
+            shutil.copy2(f, d)
+            copied.append(f.name)
+            digests[f.name] = _sha256(d)
+    except PermissionError as exc:
+        # Windows will not let you overwrite a loaded exe or DLL. Failing
+        # halfway leaves a mix of two builds, which is worse than not starting,
+        # so undo everything and say what to do.
+        _rollback(f"{exc.filename or 'a file'} is locked")
+        return {"ok": False, "error":
+                "llama-server is running — Windows locks its exe and DLLs. "
+                "Stop it (tray: llama.cpp -> Stop, or let it idle-unload) and "
+                "install again. Nothing was changed."}
+    except OSError as exc:
+        _rollback(f"copy failed: {exc}")
+        return {"ok": False, "error": f"install failed: {exc}. Nothing was changed."}
+
     progress(f"installed {len(copied)} files: " + ", ".join(copied))
 
     # Verify by running it. The failure this catches is specific and was real:
@@ -687,15 +712,8 @@ def install(progress: Progress = _noop) -> dict[str, Any]:
     want = _git_out(["rev-parse", "HEAD"])
     got = _probe_commit(target / _exe("llama-server"))
     if not got or not (want.startswith(got) or got.startswith(want[:len(got)])):
-        progress(f"!! installed binary reports commit {got or '(would not run)'}, "
-                 f"expected {want[:9]} — rolling back")
-        for name in copied:
-            b = backup / name
-            if b.is_file():
-                shutil.copy2(b, target / name)
-            else:
-                (target / name).unlink(missing_ok=True)
-        shutil.rmtree(backup, ignore_errors=True)
+        _rollback(f"installed binary reports commit {got or '(would not run)'}, "
+                  f"expected {want[:9]}")
         return {"ok": False, "error":
                 f"install verification failed: the installed binary reports "
                 f"commit {got or '(it would not run)'}, not {want[:9]}. "

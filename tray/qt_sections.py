@@ -1608,7 +1608,25 @@ def _llama_patch_build_card(window) -> QWidget:
     build_btn.clicked.connect(
         lambda: _run("build patched",
                      lambda progress: patcher.build_patched(progress, tag=_tag())))
-    install_btn.clicked.connect(lambda: _run("install", patcher.install))
+    def _install() -> None:
+        # Windows locks a running exe and its DLLs, so the server has to go
+        # down before the copy — same reason Version Manager -> Restore stops
+        # it. Done here rather than in patcher.install() because the supervisor
+        # is async and only the tray has the bot loop.
+        def _job(progress):
+            loop = getattr(window, "bot_loop", None)
+            try:
+                from process import _SUPERVISOR  # type: ignore
+                if _SUPERVISOR and loop is not None and _SUPERVISOR.alive():
+                    progress("stopping llama-server (its exe and DLLs are locked while it runs)")
+                    import asyncio as _a
+                    _a.run_coroutine_threadsafe(_SUPERVISOR.stop(), loop).result(timeout=30)
+            except Exception as exc:
+                progress(f"!! could not stop llama-server: {exc}")
+            return patcher.install(progress)
+        _run("install", _job)
+
+    install_btn.clicked.connect(_install)
 
     _refresh()
     card._refresh_patch_build = _refresh  # type: ignore[attr-defined]
