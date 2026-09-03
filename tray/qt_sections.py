@@ -1435,6 +1435,171 @@ def _llama_version_manager_card(window) -> QWidget:
     return card
 
 
+def _llama_patch_build_card(window) -> QWidget:
+    """Build llama.cpp from source with telecode's patch series applied.
+
+    Shaped as *verify a patch against upstream*, not *maintain a fork*: every
+    run resets a disposable checkout to an upstream tag and re-applies
+    patches/llama.cpp/*.patch on top. A patch that stops applying has usually
+    landed upstream — that is a result, so it is reported rather than forced.
+
+    The install step overlays the same directory the release updater writes to
+    and leaves the same .bak-<ts> snapshot, so Version Manager → Restore undoes
+    a custom build exactly like a bad release. The converse is the standing
+    trap: an "Update Now" silently replaces a custom build, which is why the
+    status line reports whether what is installed is what was built.
+    """
+    import sys as _sys
+    import threading
+    from PySide6.QtCore import QObject, Signal as _Signal
+    from PySide6.QtWidgets import QPlainTextEdit
+    from llamacpp import patcher
+
+    mono = "font-family: 'JetBrains Mono', Consolas, monospace;"
+
+    class _PatchBridge(QObject):
+        line = _Signal(str)
+        done = _Signal(str, dict)   # step, result
+
+    bridge = _PatchBridge()
+
+    card, body = _card(
+        "Patched Build",
+        "Clone llama.cpp at an upstream tag, apply patches/llama.cpp/*.patch, "
+        "build, and install over the release binary. Used to verify a patch "
+        "before it is proposed upstream — not to maintain a permanent fork.",
+    )
+
+    body.addWidget(_line_row(
+        "llamacpp.custom_build.source_dir", "Source Folder",
+        str(patcher.source_dir()),
+        "Where llama.cpp is checked out. Empty = <settings>/build/llama.cpp. "
+        "A full checkout is several GB, so point this at a drive with room. "
+        "The tree is disposable — every fetch hard-resets it."))
+    body.addWidget(_line_row(
+        "llamacpp.custom_build.tag", "Upstream Tag", "empty = latest release",
+        "Tag to build, e.g. b10733. Empty tracks whatever the release updater "
+        "considers current, so a patched build matches the release it replaces."))
+    body.addWidget(_toggle_row(
+        "llamacpp.custom_build.cuda", "CUDA",
+        "Build with GGML_CUDA=ON. Defaults to whatever variant the updater "
+        "would have installed."))
+
+    status = QLabel("…")
+    status.setWordWrap(True)
+    status.setStyleSheet(f"color: {FG}; {mono} font-size: 11px;")
+    body.addWidget(_row(row_label("Status",
+                                   "Checkout, applied patches, and whether the "
+                                   "installed binary is the one that was built."),
+                        status))
+
+    fetch_btn = QPushButton("Fetch / Reset Source")
+    patch_btn = QPushButton("Apply Patches")
+    build_btn = QPushButton("Build")
+    build_btn.setProperty("class", "primary")
+    install_btn = QPushButton("Install")
+    refresh_btn = QPushButton("Refresh")
+
+    actions = QWidget()
+    al = QHBoxLayout(actions)
+    al.setContentsMargins(0, 0, 0, 0)
+    al.setSpacing(8)
+    for b in (fetch_btn, patch_btn, build_btn, install_btn, refresh_btn):
+        al.addWidget(b)
+    al.addStretch(1)
+    body.addWidget(actions)
+
+    out = QPlainTextEdit()
+    out.setReadOnly(True)
+    out.setMaximumBlockCount(4000)
+    out.setStyleSheet(
+        f"background: {BG_ELEV}; color: {FG}; border: 1px solid {BORDER}; "
+        f"border-radius: 6px; {mono} font-size: 11px;"
+    )
+    out.setMinimumHeight(200)
+    out.setPlaceholderText("Build output appears here.")
+    body.addWidget(out)
+
+    _busy = [False]
+
+    def _set_busy(v: bool) -> None:
+        _busy[0] = v
+        for b in (fetch_btn, patch_btn, build_btn, install_btn):
+            b.setEnabled(not v)
+
+    def _refresh() -> None:
+        try:
+            st = patcher.status()
+        except Exception as exc:
+            status.setText(f"status failed: {exc}")
+            return
+        tc = st["toolchain"]
+        missing = [k for k in ("git", "cmake") if not tc.get(k)]
+        if _sys.platform == "win32" and not tc.get("vcvars"):
+            missing.append("Visual Studio C++ tools")
+        lines = []
+        if st["source_present"]:
+            lines.append(f"checkout: {st['checked_out'] or '?'} ({st['head'] or '?'})"
+                         + ("  [dirty]" if st["dirty"] else ""))
+        else:
+            lines.append("checkout: none — Fetch first")
+        applied = st["patches_applied"]
+        lines.append(f"patches: {len(applied)}/{len(st['patches'])} applied"
+                     + (f" — {', '.join(applied)}" if applied else ""))
+        if st["built_binary"]:
+            lines.append("built: yes" + ("  (installed)" if st["build_is_installed"]
+                                          else "  — NOT the installed binary"))
+        else:
+            lines.append("built: no")
+        lines.append(f"installed: b{st['installed_version'] or '?'}")
+        if missing:
+            lines.append("toolchain missing: " + ", ".join(missing))
+        status.setText("\n".join(lines))
+        install_btn.setEnabled(bool(st["built_binary"]) and not _busy[0])
+
+    bridge.line.connect(lambda t: out.appendPlainText(t))
+
+    def _on_done(step: str, res: dict) -> None:
+        _set_busy(False)
+        if res.get("ok"):
+            out.appendPlainText(f"== {step}: OK")
+        else:
+            out.appendPlainText(f"== {step}: FAILED — {res.get('error') or res}")
+        if res.get("failed"):
+            for f in res["failed"]:
+                out.appendPlainText(f"   !! {f['patch']}: {f['reason']}")
+        _refresh()
+    bridge.done.connect(_on_done)
+
+    def _run(step: str, fn) -> None:
+        if _busy[0]:
+            return
+        _set_busy(True)
+        out.appendPlainText(f"\n== {step} …")
+
+        def _worker() -> None:
+            try:
+                res = fn(progress=bridge.line.emit)
+            except Exception as exc:
+                res = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            bridge.done.emit(step, res)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _tag() -> str:
+        return str(get_path(read_settings(), "llamacpp.custom_build.tag", "") or "").strip()
+
+    fetch_btn.clicked.connect(lambda: _run("fetch", lambda progress: patcher.fetch_source(_tag(), progress)))
+    patch_btn.clicked.connect(lambda: _run("apply patches", patcher.apply_patches))
+    build_btn.clicked.connect(lambda: _run("build", patcher.build))
+    install_btn.clicked.connect(lambda: _run("install", patcher.install))
+    refresh_btn.clicked.connect(_refresh)
+
+    _refresh()
+    card._refresh_patch_build = _refresh  # type: ignore[attr-defined]
+    return card
+
+
 def _llama(window) -> QWidget:
     scroll, content, layout = _page()
 
@@ -1558,6 +1723,7 @@ def _llama(window) -> QWidget:
     layout.addWidget(_llama_updater_card(window))
     version_manager_card = _llama_version_manager_card(window)
     layout.addWidget(version_manager_card)
+    layout.addWidget(_llama_patch_build_card(window))
 
     # Server (binary + binding)
     srv_card, srv_body = _card("Server", "llamacpp.* — binary + binding (restart required)")

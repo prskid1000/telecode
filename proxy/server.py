@@ -437,6 +437,7 @@ def _apply_tool_transforms(
     managed_inject_names: list[str],
     sort_tools: bool = False,
     sticky: set[str] | None = None,
+    defer_supported: bool = False,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Split tools into core + deferred for the internal body.
 
@@ -494,7 +495,14 @@ def _apply_tool_transforms(
         # Tools this conversation has already loaded stay core for its lifetime.
         # Without this the array reverts on the next request and the whole
         # prefix re-prefills a second time — see the _sticky_tools note above.
-        core_names |= (sticky or set())
+        #
+        # Inert when the server supports defer_loading: everything is declared
+        # already, so promoting a tool would only make it *rendered* — moving
+        # the prefix, which is the very thing this whole path exists to avoid.
+        # (Entries can survive from a pre-patch session, hence the guard rather
+        # than trusting the intercept loop not to have written any.)
+        if not defer_supported:
+            core_names |= (sticky or set())
 
         core_tools_out: list[dict[str, Any]] = []
         for t in tools:
@@ -529,7 +537,25 @@ def _apply_tool_transforms(
             from proxy.tool_registry import TOOL_SEARCH_TOOL
             core_tools_out.insert(0, _anth_to_openai_tool(TOOL_SEARCH_TOOL))
 
-        tools = core_tools_out
+        if defer_supported and deferred:
+            # llama.cpp carries our defer_loading patch: declare EVERY tool so
+            # the sampling grammar accepts it, and let the server leave the
+            # deferred schemas out of the rendered prompt. The declared set is
+            # then constant for the whole conversation, so revealing a schema
+            # later costs nothing — no position-0 change, no re-prefill.
+            deferred_names_local = {d["name"] for d in deferred}
+            all_tools = list(core_tools_out)
+            for t in tools:
+                if _fn_name(t) in deferred_names_local:
+                    t.setdefault("function", {})["defer_loading"] = True
+                    all_tools.append(t)
+            for oa, anth in zip(managed_oa, inject_schemas):
+                if _fn_name(oa) in deferred_names_local:
+                    oa.setdefault("function", {})["defer_loading"] = True
+                    all_tools.append(oa)
+            tools = all_tools
+        else:
+            tools = core_tools_out
     else:
         tools = managed_oa + tools
 
@@ -852,10 +878,17 @@ async def _prepare_internal_body(
     managed_inject: list[str] = [n for n in managed_inject_raw if _is_enabled(n)]
 
     conv_key = _conversation_key(body)
+    # Cached after the first call per (server, model); any failure answers
+    # False, which just means we keep doing the split ourselves.
+    defer_supported = False
+    if use_tool_search:
+        from proxy import llama_caps
+        defer_supported = await llama_caps.supports_defer_loading(active_model)
     internal, deferred = _apply_tool_transforms(
         internal, profile, use_tool_search, managed_inject,
         sort_tools=use_sort_tools,
         sticky=_sticky_get(conv_key),
+        defer_supported=defer_supported,
     )
 
     # 6. Inject deferred-listing reminder into first user message
@@ -904,6 +937,7 @@ async def _prepare_internal_body(
         "reasoning_cfg": reasoning_cfg,
         "profile": profile,
         "conv_key": conv_key,
+        "defer_supported": defer_supported,
     }
 
 
@@ -1653,14 +1687,24 @@ async def _run_streaming(
             if status_line:
                 await _emit_status(adapter, resp, request, write_lock, status_line)
 
-            # Append matched schemas to body.tools (core-visible going forward).
-            # This shifts position 0 and costs one full re-prefill; _sticky_add
-            # makes sure we only ever pay it ONCE per tool per conversation
-            # instead of again on the next request when the split is recomputed.
+            # Make the loaded tools callable from here on.
+            #
+            # With defer_loading support the tool is ALREADY declared — it was
+            # simply not rendered — so there is nothing to append and the prefix
+            # never moves. We only stop intercepting it; the model gets the
+            # schema from the tool_result, which lands at the tail.
+            #
+            # Without it we must append to body["tools"], which shifts position 0
+            # and costs one full re-prefill. _sticky_add at least keeps that to
+            # once per tool per conversation rather than again on the next
+            # request, when the core/deferred split is recomputed.
             if matched:
-                body.setdefault("tools", []).extend(_anth_tool_to_openai_tool(m) for m in matched)
-                core_visible_names |= {m["name"] for m in matched}
-                _sticky_add(prep.get("conv_key"), {m["name"] for m in matched})
+                names = {m["name"] for m in matched}
+                if not prep.get("defer_supported"):
+                    body.setdefault("tools", []).extend(
+                        _anth_tool_to_openai_tool(m) for m in matched)
+                    _sticky_add(prep.get("conv_key"), names)
+                core_visible_names |= names
 
             # Append [assistant-tool_call, tool-result] to messages (OpenAI shape)
             body.setdefault("messages", []).extend([
