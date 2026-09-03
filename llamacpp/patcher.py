@@ -77,13 +77,17 @@ def patches() -> list[Path]:
 
 
 def source_dir() -> Path:
-    """Checkout location. `llamacpp.custom_build.source_dir`, else a default
-    under the settings dir. Configurable because a source tree is big and
-    users keep code on a different drive than their config."""
+    """Checkout location — `llamacpp.custom_build.source_dir`, else ~/Projects/llama.cpp.
+
+    Defaults outside the settings dir on purpose: a checkout is several GB of
+    someone else's source, which does not belong next to config, and people
+    keep code on a different drive than their dotfiles. Configurable for the
+    same reason.
+    """
     raw = str(app_config.get_nested("llamacpp.custom_build.source_dir", "") or "").strip()
     if raw:
         return Path(cfg.resolve_path(raw))
-    return _settings_dir() / "build" / "llama.cpp"
+    return Path.home() / "Projects" / "llama.cpp"
 
 
 def build_dir() -> Path:
