@@ -188,6 +188,12 @@ combinations (`mlock+dio`, `mmap+mlock+dio`) are rejected by the parser, so it i
 - **Ready probe:** `/health` `"ok"` = ready; 503/`"loading model"` = warming; connection error = down. Deadline `llamacpp.ready_timeout_sec` (default 120). 1s re-poll after `"ok"` catches orphans.
 - **Version Manager** (`updater.py` + `flag_audit.py`, on-demand from the tray llama.cpp page's "Version Manager" card). Units are real binaries: the active `llama-server` plus every `.bak-<ts>/` the updater left behind (each a runnable previous build, tagged with `.telecode-version`). `flag_audit.probe(binary)` parses `--help` into `{flag → {aliases, takes_value, allowed, removed, deprecated}}`. **Test** = `audit_config(binary)` cross-checks every flag `build_argv` emits across all models against that build (unknown/removed flags + out-of-range enum values). **Compare** = `compare()` diffs the active build's flag surface vs a selected one (added/removed/changed). **Restore** = `updater.restore_backup(ts)` reverse-overlays a backup into the install dir (supervisor stopped first; displaced files become a fresh reversible backup). Probes run the real binary, falling back to a spec cached under `data/cli-audit/specs/b<ver>.json` when an old backup can't relaunch — the updater calls `flag_audit.record_version_spec()` before+after each install to populate that cache. Reports append to `data/logs/cli_audit.log` (in the Logs viewer allowlist). This is the guard that catches flag churn like the v9243 `--checkpoint-every-n-tokens` → `--checkpoint-min-step` rename before it breaks spawn.
 
+**Keep `cache_ram` non-zero.** `--cache-ram N` is the host-RAM prompt cache in MiB (upstream default
+8192; **0 disables it**), and `--cache-idle-slots` saves an idle slot's KV there when a new task claims
+the slot instead of destroying it. With both off, a single short request evicts a long conversation and
+forces a full re-prefill — measured 2026-09-03: a 2,206-token session-title call took the one slot
+(`parallel: 1`) from a 67,883-token conversation, costing 50 s to rebuild. Costs host RAM, not VRAM.
+
 **Settings layout (no duplicates):**
 - `llamacpp.*` — server-wide CLI flags (threads, batch, load_mode, kv_*, spec_type, cache_ram, endpoints,
   server-mode, timeout, api_prefix, video_*).
@@ -213,6 +219,25 @@ Dual-protocol middleware in front of llama.cpp. Both Anthropic `/v1/messages` an
 2. **Translation** (`translate.py`): Anthropic → OpenAI (`tool_use` → assistant `tool_calls`; `tool_result` → `role:"tool"` + lifted user message with image parts; `cache_control` dropped recursively; `system` flattened into leading `{"role":"system"}`). `_normalize_system_messages` merges only the **leading run** of system messages into index 0; what happens to a system message arriving mid-conversation is `proxy.mid_system_messages` (per-profile overridable): `demote` (default — keeps its position, re-roled to `user`, and held back past a `tool_calls`→`tool` run so the pairing stays adjacent), `strip`, `merge_top` (legacy hoist) or `keep` (no-op). Only `demote`/`strip` are both template-safe and cache-safe: `merge_top` satisfies Qwen’s "system must be first" check but appends to the tail of the front block every turn, shifting the whole conversation and pinning llama.cpp’s prefix cache (measured: 53% worst-turn reuse vs 100%). OpenAI is near-identity + `cache_prompt=true` + `stream_options.include_usage=true`. Defaults: request body > per-model > top-level.
 3. **Managed-tool injection:** registry names + `strip_from_cc` → strip set; Anthropic schemas converted to OpenAI tools.
 4. **Tool search** (`tool_search: true`): splits tools into core + deferred; `ToolSearch` meta-tool injected; deferred names in `<system-reminder>` on first user message. Auto-load (`auto_load_tools: true`): blind call → schema as tool_result, model retries. Otherwise blocks and instructs `ToolSearch(select:Name)`. Hallucination guard: unknown name → BM25 top-5.
+
+   **Loading a tool costs a full re-prefill, and the append is load-bearing.** Tools render at
+   position 0 of the Qwen template (the first system block opens with the `<tools>` list), so
+   appending a loaded schema to `body["tools"]` shifts the entire prefix. llama.cpp's
+   longest-common-prefix similarity collapses — core is only ~6% of a long prompt, well under the
+   0.10 threshold — and it falls back to `selected slot by LRU`, re-prefilling everything
+   (measured 2026-09-03: 68,390 tokens / 51 s on a 70K conversation).
+   It cannot be fixed by *not* appending: with the tool undeclared, llama.cpp's lazy grammar
+   constrains the call to the declared array, and the model does not fail — it silently calls the
+   wrong tool. Measured: asked for `secret_lookup(record_id="R-4417")` with only `get_weather`
+   declared, it reasoned correctly and then emitted `get_weather(city="R-4417")`. A permissive
+   `{"type":"object"}` stub is no escape either; the argument grammar is built from the declared
+   schema, so arguments collapse to `{}`. Declaring every deferred schema up front would cost
+   ~10,400 tokens of permanent context (55 tools, 41,775 chars without descriptions).
+   What *is* fixed: the loaded set used to revert on the very next request, because
+   `_apply_tool_transforms` recomputes the split from the static `core_tools` list — paying the
+   re-prefill a **second** time. `_sticky_tools` (LRU, 64 conversations, keyed on the `session_id`
+   inside the client's `metadata.user_id`) keeps a loaded tool core for the rest of that
+   conversation. One break per tool per conversation, not two.
 5. **System prompts:** `system_instruction` prepends a markdown file with `<if dotted.key="value">` conditionals; `inject_date_location` appends date+location as **plain text at the tail** of the system block — not wrapped in `<system-reminder>` (that got it stripped again a few steps later, making the flag a silent no-op) and not at the head (the date rolls over daily; at the tail only the conversation after it needs re-prefilling). `strip_reminders` drops `<system-reminder>` blocks **and** per-turn `<total_tokens>` budget lines, keeping skills + deferred-tools listings — re-appended at the tail in fixed order, so the result is byte-stable turn over turn.
 5b. **Client-context stripping** (`proxy/tool_registry.py`, steps 3b/3c — after translation, BEFORE every injection of ours, so our own content can never be caught). Claude Code's preamble is the largest line item in the prompt: measured on a bare `say hi` in this repo, 58,168 chars of text (+93,964 of tool JSON). It arrives by **three** different carriers, and each needs its own lever:
    - **Leading system message** — `strip_client_system_noise()` removes the billing header, `# Environment` and `gitStatus:` **unconditionally, no setting**. `gitStatus` is the top cache-breaker in the whole request: at offset 5,955 it invalidates ~90% of the prompt (CLAUDE.md included) on every commit, branch switch and dirty-file edit. All three regexes are anchored on Claude Code's exact adjacent wording (`(?=\nYou have been invoked in the following environment)`, `(?=\s*This is the git status)`) because the same code path serves plain OpenAI clients, where `# Environment` is a heading anyone might write.
