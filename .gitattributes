@@ -1,0 +1,4 @@
+# Patch files must stay byte-exact LF. Git's autocrlf would rewrite the line
+# endings on checkout and `git apply` then fails with "corrupt patch" — the
+# patch series is data consumed by another tool, not source we edit.
+*.patch -text

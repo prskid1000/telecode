@@ -124,6 +124,12 @@
   "llamacpp": {
     "enabled": false,
     "binary": "llama-server",
+    "_comment_custom_build": "Tray -> llama.cpp -> Patched Build. Checks out llama.cpp at an upstream tag, applies patches/llama.cpp/*.patch, builds, and overlays the result onto the release binary (leaving a .bak-<ts> so Version Manager -> Restore undoes it). For verifying a patch before proposing it upstream, not for maintaining a fork. Note an Update Now silently replaces a custom build.",
+    "custom_build": {
+      "source_dir": "",
+      "tag": "",
+      "cuda": true
+    },
     "host": "127.0.0.1",
     "port": 1234,
     "auto_start": false,
@@ -199,7 +205,8 @@
     "cache_idle_slots": true,
     "context_shift": false,
     "warmup": true,
-    "cache_ram": 0,
+    "_comment_cache_ram": "--cache-ram N, in MiB. 0 DISABLES the host-RAM prompt cache (upstream default is 8192); -1 = no limit. With cache_idle_slots it lets an idle slot be swapped to RAM when a new task claims it, instead of destroyed. Both off means a short unrelated request evicts a long conversation and forces a full re-prefill.",
+    "cache_ram": 8192,
     "swa_full": false,
     "ctx_checkpoints": 32,
     "checkpoint_min_step": 256,

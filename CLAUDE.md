@@ -50,6 +50,13 @@ Routines (Task Mode, separate): data/routines/<id>.json, 60s tick in proxy, fire
 - `proxy/api_{sessions,tasks,agents,jobs,runs,routines}.py` — REST surface (no auth). Any caller-supplied
   URL goes through `proxy/media_fetch.py`, and any caller-supplied filename through
   `JobManager._resolve_in` — the surface has no auth, so neither may be trusted.
+- `proxy/llama_caps.py` — functional capability probes against the running llama-server, cached
+  per (server, model). `defer_loading` is probed via `/apply-template`, which renders a prompt
+  **without inference** — a probe that ran a completion would take the single slot and evict the
+  very cache the feature exists to protect. Any failure answers False, i.e. fall back.
+- `llamacpp/patcher.py` — checkout / apply `patches/llama.cpp/*.patch` / build / install, behind the
+  tray's "Patched Build" card. The source tree is disposable and hard-reset on every fetch; the
+  patches are the artifact.
 - `proxy/media_fetch.py` — guarded fetch for caller-supplied URLs: http/https only, every resolved
   address must be public (loopback / private / link-local incl. `169.254.169.254` refused), redirects
   re-validated per hop, byte cap enforced while streaming. The proxy runs on the user's machine and
@@ -188,6 +195,20 @@ combinations (`mlock+dio`, `mmap+mlock+dio`) are rejected by the parser, so it i
 - **Ready probe:** `/health` `"ok"` = ready; 503/`"loading model"` = warming; connection error = down. Deadline `llamacpp.ready_timeout_sec` (default 120). 1s re-poll after `"ok"` catches orphans.
 - **Version Manager** (`updater.py` + `flag_audit.py`, on-demand from the tray llama.cpp page's "Version Manager" card). Units are real binaries: the active `llama-server` plus every `.bak-<ts>/` the updater left behind (each a runnable previous build, tagged with `.telecode-version`). `flag_audit.probe(binary)` parses `--help` into `{flag → {aliases, takes_value, allowed, removed, deprecated}}`. **Test** = `audit_config(binary)` cross-checks every flag `build_argv` emits across all models against that build (unknown/removed flags + out-of-range enum values). **Compare** = `compare()` diffs the active build's flag surface vs a selected one (added/removed/changed). **Restore** = `updater.restore_backup(ts)` reverse-overlays a backup into the install dir (supervisor stopped first; displaced files become a fresh reversible backup). Probes run the real binary, falling back to a spec cached under `data/cli-audit/specs/b<ver>.json` when an old backup can't relaunch — the updater calls `flag_audit.record_version_spec()` before+after each install to populate that cache. Reports append to `data/logs/cli_audit.log` (in the Logs viewer allowlist). This is the guard that catches flag churn like the v9243 `--checkpoint-every-n-tokens` → `--checkpoint-min-step` rename before it breaks spawn.
 
+- **Patched Build** (`patcher.py`, tray card below Version Manager). Clones llama.cpp, hard-resets to an
+  upstream tag (empty = whatever the release updater considers current, so a patched build matches the
+  release it replaces), applies `patches/llama.cpp/*.patch`, builds, and overlays the artifacts onto the
+  same install dir with the same `.bak-<ts>` snapshot — so **Version Manager → Restore undoes a custom
+  build exactly like a bad release**. `git apply --check` failing is a *result*, not an error to force:
+  it means the patch landed upstream or bit-rotted. Applied-ness is derived by reverse-applying each
+  patch rather than tracked in a file that can go stale. **The standing trap is the converse: "Update
+  Now" overlays a release zip onto the same directory and silently replaces a custom build**, which is
+  why `status()` compares the built binary against the installed one (`build_is_installed`) instead of
+  trusting a flag. Deliberately shaped as *verify a patch before proposing it upstream*, not *maintain a
+  fork* — the last attempt at a permanent fork was abandoned, and the cost was never the patch, it was
+  keeping it alive across upstream churn.
+  Current series: `0001-common-add-defer_loading-to-tool-definitions.patch` (ggml-org/llama.cpp#28179).
+
 **Keep `cache_ram` non-zero.** `--cache-ram N` is the host-RAM prompt cache in MiB (upstream default
 8192; **0 disables it**), and `--cache-idle-slots` saves an idle slot's KV there when a new task claims
 the slot instead of destroying it. With both off, a single short request evicts a long conversation and
@@ -238,6 +259,16 @@ Dual-protocol middleware in front of llama.cpp. Both Anthropic `/v1/messages` an
    re-prefill a **second** time. `_sticky_tools` (LRU, 64 conversations, keyed on the `session_id`
    inside the client's `metadata.user_id`) keeps a loaded tool core for the rest of that
    conversation. One break per tool per conversation, not two.
+
+   **With a llama.cpp that carries our `defer_loading` patch there is no break at all.** The flag
+   declares a tool to the sampling grammar while leaving its schema out of the rendered prompt, so the
+   proxy declares *every* tool from turn 1 (deferred ones flagged) and the declared set never changes:
+   revealing a schema later is just a `tool_result` at the tail. Support is detected at runtime by
+   `proxy/llama_caps.py`, never by build number — a local build may or may not carry the patch — and
+   any probe failure answers False, falling back to the split above. Two things follow from that split
+   in behaviour: on the patched path `_sticky_tools` is deliberately **inert** (everything is declared
+   already, so promoting a tool would only make it *rendered*, moving the prefix), and the intercept
+   loop skips the `body["tools"]` append entirely.
 5. **System prompts:** `system_instruction` prepends a markdown file with `<if dotted.key="value">` conditionals; `inject_date_location` appends date+location as **plain text at the tail** of the system block — not wrapped in `<system-reminder>` (that got it stripped again a few steps later, making the flag a silent no-op) and not at the head (the date rolls over daily; at the tail only the conversation after it needs re-prefilling). `strip_reminders` drops `<system-reminder>` blocks **and** per-turn `<total_tokens>` budget lines, keeping skills + deferred-tools listings — re-appended at the tail in fixed order, so the result is byte-stable turn over turn.
 5b. **Client-context stripping** (`proxy/tool_registry.py`, steps 3b/3c — after translation, BEFORE every injection of ours, so our own content can never be caught). Claude Code's preamble is the largest line item in the prompt: measured on a bare `say hi` in this repo, 58,168 chars of text (+93,964 of tool JSON). It arrives by **three** different carriers, and each needs its own lever:
    - **Leading system message** — `strip_client_system_noise()` removes the billing header, `# Environment` and `gitStatus:` **unconditionally, no setting**. `gitStatus` is the top cache-breaker in the whole request: at offset 5,955 it invalidates ~90% of the prompt (CLAUDE.md included) on every commit, branch switch and dirty-file edit. All three regexes are anchored on Claude Code's exact adjacent wording (`(?=\nYou have been invoked in the following environment)`, `(?=\s*This is the git status)`) because the same code path serves plain OpenAI clients, where `# Environment` is a heading anyone might write.
