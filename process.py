@@ -485,6 +485,17 @@ class LlamaSupervisor:
             await self._stop_locked()
             raise
 
+        # A fresh process may be a different binary — a patched build installed
+        # over the release, or a release update that replaced one. Capability
+        # answers are probed from the running server, so they must not survive
+        # a respawn; a stale "unsupported" would silently keep the proxy on the
+        # slow tool path until telecode restarted.
+        try:
+            from proxy import llama_caps
+            llama_caps.invalidate()
+        except Exception as exc:
+            _LLAMA_LOG.debug("llama_caps.invalidate failed: %s", exc)
+
         _LLAMA_LOG.info("llama.cpp: '%s' ready (pid %d)", model_name, self._proc.pid)
 
     async def _wait_ready(self) -> None:

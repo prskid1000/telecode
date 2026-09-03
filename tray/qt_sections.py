@@ -1500,19 +1500,19 @@ def _llama_patch_build_card(window) -> QWidget:
                                    "installed binary is the one that was built."),
                         status))
 
-    fetch_btn = QPushButton("Fetch / Reset Source")
-    patch_btn = QPushButton("Apply Patches")
-    build_btn = QPushButton("Build")
+    # Two actions, not five: fetch/apply/build is one job whose intermediate
+    # states are either useless or a bug, and installing is the separate,
+    # consequential step that overwrites the binary you are running.
+    build_btn = QPushButton("Build Patched")
     build_btn.setProperty("class", "primary")
     install_btn = QPushButton("Install")
-    refresh_btn = QPushButton("Refresh")
 
     actions = QWidget()
     al = QHBoxLayout(actions)
     al.setContentsMargins(0, 0, 0, 0)
     al.setSpacing(8)
-    for b in (fetch_btn, patch_btn, build_btn, install_btn, refresh_btn):
-        al.addWidget(b)
+    al.addWidget(build_btn)
+    al.addWidget(install_btn)
     al.addStretch(1)
     body.addWidget(actions)
 
@@ -1531,7 +1531,7 @@ def _llama_patch_build_card(window) -> QWidget:
 
     def _set_busy(v: bool) -> None:
         _busy[0] = v
-        for b in (fetch_btn, patch_btn, build_btn, install_btn):
+        for b in (build_btn, install_btn):
             b.setEnabled(not v)
 
     def _refresh() -> None:
@@ -1558,7 +1558,14 @@ def _llama_patch_build_card(window) -> QWidget:
                                           else "  — NOT the installed binary"))
         else:
             lines.append("built: no")
-        lines.append(f"installed: b{st['installed_version'] or '?'}")
+        ip = st.get("installed_patch") or {}
+        if ip.get("patched"):
+            names = ", ".join(n.split("-", 1)[-1].replace(".patch", "")
+                              for n in ip.get("patches") or []) or "?"
+            lines.append(f"installed: b{st['installed_version'] or '?'}  ·  PATCHED ({names})")
+        else:
+            lines.append(f"installed: b{st['installed_version'] or '?'}  ·  "
+                         f"{ip.get('reason') or 'stock'}")
         if missing:
             lines.append("toolchain missing: " + ", ".join(missing))
         status.setText("\n".join(lines))
@@ -1571,7 +1578,8 @@ def _llama_patch_build_card(window) -> QWidget:
         if res.get("ok"):
             out.appendPlainText(f"== {step}: OK")
         else:
-            out.appendPlainText(f"== {step}: FAILED — {res.get('error') or res}")
+            where = f" at {res['step']}" if res.get("step") else ""
+            out.appendPlainText(f"== {step}: FAILED{where} — {res.get('error') or res}")
         if res.get("failed"):
             for f in res["failed"]:
                 out.appendPlainText(f"   !! {f['patch']}: {f['reason']}")
@@ -1596,11 +1604,10 @@ def _llama_patch_build_card(window) -> QWidget:
     def _tag() -> str:
         return str(get_path(read_settings(), "llamacpp.custom_build.tag", "") or "").strip()
 
-    fetch_btn.clicked.connect(lambda: _run("fetch", lambda progress: patcher.fetch_source(_tag(), progress)))
-    patch_btn.clicked.connect(lambda: _run("apply patches", patcher.apply_patches))
-    build_btn.clicked.connect(lambda: _run("build", patcher.build))
+    build_btn.clicked.connect(
+        lambda: _run("build patched",
+                     lambda progress: patcher.build_patched(progress, tag=_tag())))
     install_btn.clicked.connect(lambda: _run("install", patcher.install))
-    refresh_btn.clicked.connect(_refresh)
 
     _refresh()
     card._refresh_patch_build = _refresh  # type: ignore[attr-defined]
