@@ -16,6 +16,7 @@ import json
 import logging
 import time
 import uuid
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Optional
 
@@ -435,6 +436,7 @@ def _apply_tool_transforms(
     use_tool_search: bool,
     managed_inject_names: list[str],
     sort_tools: bool = False,
+    sticky: set[str] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Split tools into core + deferred for the internal body.
 
@@ -489,6 +491,10 @@ def _apply_tool_transforms(
             (profile.get("core_tools") if profile and "core_tools" in profile else proxy_config.core_tools())
             or []
         )
+        # Tools this conversation has already loaded stay core for its lifetime.
+        # Without this the array reverts on the next request and the whole
+        # prefix re-prefills a second time — see the _sticky_tools note above.
+        core_names |= (sticky or set())
 
         core_tools_out: list[dict[str, Any]] = []
         for t in tools:
@@ -536,6 +542,60 @@ def _apply_tool_transforms(
         del body["tools"]
 
     return body, deferred
+
+
+# ── Sticky loaded tools ──────────────────────────────────────────────────────
+# Tools render at position 0 of the prompt, so ANY change to the array shifts
+# the whole prefix and llama.cpp re-prefills the entire conversation (measured:
+# 68K tokens / 51s). A ToolSearch load used to pay that twice — once on the
+# retry round, when the schema is appended to body["tools"], and again on the
+# NEXT request, because _apply_tool_transforms recomputes the core/deferred
+# split from the static `core_tools` list and the loaded tool falls back to
+# deferred, reverting the array.
+#
+# Remembering per conversation what has been loaded removes the second break.
+# The first is unavoidable without declaring every deferred schema up front,
+# which measures at ~10,400 tokens of permanent context — a worse trade.
+_STICKY_MAX = 64
+_sticky_tools: OrderedDict[str, set[str]] = OrderedDict()
+
+
+def _conversation_key(client_body: dict[str, Any]) -> str | None:
+    """Stable per-conversation id, or None when the client doesn't supply one.
+
+    Claude Code puts a JSON blob in metadata.user_id carrying a session_id that
+    stays constant for the life of the session — a far better key than hashing
+    message content, which carries per-turn reminders that change every turn.
+    """
+    meta = client_body.get("metadata")
+    raw = meta.get("user_id") if isinstance(meta, dict) else None
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        sid = json.loads(raw).get("session_id")
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        return raw[:128]  # opaque, but stable for this client
+    return str(sid) if sid else None
+
+
+def _sticky_get(key: str | None) -> set[str]:
+    if not key:
+        return set()
+    names = _sticky_tools.get(key)
+    if names is None:
+        return set()
+    _sticky_tools.move_to_end(key)
+    return set(names)
+
+
+def _sticky_add(key: str | None, names: set[str]) -> None:
+    if not key or not names:
+        return
+    cur = _sticky_tools.setdefault(key, set())
+    cur |= set(names)
+    _sticky_tools.move_to_end(key)
+    while len(_sticky_tools) > _STICKY_MAX:
+        _sticky_tools.popitem(last=False)
 
 
 def _inject_deferred_reminder(
@@ -791,9 +851,11 @@ async def _prepare_internal_body(
     # Honor live runtime toggles set via the control panel
     managed_inject: list[str] = [n for n in managed_inject_raw if _is_enabled(n)]
 
+    conv_key = _conversation_key(body)
     internal, deferred = _apply_tool_transforms(
         internal, profile, use_tool_search, managed_inject,
         sort_tools=use_sort_tools,
+        sticky=_sticky_get(conv_key),
     )
 
     # 6. Inject deferred-listing reminder into first user message
@@ -841,6 +903,7 @@ async def _prepare_internal_body(
         "active_model": active_model,
         "reasoning_cfg": reasoning_cfg,
         "profile": profile,
+        "conv_key": conv_key,
     }
 
 
@@ -1590,10 +1653,14 @@ async def _run_streaming(
             if status_line:
                 await _emit_status(adapter, resp, request, write_lock, status_line)
 
-            # Append matched schemas to body.tools (core-visible going forward)
+            # Append matched schemas to body.tools (core-visible going forward).
+            # This shifts position 0 and costs one full re-prefill; _sticky_add
+            # makes sure we only ever pay it ONCE per tool per conversation
+            # instead of again on the next request when the split is recomputed.
             if matched:
                 body.setdefault("tools", []).extend(_anth_tool_to_openai_tool(m) for m in matched)
                 core_visible_names |= {m["name"] for m in matched}
+                _sticky_add(prep.get("conv_key"), {m["name"] for m in matched})
 
             # Append [assistant-tool_call, tool-result] to messages (OpenAI shape)
             body.setdefault("messages", []).extend([
