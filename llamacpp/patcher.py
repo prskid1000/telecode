@@ -51,6 +51,17 @@ UPSTREAM_REPO = "https://github.com/ggml-org/llama.cpp.git"
 # and none of the patch — while still looking like it worked.
 _LIB_SUFFIXES = (".exe", ".dll", ".so", ".dylib")
 
+# Build these, not just llama-server. The release ships ~23 executables that
+# all link the same DLLs; leaving them at the old build while replacing the
+# DLLs under them produces launchers that load a mismatched library.
+_BUILD_TARGETS = ("llama-server", "llama-cli", "llama-bench", "llama-mtmd-cli")
+
+# Files in the install dir that belong to llama.cpp itself, so anything
+# matching that our build does NOT produce is stale and must not be left
+# beside our DLLs. Deliberately prefix-based: the CUDA runtime the release
+# ships (cudart*, cublas*, nv*) is NOT ours to rebuild and must survive.
+_OWNED_PREFIXES = ("ggml", "llama", "mtmd", "rpc-server")
+
 Progress = Callable[[str], None]
 
 
@@ -507,7 +518,7 @@ def build(progress: Progress = _noop, *, cuda: Optional[bool] = None,
         cfg_args.append("-DCMAKE_CUDA_ARCHITECTURES=native")
         progress(f"CUDA toolkit {cu['version']} (arch: native)")
     build_args = [cmake, "--build", str(bdir), "--config", "Release",
-                  "--target", "llama-server", "-j", str(jobs)]
+                  "--target", *_BUILD_TARGETS, "-j", str(jobs)]
 
     if sys.platform == "win32":
         # cl.exe only exists on PATH inside a vcvars shell, so the whole
@@ -660,6 +671,11 @@ def install(progress: Progress = _noop) -> dict[str, Any]:
     if not target.is_dir():
         return {"ok": False, "error": f"install dir does not exist: {target}"}
 
+    # Probe BEFORE anything is copied. This labels the backup with the version
+    # being replaced, which is what Version Manager shows next to it; reading it
+    # afterwards would stamp every backup with the version that just replaced it.
+    outgoing_version = updater.installed_version() or "unknown"
+
     ts = time.strftime("%Y%m%d-%H%M%S")
     backup = target / f".bak-{ts}"
     backup.mkdir(parents=True, exist_ok=True)
@@ -669,20 +685,47 @@ def install(progress: Progress = _noop) -> dict[str, Any]:
         shutil.rmtree(backup, ignore_errors=True)
         return {"ok": False, "error": "no artifacts found next to the built binary"}
 
+    # Everything llama.cpp-owned that our build does not produce is stale the
+    # moment our DLLs land: a b10775 ggml-base.dll enumerates the backend DLLs
+    # sitting next to it, and the release ships 15 ggml-cpu-* variants we do
+    # not rebuild. Loading one of those into our base is an ABI mismatch that
+    # `--version` cannot catch, because that path never loads a CPU backend.
+    # Move them into the backup rather than leave them: a stale binary that
+    # crashes at model load is worse than a missing one, and Restore (or
+    # Update Now) brings the whole release back.
+    ours = {f.name.lower() for f in artifacts}
+    stale: list[Path] = []
+    for f in target.iterdir():
+        if not f.is_file() or f.suffix.lower() not in _LIB_SUFFIXES:
+            continue
+        n = f.name.lower()
+        if n in ours or not n.startswith(_OWNED_PREFIXES):
+            continue
+        stale.append(f)
+
     copied: list[str] = []
+    quarantined: list[str] = []
     digests: dict[str, str] = {}
 
     def _rollback(reason: str) -> None:
         progress(f"!! {reason} — rolling back {len(copied)} file(s)")
-        for name in copied:
+        for name in copied + quarantined:
             b = backup / name
             if b.is_file():
                 shutil.copy2(b, target / name)
-            else:
+            elif name in copied:
                 (target / name).unlink(missing_ok=True)
         shutil.rmtree(backup, ignore_errors=True)
 
     try:
+        for f in stale:
+            shutil.copy2(f, backup / f.name)
+            f.unlink()
+            quarantined.append(f.name)
+        if quarantined:
+            progress(f"moved {len(quarantined)} stale file(s) into the backup: "
+                     + ", ".join(quarantined[:6])
+                     + ("…" if len(quarantined) > 6 else ""))
         for f in artifacts:
             d = target / f.name
             if d.is_file():
@@ -720,11 +763,13 @@ def install(progress: Progress = _noop) -> dict[str, Any]:
                 f"Rolled back."}
     progress(f"verified: installed binary reports commit {got}")
 
-    # Same marker updater.restore_backup() reads, so Restore lists this like a
-    # release backup rather than an unlabelled directory.
+    # Same marker updater.restore_backup() reads, so this is listed and restored
+    # exactly like a release backup — a custom build is undone by Version
+    # Manager -> Restore, no separate mechanism. Kept on success on purpose:
+    # it is the undo path, not scratch. Only a FAILED install removes it,
+    # because then nothing was changed and it would describe nothing.
     try:
-        (backup / ".telecode-version").write_text(
-            updater.installed_version() or "unknown", encoding="utf-8")
+        (backup / ".telecode-version").write_text(outgoing_version, encoding="utf-8")
     except OSError:
         pass
 
@@ -742,4 +787,5 @@ def install(progress: Progress = _noop) -> dict[str, Any]:
     except OSError as exc:
         progress(f"!! could not write {MARKER}: {exc}")
 
-    return {"ok": True, "installed": copied, "backup": str(backup)}
+    return {"ok": True, "installed": copied, "quarantined": quarantined,
+            "backup": str(backup)}
