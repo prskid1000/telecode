@@ -25,6 +25,7 @@ Current series:
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import shutil
@@ -284,6 +285,7 @@ def status() -> dict[str, Any]:
         "installed_binary": str(installed) if installed.is_file() else None,
         "installed_version": updater.installed_version(),
         "build_is_installed": False,
+        "installed_patch": installed_patch_info(),
         "toolchain": toolchain(),
     }
     if st["source_present"]:
@@ -444,6 +446,73 @@ def build(progress: Progress = _noop, *, cuda: Optional[bool] = None,
     return {"ok": True, "binary": str(built), "cuda": cuda}
 
 
+MARKER = ".telecode-patched.json"
+
+
+def _marker_path() -> Path:
+    return updater.install_dir() / MARKER
+
+
+def installed_patch_info() -> dict[str, Any]:
+    """What the *installed* binary is, patch-wise.
+
+    A build number cannot answer this — a patched b10775 and a stock b10775
+    report the same version. So install() records the sha256 of what it wrote,
+    and this compares it against the binary that is actually there now. That
+    comparison is the whole point: the release updater overlays the same
+    directory and would otherwise leave a stale marker claiming "patched" over
+    a stock binary it just installed.
+    """
+    binp = updater.install_dir() / _exe("llama-server")
+    out: dict[str, Any] = {"patched": False, "patches": [], "tag": "", "reason": ""}
+    if not binp.is_file():
+        out["reason"] = "no installed binary"
+        return out
+    mp = _marker_path()
+    if not mp.is_file():
+        out["reason"] = "stock (no patch marker)"
+        return out
+    try:
+        rec = json.loads(mp.read_text(encoding="utf-8"))
+    except Exception:
+        out["reason"] = "unreadable marker"
+        return out
+    if rec.get("sha256") != _sha256(binp):
+        out["reason"] = "stock (binary replaced since it was patched)"
+        return out
+    out.update(patched=True, patches=rec.get("patches") or [],
+               tag=rec.get("tag") or "", reason="")
+    return out
+
+
+def build_patched(progress: Progress = _noop, *, tag: str = "") -> dict[str, Any]:
+    """fetch -> apply -> build, as one action.
+
+    Split into three buttons originally; that exposed an ordering the user has
+    no reason to care about, and every intermediate state is either useless or
+    a bug. Failures still stop at the step that failed and say which.
+    """
+    progress("== fetch / reset source")
+    res = fetch_source(tag, progress)
+    if not res.get("ok"):
+        return {"ok": False, "step": "fetch", "error": res.get("error")}
+
+    progress("== apply patches")
+    ap = apply_patches(progress)
+    if not ap.get("ok"):
+        return {"ok": False, "step": "apply", "error": "one or more patches did not apply",
+                "failed": ap.get("failed") or []}
+
+    progress("== build")
+    bd = build(progress)
+    if not bd.get("ok"):
+        return {"ok": False, "step": "build", "error": bd.get("error")}
+
+    return {"ok": True, "tag": res.get("tag"), "head": res.get("head"),
+            "applied": ap.get("applied") or [], "skipped": ap.get("skipped") or [],
+            "binary": bd.get("binary"), "cuda": bd.get("cuda")}
+
+
 def install(progress: Progress = _noop) -> dict[str, Any]:
     """Overlay the built binaries onto the install dir, snapshotting what they
     replace into `.bak-<ts>/` — the same mechanism release installs use, so the
@@ -485,5 +554,18 @@ def install(progress: Progress = _noop) -> dict[str, Any]:
             updater.installed_version() or "unknown", encoding="utf-8")
     except OSError:
         pass
+
+    # Record what we wrote so installed_patch_info() can tell a patched binary
+    # from a stock one of the same build number.
+    try:
+        _marker_path().write_text(json.dumps({
+            "tag": _git_out(["describe", "--tags", "--always"]),
+            "head": _git_out(["rev-parse", "--short", "HEAD"]),
+            "patches": applied_patches(),
+            "sha256": _sha256(target / _exe("llama-server")),
+            "installed_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }, indent=2), encoding="utf-8")
+    except OSError as exc:
+        progress(f"!! could not write {MARKER}: {exc}")
 
     return {"ok": True, "installed": copied, "backup": str(backup)}
