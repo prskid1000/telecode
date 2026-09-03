@@ -44,9 +44,12 @@ log = logging.getLogger("telecode.llamacpp.patcher")
 
 UPSTREAM_REPO = "https://github.com/ggml-org/llama.cpp.git"
 
-# Binaries worth copying out of a build. Anything else the build produces is
-# left behind — we overlay onto a release install that already has the rest.
-_ARTIFACTS = ("llama-server", "llama-cli", "llama-bench", "llama-mtmd-cli")
+# Which files an install copies is derived from the build output, never from a
+# hardcoded list of executables. llama.cpp puts the actual logic in DLLs
+# (llama-server-impl.dll, llama-common.dll, ggml-*.dll) behind a ~10 KB
+# launcher exe, so copying only *.exe installs a stub over the release's DLLs
+# and none of the patch — while still looking like it worked.
+_LIB_SUFFIXES = (".exe", ".dll", ".so", ".dylib")
 
 Progress = Callable[[str], None]
 
@@ -570,9 +573,17 @@ def installed_patch_info() -> dict[str, Any]:
     except Exception:
         out["reason"] = "unreadable marker"
         return out
-    if rec.get("sha256") != _sha256(binp):
-        out["reason"] = "stock (binary replaced since it was patched)"
+    files = rec.get("files") or {}
+    if not files:
+        out["reason"] = "stock (marker predates per-file verification)"
         return out
+    for name, digest in files.items():
+        f = updater.install_dir() / name
+        if not f.is_file() or _sha256(f) != digest:
+            # One replaced file is enough: a release update overlays the whole
+            # directory, and a partially-overwritten install is not "patched".
+            out["reason"] = f"stock ({name} replaced since it was patched)"
+            return out
     out.update(patched=True, patches=rec.get("patches") or [],
                tag=rec.get("tag") or "", reason="")
     return out
@@ -606,6 +617,37 @@ def build_patched(progress: Progress = _noop, *, tag: str = "") -> dict[str, Any
             "binary": bd.get("binary"), "cuda": bd.get("cuda")}
 
 
+def build_artifacts() -> list[Path]:
+    """Every binary the build produced, next to llama-server."""
+    built = _built_binary()
+    if not built:
+        return []
+    out: list[Path] = []
+    for f in sorted(built.parent.iterdir()):
+        if not f.is_file():
+            continue
+        if sys.platform == "win32":
+            if f.suffix.lower() in (".exe", ".dll"):
+                out.append(f)
+        elif f.suffix.lower() in ("", ".so", ".dylib") or ".so." in f.name:
+            out.append(f)
+    return out
+
+
+def _probe_commit(binary: Path) -> str:
+    """The commit `<binary> --version` reports, or '' if it will not run."""
+    try:
+        kwargs: dict[str, Any] = {"capture_output": True, "text": True, "timeout": 30}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = 0x08000000
+        res = subprocess.run([str(binary), "--version"], **kwargs)
+        m = re.search(r"commit\s+([0-9a-f]{7,40})",
+                      (res.stdout or "") + (res.stderr or ""))
+        return m.group(1) if m else ""
+    except Exception:
+        return ""
+
+
 def install(progress: Progress = _noop) -> dict[str, Any]:
     """Overlay the built binaries onto the install dir, snapshotting what they
     replace into `.bak-<ts>/` — the same mechanism release installs use, so the
@@ -622,23 +664,43 @@ def install(progress: Progress = _noop) -> dict[str, Any]:
     backup = target / f".bak-{ts}"
     backup.mkdir(parents=True, exist_ok=True)
 
-    src_root = built.parent
-    copied: list[str] = []
-    for stem in _ARTIFACTS:
-        name = _exe(stem)
-        s = src_root / name
-        if not s.is_file():
-            continue
-        d = target / name
-        if d.is_file():
-            shutil.copy2(d, backup / name)
-        shutil.copy2(s, d)
-        copied.append(name)
-        progress(f"installed {name}")
-
-    if not copied:
+    artifacts = build_artifacts()
+    if not artifacts:
         shutil.rmtree(backup, ignore_errors=True)
         return {"ok": False, "error": "no artifacts found next to the built binary"}
+
+    copied: list[str] = []
+    digests: dict[str, str] = {}
+    for f in artifacts:
+        d = target / f.name
+        if d.is_file():
+            shutil.copy2(d, backup / f.name)
+        shutil.copy2(f, d)
+        copied.append(f.name)
+        digests[f.name] = _sha256(d)
+    progress(f"installed {len(copied)} files: " + ", ".join(copied))
+
+    # Verify by running it. The failure this catches is specific and was real:
+    # a launcher exe from one build sitting on another build's DLLs starts,
+    # prints a version, and reports the OLD commit — so "it ran" proves nothing
+    # and only the commit does.
+    want = _git_out(["rev-parse", "HEAD"])
+    got = _probe_commit(target / _exe("llama-server"))
+    if not got or not (want.startswith(got) or got.startswith(want[:len(got)])):
+        progress(f"!! installed binary reports commit {got or '(would not run)'}, "
+                 f"expected {want[:9]} — rolling back")
+        for name in copied:
+            b = backup / name
+            if b.is_file():
+                shutil.copy2(b, target / name)
+            else:
+                (target / name).unlink(missing_ok=True)
+        shutil.rmtree(backup, ignore_errors=True)
+        return {"ok": False, "error":
+                f"install verification failed: the installed binary reports "
+                f"commit {got or '(it would not run)'}, not {want[:9]}. "
+                f"Rolled back."}
+    progress(f"verified: installed binary reports commit {got}")
 
     # Same marker updater.restore_backup() reads, so Restore lists this like a
     # release backup rather than an unlabelled directory.
@@ -655,7 +717,8 @@ def install(progress: Progress = _noop) -> dict[str, Any]:
             "tag": _git_out(["describe", "--tags", "--always"]),
             "head": _git_out(["rev-parse", "--short", "HEAD"]),
             "patches": applied_patches(),
-            "sha256": _sha256(target / _exe("llama-server")),
+            "commit": got,
+            "files": digests,
             "installed_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }, indent=2), encoding="utf-8")
     except OSError as exc:
