@@ -28,6 +28,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -233,6 +234,38 @@ def find_ninja() -> Optional[str]:
     return None
 
 
+def cuda_toolkit() -> dict[str, Any]:
+    """The local CUDA toolkit, and whether it matches the installed runtime.
+
+    This matters because install() copies executables only — not the CUDA
+    runtime DLLs. The release zips ship a cudart matched to their own variant,
+    so a locally built binary linked against a DIFFERENT CUDA major lands next
+    to a cudart it cannot use and fails to start. Detect the mismatch before
+    the build rather than after the binary is in place.
+    """
+    out: dict[str, Any] = {"nvcc": shutil.which("nvcc"), "version": "",
+                           "major": None, "installed_major": None, "mismatch": False}
+    if out["nvcc"]:
+        try:
+            kwargs: dict[str, Any] = {"capture_output": True, "text": True, "timeout": 15}
+            if sys.platform == "win32":
+                kwargs["creationflags"] = 0x08000000
+            res = subprocess.run([out["nvcc"], "--version"], **kwargs)
+            m = re.search(r"release (\d+)\.(\d+)", (res.stdout or "") + (res.stderr or ""))
+            if m:
+                out["version"] = f"{m.group(1)}.{m.group(2)}"
+                out["major"] = int(m.group(1))
+        except Exception as exc:
+            log.debug("nvcc probe failed: %s", exc)
+    try:
+        out["installed_major"] = updater.cuda_major_of_variant(updater.detect_variant())
+    except Exception:
+        pass
+    if out["major"] and out["installed_major"]:
+        out["mismatch"] = out["major"] != out["installed_major"]
+    return out
+
+
 def toolchain() -> dict[str, Any]:
     """What's available to build with — surfaced in the tray before you click."""
     out: dict[str, Any] = {
@@ -240,6 +273,7 @@ def toolchain() -> dict[str, Any]:
         "cmake": find_cmake(),
         "ninja": find_ninja(),
         "vcvars": str(_vcvars()) if _vcvars() else None,
+        "cuda": cuda_toolkit(),
     }
     out["ready"] = bool(out["git"] and out["cmake"] and
                         (sys.platform != "win32" or out["vcvars"]))
@@ -278,6 +312,7 @@ def status() -> dict[str, Any]:
     st: dict[str, Any] = {
         "source_dir": str(src),
         "source_present": (src / ".git").is_dir(),
+        "origin": _git_out(["remote", "get-url", "origin"]),
         "checked_out": _git_out(["describe", "--tags", "--always"]),
         "head": _git_out(["rev-parse", "--short", "HEAD"]),
         "dirty": bool(_git_out(["status", "--porcelain"])),
@@ -303,6 +338,26 @@ def status() -> dict[str, Any]:
 
 # ── Operations ───────────────────────────────────────────────────────
 
+def _normalize_origin(progress: Progress = _noop) -> None:
+    """Force `origin` to the main llama.cpp repo.
+
+    A previous origin is preserved as `fork` rather than dropped: this may be
+    a checkout someone also pushes PR branches from, and silently destroying
+    their push path to make our fetch tidy would be a poor trade.
+    """
+    cur = _git_out(["remote", "get-url", "origin"])
+    if cur == UPSTREAM_REPO:
+        return
+    if cur:
+        if not _git_out(["remote", "get-url", "fork"]):
+            _git(["remote", "add", "fork", cur], progress)
+            progress(f"previous origin kept as remote 'fork': {cur}")
+        _git(["remote", "set-url", "origin", UPSTREAM_REPO], progress)
+    else:
+        _git(["remote", "add", "origin", UPSTREAM_REPO], progress)
+    progress(f"origin -> {UPSTREAM_REPO}")
+
+
 def fetch_source(tag: str = "", progress: Progress = _noop) -> dict[str, Any]:
     """Clone or update the checkout and hard-reset to `tag`.
 
@@ -316,14 +371,23 @@ def fetch_source(tag: str = "", progress: Progress = _noop) -> dict[str, Any]:
     if not (src / ".git").is_dir():
         progress(f"cloning {UPSTREAM_REPO} -> {src}")
         # Full history is not needed and costs ~1.5 GB; tags are, for checkout.
-        rc = _run(["git", "clone", "--filter=blob:none", UPSTREAM_REPO, str(src)],
+        # --progress because git prints none of it when stderr is not a TTY,
+        # which makes a multi-minute clone look like a hang.
+        rc = _run(["git", "clone", "--progress", "--filter=blob:none",
+                   UPSTREAM_REPO, str(src)],
                   src.parent, progress, timeout=3600)
         if rc != 0:
             return {"ok": False, "error": f"clone failed (exit {rc})"}
     else:
-        progress("fetching upstream")
-        if _git(["fetch", "--tags", "--force", "origin"], progress, timeout=1800) != 0:
-            return {"ok": False, "error": "fetch failed"}
+        # `origin` is always the main repo. A checkout living in a normal
+        # projects folder tends to acquire someone's fork as origin, and then
+        # "latest upstream release" quietly means "latest tag that fork
+        # happens to have" — which is exactly what was happening here.
+        _normalize_origin(progress)
+        progress("fetching tags from origin")
+        if _git(["fetch", "--progress", "--tags", "--force", "origin"],
+                progress, timeout=1800) != 0:
+            return {"ok": False, "error": f"fetch from {UPSTREAM_REPO} failed"}
 
     target = tag.strip()
     if not target:
@@ -333,14 +397,22 @@ def fetch_source(tag: str = "", progress: Progress = _noop) -> dict[str, Any]:
             rel = asyncio.run(updater.fetch_latest_release())
             target = (rel or {}).get("tag_name", "") or ""
         except Exception as exc:
-            progress(f"!! could not resolve latest tag: {exc}")
+            # Deliberately NOT falling back to origin/master. Master is ahead of
+            # the newest release, may not build, and the patch may not apply to
+            # it — and the user asked for "latest release", so quietly building
+            # something else is worse than stopping. Name a tag to override.
+            return {"ok": False,
+                    "error": f"could not resolve the latest release tag ({exc}). "
+                             f"Set Upstream Tag explicitly to build a known version."}
     if not target:
-        target = "origin/master"
-        progress("falling back to origin/master")
+        return {"ok": False,
+                "error": "no release tag resolved; set Upstream Tag explicitly"}
+    progress(f"latest release resolves to {target}")
 
     progress(f"checking out {target}")
     if _git(["checkout", "--force", target], progress) != 0:
-        return {"ok": False, "error": f"checkout {target} failed"}
+        return {"ok": False, "error":
+                f"checkout {target} failed — the tag may not exist upstream"}
     _git(["reset", "--hard"], progress)
     _git(["clean", "-fd"], progress)
     return {"ok": True, "tag": target, "head": _git_out(["rev-parse", "--short", "HEAD"])}
@@ -414,6 +486,23 @@ def build(progress: Progress = _noop, *, cuda: Optional[bool] = None,
         "-DLLAMA_BUILD_TESTS=OFF",
         "-DLLAMA_BUILD_EXAMPLES=OFF",
     ]
+    if cuda:
+        cu = tc["cuda"]
+        if not cu["nvcc"]:
+            return {"ok": False, "error": "GGML_CUDA is on but no nvcc on PATH — "
+                                          "install the CUDA toolkit, or turn CUDA off"}
+        if cu["mismatch"]:
+            return {"ok": False, "error":
+                    f"CUDA toolkit {cu['version']} would link against cudart "
+                    f"{cu['major']}, but the installed llama.cpp is a CUDA "
+                    f"{cu['installed_major']} build and ships that runtime. Installing "
+                    f"the result would produce a binary that cannot start. Install a "
+                    f"matching toolkit, or turn CUDA off."}
+        # Build only for the GPU that is actually here. The release zips are fat
+        # binaries covering every arch; we are not shipping this one anywhere, so
+        # native is both faster to compile and smaller.
+        cfg_args.append("-DCMAKE_CUDA_ARCHITECTURES=native")
+        progress(f"CUDA toolkit {cu['version']} (arch: native)")
     build_args = [cmake, "--build", str(bdir), "--config", "Release",
                   "--target", "llama-server", "-j", str(jobs)]
 

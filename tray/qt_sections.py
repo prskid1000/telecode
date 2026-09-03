@@ -1548,6 +1548,7 @@ def _llama_patch_build_card(window) -> QWidget:
         if st["source_present"]:
             lines.append(f"checkout: {st['checked_out'] or '?'} ({st['head'] or '?'})"
                          + ("  [dirty]" if st["dirty"] else ""))
+            lines.append(f"origin:   {st.get('origin') or '?'}")
         else:
             lines.append("checkout: none — Fetch first")
         applied = st["patches_applied"]
