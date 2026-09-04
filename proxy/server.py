@@ -904,11 +904,20 @@ async def _prepare_internal_body(
         keep_md = int(_pget("keep_claude_md", proxy_config.keep_claude_md()))
     except (TypeError, ValueError):
         keep_md = -1
+    try:
+        keep_mem = int(_pget("keep_memory", proxy_config.keep_memory()))
+    except (TypeError, ValueError):
+        keep_mem = -1
+    try:
+        keep_rules = int(_pget("keep_rules", proxy_config.keep_rules()))
+    except (TypeError, ValueError):
+        keep_rules = -1
     if use_strip_reminders:
         internal["messages"] = _strip_reminders_from_internal(
-            internal.get("messages", []), keep_md)
-    elif keep_md >= 0:
-        internal["messages"] = limit_claude_md(internal.get("messages", []), keep_md)
+            internal.get("messages", []), keep_md, keep_mem, keep_rules)
+    elif keep_md >= 0 or keep_mem >= 0 or keep_rules >= 0:
+        internal["messages"] = limit_claude_md(
+            internal.get("messages", []), keep_md, keep_mem, keep_rules)
 
     # 8. Context overflow — last, so it sees the final prepared body.
     internal = await _apply_context_overflow(
@@ -1085,7 +1094,9 @@ async def _apply_context_overflow(
 
 
 def _strip_reminders_from_internal(messages: list[dict[str, Any]],
-                                   keep_claude_md: int = -1) -> list[dict[str, Any]]:
+                                   keep_claude_md: int = -1,
+                                   keep_memory: int = -1,
+                                   keep_rules: int = -1) -> list[dict[str, Any]]:
     """Re-use the Anthropic-shape reminder stripper on the internal history.
 
     The content we care about is just the text inside messages — role labels
@@ -1107,7 +1118,8 @@ def _strip_reminders_from_internal(messages: list[dict[str, Any]],
             or msg.get("tool_call_id")
             or msg.get("role") == "tool"
         )
-        cleaned = strip_all_reminders([msg], keep_claude_md)
+        cleaned = strip_all_reminders([msg], keep_claude_md, keep_memory,
+                                      keep_rules)
         if cleaned:
             out.append(cleaned[0])
         elif is_protocol:

@@ -2608,10 +2608,28 @@ _PROXY_SETTING_COPY: dict[str, tuple[str, str]] = {
         "stripping it makes the model use those tools blind."),
     "keep_claude_md": (
         "Keep CLAUDE.md Files",
-        "How many of the concatenated CLAUDE.md documents to keep, in load "
-        "order — user-global, then project, then nested, then MEMORY.md. Also "
-        "the exclusion from Strip Client Bookkeeping: the block rides inside "
-        "the <system-reminder>, so anything but 'All' is honoured either way."),
+        "How many CLAUDE.md documents to keep, in load order — managed "
+        "policy, then each directory's CLAUDE.md and CLAUDE.local.md from "
+        "~/.claude down to the project. Rules and auto-memory are NOT counted "
+        "here; each has its own dial. Also the exclusion from Strip Client "
+        "Bookkeeping: the block rides inside the <system-reminder>, so "
+        "anything but 'All' is honoured either way."),
+    "keep_rules": (
+        "Keep Rules Files",
+        "How many .claude/rules/**.md documents to keep. Counted apart from "
+        "CLAUDE.md because rules are many and small where CLAUDE.md files are "
+        "few and large — six rules make eight documents, and a shared limit "
+        "of 2 would keep the two big files and drop every rule. Path-scoped "
+        "rules never appear here; they arrive later, when Claude reads a "
+        "matching file."),
+    "keep_memory": (
+        "Keep Auto-Memory",
+        "How many auto-memory documents to keep — the MEMORY.md index Claude "
+        "Code loads at session start. Counted separately from CLAUDE.md "
+        "because memory loads LAST and is the smallest document, so one "
+        "shared count drops it first: 'Keep first 2' in a project with its "
+        "own CLAUDE.md would discard your memories and keep a 13KB project "
+        "file instead."),
     "system_instruction": (
         "Instruction File",
         "Markdown file from proxy/instructions/ prepended to the system "
@@ -2636,6 +2654,16 @@ _PROXY_SCOPE_NOTE = {
     "profile": "Applies to requests this profile matches, overriding the "
                "global Proxy setting of the same name.",
 }
+
+
+# Shared by keep_claude_md and keep_memory, globally and per profile, so the
+# four rows always offer the same choices. A named-option dropdown, not a
+# spinner: -1 and 0 are modes ("all" / "drop them"), not points on a scale,
+# and a bare number cannot say which is which.
+_KEEP_DOC_OPTIONS: list[tuple[str, int]] = (
+    [("All (no limit)", -1), ("None — drop them", 0)]
+    + [(f"Keep first {n}", n) for n in range(1, 7)]
+)
 
 
 def _proxy_copy(key: str, scope: str) -> tuple[str, str]:
@@ -2767,11 +2795,12 @@ def _proxy(window) -> QWidget:
     # A named-option dropdown, not a spinner: -1 and 0 are modes ("all" /
     # "drop it"), not points on a scale, and a bare number cannot say which
     # is which. Same control and same options as the per-profile row.
-    _keep_label, _keep_help = _proxy_copy("keep_claude_md", "global")
-    body.addWidget(_enum_row("proxy.keep_claude_md", _keep_label,
-                                [("All (no limit)", -1), ("None — drop the block", 0)]
-                                + [(f"Keep first {n}", n) for n in range(1, 7)],
-                                _keep_help))
+    # One row per document kind in the `# claudeMd` block, same control and
+    # same options: all three kinds are plural, so all three are counts.
+    for _field in ("keep_claude_md", "keep_rules", "keep_memory"):
+        _lbl, _hlp = _proxy_copy(_field, "global")
+        body.addWidget(_enum_row(f"proxy.{_field}", _lbl,
+                                    _KEEP_DOC_OPTIONS, _hlp))
 
     body = _sec("System Instruction",
                 "proxy.system_instruction — markdown prepended to the system block")
@@ -3086,26 +3115,30 @@ def _proxy_profiles_card() -> QFrame:
         for _f in ("strip_client_system_prompt", "strip_skills", "strip_mcp_instructions"):
             _toggle_field(sl, _f)
 
-        # CLAUDE.md is a count, not a switch: `# claudeMd` is every CLAUDE.md
-        # on the path concatenated, in load order. Same dropdown as the global
-        # row, built from the same option list.
-        try:
-            _cur_keep = int(prof.get("keep_claude_md", -1))
-        except (TypeError, ValueError):
-            _cur_keep = -1
-        keep_cb = QComboBox()
-        _keep_opts: list[tuple[str, int]] = [
-            ("All (no limit)", -1), ("None — drop the block", 0)]
-        _keep_opts += [(f"Keep first {n}", n) for n in range(1, 7)]
-        for _txt, _val in _keep_opts:
-            keep_cb.addItem(_txt, _val)
-        keep_cb.setCurrentIndex(
-            next((i for i, (_, v) in enumerate(_keep_opts) if v == _cur_keep), 0))
-        keep_cb.currentIndexChanged.connect(
-            lambda _i: _patch("keep_claude_md", int(keep_cb.currentData())))
-        sl.addWidget(_row(
-            row_label(*_proxy_copy("keep_claude_md", "profile"), "keep_claude_md"),
-            _wrap_align(keep_cb, Qt.AlignmentFlag.AlignLeft)))
+        # All three are counts, not switches: the `# claudeMd` block carries
+        # CLAUDE.md files, rules files and the auto-memory index, and each
+        # kind is plural. Counted separately so the CLAUDE.md limit never
+        # decides whether the rules or the memory index survive. Same dropdown
+        # as the global rows, built from the same option list.
+        def _count_field(dest: QVBoxLayout, field: str) -> None:
+            try:
+                cur = int(prof.get(field, -1))
+            except (TypeError, ValueError):
+                cur = -1
+            cb = QComboBox()
+            for _txt, _val in _KEEP_DOC_OPTIONS:
+                cb.addItem(_txt, _val)
+            cb.setCurrentIndex(
+                next((i for i, (_, v) in enumerate(_KEEP_DOC_OPTIONS)
+                      if v == cur), 0))
+            cb.currentIndexChanged.connect(
+                lambda _i, f=field, w=cb: _patch(f, int(w.currentData())))
+            dest.addWidget(_row(
+                row_label(*_proxy_copy(field, "profile"), field),
+                _wrap_align(cb, Qt.AlignmentFlag.AlignLeft)))
+
+        for _f in ("keep_claude_md", "keep_rules", "keep_memory"):
+            _count_field(sl, _f)
 
         # System instruction
         sl = _sec("System Instruction", "system_instruction — markdown prepended to the system block")
@@ -3491,6 +3524,8 @@ def _proxy_profiles_card() -> QFrame:
             "sort_tools": False,
             "inject_date_location": False,
             "keep_claude_md": -1,
+            "keep_rules": -1,
+            "keep_memory": -1,
             "strip_client_system_prompt": False,
             "strip_skills": False,
             "strip_mcp_instructions": False,
