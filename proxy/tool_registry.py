@@ -347,9 +347,20 @@ def strip_turn_context(text: str, *, skills: bool = False,
 #   -1  leave it alone (default)
 #    0  drop the block outright
 #    N  keep the first N documents
+#
+# MEMORY.md is deliberately NOT part of that count — `keep_memory` is a second
+# count, same three modes, governing the auto-memory index. See
+# _select_claude_md_docs for why they cannot share one dial.
 
 _CLAUDE_MD_START_RE = re.compile(r"^# claudeMd$", re.M)
 _DOC_HEADER_RE = re.compile(r"^Contents of .+:$", re.M)
+_MEMORY_PATH_RE = re.compile(r"[\\/]memory[\\/]MEMORY\.md", re.I)
+# Measured, not assumed: a rules file arrives under the SAME `(project
+# instructions, checked into the codebase)` label as a project CLAUDE.md, so
+# the path is the only thing that tells them apart. Matches `~/.claude/rules/`
+# and `<project>/.claude/rules/` alike, at any nesting depth — the directory
+# is walked recursively.
+_RULES_PATH_RE = re.compile(r"[\\/]\.claude[\\/]rules[\\/]", re.I)
 
 # What ends the `# claudeMd` section. Claude Code's sibling context headers are
 # a single camelCase token (`# currentDate`, `# userEmail`, `# gitStatus`);
@@ -371,63 +382,122 @@ def _claude_md_span(text: str) -> tuple[int, int] | None:
     return m.start(), (nxt.start() if nxt else len(text))
 
 
-def _claude_md_trimmed(section: str, keep: int) -> str:
-    """`section` cut down to its first `keep` `Contents of …:` documents."""
+def _doc_kind(header: str) -> str:
+    """Which of the three kinds this `Contents of …:` header names.
+
+    Claude Code's labels do NOT separate them. A rules file and a project
+    CLAUDE.md both arrive as `(project instructions, checked into the
+    codebase)` — measured, not assumed — so only the path distinguishes those
+    two. Memory is the one kind with its own label.
+    """
+    if "auto-memory" in header or _MEMORY_PATH_RE.search(header):
+        return "memory"
+    if _RULES_PATH_RE.search(header):
+        return "rules"
+    return "claude_md"
+
+
+def _select_claude_md_docs(section: str, keep: int, keep_memory: int,
+                           keep_rules: int) -> str:
+    """`section` reduced to its first `keep` CLAUDE.md documents, `keep_rules`
+    rules documents and `keep_memory` auto-memory documents. `-1` means "all
+    of that kind".
+
+    Three counts rather than one because all three kinds are plural and they
+    are wildly different sizes, so a single positional limit cuts by accident
+    of load order rather than by intent:
+
+      claude_md  managed policy, `~/.claude/CLAUDE.md`, then each ancestor
+                 directory's CLAUDE.md and CLAUDE.local.md down to the
+                 project. Few, large. (`@path` imports expand inline and do
+                 not appear as separate documents.)
+      rules      `.claude/rules/**.md` without `paths:` frontmatter, user- and
+                 project-level, loaded recursively. Many, small. Path-scoped
+                 rules are NOT here — they arrive mid-conversation when Claude
+                 reads a matching file.
+      memory     the auto-memory index. One per request today: Claude Code
+                 loads only MEMORY.md at startup and reads the directory's
+                 topic files on demand.
+
+    Memory is the sharpest case — it loads LAST and is the smallest document,
+    so one shared limit drops it before anything else — but rules have the
+    same problem: six rules files ahead of the index push it out of any small
+    count.
+
+    Returns "" when nothing survives, so callers drop the `# claudeMd` heading
+    rather than shipping a header with no documents under it.
+    """
+    limits = {"claude_md": keep, "rules": keep_rules, "memory": keep_memory}
     docs = list(_DOC_HEADER_RE.finditer(section))
-    if len(docs) <= keep:
+    if not docs:
         return section
-    return section[:docs[keep].start()]
+    if all(v < 0 for v in limits.values()):
+        return section
+
+    out = [section[:docs[0].start()]]        # `# claudeMd` heading + intro
+    seen = {k: 0 for k in limits}
+    for i, m in enumerate(docs):
+        end = docs[i + 1].start() if i + 1 < len(docs) else len(section)
+        kind = _doc_kind(m.group(0))
+        limit = limits[kind]
+        if limit < 0 or seen[kind] < limit:
+            out.append(section[m.start():end])
+            seen[kind] += 1
+    return "".join(out) if len(out) > 1 else ""
 
 
-def extract_claude_md(text: str, keep: int) -> str:
-    """The first `keep` CLAUDE.md documents, re-wrapped as a reminder.
+def extract_claude_md(text: str, keep: int, keep_memory: int = -1,
+                      keep_rules: int = -1) -> str:
+    """The kept CLAUDE.md documents, re-wrapped as a reminder.
 
     Used to carry the block through `strip_reminders`, which would otherwise
     delete the wrapper it lives in.
     """
-    if keep <= 0:
+    if keep == 0 and keep_memory == 0 and keep_rules == 0:
         return ""
     span = _claude_md_span(text)
     if not span:
         return ""
-    section = _claude_md_trimmed(text[span[0]:span[1]], keep).rstrip()
+    section = _select_claude_md_docs(
+        text[span[0]:span[1]], keep, keep_memory, keep_rules).rstrip()
     if not section:
         return ""
     return f"<system-reminder>\n{section}\n</system-reminder>"
 
 
-def limit_claude_md_text(text: str, keep: int) -> str:
+def limit_claude_md_text(text: str, keep: int, keep_memory: int = -1,
+                         keep_rules: int = -1) -> str:
     """Trim the block in place — for when reminders are NOT being stripped.
 
-    The surviving head stays byte-identical, so llama.cpp's prefix cache only
-    has to refill from the cut.
+    The result is byte-stable turn over turn, which is what llama.cpp's prefix
+    cache needs. Note that keeping MEMORY.md while dropping an earlier project
+    file removes a document from the MIDDLE of the block, so the refill starts
+    at the first cut rather than at the end of the kept head — a one-time cost
+    on the first turn, not a per-turn one.
     """
-    if keep < 0:
+    if keep < 0 and keep_memory < 0 and keep_rules < 0:
         return text
     span = _claude_md_span(text)
     if not span:
         return text
     start, end = span
-    if keep == 0:
-        cut_at = start
-    else:
-        docs = list(_DOC_HEADER_RE.finditer(text[start:end]))
-        if len(docs) <= keep:
-            return text
-        cut_at = start + docs[keep].start()
-    head, tail = text[:cut_at], text[end:]
-    if head.strip() and tail.strip():
-        return head.rstrip() + "\n\n" + tail.lstrip()
-    return (head + tail).strip()
+    kept = _select_claude_md_docs(text[start:end], keep, keep_memory,
+                                  keep_rules).rstrip()
+    parts = [p for p in (text[:start].rstrip(), kept, text[end:].lstrip())
+             if p.strip()]
+    return "\n\n".join(parts).strip()
 
 
-def _strip_reminders_except_preserved(text: str, keep_claude_md: int = -1) -> str:
+def _strip_reminders_except_preserved(text: str, keep_claude_md: int = -1,
+                                      keep_memory: int = -1,
+                                      keep_rules: int = -1) -> str:
     """Strip client bookkeeping from `text`.
 
     Removed: every <system-reminder> block, and every <total_tokens> budget
-    line. Kept: the first `keep_claude_md` CLAUDE.md documents, skills
-    listings and our deferred-tools listing — re-appended at the end in a
-    fixed order, so the result stays byte-identical turn over turn.
+    line. Kept: the first `keep_claude_md` CLAUDE.md documents, MEMORY.md when
+    `keep_memory`, skills listings and our deferred-tools listing —
+    re-appended at the end in a fixed order, so the result stays
+    byte-identical turn over turn.
     (Proxy-authored context that must survive is emitted as plain text rather
     than added here — see server.py::_inject_system_prompt.)
     """
@@ -435,7 +505,7 @@ def _strip_reminders_except_preserved(text: str, keep_claude_md: int = -1) -> st
     # highest-priority instruction in the request, and a fixed order is what
     # keeps the result byte-stable.
     preserved: list[str] = []
-    kept_md = extract_claude_md(text, keep_claude_md)
+    kept_md = extract_claude_md(text, keep_claude_md, keep_memory, keep_rules)
     if kept_md:
         preserved.append(kept_md)
     preserved += (_SKILLS_REMINDER_RE.findall(text)
@@ -479,25 +549,31 @@ def _apply_to_messages(
 
 
 def strip_all_reminders(messages: list[dict[str, Any]],
-                        keep_claude_md: int = -1) -> list[dict[str, Any]]:
-    """Strip system-reminder blocks, preserving skills + `keep_claude_md` docs."""
+                        keep_claude_md: int = -1,
+                        keep_memory: int = -1,
+                        keep_rules: int = -1) -> list[dict[str, Any]]:
+    """Strip system-reminder blocks, preserving skills + the kept docs."""
     return _apply_to_messages(
         messages,
-        lambda t: _strip_reminders_except_preserved(t, keep_claude_md).strip(),
+        lambda t: _strip_reminders_except_preserved(
+            t, keep_claude_md, keep_memory, keep_rules).strip(),
     )
 
 
 def limit_claude_md(messages: list[dict[str, Any]],
-                    keep: int) -> list[dict[str, Any]]:
+                    keep: int,
+                    keep_memory: int = -1,
+                    keep_rules: int = -1) -> list[dict[str, Any]]:
     """Trim the CLAUDE.md block in place, reminders left intact.
 
-    The other half of `keep_claude_md`: used when `strip_reminders` is off, so
-    the dial still limits how many documents get through.
+    The other half of `keep_claude_md` / `keep_memory`: used when
+    `strip_reminders` is off, so the dials still limit what gets through.
     """
-    if keep < 0:
+    if keep < 0 and keep_memory < 0 and keep_rules < 0:
         return messages
     return _apply_to_messages(
-        messages, lambda t: limit_claude_md_text(t, keep).strip()
+        messages,
+        lambda t: limit_claude_md_text(t, keep, keep_memory, keep_rules).strip()
     )
 
 

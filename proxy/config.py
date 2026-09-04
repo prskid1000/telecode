@@ -130,11 +130,11 @@ def keep_claude_md() -> int:
     """How many CLAUDE.md documents to let through, in load order.
 
     `# claudeMd` is every CLAUDE.md on the path concatenated — managed policy,
-    user (`~/.claude/CLAUDE.md`), project, nested, then MEMORY.md — so this is
-    a count, not a switch.
+    user (`~/.claude/CLAUDE.md`), project, then nested — so this is a count,
+    not a switch. MEMORY.md is excluded from the count; see `keep_memory`.
 
       -1  leave the block alone (default)
-       0  drop it entirely
+       0  drop every CLAUDE.md document
        N  keep the first N documents
 
     Doubles as the exclusion from `strip_reminders`: the block rides inside
@@ -144,6 +144,60 @@ def keep_claude_md() -> int:
     """
     try:
         return int(app_config.get_nested("proxy.keep_claude_md", -1))
+    except (TypeError, ValueError):
+        return -1
+
+
+def keep_memory() -> int:
+    """How many auto-memory documents to let through. Same three modes as
+    `keep_claude_md`:
+
+      -1  keep every memory document (default)
+       0  drop them
+       N  keep the first N
+
+    Split from `keep_claude_md` because the two are the same shape but
+    different things. MEMORY.md is model-written, sits LAST in load order, and
+    is the smallest document in the block — so a single positional count drops
+    it before anything else, which is exactly backwards: `keep_claude_md: 2`
+    in a project with its own CLAUDE.md would keep a 13KB project file and
+    silently discard a 2.7KB memory index. Counting them separately means
+    neither dial decides the other's fate.
+
+    A count rather than a switch because the memory directory is plural —
+    a MEMORY.md index plus one topic file per memory. Only the index is loaded
+    at session start (the topic files are read on demand), so today this dial
+    sees a single document per request; the count keeps it the same shape as
+    its sibling and needs no rework if that ever changes.
+
+    Per-profile `keep_memory` overrides this.
+    """
+    try:
+        return int(app_config.get_nested("proxy.keep_memory", -1))
+    except (TypeError, ValueError):
+        return -1
+
+
+def keep_rules() -> int:
+    """How many `.claude/rules/**.md` documents to let through. Same three
+    modes as `keep_claude_md` (`-1` all / `0` none / `N` first N).
+
+    Rules are counted apart from CLAUDE.md because they are many and small
+    where CLAUDE.md files are few and large, so one shared limit cuts by
+    accident of load order. A project with six rules files emits eight
+    documents; `keep_claude_md: 2` would keep the two big CLAUDE.md files and
+    silently drop every rule.
+
+    Claude Code gives a rules file the SAME `(project instructions, checked
+    into the codebase)` label as a project CLAUDE.md — verified against a live
+    request — so they are told apart by path alone. Path-scoped rules (`paths:`
+    frontmatter) never reach this block: they arrive mid-conversation when
+    Claude reads a matching file.
+
+    Per-profile `keep_rules` overrides this.
+    """
+    try:
+        return int(app_config.get_nested("proxy.keep_rules", -1))
     except (TypeError, ValueError):
         return -1
 
