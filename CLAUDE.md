@@ -296,15 +296,23 @@ Dual-protocol middleware in front of llama.cpp. Both Anthropic `/v1/messages` an
    `_drop_empty_turns()` then prunes turns the strippers emptied — an empty turn is pure chat-template scaffolding (`<|im_start|>user\n<|im_end|>`). Tool-protocol turns (`tool_calls` / `role:"tool"`) are exempt from every stripper and from the prune, so the pairing templates require is never broken; turns carrying an image keep their remaining blocks.
 6. **Intercept loop:** OpenAI internal shape. `_run_upstream_round` branches on first content signal. Tool_call → assemble → `InterceptedToolCall`. Otherwise stream live via adapter. `_start_heartbeat`: Anthropic gets `: keepalive` + `event: ping` every `proxy.ping_interval`; OpenAI gets `: keepalive` only. Up to `proxy.max_roundtrips` (default 15).
 7. **Adapters** (`AnthropicAdapter`/`OpenAIAdapter`): per-round `*StreamState`. Status lines = synthetic content blocks at indices `0..status_emitted-1`. `<think>` openers across delta boundaries via max-tag-length lookahead. `thinking_delta` when `emit_thinking_blocks=true`.
-8. **Multimodal.** Images pass through as `image_url` — llama.cpp fetches a remote one itself. **Video does
-   not**: llama.cpp accepts only `{"type": "input_video", "input_video": {"data": "<base64>"}}`, its README
-   calling that "an extension from OAI schema", and it *throws* on any content type it does not recognise
-   (`unsupported content[].type`). So OpenAI's own `video_url` part must be **renamed, not forwarded**, and
-   an Anthropic `video` block — which Anthropic itself has no such thing as, this is a telecode extension
-   mirroring its `image` block — maps onto the same. Base64 only, so `server.py::_inline_video_urls` resolves
-   a remote URL through `media_fetch` *before* translation (translate.py is deliberately sync and pure);
-   a refused URL becomes a 400 rather than a silent drop. Needs an mmproj, and ffmpeg/ffprobe for
-   `--video-fps` / `--video-timestamp-interval` decoding.
+8. **Multimodal — image, video, audio, handled uniformly.** llama.cpp takes `image_url`, `input_video` and
+   `input_audio`, and it *throws* on any content type it does not recognise (`unsupported content[].type`),
+   so every other client spelling must be **renamed, not forwarded**: `video_url` and `audio_url` become
+   `input_*` in `translate.py::_normalize_media_parts`. `input_audio` happens to match OpenAI's own spelling,
+   but its payload is still normalised — OpenAI puts raw base64 in `.data`, some clients send a `data:` URI,
+   llama.cpp also allows `.url` — so exactly one shape goes upstream. `input_audio.format` is dropped;
+   llama.cpp ignores it and sniffs the container (miniaudio: mp3/wav/flac).
+   On the Anthropic side, `video` and `audio` blocks are **telecode extensions** mirroring its own `image`
+   block — the Messages API has neither.
+   `server.py::_inline_media_urls` resolves every remote URL through `media_fetch` *before* translation
+   (translate.py is deliberately sync and pure); a refused URL becomes a 400 rather than a silent drop.
+   That includes images, which used to be handed to llama.cpp to fetch: same SSRF primitive (llama.cpp runs
+   on this machine, so a URL the caller cannot reach is one it can) and its own fetch caps at 10 MB / 10 s.
+   The trade is that a **localhost or LAN image URL is now refused** — drop the `"image"` entries from
+   `_URL_MEDIA_*` to restore it. Each kind needs an mmproj: audio wants an audio-capable projector
+   (Qwen2-Audio, Ultravox, Voxtral), video additionally wants ffmpeg/ffprobe for `--video-fps` /
+   `--video-timestamp-interval`.
 9. **`count_tokens`:** full prepare → `/apply-template` → `/tokenize`. **`/v1/embeddings`:** forwarded verbatim. **CORS:** `cors_origins`; streaming gets headers via `_apply_cors_to_stream()` before `prepare()`.
 
 To use: `llamacpp.enabled` + `proxy.enabled`, fill `llamacpp.binary` + `llamacpp.models.<name>.path`, point clients at `http://localhost:1235`.
