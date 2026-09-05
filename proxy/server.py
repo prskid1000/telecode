@@ -692,15 +692,46 @@ def _drop_empty_turns(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out or messages
 
 
-async def _inline_video_urls(body: dict[str, Any], inbound_protocol: str) -> None:
-    """Replace video-by-URL with inline base64, in place.
+# Content blocks that can carry a remote URL, by inbound protocol. `image` is
+# Anthropic's own block; `video` and `audio` are telecode extensions (the
+# Messages API has neither). The OpenAI side is llama.cpp's `input_*` plus the
+# `*_url` variants clients mirror from `image_url`.
+#
+# All three kinds are inlined here rather than handed to llama.cpp. Images used
+# to be the exception — llama.cpp fetched those itself — but that is the same
+# SSRF primitive as the other two: llama.cpp runs on this machine, so a URL the
+# caller cannot reach is one it can, and its fetch caps at 10 MB / 10 s besides.
+# Consequence worth knowing: an image URL on localhost or the LAN is now
+# REFUSED where it previously worked. Drop the "image" entries to restore that.
+_URL_MEDIA_ANTHROPIC = {
+    "image": "image/png",
+    "video": "video/mp4",
+    "audio": "audio/mpeg",
+}
+_URL_MEDIA_OPENAI = {
+    "image_url": ("image_url", "image/png"),
+    "video_url": ("video_url", "video/mp4"),
+    "audio_url": ("audio_url", "audio/mpeg"),
+    "input_video": ("input_video", "video/mp4"),
+    "input_audio": ("input_audio", "audio/mpeg"),
+}
 
-    Anthropic shape:  {"type": "video",     "source": {"type": "url", "url": ...}}
-    OpenAI shape:     {"type": "video_url", "video_url": {"url": ...}}
 
-    A data: URI is left alone — translate.py decodes those. Only a real remote
-    URL is fetched, through media_fetch's guards, because the proxy can reach
-    localhost and the LAN on behalf of a caller who cannot.
+async def _inline_media_urls(body: dict[str, Any], inbound_protocol: str) -> None:
+    """Replace video/audio-by-URL with inline base64, in place.
+
+    Anthropic shape:  {"type": "audio",       "source": {"type": "url", "url": ...}}
+    OpenAI shape:     {"type": "input_audio", "input_audio": {"url": ...}}
+                      {"type": "audio_url",   "audio_url": {"url": ...}}
+
+    A data: URI is left alone — translate.py decodes those — as is raw base64,
+    which is what OpenAI's own `input_audio.data` carries. Only a real remote
+    URL is fetched, and we fetch it rather than letting llama.cpp do it: its
+    own fetch caps at 10 MB / 10 s, and it runs on this machine, so a URL the
+    caller cannot reach is one llama.cpp can. media_fetch's guards apply here.
+
+    The declared `media_type` is cosmetic — llama.cpp sniffs the container —
+    so a fetched clip is labelled by kind rather than by probing the bytes.
     """
     from proxy.media_fetch import MediaFetchError, fetch_media_b64
 
@@ -713,28 +744,36 @@ async def _inline_video_urls(body: dict[str, Any], inbound_protocol: str) -> Non
         for block in content:
             if not isinstance(block, dict):
                 continue
-            url = None
-            if inbound_protocol == "anthropic" and block.get("type") == "video":
+            btype = str(block.get("type"))
+            url, key, mime = None, "", ""
+            if inbound_protocol == "anthropic" and btype in _URL_MEDIA_ANTHROPIC:
+                mime = _URL_MEDIA_ANTHROPIC[btype]
                 src = block.get("source") or {}
                 if src.get("type") == "url":
                     url = src.get("url", "")
-            elif block.get("type") == "video_url":
-                url = (block.get("video_url") or {}).get("url", "")
+            elif btype in _URL_MEDIA_OPENAI:
+                key, mime = _URL_MEDIA_OPENAI[btype]
+                inner = block.get(key) or {}
+                if isinstance(inner, dict):
+                    url = inner.get("url") or inner.get("data") or ""
 
-            if not url or url.startswith("data:"):
+            # Only an http(s) URL needs resolving. A data: URI is already
+            # inline, and anything else is raw base64.
+            if not url or not url.startswith(("http://", "https://")):
                 continue
             try:
                 data = await fetch_media_b64(url)
             except MediaFetchError as exc:
                 # A refused or unreachable URL is the client's problem, and a
-                # silent drop would look like the model ignoring the video.
-                raise web.HTTPBadRequest(reason=f"video URL rejected: {exc}") from exc
+                # silent drop would look like the model ignoring the clip.
+                raise web.HTTPBadRequest(
+                    reason=f"{btype} URL rejected: {exc}") from exc
 
-            if block.get("type") == "video":
-                block["source"] = {"type": "base64", "media_type": "video/mp4",
-                                   "data": data}
+            if key:
+                block[key] = {"url": f"data:{mime};base64,{data}"}
             else:
-                block["video_url"] = {"url": f"data:video/mp4;base64,{data}"}
+                block["source"] = {"type": "base64", "media_type": mime,
+                                   "data": data}
 
 
 async def _prepare_internal_body(
@@ -777,7 +816,7 @@ async def _prepare_internal_body(
     #     with passing the URL through because llama.cpp fetches those itself.
     #     Done here rather than in translate.py because it needs to await, and
     #     translate.py is deliberately synchronous and pure.
-    await _inline_video_urls(body, inbound_protocol)
+    await _inline_media_urls(body, inbound_protocol)
 
     # 3. Client body → internal (OpenAI) body
     if inbound_protocol == "anthropic":

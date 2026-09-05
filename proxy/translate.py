@@ -161,26 +161,36 @@ def _normalize_system_messages(
     return [{"role": "system", "content": "\n\n".join(lead)}, *rest]
 
 
-# ── Video ────────────────────────────────────────────────────────────────
+# ── Video and audio ──────────────────────────────────────────────────────
 #
-# llama.cpp accepts video on /v1/chat/completions as
+# llama.cpp accepts both on /v1/chat/completions as content parts of its own:
 #     {"type": "input_video", "input_video": {"data": "<base64>"}}
-# which its own README calls "an extension from OAI schema. For now, it only
-# accepts base64 input". Two consequences drive everything below:
+#     {"type": "input_audio", "input_audio": {"data": "<base64>"}}
+# Its README calls these "an extension from OAI schema" — though `input_audio`
+# happens to match OpenAI's own spelling, so an OpenAI client's audio part
+# already arrives in the right shape. Three things drive everything below:
 #
-#   1. Base64 only. There is no URL form, so a remote URL has to be fetched by
-#      someone. server.py's _inline_video_urls does it before translation,
-#      through proxy/media_fetch's SSRF guards — the proxy can reach localhost
-#      and the LAN on behalf of a caller who cannot. By the time a body reaches
-#      here every video is inline, so the refusal below is a backstop for a
-#      caller that bypassed that path, not the policy itself.
+#   1. We inline every remote URL ourselves. llama.cpp CAN fetch one (its
+#      `handle_media` takes `http…`), but it does so with a 10 MB cap and a
+#      10 s timeout, and it runs on this machine — so a URL the caller could
+#      not reach becomes one llama.cpp can. server.py's _inline_media_urls
+#      fetches instead, before translation, through proxy/media_fetch's SSRF
+#      guards. By the time a body reaches here every clip is inline, so the
+#      refusals below are a backstop for a caller that bypassed that path,
+#      not the policy itself.
 #   2. llama.cpp REJECTS unknown content types outright
 #      (`throw std::invalid_argument("unsupported content[].type")`), so a
 #      passthrough of OpenAI's own `video_url` part is a hard 400. It has to be
-#      renamed, not forwarded.
+#      renamed, not forwarded. Audio needs the same for the `audio_url`
+#      spelling some clients mirror from video.
+#   3. `input_audio.format` is accepted and ignored — llama.cpp sniffs the
+#      container itself (miniaudio: mp3, wav, flac), so we never have to get
+#      the declared type right.
 #
-# Video also requires an mmproj; without one llama.cpp answers "video input is
-# not supported - hint: ... you may need to provide the mmproj".
+# Both need an mmproj; without one llama.cpp answers "<kind> input is not
+# supported - hint: ... you may need to provide the mmproj". Audio needs an
+# audio-capable projector specifically (Qwen2-Audio, Ultravox, Voxtral) — a
+# vision mmproj does not carry the audio tower.
 
 _DATA_URI_RE = re.compile(r"^data:([^;,]*);base64,(.*)$", re.S)
 
@@ -189,36 +199,70 @@ class VideoInputError(ValueError):
     """A video block that cannot be represented to llama.cpp."""
 
 
-def _video_part_from_b64(data: str) -> dict[str, Any]:
-    return {"type": "input_video", "input_video": {"data": data}}
+class AudioInputError(ValueError):
+    """An audio block that cannot be represented to llama.cpp."""
 
 
-def _video_part_from_url(url: str) -> dict[str, Any]:
+def _media_part_from_b64(kind: str, data: str) -> dict[str, Any]:
+    key = f"input_{kind}"
+    return {"type": key, key: {"data": data}}
+
+
+def _media_part_from_url(kind: str, url: str) -> dict[str, Any]:
     """Accept a base64 data: URI; refuse anything else.
 
-    Remote URLs are resolved upstream by server.py's _inline_video_urls, so a
+    Remote URLs are resolved upstream by server.py's _inline_media_urls, so a
     non-data URI arriving here means that pass was skipped. Refusing is the
     safe failure: this function cannot await, and guessing would either block
     the event loop or fetch unguarded.
+
+    A raw (non-URI) base64 payload is passed through — that is what OpenAI's
+    own `input_audio.data` carries, and llama.cpp accepts it directly.
     """
-    m = _DATA_URI_RE.match(url or "")
-    if not m:
-        raise VideoInputError(
-            "video must be inline base64 by this point — llama.cpp accepts only "
-            "base64 for input_video, and remote URLs are resolved earlier by "
-            "server.py's _inline_video_urls"
-        )
-    return _video_part_from_b64(m.group(2))
+    text = url or ""
+    m = _DATA_URI_RE.match(text)
+    if m:
+        return _media_part_from_b64(kind, m.group(2))
+    if text and "://" not in text[:16]:
+        # Raw base64, already inline. Nothing to resolve.
+        return _media_part_from_b64(kind, text)
+    err = AudioInputError if kind == "audio" else VideoInputError
+    raise err(
+        f"{kind} must be inline by this point — remote URLs are resolved "
+        f"earlier by server.py's _inline_media_urls, through the SSRF guards "
+        f"in proxy/media_fetch"
+    )
 
 
-def _normalize_video_parts(messages: list[Any]) -> None:
-    """Rewrite OpenAI video parts in place into llama.cpp's `input_video`.
+def _video_part_from_b64(data: str) -> dict[str, Any]:
+    return _media_part_from_b64("video", data)
 
-    OpenAI spells video `{"type": "video_url", "video_url": {"url": ...}}`;
-    llama.cpp only knows `input_video` and throws on anything it does not
-    recognise, so forwarding the OpenAI spelling is a guaranteed 400. A client
-    already sending `input_video` is left alone.
+
+def _video_part_from_url(url: str) -> dict[str, Any]:
+    return _media_part_from_url("video", url)
+
+
+def _audio_part_from_b64(data: str) -> dict[str, Any]:
+    return _media_part_from_b64("audio", data)
+
+
+def _audio_part_from_url(url: str) -> dict[str, Any]:
+    return _media_part_from_url("audio", url)
+
+
+def _normalize_media_parts(messages: list[Any]) -> None:
+    """Rewrite OpenAI video/audio parts in place into llama.cpp's spelling.
+
+    `video_url` and `audio_url` are renamed to `input_video` / `input_audio`,
+    because llama.cpp throws on any content type it does not recognise. An
+    `input_audio` part is already the right type, but its payload still gets
+    normalised: OpenAI sends raw base64 in `.data`, some clients send a data:
+    URI, and llama.cpp also allows `.url` — all three collapse to inline
+    base64 here so exactly one shape reaches the server. `format` is dropped
+    with the rest of the wrapper; llama.cpp ignores it anyway.
     """
+    renames = {"video_url": "video", "audio_url": "audio",
+               "input_video": "video", "input_audio": "audio"}
     for msg in messages:
         if not isinstance(msg, dict):
             continue
@@ -226,10 +270,16 @@ def _normalize_video_parts(messages: list[Any]) -> None:
         if not isinstance(content, list):
             continue
         for i, part in enumerate(content):
-            if not isinstance(part, dict) or part.get("type") != "video_url":
+            if not isinstance(part, dict):
                 continue
-            url = (part.get("video_url") or {}).get("url", "")
-            content[i] = _video_part_from_url(url)
+            kind = renames.get(str(part.get("type")))
+            if kind is None:
+                continue
+            inner = part.get(str(part.get("type"))) or {}
+            if not isinstance(inner, dict):
+                continue
+            payload = inner.get("data") or inner.get("url") or ""
+            content[i] = _media_part_from_url(kind, payload)
 
 
 # ── Anthropic request → internal (OpenAI-shape) ──────────────────────────
@@ -268,16 +318,18 @@ def _anthropic_content_to_openai(content: Any) -> Any:
                     "type": "image_url",
                     "image_url": {"url": src.get("url", "")},
                 })
-        elif btype == "video":
-            # NOT in Anthropic's Messages API — it has no video content block.
-            # This mirrors the shape of Anthropic's own `image` block so a
-            # client that wants video through the Anthropic surface has one
-            # obvious spelling, and is documented as a telecode extension.
+        elif btype in ("video", "audio"):
+            # NEITHER is in Anthropic's Messages API — it has no video or audio
+            # content block. Both mirror the shape of Anthropic's own `image`
+            # block so a client that wants them through the Anthropic surface
+            # has one obvious spelling, and both are documented as telecode
+            # extensions. `media_type` is carried by the client but unused:
+            # llama.cpp sniffs the container.
             src = block.get("source", {}) or {}
             if src.get("type") == "url":
-                parts.append(_video_part_from_url(src.get("url", "")))
+                parts.append(_media_part_from_url(btype, src.get("url", "")))
             else:
-                parts.append(_video_part_from_b64(src.get("data", "")))
+                parts.append(_media_part_from_b64(btype, src.get("data", "")))
         elif btype == "document":
             # llama.cpp doesn't have native PDF — surface as text if provided
             src = block.get("source", {}) or {}
@@ -949,7 +1001,7 @@ def openai_request_to_internal(
     _apply_reasoning_effort_template(body, defaults, effort)
     sys_nudge = _apply_effort_entry(entry, body, defaults)
 
-    _normalize_video_parts(body.get("messages") or [])
+    _normalize_media_parts(body.get("messages") or [])
 
     messages = _normalize_system_messages(body.get("messages") or [], system_mode)
     if sys_nudge:
