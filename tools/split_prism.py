@@ -18,7 +18,7 @@ OUT = Path(sys.argv[2])
 
 # (number, slug, subject, [path predicates], body)
 GROUPS: list[tuple[str, str, str, list[str], str]] = [
-    ("0002", "prism-ggml-core-low-bit-types",
+    ("0001", "prism-ggml-core-low-bit-types",
      "ggml : add the Prism low-bit types (PQ2_0, PTQ1_0) and the FWHT op",
      ["ggml/include/", "ggml/src/ggml.c", "ggml/src/ggml-common.h",
       "ggml/src/ggml-quants.c", "ggml/src/ggml-quants.h", "ggml/src/gguf.cpp",
@@ -32,7 +32,7 @@ GROUPS: list[tuple[str, str, str, list[str], str]] = [
      "rather than replacing it - the published PQ2_0 GGUFs and the upstream\n"
      "group-64 GGUFs are different files. PTQ1_0 is the 1.75 bpw sibling."),
 
-    ("0003", "prism-ggml-cpu-backend",
+    ("0002", "prism-ggml-cpu-backend",
      "ggml-cpu : PQ2_0 / PTQ1_0 CPU backend, repack and SIMD dots",
      ["ggml/src/ggml-cpu/"],
      "Scalar q8_0 vec-dot and CPU traits for both types, the get_rows and ops.cpp\n"
@@ -41,7 +41,7 @@ GROUPS: list[tuple[str, str, str, list[str], str]] = [
      "The ARM NEON dot is marked UNVERIFIED upstream - the fork's own commit\n"
      "message says it needs ARM hardware it was never run on."),
 
-    ("0004", "prism-ggml-cuda-backend",
+    ("0003", "prism-ggml-cuda-backend",
      "ggml-cuda : PQ2_0 / PTQ1_0 CUDA kernels, FWHT and the Hopper prefill path",
      ["ggml/src/ggml-cuda/"],
      "MMQ tile loaders, MMVQ, dequantize and get_rows for both low-bit types;\n"
@@ -51,7 +51,7 @@ GROUPS: list[tuple[str, str, str, list[str], str]] = [
      "Also carries the gated-delta-net rows-indexed state read that the qwen35\n"
      "ring decode path needs, and the GB10 tuning."),
 
-    ("0005", "prism-ggml-metal-backend",
+    ("0004", "prism-ggml-metal-backend",
      "ggml-metal : PQ2_0 / PTQ1_0 Metal backend and FWHT kernels",
      ["ggml/src/ggml-metal/"],
      "Mat-vec and mat-mul in exact float for both types, the dequant-copy\n"
@@ -61,7 +61,7 @@ GROUPS: list[tuple[str, str, str, list[str], str]] = [
      "the series stop reproducing the fork, and it costs nothing at build time\n"
      "(the Metal backend is not compiled here)."),
 
-    ("0006", "prism-ggml-other-backends",
+    ("0005", "prism-ggml-other-backends",
      "ggml : PQ2_0 / PTQ1_0 support in the Vulkan, HIP and remaining backends",
      ["ggml/src/ggml-vulkan", "ggml/src/ggml-sycl", "ggml/src/ggml-opencl",
       "ggml/src/ggml-hexagon", "ggml/src/ggml-webgpu", "ggml/src/ggml-musa",
@@ -70,7 +70,7 @@ GROUPS: list[tuple[str, str, str, list[str], str]] = [
      "Q1_0/Q2_0/PQ2_0 on AMD, and the supports_op / type-table updates the other\n"
      "backends need so they correctly refuse the new types instead of crashing."),
 
-    ("0007", "prism-llama-runtime",
+    ("0006", "prism-llama-runtime",
      "llama : Prism runtime - ftype wiring, KV mean-centering, DSpark/DFlash",
      ["src/", "include/"],
      "The llama-level half of the fork:\n\n"
@@ -86,7 +86,7 @@ GROUPS: list[tuple[str, str, str, list[str], str]] = [
      "This is the patch most exposed to upstream churn: llama-arch.cpp alone is\n"
      "479 added / 413 removed lines against a file upstream edits constantly."),
 
-    ("0008", "prism-common-and-tools",
+    ("0007", "prism-common-and-tools",
      "common, tools : DSpark drafter runtime, kv-mean-center tool, speculative",
      ["common/", "tools/", "examples/", "CMakeLists.txt"],
      "The DSpark Markov drafter (CUDA and Metal), the speculative-decoding\n"
@@ -96,7 +96,7 @@ GROUPS: list[tuple[str, str, str, list[str], str]] = [
      "Note: telecode builds with LLAMA_BUILD_EXAMPLES=OFF, so the examples/ files\n"
      "are carried but never compiled."),
 
-    ("0009", "prism-conversion-and-gguf-py",
+    ("0008", "prism-conversion-and-gguf-py",
      "gguf-py, conversion : Prism quant types and DSpark/DFlash exporters",
      ["gguf-py/", "conversion/"],
      "Python-side constants for the new ggml types and the conversion scripts\n"
@@ -104,7 +104,7 @@ GROUPS: list[tuple[str, str, str, list[str], str]] = [
      "Not needed to RUN a published GGUF - only to produce one. Safe to drop if\n"
      "you are only consuming prism-ml's published weights."),
 
-    ("0010", "prism-tests",
+    ("0009", "prism-tests",
      "tests : Prism low-bit and drafter test coverage",
      ["tests/"],
      "Element-map and CUDA-dot tests for PTQ1_0, the kv-mean-center test, the\n"
@@ -114,7 +114,7 @@ GROUPS: list[tuple[str, str, str, list[str], str]] = [
      "compiled. Kept because they are the only executable specification of what\n"
      "the kernels are supposed to produce."),
 
-    ("0011", "prism-docs-and-ci",
+    ("0010", "prism-docs-and-ci",
      "docs, ci : Prism README notes and the release-prism workflow",
      [".github/", "docs/", "README.md", "AGENTS.md", "CONTRIBUTING.md",
       "LICENSE", "NOTICE"],
@@ -136,10 +136,17 @@ Provenance
 ----------
 Source:   https://github.com/PrismML-Eng/llama.cpp
 Branch:   prism
-Range:    5ea87ddad22541a37053c7ba92b02ec1923617c6..9a9394a895b96003ca842a6041cb28ac49a108f7
-Base tag: b10615 (the fork's base is b10615 plus one unrelated webgpu commit,
-          which is NOT included here - this diff is the fork's own work only)
-Part {part} of {total}, split by file group from the full 14,759-line fork diff.
+Applies to: upstream tag b11065
+
+NOT a straight diff of the vendor's branch. The fork's own base was b10615;
+this is telecode's merge of it onto b11065 (~450 upstream commits later), so it
+carries none of the vendor's testing. Where upstream had since implemented a
+fork feature itself, the merge kept UPSTREAM's version -- see
+docs/vendor-patches.md for the rule and the list.
+
+Part {part} of {total}, split by file group. Groups own disjoint file sets, so
+there is no apply-time ordering dependency between them; compile-time there is
+(the ggml core patch underpins every backend patch).
 llama.cpp is MIT licensed; the fork carries the same terms.
 ---
 """

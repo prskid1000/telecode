@@ -27,6 +27,10 @@ prompt that never mentions tools while the grammar still expects calls.
 Ref: #28179
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Rebased onto upstream b11065: the original diff no longer applied at
+common/chat.h:358 after upstream's churn there. Re-expressed by 3-way
+apply, so the change is the same one, not a re-implementation.
+
 ---
  common/chat-auto-parser.h |  4 ++
  common/chat.cpp           | 42 +++++++++++++++---
@@ -36,7 +40,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
  5 files changed, 153 insertions(+), 7 deletions(-)
 
 diff --git a/common/chat-auto-parser.h b/common/chat-auto-parser.h
-index 8ae15c9..e4dee1f 100644
+index 8ae15c91e..e4dee1f0c 100644
 --- a/common/chat-auto-parser.h
 +++ b/common/chat-auto-parser.h
 @@ -54,6 +54,10 @@ namespace autoparser {
@@ -51,10 +55,10 @@ index 8ae15c9..e4dee1f 100644
      json                                  json_schema;
      bool                                  parallel_tool_calls = true;
 diff --git a/common/chat.cpp b/common/chat.cpp
-index 743ecde..6419739 100644
+index 6c8099cf2..822dfbdc2 100644
 --- a/common/chat.cpp
 +++ b/common/chat.cpp
-@@ -554,21 +554,29 @@ json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msg
+@@ -555,21 +555,29 @@ json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msg
      return render_message_to_json(msgs, c);
  }
  
@@ -87,7 +91,7 @@ index 743ecde..6419739 100644
      }
      return result;
  }
-@@ -594,13 +602,31 @@ std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & too
+@@ -605,13 +613,31 @@ std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & too
                  }
  
                  const auto & function = tool.at("function");
@@ -119,7 +123,7 @@ index 743ecde..6419739 100644
      } catch (const std::exception & e) {
          throw std::runtime_error("Failed to parse tools: " + std::string(e.what()) + "; tools = " + tools.dump(2));
      }
-@@ -945,8 +971,11 @@ static std::string common_chat_template_direct_apply_impl(
+@@ -919,8 +945,11 @@ std::string common_chat_template_direct_apply_impl(
          {"eos_token", tmpl.eos_token()},
          {"enable_thinking", inputs.enable_thinking},
      };
@@ -133,7 +137,7 @@ index 743ecde..6419739 100644
      }
      if (inputs.extra_context.is_object()) {
          // TODO: do we need to merge, or replacing is fine?
-@@ -3607,7 +3636,8 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
+@@ -1223,7 +1252,8 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
  static common_chat_params common_chat_templates_apply_jinja(const struct common_chat_templates *        tmpls,
                                                              const struct common_chat_templates_inputs & inputs) {
      autoparser::generation_params params;
@@ -144,7 +148,7 @@ index 743ecde..6419739 100644
          params.tools.is_array() && tmpls->template_tool_use ? *tmpls->template_tool_use : *tmpls->template_default;
      const auto & src             = tmpl.source();
 diff --git a/common/chat.h b/common/chat.h
-index cb39e34..a48814c 100644
+index 0e1423a5a..79f4dcda2 100644
 --- a/common/chat.h
 +++ b/common/chat.h
 @@ -217,6 +217,12 @@ struct common_chat_tool {
@@ -170,13 +174,13 @@ index cb39e34..a48814c 100644
 +common_json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools,
 +                                               bool skip_deferred = false);
  
- // get template caps, useful for reporting to server /props endpoint
- std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_templates * chat_templates);
+ // The parameters schema of a function tool. A tool without parameters, or with an empty {}, takes zero arguments.
+ common_json common_chat_tool_parameters(const common_json & function);
 diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
-index 7918f0f..cd4cb75 100644
+index 13733c1d9..954d08618 100644
 --- a/tests/test-chat.cpp
 +++ b/tests/test-chat.cpp
-@@ -1788,6 +1788,97 @@ static void test_tools_oaicompat_json_conversion() {
+@@ -1813,6 +1813,97 @@ static void test_tools_oaicompat_json_conversion() {
                    common_chat_tools_to_json_oaicompat({ special_function_tool }).dump(2));
  }
  
@@ -274,7 +278,7 @@ index 7918f0f..cd4cb75 100644
  static void test_convert_responses_to_chatcmpl() {
      LOG_DBG("%s\n", __func__);
  
-@@ -7230,6 +7321,7 @@ int main(int argc, char ** argv) {
+@@ -7624,6 +7715,7 @@ int main(int argc, char ** argv) {
          test_msgs_oaicompat_json_conversion();
          test_msg_token_delimiters_split();
          test_tools_oaicompat_json_conversion();
@@ -283,10 +287,10 @@ index 7918f0f..cd4cb75 100644
          test_developer_role_to_system_workaround();
          test_deepseek_v4_thinking_retention();
 diff --git a/tools/server/README.md b/tools/server/README.md
-index c6e907b..67210a9 100644
+index ef9033404..d79efd885 100644
 --- a/tools/server/README.md
 +++ b/tools/server/README.md
-@@ -1329,6 +1329,17 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type":
+@@ -1327,6 +1327,17 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type":
  
  `parse_tool_calls`: Whether to parse the generated tool call.
  

@@ -14,18 +14,25 @@ Provenance
 ----------
 Source:   https://github.com/PrismML-Eng/llama.cpp
 Branch:   prism
-Range:    5ea87ddad22541a37053c7ba92b02ec1923617c6..9a9394a895b96003ca842a6041cb28ac49a108f7
-Base tag: b10615 (the fork's base is b10615 plus one unrelated webgpu commit,
-          which is NOT included here - this diff is the fork's own work only)
-Part 10 of 10, split by file group from the full 14,759-line fork diff.
+Applies to: upstream tag b11065
+
+NOT a straight diff of the vendor's branch. The fork's own base was b10615;
+this is telecode's merge of it onto b11065 (~450 upstream commits later), so it
+carries none of the vendor's testing. Where upstream had since implemented a
+fork feature itself, the merge kept UPSTREAM's version -- see
+docs/vendor-patches.md for the rule and the list.
+
+Part 10 of 10, split by file group. Groups own disjoint file sets, so
+there is no apply-time ordering dependency between them; compile-time there is
+(the ggml core patch underpins every backend patch).
 llama.cpp is MIT licensed; the fork carries the same terms.
 ---
 diff --git a/.github/workflows/build-android.yml b/.github/workflows/build-android.yml
-index a05248e12..0748499ce 100644
+index 90960a7f6..a923e4bad 100644
 --- a/.github/workflows/build-android.yml
 +++ b/.github/workflows/build-android.yml
 @@ -52,6 +52,7 @@ jobs:
-         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+         uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
          with:
            log-accepted-android-sdk-licenses: false
 +          packages: 'platform-tools'
@@ -33,7 +40,7 @@ index a05248e12..0748499ce 100644
        - name: Build
          run: |
 @@ -126,6 +127,7 @@ jobs:
-         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+         uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
          with:
            log-accepted-android-sdk-licenses: false
 +          packages: 'platform-tools'
@@ -1012,20 +1019,10 @@ index 6d83a02f4..27f3ca0ee 100644
  > The single exception to the comment restrictions above is the official `ggml-gh-bot` account, which is whitelisted to review and post comments automatically.
  
 diff --git a/CONTRIBUTING.md b/CONTRIBUTING.md
-index 6aac3cb87..5fabfce28 100644
+index 59ec3f311..20db9d888 100644
 --- a/CONTRIBUTING.md
 +++ b/CONTRIBUTING.md
-@@ -22,9 +22,6 @@ If AI is used to generate any portion of the code, contributors must adhere to t
- 2. Check for an existing PR addressing the same change; if one exists, comment there to work with its author instead of opening a duplicate.
- 3. Perform a comprehensive manual review prior to submitting the pull request.
- 4. Be prepared to explain every line of code they submitted when asked about it by a maintainer.
--5. It is strictly prohibited to use AI to write your posts for you (bug reports, feature requests, pull request descriptions, Github discussions, responding to humans, ...).
--
--For more info, please refer to the [AGENTS.md](AGENTS.md) file.
- 
- # Pull requests (for contributors & collaborators)
- 
-@@ -32,12 +29,7 @@ For more info, please refer to the [AGENTS.md](AGENTS.md) file.
+@@ -32,12 +32,7 @@ For more info, please refer to the [AGENTS.md](AGENTS.md) file.
  
  - Search for existing discussions and PRs first - duplicates will likely be closed without questions.
  - Features must begin with an issue, not a PR - let interest accumulate before writing code; niche features may only land as an example/tool, or on a private fork.
@@ -1039,7 +1036,7 @@ index 6aac3cb87..5fabfce28 100644
  ### Preparing your PR
  
 diff --git a/README.md b/README.md
-index 0b5598c6e..09772faa5 100644
+index aae3bcd35..c6f2391d0 100644
 --- a/README.md
 +++ b/README.md
 @@ -1,5 +1,22 @@
@@ -1174,7 +1171,7 @@ index 000000000..548f5e4a7
 +  a mismatch. In the matching basis the two features compose; see tools/kv-mean-center/README.md
 +  for measured numbers.
 diff --git a/docs/speculative.md b/docs/speculative.md
-index 0f9f8a3d9..bb235ca87 100644
+index ffb1e34c7..b14707c3c 100644
 --- a/docs/speculative.md
 +++ b/docs/speculative.md
 @@ -78,6 +78,45 @@ See:

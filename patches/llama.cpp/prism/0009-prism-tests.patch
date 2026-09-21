@@ -15,14 +15,21 @@ Provenance
 ----------
 Source:   https://github.com/PrismML-Eng/llama.cpp
 Branch:   prism
-Range:    5ea87ddad22541a37053c7ba92b02ec1923617c6..9a9394a895b96003ca842a6041cb28ac49a108f7
-Base tag: b10615 (the fork's base is b10615 plus one unrelated webgpu commit,
-          which is NOT included here - this diff is the fork's own work only)
-Part 9 of 10, split by file group from the full 14,759-line fork diff.
+Applies to: upstream tag b11065
+
+NOT a straight diff of the vendor's branch. The fork's own base was b10615;
+this is telecode's merge of it onto b11065 (~450 upstream commits later), so it
+carries none of the vendor's testing. Where upstream had since implemented a
+fork feature itself, the merge kept UPSTREAM's version -- see
+docs/vendor-patches.md for the rule and the list.
+
+Part 9 of 10, split by file group. Groups own disjoint file sets, so
+there is no apply-time ordering dependency between them; compile-time there is
+(the ggml core patch underpins every backend patch).
 llama.cpp is MIT licensed; the fork carries the same terms.
 ---
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index b9f9d4b78..67ff970be 100644
+index 9b3a4fcc4..09d44a4ef 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
 @@ -144,6 +144,25 @@ if (NOT WIN32)
@@ -51,7 +58,7 @@ index b9f9d4b78..67ff970be 100644
  if (LLAMA_LLGUIDANCE)
      llama_build_and_test(test-grammar-llguidance.cpp ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-llama-bpe.gguf)
  endif ()
-@@ -159,6 +178,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+@@ -160,6 +179,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
      llama_build_and_test(test-grammar-integration.cpp)
      llama_build_and_test(test-llama-grammar.cpp)
      llama_build_and_test(test-batch-alloc.cpp)
@@ -59,15 +66,16 @@ index b9f9d4b78..67ff970be 100644
      llama_build_and_test(test-chat.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
      target_include_directories(test-chat PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
      target_link_libraries(test-chat PRIVATE server-context)
-@@ -237,6 +257,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
-     set_tests_properties(test-recurrent-state-rollback-dsv4 PROPERTIES
-         FIXTURES_REQUIRED generate-models
-     )
+@@ -253,6 +273,8 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+     set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED generate-models)
+ 
+     llama_build(test-fusion.cpp)
++
 +    llama_build_and_test(test-kv-mean-center.cpp)
  endif()
  
  llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
-@@ -311,6 +332,8 @@ if (NOT GGML_BACKEND_DL)
+@@ -326,6 +348,8 @@ if (NOT GGML_BACKEND_DL AND GGML_CPU)
      # these tests use the backends directly and cannot be built with dynamic loading
      llama_build_and_test(test-barrier.cpp)
      llama_build_and_test(test-quantize-fns.cpp)
@@ -396,10 +404,10 @@ index 000000000..0e5a7bb09
 +if __name__ == "__main__":
 +    main()
 diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
-index 99014df09..b28bc29ef 100644
+index c75cb3c0f..6c7b58d16 100644
 --- a/tests/test-backend-ops.cpp
 +++ b/tests/test-backend-ops.cpp
-@@ -4345,16 +4345,22 @@ struct test_gated_delta_net : public test_case {
+@@ -4644,16 +4644,22 @@ struct test_gated_delta_net : public test_case {
      const bool    permuted;
      const bool    kda;
      const int64_t K; // snapshot slot count: 1 = final-only, >1 = last K states
@@ -425,7 +433,7 @@ index 99014df09..b28bc29ef 100644
  
      ggml_tensor * build_graph(ggml_context * ctx) override {
          ggml_tensor * q;
-@@ -4376,14 +4382,33 @@ struct test_gated_delta_net : public test_case {
+@@ -4675,14 +4681,33 @@ struct test_gated_delta_net : public test_case {
          const int64_t g_ne0 = kda ? head_size : 1;
          ggml_tensor * g     = ggml_new_tensor_4d(ctx, type, g_ne0, head_count * v_repeat, n_seq_tokens, n_seqs);
          ggml_tensor * beta  = ggml_new_tensor_4d(ctx, type, 1, head_count * v_repeat, n_seq_tokens, n_seqs);
@@ -462,7 +470,7 @@ index 99014df09..b28bc29ef 100644
          return out;
      }
  
-@@ -4391,11 +4416,23 @@ struct test_gated_delta_net : public test_case {
+@@ -4690,11 +4715,23 @@ struct test_gated_delta_net : public test_case {
          for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
              if (ggml_is_view_op(t->op)) { continue; }
              if (strcmp(t->name, "g") == 0) {
@@ -488,7 +496,7 @@ index 99014df09..b28bc29ef 100644
              } else {
                  init_tensor_uniform(t);
              }
-@@ -4649,6 +4686,71 @@ struct test_mul_mat_hadamard : public test_mul_mat {
+@@ -5064,6 +5101,71 @@ struct test_mul_mat_hadamard : public test_mul_mat {
      }
  };
  
@@ -557,10 +565,10 @@ index 99014df09..b28bc29ef 100644
 +    }
 +};
 +
- static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats) {
+ static void init_mul_mat_id_ids(ggml_context * ctx, int n_mats) {
      std::random_device rd;
      std::default_random_engine rng(rd());
-@@ -8249,6 +8351,7 @@ static const ggml_type all_types[] = {
+@@ -8898,6 +9000,7 @@ static const ggml_type all_types[] = {
      GGML_TYPE_Q8_0,
      GGML_TYPE_Q1_0,
      GGML_TYPE_Q2_0,
@@ -568,7 +576,7 @@ index 99014df09..b28bc29ef 100644
      GGML_TYPE_MXFP4, GGML_TYPE_NVFP4,
      GGML_TYPE_Q2_K, GGML_TYPE_Q3_K,
      GGML_TYPE_Q4_K, GGML_TYPE_Q5_K,
-@@ -8265,6 +8368,7 @@ static const ggml_type base_types[] = {
+@@ -8914,6 +9017,7 @@ static const ggml_type base_types[] = {
      GGML_TYPE_Q8_0, // for I8MM tests
      GGML_TYPE_Q1_0,
      GGML_TYPE_Q2_0,
@@ -576,7 +584,7 @@ index 99014df09..b28bc29ef 100644
      GGML_TYPE_Q4_0,
      GGML_TYPE_Q4_1, // for I8MM tests
      GGML_TYPE_Q4_K,
-@@ -8278,6 +8382,7 @@ static const ggml_type other_types[] = {
+@@ -8927,6 +9031,7 @@ static const ggml_type other_types[] = {
      GGML_TYPE_Q8_0,
      GGML_TYPE_Q1_0,
      GGML_TYPE_Q2_0,
@@ -584,7 +592,7 @@ index 99014df09..b28bc29ef 100644
      GGML_TYPE_Q2_K, GGML_TYPE_Q3_K,
      GGML_TYPE_Q5_K,
      GGML_TYPE_Q6_K,
-@@ -8427,6 +8532,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -9104,6 +9209,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
      test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_I64, { 1, 8, 1, 3 }, { 1, 1 }, 2, false));
      test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_I32, { 1, 8, 1, 3 }, { 1, 1 }, 2, false));
      test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_Q8_0, GGML_TYPE_I32, { 256, 5, 1, 3 }, { 1, 1, }, 1, false));
@@ -596,7 +604,7 @@ index 99014df09..b28bc29ef 100644
      for (ggml_type src_type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
          for (ggml_type type : all_types) {
              for (int b : {1, 7}) {
-@@ -8499,6 +8609,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -9177,6 +9287,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
  
      // im2col 1D
      test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_F32, {3000, 128, 1, 1}, {3, 128, 1280, 1}, 1, 0, 1, 0, 1, 0, false));
@@ -605,14 +613,16 @@ index 99014df09..b28bc29ef 100644
      test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32, {3000, 128, 1, 1}, {3, 128, 1280, 1}, 1, 0, 1, 0, 1, 0, false));
      test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {3000, 128, 1, 1}, {3, 128, 1280, 1}, 1, 0, 1, 0, 1, 0, false));
      test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {3000, 384, 1, 1}, {3, 384,  384, 1}, 1, 0, 1, 0, 1, 0, false));
-@@ -9136,8 +9248,29 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -9850,13 +9962,35 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
      test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 128, 32, 128));
      test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 128, 4, 128, {2, 3}));
      test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 256, 512, 256)); // many rows
+-    test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 32, 1, 32)); // too small (N<64)
+-    test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 1024, 1, 1024)); // too big (N>512)
 +    test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 1024, 1, 1024));
 +    test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 2048, 1, 2048));
 +    test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 2048, 32, 2048));
-+    test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F16, 64, 1, 64));
+     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F16, 64, 1, 64));
 +    test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F16, 128, 32, 128));
 +    test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F16, 2048, 1, 2048));
 +    test_cases.emplace_back(new test_fwht_signed(1024, 5120, 1));
@@ -631,12 +641,18 @@ index 99014df09..b28bc29ef 100644
 +    test_cases.emplace_back(new test_fwht_signed(4096, 8192, 1,  GGML_TYPE_F16));
 +    test_cases.emplace_back(new test_fwht_signed(8192, 8192, 2));
 +    test_cases.emplace_back(new test_fwht_signed(8192, 8192, 1,  GGML_TYPE_F16));
-     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 32, 1, 32)); // too small (N<64)
--    test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 1024, 1, 1024)); // too big (N>512)
++    test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 32, 1, 32)); // too small (N<64)
++    // upstream b11065 also lists (1024,1,1024) here as "too big (N>512)"; the fork's kernel
++    // handles it (covered above), so only its new F16 shapes are carried over. Exact
++    // duplicates of F16 cases already listed above (64,1,64 and 128,32,128) are dropped.
+     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F16, 128, 1, 128));
+     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F16, 256, 1, 256));
+     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F16, 512, 1, 512));
+-    test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F16, 128, 32, 128));
+     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F16, 128, 4, 128, {2, 3}));
+     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F16, 256, 512, 256)); // many rows
  
- #if 0
-     // > 4GB A matrix. Too slow to be enabled by default.
-@@ -10050,6 +10183,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -10970,6 +11104,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
      test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 1, 1));
      test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1));
      test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1, 1, true, true));
@@ -648,7 +664,7 @@ index 99014df09..b28bc29ef 100644
      test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1, 1, false, true));
      test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 16, 64, 1, 2));
      test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 4, 1));
-@@ -10090,6 +10228,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -11010,6 +11149,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
      // overflow: n_tokens > K — only the last K snapshots kept.
      test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 32,   8, 1, 1, false, false, /*K=*/3));
      test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64,  16, 2, 1, false, false, /*K=*/4));
@@ -663,8 +679,8 @@ index 99014df09..b28bc29ef 100644
 +    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64,  16, 2, 1, false, false, /*K=*/4, /*rows=*/true));
 +    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64,   4, 2, 1, false, true,  /*K=*/4, /*rows=*/true)); // KDA
  
- #if 0
-     // these tests are disabled to save execution time, sbut they can be handy for debugging
+     // gdn + cache cpy fusion (K > 1)
+     test_cases.emplace_back(new test_gated_delta_net_cache_fusion(GGML_TYPE_F32, 4, 32,   2, 1, 2));
 diff --git a/tests/test-dfly-fusion.cpp b/tests/test-dfly-fusion.cpp
 new file mode 100644
 index 000000000..d0a594b2b
@@ -4259,10 +4275,10 @@ index 000000000..d8cf77e10
 +    return bad != 0;
 +}
 diff --git a/tests/test-quantize-fns.cpp b/tests/test-quantize-fns.cpp
-index 9510ac14c..4f77fb970 100644
+index 570fca89a..8e8529447 100644
 --- a/tests/test-quantize-fns.cpp
 +++ b/tests/test-quantize-fns.cpp
-@@ -159,6 +159,8 @@ static int test_vec_dot_q(bool verbose) {
+@@ -192,6 +192,8 @@ static int test_vec_dot_q(bool verbose) {
                  type == GGML_TYPE_TQ1_0   ? MAX_QUANTIZATION_TOTAL_ERROR_TERNARY :
                  type == GGML_TYPE_TQ2_0   ? MAX_QUANTIZATION_TOTAL_ERROR_TERNARY :
                  type == GGML_TYPE_Q2_0    ? MAX_QUANTIZATION_TOTAL_ERROR_TERNARY :
@@ -4271,7 +4287,7 @@ index 9510ac14c..4f77fb970 100644
                  type == GGML_TYPE_Q2_K    ? MAX_QUANTIZATION_TOTAL_ERROR_2BITS :
                  type == GGML_TYPE_IQ2_S   ? MAX_QUANTIZATION_TOTAL_ERROR_2BITS :
                  type == GGML_TYPE_Q3_K    ? MAX_QUANTIZATION_TOTAL_ERROR_3BITS :
-@@ -184,7 +186,7 @@ static int test_vec_dot_q(bool verbose) {
+@@ -217,7 +219,7 @@ static int test_vec_dot_q(bool verbose) {
                  ? MAX_DOT_PRODUCT_ERROR_LOWBIT
                  : type == GGML_TYPE_Q1_0
                  ? MAX_DOT_PRODUCT_ERROR_BINARY

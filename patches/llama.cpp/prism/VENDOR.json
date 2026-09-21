@@ -1,0 +1,28 @@
+{
+  "name": "prism",
+  "repo": "https://github.com/PrismML-Eng/llama.cpp.git",
+  "branch": "prism",
+  "vendor_commit": "9a9394a895b96003ca842a6041cb28ac49a108f7",
+  "vendor_base": "5ea87ddad22541a37053c7ba92b02ec1923617c6",
+  "ported_onto": "b11065",
+  "generated": "2026-09-21",
+  "why": "prism-ml's Bonsai GGUFs are packed in PQ2_0 (ternary, FP16 scale per 128 weights, 1.71 bpw). Upstream's Q1_0/Q2_0 are the group-64 formats and cannot read a group-128 file. The qwen35 architecture itself is already upstream; only the weight format is not.",
+  "claims": {
+    "ggml_types": {
+      "PQ2_0": 142,
+      "PTQ1_0": 143
+    },
+    "file_types": {
+      "MOSTLY_PQ2_0": 128,
+      "MOSTLY_PTQ1_0": 129
+    },
+    "archs": [
+      "dspark"
+    ]
+  },
+  "notes": [
+    "claims verified against the merged tree, not copied from the fork's docs: ggml.h defines PQ2_0=142 / PTQ1_0=143, and `dspark` is the only arch string present here and absent from upstream b11065. dflash and dfly are drafter variants, not separate LLM_ARCH entries.",
+    "upstream had independently implemented two of the fork's optimizations by b11065 - the DGX-Spark L2 prefetch in ggml-cuda/mmvq.cu (now mmvq_should_prefetch / mmvq_prefetch_l2) and the HIP crumb-unpack in vecdotq.cuh. Both resolved toward upstream's version. Re-check this on every refresh; it is the cheapest way for the series to shrink.",
+    "this port is telecode's own merge of the fork onto b11065, NOT a regeneration of a vendor rebase. The fork's own base was still b10615 at the time. If `vendor_drift.py status` reports the vendor has rebased, regenerate from their base instead - it inherits their testing, which this merge does not."
+  ]
+}

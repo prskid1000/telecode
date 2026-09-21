@@ -210,19 +210,33 @@ combinations (`mlock+dio`, `mmap+mlock+dio`) are rejected by the parser, so it i
   Current series: `0001-common-add-defer_loading-to-tool-definitions.patch` (ggml-org/llama.cpp#28179),
   then `0002..0011-prism-*.patch`.
 
-- **The prism series vendors a whole fork, and breaks the rule above on purpose.** `0002..0011` are the
-  entire [PrismML-Eng/llama.cpp](https://github.com/PrismML-Eng/llama.cpp) `prism` branch — 14,759 added
-  lines over 157 files — split by file group. They add **PQ2_0** (ternary, FP16 scale per **128**
-  weights, 1.71 bpw, ggml type 142) and **PTQ1_0**, plus CPU/CUDA/Metal/Vulkan/HIP kernels, the Hadamard
-  weight-fold runtime, KV mean-centering and the DSpark/DFlash/DFly drafters. That is what the prism-ml
-  Bonsai GGUFs need: upstream's `Q1_0`/`Q2_0` (41/42) are the **group-64** formats and cannot read a
-  group-128 file. The *architecture* (`qwen35`) is already upstream — only the weight format is not.
-  **`llamacpp.custom_build.tag` is therefore pinned to `b10615`**, the fork's own base; empty would float
-  to latest and fail all ten at once. Upstream is ~450 commits past that and growing — refresh by
-  regenerating (`tools/split_prism.py`), never by hand-editing a `.patch`. Full runbook, the
-  which-GGUF-runs-where table, and the expected residual diffs: [docs/prism-patches.md](docs/prism-patches.md).
-  Before reaching for it: `Ternary-Bonsai-27B-Q2_g64.gguf` (7.23 GB) runs on a **stock** build with no
-  patches at all — 400 MB more than the PQ2_0 file buys zero fork maintenance.
+- **A subdirectory of `patches/llama.cpp/` is a whole third-party fork, vendored.** Different kind of
+  thing from a top-level patch: not awaiting upstream, and thousands of lines or nothing — some GGUFs
+  simply cannot be read by stock llama.cpp. `patches()` returns top-level (ours) first, then each vendor
+  dir; `patch_key()` keys by relative path because two vendors both numbering from 0001 would otherwise
+  alias each other in `applied_patches()`. Framework, resolution rule and regeneration runbook:
+  [docs/vendor-patches.md](docs/vendor-patches.md).
+
+- **`patches/llama.cpp/prism/`** is the [PrismML-Eng](https://github.com/PrismML-Eng/llama.cpp) `prism`
+  branch (14,759 added lines / 157 files) **merged onto upstream b11065 by us**, split by file group.
+  Adds **PQ2_0** (ternary, FP16 scale per **128** weights, 1.71 bpw, ggml type 142) and **PTQ1_0**, plus
+  CPU/CUDA/Metal/Vulkan/HIP kernels, the Hadamard weight-fold runtime, KV mean-centering and the
+  DSpark/DFlash/DFly drafters. Upstream's `Q1_0`/`Q2_0` (41/42) are the **group-64** formats and cannot
+  read a group-128 file; the `qwen35` arch is already upstream, so only the weight format was missing.
+  We carry the merge ourselves rather than tracking their rebases — theirs land every 4–6 weeks in big
+  jumps, and their release tags (`prism-b10709`) encode *their own commit count*, not the upstream base.
+  Before reaching for any of it: `Ternary-Bonsai-27B-Q2_g64.gguf` (7.23 GB) runs on a **stock** build
+  with no patches — 400 MB over the PQ2_0 file buys zero fork maintenance.
+
+- **`tools/vendor_drift.py` is how the port stays current** — `status` (does the series still apply to
+  its own tag? to newest upstream? has the vendor moved or rebased?), `conflicts <vendor> --onto <tag>`
+  (3-way applies and prints **only** the hunks git could not resolve, formatted for a model to rewrite),
+  `collisions` (two vendors claiming ggml type 142 or the arch string `dspark` compile fine and then
+  **silently misread weights** — each vendor declares `claims` in `VENDOR.json` and this is the only
+  check that catches it). **Resolution rule: upstream-latest PLUS the vendor's feature, never one side
+  wholesale — and check first whether upstream has since implemented the feature itself.** That last one
+  paid off twice in this port: the fork's DGX-Spark L2 prefetch and its HIP crumb-unpack both exist
+  upstream now, so both resolved toward upstream and the series got smaller.
 
 **Keep `cache_ram` non-zero.** `--cache-ram N` is the host-RAM prompt cache in MiB (upstream default
 8192; **0 disables it**), and `--cache-idle-slots` saves an idle slot's KV there when a new task claims

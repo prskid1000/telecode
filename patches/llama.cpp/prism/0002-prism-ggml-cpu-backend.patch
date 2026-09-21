@@ -14,14 +14,21 @@ Provenance
 ----------
 Source:   https://github.com/PrismML-Eng/llama.cpp
 Branch:   prism
-Range:    5ea87ddad22541a37053c7ba92b02ec1923617c6..9a9394a895b96003ca842a6041cb28ac49a108f7
-Base tag: b10615 (the fork's base is b10615 plus one unrelated webgpu commit,
-          which is NOT included here - this diff is the fork's own work only)
-Part 2 of 10, split by file group from the full 14,759-line fork diff.
+Applies to: upstream tag b11065
+
+NOT a straight diff of the vendor's branch. The fork's own base was b10615;
+this is telecode's merge of it onto b11065 (~450 upstream commits later), so it
+carries none of the vendor's testing. Where upstream had since implemented a
+fork feature itself, the merge kept UPSTREAM's version -- see
+docs/vendor-patches.md for the rule and the list.
+
+Part 2 of 10, split by file group. Groups own disjoint file sets, so
+there is no apply-time ordering dependency between them; compile-time there is
+(the ggml core patch underpins every backend patch).
 llama.cpp is MIT licensed; the fork carries the same terms.
 ---
 diff --git a/ggml/src/ggml-cpu/arch-fallback.h b/ggml/src/ggml-cpu/arch-fallback.h
-index 152e0bac9..d283c2ed5 100644
+index 2b9a42657..21aad0c00 100644
 --- a/ggml/src/ggml-cpu/arch-fallback.h
 +++ b/ggml/src/ggml-cpu/arch-fallback.h
 @@ -17,6 +17,8 @@
@@ -163,7 +170,7 @@ index 152e0bac9..d283c2ed5 100644
  #define ggml_gemm_q4_0_4x4_q8_0_generic ggml_gemm_q4_0_4x4_q8_0
  #define ggml_gemm_q4_0_4x8_q8_0_generic ggml_gemm_q4_0_4x8_q8_0
  #define ggml_gemm_q2_K_8x8_q8_K_generic ggml_gemm_q2_K_8x8_q8_K
-@@ -243,11 +283,17 @@
+@@ -243,10 +283,17 @@
  #define ggml_gemm_mxfp4_8x8_q8_0_generic ggml_gemm_mxfp4_8x8_q8_0
  #define ggml_gemm_q8_0_4x4_q8_0_generic ggml_gemm_q8_0_4x4_q8_0
  #define ggml_gemm_q8_0_4x8_q8_0_generic ggml_gemm_q8_0_4x8_q8_0
@@ -176,22 +183,23 @@ index 152e0bac9..d283c2ed5 100644
  // quants.c
  #define quantize_row_q8_K_generic quantize_row_q8_K
  #define ggml_vec_dot_nvfp4_q8_0_generic ggml_vec_dot_nvfp4_q8_0
- #define ggml_vec_dot_q1_0_q8_0_generic ggml_vec_dot_q1_0_q8_0
++#define ggml_vec_dot_q1_0_q8_0_generic ggml_vec_dot_q1_0_q8_0
 +#define ggml_vec_dot_pq2_0_q8_0_generic ggml_vec_dot_pq2_0_q8_0
  #define ggml_vec_dot_q2_0_q8_0_generic ggml_vec_dot_q2_0_q8_0
  #define ggml_vec_dot_tq1_0_q8_K_generic ggml_vec_dot_tq1_0_q8_K
  #define ggml_vec_dot_tq2_0_q8_K_generic ggml_vec_dot_tq2_0_q8_K
-@@ -280,6 +326,9 @@
+@@ -277,6 +324,10 @@
  #define ggml_gemv_mxfp4_8x8_q8_0_generic ggml_gemv_mxfp4_8x8_q8_0
  #define ggml_gemv_q8_0_4x4_q8_0_generic ggml_gemv_q8_0_4x4_q8_0
  #define ggml_gemv_q8_0_4x8_q8_0_generic ggml_gemv_q8_0_4x8_q8_0
 +#define ggml_gemv_q1_0_4x4_q8_0_generic ggml_gemv_q1_0_4x4_q8_0
 +#define ggml_gemv_q1_0_4x8_q8_0_generic ggml_gemv_q1_0_4x8_q8_0
 +#define ggml_gemv_pq2_0_4x8_q8_0_generic ggml_gemv_pq2_0_4x8_q8_0
- #define ggml_gemm_q4_0_4x4_q8_0_generic ggml_gemm_q4_0_4x4_q8_0
++#define ggml_gemm_q4_0_4x4_q8_0_generic ggml_gemm_q4_0_4x4_q8_0
  #define ggml_gemm_q4_0_4x8_q8_0_generic ggml_gemm_q4_0_4x8_q8_0
  #define ggml_gemm_q4_0_8x8_q8_0_generic ggml_gemm_q4_0_8x8_q8_0
-@@ -296,7 +345,12 @@
+ #define ggml_gemm_q2_K_8x8_q8_K_generic ggml_gemm_q2_K_8x8_q8_K
+@@ -292,7 +343,12 @@
  #define ggml_gemm_mxfp4_8x8_q8_0_generic ggml_gemm_mxfp4_8x8_q8_0
  #define ggml_gemm_q8_0_4x4_q8_0_generic ggml_gemm_q8_0_4x4_q8_0
  #define ggml_gemm_q8_0_4x8_q8_0_generic ggml_gemm_q8_0_4x8_q8_0
@@ -204,7 +212,7 @@ index 152e0bac9..d283c2ed5 100644
  // quants.c
  #define ggml_vec_dot_tq1_0_q8_K_generic ggml_vec_dot_tq1_0_q8_K
  #define ggml_vec_dot_tq2_0_q8_K_generic ggml_vec_dot_tq2_0_q8_K
-@@ -312,6 +366,7 @@
+@@ -308,6 +364,7 @@
  #define ggml_vec_dot_mxfp4_q8_0_generic ggml_vec_dot_mxfp4_q8_0
  #define ggml_vec_dot_nvfp4_q8_0_generic ggml_vec_dot_nvfp4_q8_0
  #define ggml_vec_dot_q1_0_q8_0_generic ggml_vec_dot_q1_0_q8_0
@@ -212,7 +220,7 @@ index 152e0bac9..d283c2ed5 100644
  #define ggml_vec_dot_q2_0_q8_0_generic ggml_vec_dot_q2_0_q8_0
  // repack.cpp
  #define ggml_quantize_mat_q8_0_4x4_generic ggml_quantize_mat_q8_0_4x4
-@@ -334,6 +389,9 @@
+@@ -330,6 +387,9 @@
  #define ggml_gemv_mxfp4_8x8_q8_0_generic ggml_gemv_mxfp4_8x8_q8_0
  #define ggml_gemv_q8_0_4x4_q8_0_generic ggml_gemv_q8_0_4x4_q8_0
  #define ggml_gemv_q8_0_4x8_q8_0_generic ggml_gemv_q8_0_4x8_q8_0
@@ -222,7 +230,7 @@ index 152e0bac9..d283c2ed5 100644
  #define ggml_gemm_q4_0_4x4_q8_0_generic ggml_gemm_q4_0_4x4_q8_0
  #define ggml_gemm_q4_0_4x8_q8_0_generic ggml_gemm_q4_0_4x8_q8_0
  #define ggml_gemm_q4_0_8x8_q8_0_generic ggml_gemm_q4_0_8x8_q8_0
-@@ -350,4 +408,7 @@
+@@ -346,4 +406,7 @@
  #define ggml_gemm_mxfp4_8x8_q8_0_generic ggml_gemm_mxfp4_8x8_q8_0
  #define ggml_gemm_q8_0_4x4_q8_0_generic ggml_gemm_q8_0_4x4_q8_0
  #define ggml_gemm_q8_0_4x8_q8_0_generic ggml_gemm_q8_0_4x8_q8_0
@@ -1042,18 +1050,18 @@ index af1cebad1..4a12aad60 100644
 +    ggml_gemm_pq2_0_4x8_q8_0_generic(n, s, bs, vx, vy, nr, nc);
 +}
 diff --git a/ggml/src/ggml-cpu/ggml-cpu.c b/ggml/src/ggml-cpu/ggml-cpu.c
-index 87ac0a702..9cd2c2d39 100644
+index 8bb0ff7bc..c79d68e4e 100644
 --- a/ggml/src/ggml-cpu/ggml-cpu.c
 +++ b/ggml/src/ggml-cpu/ggml-cpu.c
-@@ -5,6 +5,7 @@
- #include "ggml-backend.h"
+@@ -6,6 +6,7 @@
  #include "traits.h"
+ #include "iqp.h"
  #include "ggml-cpu-impl.h"
 +#include "ggml-cpu.h"
  #include "ggml-impl.h"
  #include "quants.h"
  #include "ggml-threading.h"
-@@ -236,6 +237,18 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
+@@ -237,6 +238,18 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
          .vec_dot_type             = GGML_TYPE_Q8_0,
          .nrows                    = 1,
      },
@@ -1072,53 +1080,8 @@ index 87ac0a702..9cd2c2d39 100644
      [GGML_TYPE_Q4_0] = {
          .from_float               = quantize_row_q4_0,
          .vec_dot                  = ggml_vec_dot_q4_0_q8_0,
-@@ -1328,7 +1341,9 @@ UseGgmlGemm1:;
-         const size_t nbw3 = nbw2*ne12;
- 
-         assert(params->wsize >= ne13*nbw3);
--        GGML_ASSERT(src1->type == GGML_TYPE_F32);
-+        // F16 src1 converts straight to float, so wdata rows must be floats; a quantized vec_dot_type would overrun the buffer
-+        GGML_ASSERT(src1->type == GGML_TYPE_F32 ||
-+                    (src1->type == GGML_TYPE_F16 && vec_dot_type == GGML_TYPE_F32));
- 
-     #if 0
-         for (int64_t i13 = 0; i13 < ne13; ++i13) {
-@@ -1347,9 +1362,15 @@ UseGgmlGemm1:;
-                     size_t bs = ggml_blck_size(vec_dot_type);
-                     int64_t ne10_block_start = (ith * ne10/bs) / nth;
-                     int64_t ne10_block_end   = ((ith + 1) * ne10/bs) / nth;
--                    from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11 + ne10_block_start*bs*nb10),
--                               (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1 + ne10_block_start*nbw0),
--                               (ne10_block_end - ne10_block_start) * bs);
-+                    const char * src1_block = (const char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11 + ne10_block_start*bs*nb10;
-+                    char * dst_block = wdata + i13*nbw3 + i12*nbw2 + i11*nbw1 + ne10_block_start*nbw0;
-+                    const int64_t n_block = (ne10_block_end - ne10_block_start) * bs;
-+
-+                    if (src1->type == GGML_TYPE_F32) {
-+                        from_float((const float *) src1_block, dst_block, n_block);
-+                    } else {
-+                        ggml_cpu_fp16_to_fp32((const ggml_fp16_t *) src1_block, (float *) dst_block, n_block);
-+                    }
-                 }
-             }
-         }
-diff --git a/ggml/src/ggml-cpu/ggml-cpu.cpp b/ggml/src/ggml-cpu/ggml-cpu.cpp
-index 8cece71f1..1df0f2bb9 100644
---- a/ggml/src/ggml-cpu/ggml-cpu.cpp
-+++ b/ggml/src/ggml-cpu/ggml-cpu.cpp
-@@ -451,6 +451,10 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
-                 op->type != GGML_TYPE_IQ1_S   &&
-                 op->type != GGML_TYPE_IQ1_M; // missing type_traits.from_float
-         case GGML_OP_MUL_MAT:
-+            if (ggml_get_op_params_i32(op, 1) == GGML_HINT_SRC0_IS_HADAMARD &&
-+                src0->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) {
-+                return src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16;
-+            }
-             return src1->type == GGML_TYPE_F32 || src1->type == ggml_get_type_traits_cpu(src0->type)->vec_dot_type;
-         case GGML_OP_SOFT_MAX_BACK: {
-             if (op->src[0]->type != GGML_TYPE_F32 || op->src[1]->type != GGML_TYPE_F32) {
 diff --git a/ggml/src/ggml-cpu/ops.cpp b/ggml/src/ggml-cpu/ops.cpp
-index b869f4bdd..4fc7514bb 100644
+index ba00a0a73..11918c8b5 100644
 --- a/ggml/src/ggml-cpu/ops.cpp
 +++ b/ggml/src/ggml-cpu/ops.cpp
 @@ -666,6 +666,8 @@ void ggml_compute_forward_add(
@@ -1148,7 +1111,7 @@ index b869f4bdd..4fc7514bb 100644
          case GGML_TYPE_Q4_0:
          case GGML_TYPE_Q4_1:
          case GGML_TYPE_Q5_0:
-@@ -4518,6 +4524,8 @@ void ggml_compute_forward_out_prod(
+@@ -4651,6 +4657,8 @@ void ggml_compute_forward_out_prod(
      switch (src0->type) {
          case GGML_TYPE_Q1_0:
          case GGML_TYPE_Q2_0:
@@ -1157,7 +1120,7 @@ index b869f4bdd..4fc7514bb 100644
          case GGML_TYPE_Q4_0:
          case GGML_TYPE_Q4_1:
          case GGML_TYPE_Q5_0:
-@@ -4794,6 +4802,8 @@ void ggml_compute_forward_set(
+@@ -4927,6 +4935,8 @@ void ggml_compute_forward_set(
          case GGML_TYPE_BF16:
          case GGML_TYPE_Q1_0:
          case GGML_TYPE_Q2_0:
@@ -1166,7 +1129,7 @@ index b869f4bdd..4fc7514bb 100644
          case GGML_TYPE_Q4_0:
          case GGML_TYPE_Q4_1:
          case GGML_TYPE_Q5_0:
-@@ -5019,6 +5029,8 @@ void ggml_compute_forward_get_rows(
+@@ -5152,6 +5162,8 @@ void ggml_compute_forward_get_rows(
      switch (src0->type) {
          case GGML_TYPE_Q1_0:
          case GGML_TYPE_Q2_0:
@@ -1175,7 +1138,7 @@ index b869f4bdd..4fc7514bb 100644
          case GGML_TYPE_Q4_0:
          case GGML_TYPE_Q4_1:
          case GGML_TYPE_Q5_0:
-@@ -5776,6 +5788,8 @@ void ggml_compute_forward_clamp(
+@@ -5909,6 +5921,8 @@ void ggml_compute_forward_clamp(
          case GGML_TYPE_BF16:
          case GGML_TYPE_Q1_0:
          case GGML_TYPE_Q2_0:
@@ -1184,7 +1147,7 @@ index b869f4bdd..4fc7514bb 100644
          case GGML_TYPE_Q4_0:
          case GGML_TYPE_Q4_1:
          case GGML_TYPE_Q5_0:
-@@ -10762,6 +10776,11 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
+@@ -10905,6 +10919,11 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
      ggml_tensor * src_beta  = dst->src[4];
      ggml_tensor * src_state = dst->src[5];
  
@@ -1196,7 +1159,7 @@ index b869f4bdd..4fc7514bb 100644
      const int64_t S_v      = src_v->ne[0];
      const int64_t H        = src_v->ne[1];
      const int64_t n_tokens = src_v->ne[2];
-@@ -10792,8 +10811,13 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
+@@ -10935,8 +10954,13 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
      // K (snapshot slot count) is an op param; state holds s0 only [S_v, S_v, H, n_seqs].
      const int64_t K = ggml_get_op_params_i32(dst, 0);
      GGML_ASSERT(K >= 1);
@@ -1212,7 +1175,7 @@ index b869f4bdd..4fc7514bb 100644
  
      const int64_t per_thread = S_v + (K > 1 ? S_v * S_v : 0);
      const int ith = params->ith;
-@@ -10837,9 +10861,12 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
+@@ -10980,9 +11004,12 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
              ? state_work
              : state_out_base + (iv3 * H + iv1) * S_v * S_v;
  
@@ -1228,7 +1191,7 @@ index b869f4bdd..4fc7514bb 100644
          memcpy(s_out, s_in, S_v * S_v * sizeof(float));
  
          // attn output pointer for first token of this (head, seq)
-@@ -10850,8 +10877,15 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
+@@ -10993,8 +11020,15 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
              const float * k_d = (const float *)((const char *)src_k->data + ik3 * nbk3 + t * nbk2 + ik1 * nbk1);
              const float * v_d = (const float *)((const char *)src_v->data + iv3 * nbv3 + t * nbv2 + iv1 * nbv1);
  
@@ -1246,7 +1209,7 @@ index b869f4bdd..4fc7514bb 100644
  
              // state is stored transposed: s_out[j*S_v + i] = S[i][j]
              // so row j of s_out = column j of S (contiguous access)
-@@ -10866,7 +10900,7 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
+@@ -11009,7 +11043,7 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
                      ggml_vec_mul_f32(S_v, &s_out[j * S_v], &s_out[j * S_v], delta);
                  }
              } else {
@@ -1255,63 +1218,6 @@ index b869f4bdd..4fc7514bb 100644
              }
  
              // delta[j] = sum_i S[i][j] * k[i] = dot(row j of M, k)
-@@ -11844,11 +11878,20 @@ void ggml_compute_forward_opt_step_sgd(const ggml_compute_params * params, ggml_
-     }
- }
- 
--static void ggml_compute_forward_fwht_f32(const ggml_compute_params * params, ggml_tensor * dst) {
-+static inline float ggml_fwht_load(const float value) {
-+    return value;
-+}
-+
-+static inline float ggml_fwht_load(const ggml_fp16_t value) {
-+    return ggml_fp16_to_fp32(value);
-+}
-+
-+template<typename src_t>
-+static void ggml_compute_forward_fwht_impl(const ggml_compute_params * params, ggml_tensor * dst) {
-     const ggml_tensor * src0 = dst->src[0];
-     const ggml_tensor * src1 = dst->src[1];
- 
--    GGML_ASSERT(src1->type == GGML_TYPE_F32);
-+    GGML_ASSERT(src1->type == (std::is_same_v<src_t, float> ? GGML_TYPE_F32 : GGML_TYPE_F16));
-     GGML_ASSERT(dst->type == GGML_TYPE_F32);
- 
-     GGML_TENSOR_BINARY_OP_LOCALS
-@@ -11875,11 +11918,11 @@ static void ggml_compute_forward_fwht_f32(const ggml_compute_params * params, gg
-         const int64_t i12 = (r - i13 * ne11 * ne12) / ne11;
-         const int64_t i11 = r - i13 * ne11 * ne12 - i12 * ne11;
- 
--        const float * src_row = (const float *) ((const char *) src1->data + i11 * nb11 + i12 * nb12 + i13 * nb13);
-+        const src_t * src_row = (const src_t *) ((const char *) src1->data + i11 * nb11 + i12 * nb12 + i13 * nb13);
-         float * dst_row = (float *) ((char *) dst->data + i11 * nb1 + i12 * nb2 + i13 * nb3);
- 
-         for (int64_t j = 0; j < n; j++) {
--            dst_row[j] = src_row[j] * scale;
-+            dst_row[j] = ggml_fwht_load(src_row[j]) * scale;
-         }
- 
-         // Scalar passes
-@@ -11926,12 +11969,17 @@ void ggml_compute_forward_fwht(const ggml_compute_params * params, ggml_tensor *
-     switch (src1->type) {
-         case GGML_TYPE_F32:
-             {
--                ggml_compute_forward_fwht_f32(params, dst);
-+                ggml_compute_forward_fwht_impl<float>(params, dst);
-+            }
-+            break;
-+        case GGML_TYPE_F16:
-+            {
-+                ggml_compute_forward_fwht_impl<ggml_fp16_t>(params, dst);
-             }
-             break;
-         default:
-             {
--                GGML_ABORT("fatal error - fwht is F32 only");
-+                GGML_ABORT("fatal error - fwht supports F32 and F16 input");
-             }
-     }
- }
 diff --git a/ggml/src/ggml-cpu/quants.c b/ggml/src/ggml-cpu/quants.c
 index 5e36459f8..3e275dc70 100644
 --- a/ggml/src/ggml-cpu/quants.c
@@ -1486,7 +1392,7 @@ index 93ea7eeff..f00f35c3f 100644
  void ggml_vec_dot_q4_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
  void ggml_vec_dot_q4_1_q8_1_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
 diff --git a/ggml/src/ggml-cpu/repack.cpp b/ggml/src/ggml-cpu/repack.cpp
-index 9689ca3ce..d0a55cac9 100644
+index f5e419c1e..9e370e1af 100644
 --- a/ggml/src/ggml-cpu/repack.cpp
 +++ b/ggml/src/ggml-cpu/repack.cpp
 @@ -1365,6 +1365,198 @@ void ggml_gemv_q8_0_4x8_q8_0_generic(int                        n,
@@ -2160,7 +2066,7 @@ index 9689ca3ce..d0a55cac9 100644
      // instances for RISC-V
      //
      // These implement outer-product style matrix multiplication kernels with
-@@ -4718,6 +5333,28 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
+@@ -4723,6 +5338,28 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
              }
              #endif
          }

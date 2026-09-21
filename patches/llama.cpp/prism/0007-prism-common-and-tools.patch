@@ -15,14 +15,21 @@ Provenance
 ----------
 Source:   https://github.com/PrismML-Eng/llama.cpp
 Branch:   prism
-Range:    5ea87ddad22541a37053c7ba92b02ec1923617c6..9a9394a895b96003ca842a6041cb28ac49a108f7
-Base tag: b10615 (the fork's base is b10615 plus one unrelated webgpu commit,
-          which is NOT included here - this diff is the fork's own work only)
-Part 7 of 10, split by file group from the full 14,759-line fork diff.
+Applies to: upstream tag b11065
+
+NOT a straight diff of the vendor's branch. The fork's own base was b10615;
+this is telecode's merge of it onto b11065 (~450 upstream commits later), so it
+carries none of the vendor's testing. Where upstream had since implemented a
+fork feature itself, the merge kept UPSTREAM's version -- see
+docs/vendor-patches.md for the rule and the list.
+
+Part 7 of 10, split by file group. Groups own disjoint file sets, so
+there is no apply-time ordering dependency between them; compile-time there is
+(the ggml core patch underpins every backend patch).
 llama.cpp is MIT licensed; the fork carries the same terms.
 ---
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 4caff55d1..6d8a7e8bb 100644
+index 4feaf083e..2f211e5b9 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -144,6 +144,9 @@ option(LLAMA_TESTS_INSTALL "llama: install tests" ON)
@@ -36,11 +43,11 @@ index 4caff55d1..6d8a7e8bb 100644
  
  # Required for relocatable CMake package
 diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
-index 36f1e0cd5..ef76fff1a 100644
+index 2b307c59d..922838019 100644
 --- a/common/CMakeLists.txt
 +++ b/common/CMakeLists.txt
-@@ -83,6 +83,8 @@ add_library(${TARGET}
-     json-schema-to-grammar.cpp
+@@ -88,6 +88,8 @@ add_library(${TARGET}
+     json-schema.h
      json.cpp
      json.h
 +    kv-mean-center.cpp
@@ -48,7 +55,7 @@ index 36f1e0cd5..ef76fff1a 100644
      llguidance.cpp
      log.cpp
      log.h
-@@ -178,4 +180,56 @@ if (LLAMA_LLGUIDANCE)
+@@ -183,4 +185,56 @@ if (LLAMA_LLGUIDANCE)
      endif()
  endif()
  
@@ -106,10 +113,10 @@ index 36f1e0cd5..ef76fff1a 100644
 +
  target_link_libraries(${TARGET} PUBLIC llama Threads::Threads)
 diff --git a/common/arg.cpp b/common/arg.cpp
-index 86f8610a5..63f3a7b06 100644
+index c4c4e143c..78c5e4adc 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
-@@ -1739,7 +1739,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -1747,7 +1747,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
          [](common_params & params, int value) {
              params.n_chunks = value;
          }
@@ -118,7 +125,7 @@ index 86f8610a5..63f3a7b06 100644
      add_opt(common_arg({ "-fa", "--flash-attn" }, "[on|off|auto]",
                         string_format("set Flash Attention use ('on', 'off', or 'auto', default: '%s')",
                                       llama_flash_attn_type_name(params.flash_attn_type)),
-@@ -2448,6 +2448,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -2456,6 +2456,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.cache_type_v = kv_cache_type_from_str(value);
          }
      ).set_env("LLAMA_ARG_CACHE_TYPE_V"));
@@ -134,7 +141,7 @@ index 86f8610a5..63f3a7b06 100644
      add_opt(common_arg(
          {"--hellaswag"},
          "compute HellaSwag score over random tasks from datafile supplied with -f",
-@@ -3123,7 +3132,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -3145,7 +3154,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.out_file = value;
          }
      ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_FINETUNE,
@@ -144,7 +151,7 @@ index 86f8610a5..63f3a7b06 100644
          {"-ofreq", "--output-frequency"}, "N",
          string_format("output the imatrix every N iterations (default: %d)", params.n_out_freq),
 diff --git a/common/common.cpp b/common/common.cpp
-index 3d54bd600..4045903ae 100644
+index d8319cd9a..382c1761e 100644
 --- a/common/common.cpp
 +++ b/common/common.cpp
 @@ -1308,8 +1308,6 @@ common_init_result::common_init_result(common_params & params, bool model_only)
@@ -187,10 +194,10 @@ index 3d54bd600..4045903ae 100644
  }
  
 diff --git a/common/common.h b/common/common.h
-index de49dac9f..eb50a6cbc 100644
+index 63d0badd0..b5fac6ccb 100644
 --- a/common/common.h
 +++ b/common/common.h
-@@ -107,6 +107,7 @@ enum llama_example {
+@@ -108,6 +108,7 @@ enum llama_example {
      LLAMA_EXAMPLE_EXPORT_GRAPH_OPS,
      LLAMA_EXAMPLE_DOWNLOAD,
      LLAMA_EXAMPLE_TOKENIZE,
@@ -198,7 +205,7 @@ index de49dac9f..eb50a6cbc 100644
  
      LLAMA_EXAMPLE_COUNT,
  };
-@@ -385,7 +386,7 @@ struct common_params_speculative {
+@@ -393,7 +394,7 @@ struct common_params_speculative {
  
      uint32_t need_n_rs_seq() const {
          bool needs_rs_seq = std::any_of(types.begin(), types.end(), [&](auto t) {
@@ -207,7 +214,7 @@ index de49dac9f..eb50a6cbc 100644
          });
  
          return needs_rs_seq ? draft.n_max : 0u;
-@@ -577,6 +578,10 @@ struct common_params {
+@@ -587,6 +588,10 @@ struct common_params {
      ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
      ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
  
@@ -1162,10 +1169,10 @@ index 000000000..9da7ffd2e
 +        const std::vector<common_kv_mean_center_layer> & layers,
 +        bool k_rot = false);
 diff --git a/common/speculative.cpp b/common/speculative.cpp
-index 4eef2212e..9b28b3188 100644
+index 77dfe9535..ffc956943 100644
 --- a/common/speculative.cpp
 +++ b/common/speculative.cpp
-@@ -1,23 +1,36 @@
+@@ -1,24 +1,37 @@
  #include "speculative.h"
  
 +#include "../src/llama-ext.h"
@@ -1198,6 +1205,7 @@ index 4eef2212e..9b28b3188 100644
  #include <algorithm>
  #include <cassert>
 +#include <cinttypes>
+ #include <cmath>
 +#include <cstdlib>
  #include <cstring>
  #include <iomanip>
@@ -1206,7 +1214,7 @@ index 4eef2212e..9b28b3188 100644
  
  #define SPC_DBG(fmt, ...) LOG_DBG("spec %12.*s: " fmt, 12, __func__, __VA_ARGS__)
  #define SPC_TRC(fmt, ...) LOG_TRC("spec %12.*s: " fmt, 12, __func__, __VA_ARGS__)
-@@ -161,6 +174,14 @@ struct common_speculative_impl {
+@@ -163,6 +176,14 @@ struct common_speculative_impl {
  
      virtual ~common_speculative_impl() = default;
  
@@ -1221,7 +1229,7 @@ index 4eef2212e..9b28b3188 100644
      virtual void begin(llama_seq_id seq_id, const llama_tokens & prompt) = 0;
  
      virtual bool process(const llama_batch & batch) = 0;
-@@ -174,6 +195,720 @@ struct common_speculative_impl {
+@@ -176,6 +197,720 @@ struct common_speculative_impl {
      virtual void set_state(llama_seq_id /*seq_id*/, const std::vector<uint8_t> & /*data*/) {}
  };
  
@@ -1942,7 +1950,7 @@ index 4eef2212e..9b28b3188 100644
  struct common_speculative_impl_draft_simple : public common_speculative_impl {
      common_params_speculative_draft params;
  
-@@ -430,7 +1165,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
+@@ -432,7 +1167,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
      // backend sampler chain per seq, attached to ctx_dft
      std::vector<llama_sampler *> backend_chains;
  
@@ -1951,7 +1959,7 @@ index 4eef2212e..9b28b3188 100644
      int32_t n_embd_enc = 0;       // target_layer_ids_n * target_hidden_size
      int32_t n_embd_tgt = 0;       // target model hidden size
      int32_t n_layer_tgt = 0;      // target model layer count
-@@ -473,7 +1208,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
+@@ -475,7 +1210,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
          }
  
          n_embd_tgt = llama_model_n_embd(model_tgt);
@@ -1960,7 +1968,7 @@ index 4eef2212e..9b28b3188 100644
          n_embd_enc = (int32_t) target_layer_ids_n * n_embd_tgt;
          n_layer_tgt = llama_model_n_layer(model_tgt);
  
-@@ -916,15 +1651,17 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
+@@ -918,7 +1653,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
      // backend sampler chain per seq, attached to ctx_dft
      std::vector<llama_sampler *> backend_chains;
  
@@ -1969,27 +1977,30 @@ index 4eef2212e..9b28b3188 100644
      int32_t n_embd_enc = 0;  // target_layer_ids_n * target_hidden_size
      int32_t n_embd_tgt = 0;  // target model hidden size
  
-     int32_t     block_size    = 0;
-     llama_token mask_token_id = 0;
+@@ -929,8 +1664,12 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
+     bool    is_mrope       = false;
+     int32_t selector_top_k = 0;
  
 -    // draft-dspark: the draft carries a Markov head and uses an anchor-first block layout
 -    const bool is_dspark;
-+    // draft-dspark: the draft carries a Markov head. Comes from the model, not the
-+    // requested type. The DSpark path also truncates on confidence, and for
++    // draft-dspark: the draft carries a Markov head and uses an anchor-first block layout.
++    // Comes from the model, not the requested type (hence non-const, assigned in the ctor
++    // body): both lineages declare general.architecture = dflash, so only the on-disk Markov
++    // head can tell them apart. The DSpark path also truncates on confidence, and for
 +    // sample_from_anchor models it starts one row earlier.
 +    bool is_dspark = false;
  
      // dspark speculators
      bool sample_from_anchor = true;
-@@ -939,7 +1676,6 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
+@@ -945,7 +1684,6 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
              common_speculative_type type = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH)
-         : common_speculative_impl(type, n_seq)
+         : common_speculative_impl(type, n_seq, params.draft.n_max)
          , params(params.draft)
 -        , is_dspark(type == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK)
      {
          auto * ctx_tgt = this->params.ctx_tgt;
          auto * ctx_dft = this->params.ctx_dft;
-@@ -952,8 +1688,21 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
+@@ -958,8 +1696,21 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
          target_layer_ids_n = llama_model_target_layer_ids_n(model_dft);
          GGML_ASSERT(target_layer_ids_n > 0 && "DFlash model has no target_layer_ids");
  
@@ -2012,8 +2023,8 @@ index 4eef2212e..9b28b3188 100644
          n_embd_enc    = (int32_t) target_layer_ids_n * n_embd_tgt;
  
          // read the trained block size from the dflash.block_size metadata key
-@@ -969,10 +1718,16 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
-         }
+@@ -981,6 +1732,11 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
+         is_dflash2     = selector_top_k > 0;
          mask_token_id = llama_vocab_mask(llama_model_get_vocab(model_dft));
  
 +        // without a mask token every masked slot is drafted as token id -1: runs, accepts nothing,
@@ -2021,6 +2032,11 @@ index 4eef2212e..9b28b3188 100644
 +        GGML_ASSERT(mask_token_id != LLAMA_TOKEN_NULL &&
 +                    "draft model has no mask token: check tokenizer.ggml.mask_token_id and tokenizer.ggml.model (a 'none' stub skips the vocab) in the GGUF");
 +
+         if (is_dspark && this->params.p_min > 0.0f) {
+             char buf[16] = {};
+             const bool has_conf =
+@@ -993,8 +1749,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
+ 
          LOG_INF("%s: adding speculative implementation '%s'\n", __func__, common_speculative_type_to_str(type).c_str());
          LOG_INF("%s: - n_max=%d, n_min=%d, p_min=%.2f\n", __func__, this->params.n_max, this->params.n_min, this->params.p_min);
 -        LOG_INF("%s: - block_size=%d, mask_token_id=%d, n_extract=%u, sample_from_anchor=%s\n", __func__,
@@ -2031,7 +2047,7 @@ index 4eef2212e..9b28b3188 100644
  
          // DFlash input is [id_last, <mask> * (block_size-1)]: in-place denoising yields at most
          // block_size-1 draft tokens, anchor-first DSpark yields a full block_size draft tokens
-@@ -2339,6 +3094,11 @@ common_params common_base_params_to_speculative(const common_params & params) {
+@@ -2497,6 +3254,11 @@ common_params common_base_params_to_speculative(const common_params & params) {
  
      result.cache_type_k  = params_spec.cache_type_k;
      result.cache_type_v  = params_spec.cache_type_v;
@@ -2043,7 +2059,7 @@ index 4eef2212e..9b28b3188 100644
      result.n_outputs_max = params.n_parallel;
      result.n_outputs_max_per_seq = 1;
  
-@@ -2391,9 +3151,7 @@ common_speculative_init_result::common_speculative_init_result(
+@@ -2549,9 +3311,7 @@ common_speculative_init_result::common_speculative_init_result(
      // the draft context holds as many tokens per sequence as the target context
      cparams.n_ctx = llama_n_ctx(ctx_tgt);
  
@@ -2054,7 +2070,7 @@ index 4eef2212e..9b28b3188 100644
      cparams.ctx_other = ctx_tgt;
  
      std::string model_path;
-@@ -2401,6 +3159,10 @@ common_speculative_init_result::common_speculative_init_result(
+@@ -2559,6 +3319,10 @@ common_speculative_init_result::common_speculative_init_result(
          model_path = params.speculative.draft.mparams.path;
          LOG_INF("%s: loading draft model '%s'\n", __func__, model_path.c_str());
  
@@ -2065,7 +2081,7 @@ index 4eef2212e..9b28b3188 100644
          llama_model * model_dft = llama_model_load_from_file(params.model.path.c_str(), mparams);
          if (model_dft == NULL) {
              LOG_ERR("%s: failed to load draft model, '%s'\n", __func__, model_path.c_str());
-@@ -2409,6 +3171,16 @@ common_speculative_init_result::common_speculative_init_result(
+@@ -2567,6 +3331,16 @@ common_speculative_init_result::common_speculative_init_result(
  
          pimpl->model.reset(model_dft);
  
@@ -2082,7 +2098,7 @@ index 4eef2212e..9b28b3188 100644
          llama_context * ctx_dft = llama_init_from_model(model_dft, cparams);
          if (ctx_dft == nullptr) {
              LOG_ERR("%s: failed to create MTP context\n", __func__);
-@@ -2511,6 +3283,13 @@ common_speculative * common_speculative_init(common_params_speculative & params,
+@@ -2669,6 +3443,13 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                  break;
              }
              case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK: {
@@ -2096,7 +2112,7 @@ index 4eef2212e..9b28b3188 100644
                  impls.push_back(std::make_unique<common_speculative_impl_draft_dflash>(
                          config.params, n_seq, COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK));
                  break;
-@@ -2811,3 +3590,33 @@ void common_speculative_print_stats(const common_speculative * spec) {
+@@ -2995,3 +3776,33 @@ void common_speculative_print_stats(const common_speculative * spec) {
                  str_perf.c_str());
      }
  }
@@ -2131,10 +2147,10 @@ index 4eef2212e..9b28b3188 100644
 +    return staged;
 +}
 diff --git a/common/speculative.h b/common/speculative.h
-index 12ae31b7d..d1a724d51 100644
+index c968750e2..a30d73747 100644
 --- a/common/speculative.h
 +++ b/common/speculative.h
-@@ -70,6 +70,12 @@ void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, co
+@@ -79,6 +79,12 @@ void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, co
  // process the batch and update the internal state of the speculative context
  bool common_speculative_process(common_speculative * spec, const llama_batch & batch);
  
@@ -2147,7 +2163,7 @@ index 12ae31b7d..d1a724d51 100644
  // generate drafts for the sequences specified with `common_speculative_get_draft_params`
  void common_speculative_draft(common_speculative * spec);
  
-@@ -83,6 +89,23 @@ void common_speculative_set_state(common_speculative * spec, llama_seq_id seq_id
+@@ -92,6 +98,23 @@ void common_speculative_set_state(common_speculative * spec, llama_seq_id seq_id
  // print statistics about the speculative decoding
  void common_speculative_print_stats(const common_speculative * spec);
  
@@ -2655,7 +2671,7 @@ index 000000000..c03a72a69
 +    return ok ? 0 : 1;
 +}
 diff --git a/examples/speculative-simple/speculative-simple.cpp b/examples/speculative-simple/speculative-simple.cpp
-index 487ae03ab..d492c1773 100644
+index 863af5a2c..fac3f8247 100644
 --- a/examples/speculative-simple/speculative-simple.cpp
 +++ b/examples/speculative-simple/speculative-simple.cpp
 @@ -66,8 +66,12 @@ int main(int argc, char ** argv) {
@@ -3300,7 +3316,7 @@ index 000000000..35bb0e4b6
 +
 +echo "wrote $OUT" >&2
 diff --git a/tools/quantize/quantize.cpp b/tools/quantize/quantize.cpp
-index 8d03c8fcd..fe668c3ee 100644
+index 38950036c..8ba9025b9 100644
 --- a/tools/quantize/quantize.cpp
 +++ b/tools/quantize/quantize.cpp
 @@ -34,6 +34,8 @@ struct quant_option {
@@ -3313,11 +3329,11 @@ index 8d03c8fcd..fe668c3ee 100644
      { "Q4_1",     LLAMA_FTYPE_MOSTLY_Q4_1,     " 4.78G, +0.4511 ppl @ Llama-3-8B",  },
      { "MXFP4_MOE",LLAMA_FTYPE_MOSTLY_MXFP4_MOE," MXFP4 MoE",  },
 diff --git a/tools/server/tests/unit/test_speculative.py b/tools/server/tests/unit/test_speculative.py
-index 583719500..871e5abaf 100644
+index 22b523954..e96b13ef4 100644
 --- a/tools/server/tests/unit/test_speculative.py
 +++ b/tools/server/tests/unit/test_speculative.py
-@@ -53,6 +53,32 @@ def test_with_and_without_draft():
-     assert tokens_no_draft == tokens_draft
+@@ -65,6 +65,32 @@ def test_with_and_without_draft():
+     assert res.body["tokens"] == tokens_no_draft
  
  
 +def test_draft_acceptance_floor():

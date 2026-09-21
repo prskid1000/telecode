@@ -22,28 +22,26 @@ Current series:
       Declares a tool to the sampling grammar while leaving its schema out of
       the rendered prompt. Upstream: ggml-org/llama.cpp#28179.
 
-  0002..0011-prism-*.patch
-      The whole PrismML fork (github.com/PrismML-Eng/llama.cpp, branch `prism`),
-      14,759 added lines over 157 files, split by file group. Adds the PQ2_0 and
-      PTQ1_0 group-128 ternary types, their CPU/CUDA/Metal/Vulkan/HIP kernels,
-      the Hadamard weight-fold runtime, KV mean-centering, and the
-      DSpark/DFlash/DFly drafters — i.e. what the prism-ml Bonsai GGUFs need.
+  prism/0001..0010-*.patch
+      A whole third-party fork, vendored — see docs/vendor-patches.md. The
+      PrismML branch (github.com/PrismML-Eng/llama.cpp) merged onto upstream by
+      us and split by file group. Adds the PQ2_0 / PTQ1_0 group-128 ternary
+      types and their kernels, so the prism-ml Bonsai GGUFs load.
 
-      This one breaks the rule in the paragraph above, knowingly. It is not a
-      patch awaiting upstream; it is a fork, vendored. `llamacpp.custom_build.tag`
-      is therefore PINNED to `b10615` — the fork's own base — because the series
-      only applies there. Leaving the tag empty would float to the latest release
-      and every prism patch would fail `--check` at once.
+      Deliberately NOT the shape described above: it is not awaiting upstream,
+      and there is no small version of it — stock llama.cpp cannot read a
+      group-128 file at all. A `--check` failure here is not "it landed
+      upstream", it is "upstream moved under the port"; the response is
+      `tools/vendor_drift.py conflicts prism`, not editing a .patch by hand.
 
-      The cost that pin buys down is real: upstream is ~450 commits past b10615
-      and moving. Refreshing means rebasing the fork, not editing these files.
-      Regenerate rather than hand-patch — see docs/prism-patches.md.
+      Split by file group rather than by commit, so the groups own disjoint file
+      sets: no apply-time ordering dependency, and any one can be deleted
+      without breaking `git apply` on the rest. Compile-time they are not
+      independent — the ggml core patch underpins every backend patch, and the
+      conversion/tests/CI patches are inert in a telecode build.
 
-      Split by file group, not by commit, so the groups have disjoint file sets
-      and no apply-time ordering dependency: any one can be deleted without
-      breaking `git apply` on the rest. Compile-time they are not independent —
-      0002 (ggml core) underpins every backend patch. 0009/0010/0011 (conversion
-      scripts, tests, the fork's CI workflow) are inert in a telecode build.
+A subdirectory is applied as a unit and keyed by relative path (`patch_key`),
+so two vendors both numbering from 0001 do not alias each other.
 """
 from __future__ import annotations
 
@@ -107,11 +105,40 @@ def patch_dir() -> Path:
 
 
 def patches() -> list[Path]:
-    """The series, in apply order (lexicographic, hence the 0001- prefixes)."""
+    """The series, in apply order.
+
+    Top-level `*.patch` are telecode's own and come first; each subdirectory is
+    one vendored upstream fork (`patches/llama.cpp/<vendor>/`, see
+    docs/vendor-patches.md), applied as a unit. Vendors are ordered by directory
+    name so the series is deterministic rather than filesystem-dependent. Within
+    each group, lexicographic — hence the 0001- prefixes.
+
+    Telecode's own patches go first on purpose: they are small and target code a
+    vendor fork is unlikely to have moved, so they get the clean tree. A vendor
+    that rewrites the same region will then fail its own --check, which names the
+    vendor rather than silently winning.
+    """
     d = patch_dir()
     if not d.is_dir():
         return []
-    return sorted(d.glob("*.patch"))
+    own = sorted(d.glob("*.patch"))
+    vendored: list[Path] = []
+    for sub in sorted(p for p in d.iterdir() if p.is_dir()):
+        vendored.extend(sorted(sub.glob("*.patch")))
+    return own + vendored
+
+
+def patch_key(p: Path) -> str:
+    """Stable id for a patch: its path relative to `patch_dir()`.
+
+    Deliberately not the basename. Two vendors both numbering from 0001 would
+    collide, and `applied_patches()` would then report one vendor's patch as
+    applied because the other vendor's same-named patch was.
+    """
+    try:
+        return p.relative_to(patch_dir()).as_posix()
+    except ValueError:
+        return p.name
 
 
 def source_dir() -> Path:
@@ -336,7 +363,7 @@ def applied_patches() -> list[str]:
         try:
             res = subprocess.run(["git", "apply", "--reverse", "--check", str(p)], **kwargs)
             if res.returncode == 0:
-                out.append(p.name)
+                out.append(patch_key(p))
         except Exception:
             continue
     return out
@@ -354,7 +381,7 @@ def status() -> dict[str, Any]:
         "head": _git_out(["rev-parse", "--short", "HEAD"]),
         "dirty": bool(_git_out(["status", "--porcelain"])),
         "patch_dir": str(patch_dir()),
-        "patches": [p.name for p in patches()],
+        "patches": [patch_key(p) for p in patches()],
         "patches_applied": [],
         "build_dir": str(build_dir()),
         "built_binary": str(built) if built else None,
@@ -472,19 +499,20 @@ def apply_patches(progress: Progress = _noop) -> dict[str, Any]:
     already = set(applied_patches())
 
     for p in series:
-        if p.name in already:
-            progress(f"-- {p.name}: already applied, skipping")
-            skipped.append(p.name)
+        key = patch_key(p)
+        if key in already:
+            progress(f"-- {key}: already applied, skipping")
+            skipped.append(key)
             continue
-        progress(f"-- {p.name}")
+        progress(f"-- {key}")
         if _git(["apply", "--check", str(p)], progress) != 0:
-            progress(f"!! {p.name} does not apply — upstreamed, or bit-rotted")
-            failed.append({"patch": p.name, "reason": "does not apply"})
+            progress(f"!! {key} does not apply — upstreamed, or bit-rotted")
+            failed.append({"patch": key, "reason": "does not apply"})
             continue
         if _git(["apply", str(p)], progress) != 0:
-            failed.append({"patch": p.name, "reason": "apply failed after check passed"})
+            failed.append({"patch": key, "reason": "apply failed after check passed"})
             continue
-        applied.append(p.name)
+        applied.append(key)
 
     return {"ok": not failed, "applied": applied, "skipped": skipped, "failed": failed}
 

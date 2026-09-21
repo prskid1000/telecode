@@ -16,14 +16,21 @@ Provenance
 ----------
 Source:   https://github.com/PrismML-Eng/llama.cpp
 Branch:   prism
-Range:    5ea87ddad22541a37053c7ba92b02ec1923617c6..9a9394a895b96003ca842a6041cb28ac49a108f7
-Base tag: b10615 (the fork's base is b10615 plus one unrelated webgpu commit,
-          which is NOT included here - this diff is the fork's own work only)
-Part 1 of 10, split by file group from the full 14,759-line fork diff.
+Applies to: upstream tag b11065
+
+NOT a straight diff of the vendor's branch. The fork's own base was b10615;
+this is telecode's merge of it onto b11065 (~450 upstream commits later), so it
+carries none of the vendor's testing. Where upstream had since implemented a
+fork feature itself, the merge kept UPSTREAM's version -- see
+docs/vendor-patches.md for the rule and the list.
+
+Part 1 of 10, split by file group. Groups own disjoint file sets, so
+there is no apply-time ordering dependency between them; compile-time there is
+(the ggml core patch underpins every backend patch).
 llama.cpp is MIT licensed; the fork carries the same terms.
 ---
 diff --git a/ggml/CMakeLists.txt b/ggml/CMakeLists.txt
-index 5f4742a38..aa1bef948 100644
+index 7f8a1f706..8ccdc71b7 100644
 --- a/ggml/CMakeLists.txt
 +++ b/ggml/CMakeLists.txt
 @@ -199,6 +199,8 @@ option(GGML_LLAMAFILE                       "ggml: use LLAMAFILE"
@@ -33,10 +40,10 @@ index 5f4742a38..aa1bef948 100644
 +option(GGML_CUDA_HOPPER_Q1                  "ggml: opt-in sm_90a wgmma path for Q1_0/PQ2_0 prefill" OFF)
 +set   (GGML_CUDA_CUTLASS_DIR "" CACHE PATH    "ggml: CUTLASS checkout root for GGML_CUDA_HOPPER_Q1")
  option(GGML_CUDA_FORCE_CUBLAS               "ggml: always use cuBLAS instead of mmq kernels"  OFF)
- set   (GGML_CUDA_PEER_MAX_BATCH_SIZE "128" CACHE STRING
-                                             "ggml: max. batch size for using peer access")
+ option(GGML_CUDA_NO_PEER_COPY               "ggml: do not use peer to peer copies"            OFF)
+ option(GGML_CUDA_NO_VMM                     "ggml: do not try to use CUDA VMM"                OFF)
 diff --git a/ggml/include/ggml.h b/ggml/include/ggml.h
-index 5f6774a63..d875a15ed 100644
+index 224bdef92..6abd4dfc2 100644
 --- a/ggml/include/ggml.h
 +++ b/ggml/include/ggml.h
 @@ -430,7 +430,11 @@ extern "C" {
@@ -51,8 +58,8 @@ index 5f6774a63..d875a15ed 100644
 +        GGML_TYPE_COUNT   = 144,
      };
  
-     // precision
-@@ -475,6 +479,8 @@ extern "C" {
+     // [TAG_GGML_PREC]
+@@ -486,6 +490,8 @@ extern "C" {
          GGML_FTYPE_MOSTLY_NVFP4   = 26, // except 1d tensors
          GGML_FTYPE_MOSTLY_Q1_0    = 27, // except 1d tensors
          GGML_FTYPE_MOSTLY_Q2_0    = 28, // except 1d tensors
@@ -61,7 +68,7 @@ index 5f6774a63..d875a15ed 100644
      };
  
      // available tensor operations:
-@@ -2597,6 +2603,31 @@ extern "C" {
+@@ -2659,6 +2665,31 @@ extern "C" {
              struct ggml_tensor  * state,
              int64_t               K);
  
@@ -94,7 +101,7 @@ index 5f6774a63..d875a15ed 100644
      //
      // q:       [n_embd_idx, n_head_idx, n_batch, ne3 ]
 diff --git a/ggml/src/ggml-common.h b/ggml/src/ggml-common.h
-index 83f9118da..65075cad8 100644
+index 1dbbe326d..ac8f3bdcf 100644
 --- a/ggml/src/ggml-common.h
 +++ b/ggml/src/ggml-common.h
 @@ -99,6 +99,11 @@ typedef sycl::half2 ggml_half2;
@@ -382,10 +389,10 @@ index 75188f1af..c9e5b2fe3 100644
  GGML_API size_t quantize_q4_1(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
  GGML_API size_t quantize_q5_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 diff --git a/ggml/src/ggml.c b/ggml/src/ggml.c
-index e0b615c07..fa2a9c44f 100644
+index 175281409..d03b7974d 100644
 --- a/ggml/src/ggml.c
 +++ b/ggml/src/ggml.c
-@@ -689,6 +689,22 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
+@@ -690,6 +690,22 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
          .to_float                 = (ggml_to_float_t) dequantize_row_q2_0,
          .from_float_ref           = (ggml_from_float_t) quantize_row_q2_0_ref,
      },
@@ -408,7 +415,7 @@ index e0b615c07..fa2a9c44f 100644
      [GGML_TYPE_Q4_0] = {
          .type_name                = "q4_0",
          .blck_size                = QK4_0,
-@@ -1434,6 +1450,8 @@ enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype) {
+@@ -1435,6 +1451,8 @@ enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype) {
          case GGML_FTYPE_MOSTLY_Q4_1:          wtype = GGML_TYPE_Q4_1;  break;
          case GGML_FTYPE_MOSTLY_Q1_0:          wtype = GGML_TYPE_Q1_0;  break;
          case GGML_FTYPE_MOSTLY_Q2_0:          wtype = GGML_TYPE_Q2_0;  break;
@@ -417,7 +424,7 @@ index e0b615c07..fa2a9c44f 100644
          case GGML_FTYPE_MOSTLY_Q5_0:          wtype = GGML_TYPE_Q5_0;  break;
          case GGML_FTYPE_MOSTLY_Q5_1:          wtype = GGML_TYPE_Q5_1;  break;
          case GGML_FTYPE_MOSTLY_Q8_0:          wtype = GGML_TYPE_Q8_0;  break;
-@@ -6346,6 +6364,83 @@ struct ggml_tensor * ggml_gated_delta_net(
+@@ -6418,6 +6436,83 @@ struct ggml_tensor * ggml_gated_delta_net(
      return result;
  }
  
@@ -501,7 +508,7 @@ index e0b615c07..fa2a9c44f 100644
  // ggml_lightning_indexer
  
  struct ggml_tensor * ggml_lightning_indexer(
-@@ -7981,6 +8076,8 @@ size_t ggml_quantize_chunk(
+@@ -8081,6 +8176,8 @@ size_t ggml_quantize_chunk(
      switch (type) {
          case GGML_TYPE_Q1_0:    result = quantize_q1_0   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
          case GGML_TYPE_Q2_0:    result = quantize_q2_0   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
@@ -511,10 +518,10 @@ index e0b615c07..fa2a9c44f 100644
          case GGML_TYPE_Q4_1:    result = quantize_q4_1   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
          case GGML_TYPE_Q5_0:    result = quantize_q5_0   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
 diff --git a/ggml/src/gguf.cpp b/ggml/src/gguf.cpp
-index 6c7b58178..d97df4a8d 100644
+index 0eb9fb744..cbeab3867 100644
 --- a/ggml/src/gguf.cpp
 +++ b/ggml/src/gguf.cpp
-@@ -774,11 +774,19 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
+@@ -782,11 +782,19 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
      // compute the total size of the data section, taking into account the alignment
      {
          ctx->size = 0;
@@ -534,7 +541,7 @@ index 6c7b58178..d97df4a8d 100644
                  GGML_LOG_ERROR("%s: failed to read tensor data\n", __func__);
                  gguf_free(ctx);
                  return nullptr;
-@@ -791,6 +799,17 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
+@@ -799,6 +807,17 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
                  return nullptr;
              }
              ctx->size += padded_size;

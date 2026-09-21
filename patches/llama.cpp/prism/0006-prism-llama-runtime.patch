@@ -22,17 +22,24 @@ Provenance
 ----------
 Source:   https://github.com/PrismML-Eng/llama.cpp
 Branch:   prism
-Range:    5ea87ddad22541a37053c7ba92b02ec1923617c6..9a9394a895b96003ca842a6041cb28ac49a108f7
-Base tag: b10615 (the fork's base is b10615 plus one unrelated webgpu commit,
-          which is NOT included here - this diff is the fork's own work only)
-Part 6 of 10, split by file group from the full 14,759-line fork diff.
+Applies to: upstream tag b11065
+
+NOT a straight diff of the vendor's branch. The fork's own base was b10615;
+this is telecode's merge of it onto b11065 (~450 upstream commits later), so it
+carries none of the vendor's testing. Where upstream had since implemented a
+fork feature itself, the merge kept UPSTREAM's version -- see
+docs/vendor-patches.md for the rule and the list.
+
+Part 6 of 10, split by file group. Groups own disjoint file sets, so
+there is no apply-time ordering dependency between them; compile-time there is
+(the ggml core patch underpins every backend patch).
 llama.cpp is MIT licensed; the fork carries the same terms.
 ---
 diff --git a/include/llama.h b/include/llama.h
-index a04177f9f..deb1e1282 100644
+index 31bbf8b0d..d14d44d08 100644
 --- a/include/llama.h
 +++ b/include/llama.h
-@@ -156,6 +156,9 @@ extern "C" {
+@@ -157,6 +157,9 @@ extern "C" {
          LLAMA_FTYPE_MOSTLY_NVFP4         = 39, // except 1d tensors
          LLAMA_FTYPE_MOSTLY_Q1_0          = 40, // except 1d tensors
          LLAMA_FTYPE_MOSTLY_Q2_0          = 41, // except 1d tensors
@@ -42,7 +49,7 @@ index a04177f9f..deb1e1282 100644
  
          LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
      };
-@@ -305,6 +308,10 @@ extern "C" {
+@@ -312,6 +315,10 @@ extern "C" {
      };
  
      struct llama_model_params {
@@ -53,7 +60,7 @@ index a04177f9f..deb1e1282 100644
          // NULL-terminated list of devices to use for offloading (if NULL, all available devices are used)
          ggml_backend_dev_t * devices;
  
-@@ -381,6 +388,14 @@ extern "C" {
+@@ -390,6 +397,14 @@ extern "C" {
          enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
          enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
  
@@ -69,18 +76,18 @@ index a04177f9f..deb1e1282 100644
          // if it returns true, execution of llama_decode() will be aborted
          // currently works only with CPU execution
 diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
-index eecf444fc..eb17e0967 100644
+index 03b7951c3..68c89d570 100644
 --- a/src/llama-arch.cpp
 +++ b/src/llama-arch.cpp
-@@ -40,6 +40,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
-     { LLM_ARCH_QWEN3VLMOE,       "qwen3vlmoe"       },
+@@ -41,6 +41,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
      { LLM_ARCH_QWEN35,           "qwen35"           },
      { LLM_ARCH_QWEN35MOE,        "qwen35moe"        },
+     { LLM_ARCH_QWEN4EXP,         "qwen4exp"         },
 +    { LLM_ARCH_DSPARK,           "dspark"           },
      { LLM_ARCH_PHI2,             "phi2"             },
      { LLM_ARCH_PHI3,             "phi3"             },
      { LLM_ARCH_PHIMOE,           "phimoe"           },
-@@ -157,91 +158,103 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
+@@ -162,95 +163,107 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
  };
  
  static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
@@ -194,81 +201,89 @@ index eecf444fc..eb17e0967 100644
 -    { LLM_KV_FULL_ATTENTION_INTERVAL,           "%s.full_attention_interval"           },
 -    { LLM_KV_NUM_LOOPS,                         "%s.num_loops"                         },
 -    { LLM_KV_SKIP_LOOP_FINAL_NORM,              "%s.skip_loop_final_norm"              },
-+    { LLM_KV_VOCAB_SIZE,                             "%s.vocab_size"                             },
-+    { LLM_KV_CONTEXT_LENGTH,                         "%s.context_length"                         },
-+    { LLM_KV_EMBEDDING_LENGTH,                       "%s.embedding_length"                       },
-+    { LLM_KV_EMBEDDING_LENGTH_OUT,                   "%s.embedding_length_out"                   },
-+    { LLM_KV_EMBEDDING_LENGTH_PER_LAYER,             "%s.embedding_length_per_layer_input"       },
-+    { LLM_KV_FEATURES_LENGTH,                        "%s.features_length"                        },
-+    { LLM_KV_BLOCK_COUNT,                            "%s.block_count"                            },
-+    { LLM_KV_LEADING_DENSE_BLOCK_COUNT,              "%s.leading_dense_block_count"              },
-+    { LLM_KV_ATTN_RES_BLOCK_SIZE,                    "%s.attn_res.block_size"                    },
-+    { LLM_KV_ACTIVATION_SITU_BETA,                   "%s.activation.situ_beta"                   },
-+    { LLM_KV_ACTIVATION_SITU_LINEAR_BETA,            "%s.activation.situ_linear_beta"            },
-+    { LLM_KV_FEED_FORWARD_LENGTH,                    "%s.feed_forward_length"                    },
-+    { LLM_KV_EXPERT_FEED_FORWARD_LENGTH,             "%s.expert_feed_forward_length"             },
-+    { LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH,      "%s.expert_shared_feed_forward_length"      },
-+    { LLM_KV_EXPERT_CHUNK_FEED_FORWARD_LENGTH,       "%s.expert_chunk_feed_forward_length"       },
-+    { LLM_KV_SWIGLU_CLAMP_EXP,                       "%s.swiglu_clamp_exp"                       },
-+    { LLM_KV_SWIGLU_CLAMP_SHEXP,                     "%s.swiglu_clamp_shexp"                     },
-+    { LLM_KV_USE_PARALLEL_RESIDUAL,                  "%s.use_parallel_residual"                  },
-+    { LLM_KV_TENSOR_DATA_LAYOUT,                     "%s.tensor_data_layout"                     },
-+    { LLM_KV_EXPERT_COUNT,                           "%s.expert_count"                           },
-+    { LLM_KV_EXPERT_USED_COUNT,                      "%s.expert_used_count"                      },
-+    { LLM_KV_EXPERT_SHARED_COUNT,                    "%s.expert_shared_count"                    },
-+    { LLM_KV_EXPERT_GROUP_COUNT,                     "%s.expert_group_count"                     },
-+    { LLM_KV_EXPERT_GROUP_USED_COUNT,                "%s.expert_group_used_count"                },
-+    { LLM_KV_EXPERT_WEIGHTS_SCALE,                   "%s.expert_weights_scale"                   },
-+    { LLM_KV_EXPERT_WEIGHTS_NORM,                    "%s.expert_weights_norm"                    },
-+    { LLM_KV_EXPERT_LATENT_LENGTH,                   "%s.expert_latent_length"                   },
-+    { LLM_KV_EXPERT_GATING_FUNC,                     "%s.expert_gating_func"                     },
-+    { LLM_KV_EXPERT_GROUP_SCALE,                     "%s.expert_group_scale"                     },
-+    { LLM_KV_EXPERTS_PER_GROUP,                      "%s.experts_per_group"                      },
-+    { LLM_KV_MOE_EVERY_N_LAYERS,                     "%s.moe_every_n_layers"                     },
-+    { LLM_KV_MOE_LATENT_SIZE,                        "%s.moe_latent_size"                        },
-+    { LLM_KV_NEXTN_PREDICT_LAYERS,                   "%s.nextn_predict_layers"                   },
-+    { LLM_KV_DSPARK_BLOCK_SIZE,                      "%s.dspark.block_size"                      },
-+    { LLM_KV_DSPARK_MASK_TOKEN_ID,                   "%s.dspark.mask_token_id"                   },
-+    { LLM_KV_DSPARK_TARGET_LAYERS,                   "%s.dspark.target_layers"                   },
-+    { LLM_KV_DSPARK_MARKOV_RANK,                     "%s.dspark.markov_rank"                     },
-+    { LLM_KV_DSPARK_CONFIDENCE_HEAD,                 "%s.dspark.confidence_head"                 },
-+    { LLM_KV_DSPARK_CONFIDENCE_WITH_MARKOV,          "%s.dspark.confidence_head_with_markov"     },
-+    { LLM_KV_DSPARK_LOG_SNR_CONDITIONING,            "%s.dspark.log_snr_conditioning"            },
-+    { LLM_KV_DSPARK_MIN_LOG_SNR,                     "%s.dspark.min_log_snr"                     },
-+    { LLM_KV_DSPARK_MAX_LOG_SNR,                     "%s.dspark.max_log_snr"                     },
-+    { LLM_KV_DSPARK_HIDDEN_CORRECTION,               "%s.dspark.hidden_correction"               },
-+    { LLM_KV_DSPARK_MARKOV_DEPLOY_EXPOSURE,          "%s.dspark.markov_deploy_exposure"          },
-+    { LLM_KV_DSPARK_CORRECTION_SIZE,                 "%s.dspark.correction_size"                 },
-+    { LLM_KV_NUM_DEEPSTACK_LAYERS,                   "%s.n_deepstack_layers"                     },
-+    { LLM_KV_DEEPSTACK_MAPPING,                      "%s.deepstack_mapping"                      },
-+    { LLM_KV_HIDDEN_ACT,                             "%s.hidden_activation"                      },
-+    { LLM_KV_POOLING_TYPE,                           "%s.pooling_type"                           },
-+    { LLM_KV_LOGIT_SCALE,                            "%s.logit_scale"                            },
-+    { LLM_KV_DECODER_START_TOKEN_ID,                 "%s.decoder_start_token_id"                 },
-+    { LLM_KV_DECODER_BLOCK_COUNT,                    "%s.decoder_block_count"                    },
-+    { LLM_KV_ATTN_LOGIT_SOFTCAPPING,                 "%s.attn_logit_softcapping"                 },
-+    { LLM_KV_ROUTER_LOGIT_SOFTCAPPING,               "%s.router_logit_softcapping"               },
-+    { LLM_KV_FINAL_LOGIT_SOFTCAPPING,                "%s.final_logit_softcapping"                },
-+    { LLM_KV_SWIN_NORM,                              "%s.swin_norm"                              },
-+    { LLM_KV_RESCALE_EVERY_N_LAYERS,                 "%s.rescale_every_n_layers"                 },
-+    { LLM_KV_TIME_MIX_EXTRA_DIM,                     "%s.time_mix_extra_dim"                     },
-+    { LLM_KV_TIME_DECAY_EXTRA_DIM,                   "%s.time_decay_extra_dim"                   },
-+    { LLM_KV_RESIDUAL_SCALE,                         "%s.residual_scale"                         },
-+    { LLM_KV_EMBEDDING_SCALE,                        "%s.embedding_scale"                        },
-+    { LLM_KV_ADAPTER_COUNT,                          "%s.adapters.count"                         },
-+    { LLM_KV_ADAPTER_TOKEN_IDS_ACTIVATE,             "%s.adapters.token_ids_activate"            },
-+    { LLM_KV_ADAPTER_TOKEN_IDS_SUBSTITUTE,           "%s.adapters.token_ids_substitute"          },
-+    { LLM_KV_ADAPTER_LORA_RANK,                      "%s.adapters.lora_rank"                     },
-+    { LLM_KV_ADAPTER_ROUTER_GAIN,                    "%s.adapters.router_gain"                   },
-+    { LLM_KV_TOKEN_SHIFT_COUNT,                      "%s.token_shift_count"                      },
-+    { LLM_KV_INTERLEAVE_MOE_LAYER_STEP,              "%s.interleave_moe_layer_step"              },
-+    { LLM_KV_FULL_ATTENTION_INTERVAL,                "%s.full_attention_interval"                },
-+    { LLM_KV_NUM_LOOPS,                              "%s.num_loops"                              },
-+    { LLM_KV_SKIP_LOOP_FINAL_NORM,                   "%s.skip_loop_final_norm"                   },
+-    { LLM_KV_HRM_LAYERS_PER_STACK,              "%s.hrm.layers_per_stack"              },
+-    { LLM_KV_HRM_H_CYCLES,                      "%s.hrm.h_cycles"                      },
+-    { LLM_KV_HRM_L_CYCLES,                      "%s.hrm.l_cycles"                      },
+-    { LLM_KV_HRM_PREFIX_LM,                     "%s.hrm.prefix_lm"                     },
++    { LLM_KV_VOCAB_SIZE,                        "%s.vocab_size"                         },
++    { LLM_KV_CONTEXT_LENGTH,                    "%s.context_length"                     },
++    { LLM_KV_EMBEDDING_LENGTH,                  "%s.embedding_length"                   },
++    { LLM_KV_EMBEDDING_LENGTH_OUT,              "%s.embedding_length_out"               },
++    { LLM_KV_EMBEDDING_LENGTH_PER_LAYER,        "%s.embedding_length_per_layer_input"   },
++    { LLM_KV_FEATURES_LENGTH,                   "%s.features_length"                    },
++    { LLM_KV_BLOCK_COUNT,                       "%s.block_count"                        },
++    { LLM_KV_LEADING_DENSE_BLOCK_COUNT,         "%s.leading_dense_block_count"          },
++    { LLM_KV_ATTN_RES_BLOCK_SIZE,               "%s.attn_res.block_size"                },
++    { LLM_KV_ACTIVATION_SITU_BETA,              "%s.activation.situ_beta"               },
++    { LLM_KV_ACTIVATION_SITU_LINEAR_BETA,       "%s.activation.situ_linear_beta"        },
++    { LLM_KV_FEED_FORWARD_LENGTH,               "%s.feed_forward_length"                },
++    { LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        "%s.expert_feed_forward_length"         },
++    { LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, "%s.expert_shared_feed_forward_length"  },
++    { LLM_KV_EXPERT_CHUNK_FEED_FORWARD_LENGTH,  "%s.expert_chunk_feed_forward_length"   },
++    { LLM_KV_SWIGLU_CLAMP_EXP,                  "%s.swiglu_clamp_exp"                   },
++    { LLM_KV_SWIGLU_CLAMP_SHEXP,                "%s.swiglu_clamp_shexp"                 },
++    { LLM_KV_USE_PARALLEL_RESIDUAL,             "%s.use_parallel_residual"              },
++    { LLM_KV_TENSOR_DATA_LAYOUT,                "%s.tensor_data_layout"                 },
++    { LLM_KV_EXPERT_COUNT,                      "%s.expert_count"                       },
++    { LLM_KV_EXPERT_USED_COUNT,                 "%s.expert_used_count"                  },
++    { LLM_KV_EXPERT_SHARED_COUNT,               "%s.expert_shared_count"                },
++    { LLM_KV_EXPERT_GROUP_COUNT,                "%s.expert_group_count"                 },
++    { LLM_KV_EXPERT_GROUP_USED_COUNT,           "%s.expert_group_used_count"            },
++    { LLM_KV_EXPERT_WEIGHTS_SCALE,              "%s.expert_weights_scale"               },
++    { LLM_KV_EXPERT_WEIGHTS_NORM,               "%s.expert_weights_norm"                },
++    { LLM_KV_EXPERT_LATENT_LENGTH,              "%s.expert_latent_length"               },
++    { LLM_KV_EXPERT_GATING_FUNC,                "%s.expert_gating_func"                 },
++    { LLM_KV_EXPERT_GROUP_SCALE,                "%s.expert_group_scale"                 },
++    { LLM_KV_EXPERTS_PER_GROUP,                 "%s.experts_per_group"                  },
++    { LLM_KV_MOE_EVERY_N_LAYERS,                "%s.moe_every_n_layers"                 },
++    { LLM_KV_MOE_LATENT_SIZE,                   "%s.moe_latent_size"                    },
++    { LLM_KV_NEXTN_PREDICT_LAYERS,              "%s.nextn_predict_layers"               },
++    { LLM_KV_DSPARK_BLOCK_SIZE,                 "%s.dspark.block_size"                  },
++    { LLM_KV_DSPARK_MASK_TOKEN_ID,              "%s.dspark.mask_token_id"               },
++    { LLM_KV_DSPARK_TARGET_LAYERS,              "%s.dspark.target_layers"               },
++    { LLM_KV_DSPARK_MARKOV_RANK,                "%s.dspark.markov_rank"                 },
++    { LLM_KV_DSPARK_CONFIDENCE_HEAD,            "%s.dspark.confidence_head"             },
++    { LLM_KV_DSPARK_CONFIDENCE_WITH_MARKOV,     "%s.dspark.confidence_head_with_markov" },
++    { LLM_KV_DSPARK_LOG_SNR_CONDITIONING,       "%s.dspark.log_snr_conditioning"        },
++    { LLM_KV_DSPARK_MIN_LOG_SNR,                "%s.dspark.min_log_snr"                 },
++    { LLM_KV_DSPARK_MAX_LOG_SNR,                "%s.dspark.max_log_snr"                 },
++    { LLM_KV_DSPARK_HIDDEN_CORRECTION,          "%s.dspark.hidden_correction"           },
++    { LLM_KV_DSPARK_MARKOV_DEPLOY_EXPOSURE,     "%s.dspark.markov_deploy_exposure"      },
++    { LLM_KV_DSPARK_CORRECTION_SIZE,            "%s.dspark.correction_size"             },
++    { LLM_KV_NUM_DEEPSTACK_LAYERS,              "%s.n_deepstack_layers"                 },
++    { LLM_KV_DEEPSTACK_MAPPING,                 "%s.deepstack_mapping"                  },
++    { LLM_KV_HIDDEN_ACT,                        "%s.hidden_activation"                  },
++    { LLM_KV_POOLING_TYPE,                      "%s.pooling_type"                       },
++    { LLM_KV_LOGIT_SCALE,                       "%s.logit_scale"                        },
++    { LLM_KV_DECODER_START_TOKEN_ID,            "%s.decoder_start_token_id"             },
++    { LLM_KV_DECODER_BLOCK_COUNT,               "%s.decoder_block_count"                },
++    { LLM_KV_ATTN_LOGIT_SOFTCAPPING,            "%s.attn_logit_softcapping"             },
++    { LLM_KV_ROUTER_LOGIT_SOFTCAPPING,          "%s.router_logit_softcapping"           },
++    { LLM_KV_FINAL_LOGIT_SOFTCAPPING,           "%s.final_logit_softcapping"            },
++    { LLM_KV_SWIN_NORM,                         "%s.swin_norm"                          },
++    { LLM_KV_RESCALE_EVERY_N_LAYERS,            "%s.rescale_every_n_layers"             },
++    { LLM_KV_TIME_MIX_EXTRA_DIM,                "%s.time_mix_extra_dim"                 },
++    { LLM_KV_TIME_DECAY_EXTRA_DIM,              "%s.time_decay_extra_dim"               },
++    { LLM_KV_RESIDUAL_SCALE,                    "%s.residual_scale"                     },
++    { LLM_KV_EMBEDDING_SCALE,                   "%s.embedding_scale"                    },
++    { LLM_KV_ADAPTER_COUNT,                     "%s.adapters.count"                     },
++    { LLM_KV_ADAPTER_TOKEN_IDS_ACTIVATE,        "%s.adapters.token_ids_activate"        },
++    { LLM_KV_ADAPTER_TOKEN_IDS_SUBSTITUTE,      "%s.adapters.token_ids_substitute"      },
++    { LLM_KV_ADAPTER_LORA_RANK,                 "%s.adapters.lora_rank"                 },
++    { LLM_KV_ADAPTER_ROUTER_GAIN,               "%s.adapters.router_gain"               },
++    { LLM_KV_TOKEN_SHIFT_COUNT,                 "%s.token_shift_count"                  },
++    { LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         "%s.interleave_moe_layer_step"          },
++    { LLM_KV_FULL_ATTENTION_INTERVAL,           "%s.full_attention_interval"            },
++    { LLM_KV_NUM_LOOPS,                         "%s.num_loops"                          },
++    { LLM_KV_SKIP_LOOP_FINAL_NORM,              "%s.skip_loop_final_norm"               },
++    { LLM_KV_HRM_LAYERS_PER_STACK,              "%s.hrm.layers_per_stack"               },
++    { LLM_KV_HRM_H_CYCLES,                      "%s.hrm.h_cycles"                       },
++    { LLM_KV_HRM_L_CYCLES,                      "%s.hrm.l_cycles"                       },
++    { LLM_KV_HRM_PREFIX_LM,                     "%s.hrm.prefix_lm"                      },
  
      { LLM_KV_ATTENTION_HEAD_COUNT,                   "%s.attention.head_count"                   },
      { LLM_KV_ATTENTION_HEAD_COUNT_KV,                "%s.attention.head_count_kv"                },
-@@ -296,111 +309,115 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
+@@ -317,117 +330,121 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
  
      { LLM_KV_HASH_LAYER_COUNT,                       "%s.hash_layer_count"                       },
  
@@ -362,6 +377,17 @@ index eecf444fc..eb17e0967 100644
 +    { LLM_KV_TARGET_HIDDEN_SIZE,                     "%s.target_hidden_size"                     },
 +    { LLM_KV_NORM_BEFORE_RESIDUAL,                   "%s.norm_before_residual"                   },
 +    { LLM_KV_NORM_BEFORE_FC,                         "%s.norm_before_fc"                         },
+ 
+-    { LLM_KV_DFLASH_BLOCK_SIZE,       "%s.block_size"       },
+-    { LLM_KV_DFLASH_CONV_KERNEL_SIZE, "%s.conv_kernel_size" },
+-    { LLM_KV_DFLASH_CONV_GROUP_SIZE,  "%s.conv_group_size"  },
+-    { LLM_KV_DFLASH_SELECTOR_RANK,    "%s.selector_rank"    },
+-    { LLM_KV_DFLASH_SELECTOR_TOP_K,   "%s.selector_top_k"   },
++    { LLM_KV_DFLASH_BLOCK_SIZE,                      "%s.block_size"                             },
++    { LLM_KV_DFLASH_CONV_KERNEL_SIZE,                "%s.conv_kernel_size"                       },
++    { LLM_KV_DFLASH_CONV_GROUP_SIZE,                 "%s.conv_group_size"                        },
++    { LLM_KV_DFLASH_SELECTOR_RANK,                   "%s.selector_rank"                          },
++    { LLM_KV_DFLASH_SELECTOR_TOP_K,                  "%s.selector_top_k"                         },
  
 -    { LLM_KV_SHORTCONV_L_CACHE, "%s.shortconv.l_cache" },
 +    { LLM_KV_SHORTCONV_L_CACHE,                      "%s.shortconv.l_cache"                      },
@@ -474,10 +500,10 @@ index eecf444fc..eb17e0967 100644
  };
  
  static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
-@@ -651,6 +668,28 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
-     { LLM_TENSOR_DSPARK_MARKOV_W1,                       "markov_w1" },
-     { LLM_TENSOR_DSPARK_MARKOV_W2,                       "markov_w2" },
-     { LLM_TENSOR_DSPARK_CONF_PROJ,                       "conf_proj" },
+@@ -704,6 +721,28 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
+     { LLM_TENSOR_DFLASH_SELECTOR_PREV,                   "selector_predecessor" },
+     { LLM_TENSOR_DFLASH_SELECTOR_NEXT,                   "selector_successor" },
+     { LLM_TENSOR_DFLASH_SELECTOR_HIDDEN,                 "selector_hidden" },
 +    { LLM_TENSOR_DSPARK_LOG_SNR_FC1,                     "log_snr_fc1" },
 +    { LLM_TENSOR_DSPARK_LOG_SNR_FC2,                     "log_snr_fc2" },
 +    { LLM_TENSOR_DFLY_LAYER_FUSION,                      "layer_fusion" },
@@ -503,357 +529,9 @@ index eecf444fc..eb17e0967 100644
  };
  
  // declare information about the model weight tensors:
-@@ -664,258 +703,285 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
- // example: https://github.com/ggml-org/llama.cpp/pull/17548
- //
- static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
--    {LLM_TENSOR_TOKEN_EMBD,                 {LLM_TENSOR_LAYER_INPUT,     GGML_OP_GET_ROWS}},
--    {LLM_TENSOR_POS_EMBD,                   {LLM_TENSOR_LAYER_INPUT,     GGML_OP_GET_ROWS}},
--    {LLM_TENSOR_TOKEN_TYPES,                {LLM_TENSOR_LAYER_INPUT,     GGML_OP_GET_ROWS}},
--    {LLM_TENSOR_TOKEN_EMBD_NORM,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},  // do the norms on the first layer (not the input layer)
--    {LLM_TENSOR_OUTPUT,                     {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_CLS,                        {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_CLS_OUT,                    {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_CLS_NORM,                   {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
--    {LLM_TENSOR_DENSE_2_OUT,                {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}}, // Dense layer output
--    {LLM_TENSOR_DENSE_3_OUT,                {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}}, // Dense layer output
--    {LLM_TENSOR_OUTPUT_NORM,                {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
--    {LLM_TENSOR_OUTPUT_NORM_LFM2,           {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
--    {LLM_TENSOR_DEC_OUTPUT_NORM,            {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
--    {LLM_TENSOR_ENC_OUTPUT_NORM,            {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
--    {LLM_TENSOR_ROPE_FREQS,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ROPE}},
--    {LLM_TENSOR_ROPE_FACTORS_LONG,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ROPE}},
--    {LLM_TENSOR_ROPE_FACTORS_SHORT,         {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ROPE}},
--    {LLM_TENSOR_ATTN_Q,                     {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ATTN_K,                     {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ATTN_V,                     {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ATTN_QKV,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ATTN_OUT,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ATTN_GATE,                  {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_FFN_GATE,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_FFN_DOWN,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_FFN_UP,                     {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_FFN_DOWN_SHEXP,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_FFN_GATE_SHEXP,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_FFN_UP_SHEXP,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ATTN_Q_A,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ATTN_Q_B,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ATTN_KV_A_MQA,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ATTN_KV_B,                  {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ATTN_KV,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ATTN_KV_NORM,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_ATTN_OUT_A,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ATTN_OUT_B,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_HC_HEAD_FN,                 {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_HC_HEAD_BASE,               {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_ADD}},
--    {LLM_TENSOR_HC_HEAD_SCALE,              {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
--    {LLM_TENSOR_HC_ATTN_FN,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_HC_ATTN_BASE,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD}},
--    {LLM_TENSOR_HC_ATTN_SCALE,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_HC_FFN_FN,                  {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_HC_FFN_BASE,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD}},
--    {LLM_TENSOR_HC_FFN_SCALE,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_ATTN_COMPRESSOR_WKV,        {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ATTN_COMPRESSOR_WGATE,      {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ATTN_COMPRESSOR_APE,        {LLM_TENSOR_LAYER_REPEATING, GGML_OP_GET_ROWS}},
--    {LLM_TENSOR_ATTN_COMPRESSOR_NORM,       {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_ATTN_K_B,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ATTN_V_B,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ATTN_SINKS,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_SCALE}},
--    {LLM_TENSOR_DEC_ATTN_Q,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_DEC_ATTN_K,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_DEC_ATTN_V,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_DEC_ATTN_OUT,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_DEC_CROSS_ATTN_Q,           {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_DEC_CROSS_ATTN_K,           {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_DEC_CROSS_ATTN_V,           {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_DEC_CROSS_ATTN_OUT,         {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_DEC_FFN_GATE,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_DEC_FFN_DOWN,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_DEC_FFN_UP,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ENC_ATTN_Q,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ENC_ATTN_K,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ENC_ATTN_V,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ENC_ATTN_OUT,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ENC_FFN_GATE,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ENC_FFN_DOWN,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ENC_FFN_UP,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_FFN_GATE_INP_SHEXP,         {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_FFN_GATE_INP,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_SSM_IN,                     {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_SSM_X,                      {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_SSM_DT,                     {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_SSM_OUT,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_SSM_ALPHA,                  {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_SSM_BETA_ALPHA,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_TIME_MIX_W1,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_TIME_MIX_W2,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_TIME_MIX_A1,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_TIME_MIX_A2,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_TIME_MIX_V1,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_TIME_MIX_V2,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_TIME_MIX_G1,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_TIME_MIX_G2,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_TIME_MIX_DECAY_W1,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_TIME_MIX_DECAY_W2,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_TIME_MIX_KEY,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_TIME_MIX_VALUE,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_TIME_MIX_RECEPTANCE,        {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_TIME_MIX_GATE,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_TIME_MIX_OUTPUT,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_CHANNEL_MIX_KEY,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_CHANNEL_MIX_RECEPTANCE,     {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_CHANNEL_MIX_VALUE,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_FFN_ACT,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_DIV}},
--    {LLM_TENSOR_SSM_CONV1D,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_SSM_CONV}},
--    {LLM_TENSOR_SSM_A,                      {LLM_TENSOR_LAYER_REPEATING, GGML_OP_SSM_SCAN}},
--    {LLM_TENSOR_SSM_A_NOSCAN,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}}, // a version of SSM_A used for MUL instead of SSM_SCAN
--    {LLM_TENSOR_SSM_DT_NORM,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_SSM_B_NORM,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_SSM_C_NORM,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_SSM_D,                      {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_SSM_NORM,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
-+    { LLM_TENSOR_TOKEN_EMBD,               { LLM_TENSOR_LAYER_INPUT, GGML_OP_GET_ROWS }       },
-+    { LLM_TENSOR_POS_EMBD,                 { LLM_TENSOR_LAYER_INPUT, GGML_OP_GET_ROWS }       },
-+    { LLM_TENSOR_TOKEN_TYPES,              { LLM_TENSOR_LAYER_INPUT, GGML_OP_GET_ROWS }       },
-+    { LLM_TENSOR_TOKEN_EMBD_NORM,
-+     { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }                                              }, // do the norms on the first layer (not the input layer)
-+    { LLM_TENSOR_OUTPUT,                   { LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT }       },
-+    { LLM_TENSOR_CLS,                      { LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT }       },
-+    { LLM_TENSOR_CLS_OUT,                  { LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT }       },
-+    { LLM_TENSOR_CLS_NORM,                 { LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL }           },
-+    { LLM_TENSOR_DENSE_2_OUT,              { LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT }       }, // Dense layer output
-+    { LLM_TENSOR_DENSE_3_OUT,              { LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT }       }, // Dense layer output
-+    { LLM_TENSOR_OUTPUT_NORM,              { LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL }           },
-+    { LLM_TENSOR_OUTPUT_NORM_LFM2,         { LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL }           },
-+    { LLM_TENSOR_DEC_OUTPUT_NORM,          { LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL }           },
-+    { LLM_TENSOR_ENC_OUTPUT_NORM,          { LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL }           },
-+    { LLM_TENSOR_ROPE_FREQS,               { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ROPE }       },
-+    { LLM_TENSOR_ROPE_FACTORS_LONG,        { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ROPE }       },
-+    { LLM_TENSOR_ROPE_FACTORS_SHORT,       { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ROPE }       },
-+    { LLM_TENSOR_ATTN_Q,                   { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ATTN_K,                   { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ATTN_V,                   { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ATTN_QKV,                 { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ATTN_OUT,                 { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ATTN_GATE,                { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_FFN_GATE,                 { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_FFN_DOWN,                 { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_FFN_UP,                   { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_FFN_DOWN_SHEXP,           { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_FFN_GATE_SHEXP,           { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_FFN_UP_SHEXP,             { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ATTN_Q_A,                 { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ATTN_Q_B,                 { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ATTN_KV_A_MQA,            { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ATTN_KV_B,                { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ATTN_KV,                  { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ATTN_KV_NORM,             { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_ATTN_OUT_A,               { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ATTN_OUT_B,               { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_HC_HEAD_FN,               { LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT }       },
-+    { LLM_TENSOR_HC_HEAD_BASE,             { LLM_TENSOR_LAYER_OUTPUT, GGML_OP_ADD }           },
-+    { LLM_TENSOR_HC_HEAD_SCALE,            { LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL }           },
-+    { LLM_TENSOR_HC_ATTN_FN,               { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_HC_ATTN_BASE,             { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD }        },
-+    { LLM_TENSOR_HC_ATTN_SCALE,            { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_HC_FFN_FN,                { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_HC_FFN_BASE,              { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD }        },
-+    { LLM_TENSOR_HC_FFN_SCALE,             { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_ATTN_COMPRESSOR_WKV,      { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ATTN_COMPRESSOR_WGATE,    { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ATTN_COMPRESSOR_APE,      { LLM_TENSOR_LAYER_REPEATING, GGML_OP_GET_ROWS }   },
-+    { LLM_TENSOR_ATTN_COMPRESSOR_NORM,     { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_ATTN_K_B,                 { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ATTN_V_B,                 { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ATTN_SINKS,               { LLM_TENSOR_LAYER_REPEATING, GGML_OP_SCALE }      },
-+    { LLM_TENSOR_DEC_ATTN_Q,               { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_DEC_ATTN_K,               { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_DEC_ATTN_V,               { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_DEC_ATTN_OUT,             { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_DEC_CROSS_ATTN_Q,         { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_DEC_CROSS_ATTN_K,         { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_DEC_CROSS_ATTN_V,         { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_DEC_CROSS_ATTN_OUT,       { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_DEC_FFN_GATE,             { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_DEC_FFN_DOWN,             { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_DEC_FFN_UP,               { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ENC_ATTN_Q,               { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ENC_ATTN_K,               { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ENC_ATTN_V,               { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ENC_ATTN_OUT,             { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ENC_FFN_GATE,             { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ENC_FFN_DOWN,             { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ENC_FFN_UP,               { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_FFN_GATE_INP_SHEXP,       { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_FFN_GATE_INP,             { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_SSM_IN,                   { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_SSM_X,                    { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_SSM_DT,                   { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_SSM_OUT,                  { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_SSM_ALPHA,                { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_SSM_BETA_ALPHA,           { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_TIME_MIX_W1,              { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_TIME_MIX_W2,              { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_TIME_MIX_A1,              { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_TIME_MIX_A2,              { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_TIME_MIX_V1,              { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_TIME_MIX_V2,              { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_TIME_MIX_G1,              { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_TIME_MIX_G2,              { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_TIME_MIX_DECAY_W1,        { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_TIME_MIX_DECAY_W2,        { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_TIME_MIX_KEY,             { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_TIME_MIX_VALUE,           { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_TIME_MIX_RECEPTANCE,      { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_TIME_MIX_GATE,            { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_TIME_MIX_OUTPUT,          { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_CHANNEL_MIX_KEY,          { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_CHANNEL_MIX_RECEPTANCE,   { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_CHANNEL_MIX_VALUE,        { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_FFN_ACT,                  { LLM_TENSOR_LAYER_REPEATING, GGML_OP_DIV }        },
-+    { LLM_TENSOR_SSM_CONV1D,               { LLM_TENSOR_LAYER_REPEATING, GGML_OP_SSM_CONV }   },
-+    { LLM_TENSOR_SSM_A,                    { LLM_TENSOR_LAYER_REPEATING, GGML_OP_SSM_SCAN }   },
-+    { LLM_TENSOR_SSM_A_NOSCAN,
-+     { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }                                              }, // a version of SSM_A used for MUL instead of SSM_SCAN
-+    { LLM_TENSOR_SSM_DT_NORM,              { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_SSM_B_NORM,               { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_SSM_C_NORM,               { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_SSM_D,                    { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_SSM_NORM,                 { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-     // Kimi KDA - Conv tensors are 4D [d_conv, 1, d_inner, 1], reshaped to 2D at runtime
--    {LLM_TENSOR_SSM_CONV1D_Q,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_SSM_CONV1D_K,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_SSM_CONV1D_V,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_SSM_F_A,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_SSM_F_B,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_SSM_BETA,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_SSM_G_A,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_SSM_G,                      {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_ATTN_RES_SCORE,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_FFN_RES_SCORE,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_OUTPUT_RES_SCORE,           {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
--    {LLM_TENSOR_FFN_ROUTED_DOWN,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_FFN_ROUTED_UP,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_FFN_ROUTED_NORM,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_SSM_G_B,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
--    {LLM_TENSOR_TIME_MIX_LERP_X,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_TIME_MIX_LN,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_CHANNEL_MIX_LERP_K,         {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_CHANNEL_MIX_LERP_R,         {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_TIME_MIX_K_K,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_TIME_MIX_K_A,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_TIME_MIX_R_K,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_TIME_MIX_LERP_W,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD}},
--    {LLM_TENSOR_TIME_MIX_LERP_K,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD}},
--    {LLM_TENSOR_TIME_MIX_LERP_V,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD}},
--    {LLM_TENSOR_TIME_MIX_LERP_R,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD}},
--    {LLM_TENSOR_TIME_MIX_LERP_G,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD}},
--    {LLM_TENSOR_TIME_MIX_LERP_FUSED,        {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD}},
--    {LLM_TENSOR_TIME_MIX_DECAY,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD}},
--    {LLM_TENSOR_TIME_MIX_W0,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD}},
--    {LLM_TENSOR_TIME_MIX_A0,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD}},
--    {LLM_TENSOR_TIME_MIX_V0,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD}},
--    {LLM_TENSOR_TIME_MIX_FIRST,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_RWKV_WKV6}},
--    {LLM_TENSOR_ATTN_NORM,                  {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_ATTN_NORM_2,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_ATTN_OUT_NORM,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_ATTN_POST_NORM,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_FFN_NORM,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_FFN_PRE_NORM_2,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_FFN_POST_NORM_1,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_FFN_POST_NORM_2,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_FFN_POST_NORM,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_FFN_NORM_EXPS,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_ATTN_Q_NORM,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_ATTN_K_NORM,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_LAYER_OUT_NORM,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_LAYER_OUT_SCALE,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_ATTN_Q_A_NORM,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_ATTN_KV_A_NORM,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_ATTN_SUB_NORM,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_FFN_SUB_NORM,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_DEC_ATTN_NORM,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_DEC_CROSS_ATTN_NORM,        {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_DEC_FFN_NORM,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_ENC_ATTN_NORM,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_ENC_FFN_NORM,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
--    {LLM_TENSOR_DEC_ATTN_REL_B,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_GET_ROWS}},
--    {LLM_TENSOR_ENC_ATTN_REL_B,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_GET_ROWS}},
--    {LLM_TENSOR_FFN_DOWN_EXPS,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
--    {LLM_TENSOR_FFN_GATE_EXPS,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
--    {LLM_TENSOR_FFN_UP_EXPS,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
--    {LLM_TENSOR_FFN_GATE_UP_EXPS,           {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
--    {LLM_TENSOR_FFN_DOWN_CHEXPS,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
--    {LLM_TENSOR_FFN_GATE_CHEXPS,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
--    {LLM_TENSOR_FFN_UP_CHEXPS,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
--    {LLM_TENSOR_FFN_EXP_PROBS_B,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD}},
-+    { LLM_TENSOR_SSM_CONV1D_Q,             { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_SSM_CONV1D_K,             { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_SSM_CONV1D_V,             { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_SSM_F_A,                  { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_SSM_F_B,                  { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_SSM_BETA,                 { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_SSM_G_A,                  { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_SSM_G,                    { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_ATTN_RES_SCORE,           { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_FFN_RES_SCORE,            { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_OUTPUT_RES_SCORE,         { LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL }           },
-+    { LLM_TENSOR_FFN_ROUTED_DOWN,          { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_FFN_ROUTED_UP,            { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_FFN_ROUTED_NORM,          { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_SSM_G_B,                  { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT }    },
-+    { LLM_TENSOR_TIME_MIX_LERP_X,          { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_TIME_MIX_LN,              { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_CHANNEL_MIX_LERP_K,       { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_CHANNEL_MIX_LERP_R,       { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_TIME_MIX_K_K,             { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_TIME_MIX_K_A,             { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_TIME_MIX_R_K,             { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_TIME_MIX_LERP_W,          { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD }        },
-+    { LLM_TENSOR_TIME_MIX_LERP_K,          { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD }        },
-+    { LLM_TENSOR_TIME_MIX_LERP_V,          { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD }        },
-+    { LLM_TENSOR_TIME_MIX_LERP_R,          { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD }        },
-+    { LLM_TENSOR_TIME_MIX_LERP_G,          { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD }        },
-+    { LLM_TENSOR_TIME_MIX_LERP_FUSED,      { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD }        },
-+    { LLM_TENSOR_TIME_MIX_DECAY,           { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD }        },
-+    { LLM_TENSOR_TIME_MIX_W0,              { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD }        },
-+    { LLM_TENSOR_TIME_MIX_A0,              { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD }        },
-+    { LLM_TENSOR_TIME_MIX_V0,              { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD }        },
-+    { LLM_TENSOR_TIME_MIX_FIRST,           { LLM_TENSOR_LAYER_REPEATING, GGML_OP_RWKV_WKV6 }  },
-+    { LLM_TENSOR_ATTN_NORM,                { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_ATTN_NORM_2,              { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_ATTN_OUT_NORM,            { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_ATTN_POST_NORM,           { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_FFN_NORM,                 { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_FFN_PRE_NORM_2,           { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_FFN_POST_NORM_1,          { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_FFN_POST_NORM_2,          { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_FFN_POST_NORM,            { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_FFN_NORM_EXPS,            { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_ATTN_Q_NORM,              { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_ATTN_K_NORM,              { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_LAYER_OUT_NORM,           { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_LAYER_OUT_SCALE,          { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_ATTN_Q_A_NORM,            { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_ATTN_KV_A_NORM,           { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_ATTN_SUB_NORM,            { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_FFN_SUB_NORM,             { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_DEC_ATTN_NORM,            { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_DEC_CROSS_ATTN_NORM,      { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_DEC_FFN_NORM,             { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_ENC_ATTN_NORM,            { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_ENC_FFN_NORM,             { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL }        },
-+    { LLM_TENSOR_DEC_ATTN_REL_B,           { LLM_TENSOR_LAYER_REPEATING, GGML_OP_GET_ROWS }   },
-+    { LLM_TENSOR_ENC_ATTN_REL_B,           { LLM_TENSOR_LAYER_REPEATING, GGML_OP_GET_ROWS }   },
-+    { LLM_TENSOR_FFN_DOWN_EXPS,            { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID } },
-+    { LLM_TENSOR_FFN_GATE_EXPS,            { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID } },
-+    { LLM_TENSOR_FFN_UP_EXPS,              { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID } },
-+    { LLM_TENSOR_FFN_GATE_UP_EXPS,         { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID } },
-+    { LLM_TENSOR_FFN_DOWN_CHEXPS,          { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID } },
-+    { LLM_TENSOR_FFN_GATE_CHEXPS,          { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID } },
-+    { LLM_TENSOR_FFN_UP_CHEXPS,            { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID } },
-+    { LLM_TENSOR_FFN_EXP_PROBS_B,          { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD }        },
+@@ -910,84 +949,110 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
+     {LLM_TENSOR_FFN_EXP_PROBS_B,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD}},
+     {LLM_TENSOR_FFN_EXP_PROBS_B_VL,         {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD}},
      // altup / laurel (gemma 3n)
 -    {LLM_TENSOR_PER_LAYER_TOKEN_EMBD,       {LLM_TENSOR_LAYER_INPUT,     GGML_OP_GET_ROWS}},
 -    {LLM_TENSOR_PER_LAYER_MODEL_PROJ,       {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
@@ -1025,22 +703,23 @@ index eecf444fc..eb17e0967 100644
      {LLM_TENSOR_DSPARK_CONF_PROJ,           {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
 +    {LLM_TENSOR_DSPARK_LOG_SNR_FC1,         {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
 +    {LLM_TENSOR_DSPARK_LOG_SNR_FC2,         {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
- };
- 
- LLM_KV::LLM_KV(llm_arch arch, const char * suffix) : arch(arch), suffix(suffix) {}
++    // dflash
+     {LLM_TENSOR_DFLASH_ATTN_CONV_BASE,      {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+     {LLM_TENSOR_DFLASH_ATTN_CONV_PROJ,      {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+     {LLM_TENSOR_DFLASH_FFN_CONV_BASE,       {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
 diff --git a/src/llama-arch.h b/src/llama-arch.h
-index 7159e23bf..651debc45 100644
+index af64f4ec5..6fe78489a 100644
 --- a/src/llama-arch.h
 +++ b/src/llama-arch.h
-@@ -45,6 +45,7 @@ enum llm_arch {
-     LLM_ARCH_QWEN3VLMOE,
+@@ -46,6 +46,7 @@ enum llm_arch {
      LLM_ARCH_QWEN35,
      LLM_ARCH_QWEN35MOE,
+     LLM_ARCH_QWEN4EXP,
 +    LLM_ARCH_DSPARK,
      LLM_ARCH_PHI2,
      LLM_ARCH_PHI3,
      LLM_ARCH_PHIMOE,
-@@ -221,6 +222,20 @@ enum llm_kv {
+@@ -226,6 +227,20 @@ enum llm_kv {
      LLM_KV_MOE_EVERY_N_LAYERS,
      LLM_KV_MOE_LATENT_SIZE,
      LLM_KV_NEXTN_PREDICT_LAYERS,
@@ -1061,7 +740,7 @@ index 7159e23bf..651debc45 100644
      LLM_KV_NUM_DEEPSTACK_LAYERS,
      LLM_KV_DEEPSTACK_MAPPING,
      LLM_KV_HIDDEN_ACT,
-@@ -386,6 +401,10 @@ enum llm_kv {
+@@ -407,6 +422,10 @@ enum llm_kv {
      LLM_KV_CLASSIFIER_OUTPUT_LABELS,
  
      LLM_KV_TARGET_LAYERS,
@@ -1070,9 +749,9 @@ index 7159e23bf..651debc45 100644
 +    LLM_KV_MIN_LOG_SNR,
 +    LLM_KV_MAX_LOG_SNR,
      LLM_KV_TARGET_HIDDEN_SIZE,
-     LLM_KV_NORM_BEFORE_RESIDUAL,
-     LLM_KV_NORM_BEFORE_FC,
-@@ -418,7 +437,7 @@ enum llm_tensor {
+     LLM_KV_DFLASH_BLOCK_SIZE,
+     LLM_KV_DFLASH_CONV_KERNEL_SIZE,
+@@ -444,7 +463,7 @@ enum llm_tensor {
      LLM_TENSOR_DENSE_3_OUT,
      LLM_TENSOR_OUTPUT,
      LLM_TENSOR_OUTPUT_NORM,
@@ -1081,7 +760,7 @@ index 7159e23bf..651debc45 100644
      LLM_TENSOR_ROPE_FREQS,
      LLM_TENSOR_ROPE_FACTORS_LONG,
      LLM_TENSOR_ROPE_FACTORS_SHORT,
-@@ -449,7 +468,7 @@ enum llm_tensor {
+@@ -475,7 +494,7 @@ enum llm_tensor {
      LLM_TENSOR_FFN_GATE_EXP,
      LLM_TENSOR_FFN_UP_EXP,
      LLM_TENSOR_FFN_NORM_EXPS,
@@ -1090,7 +769,7 @@ index 7159e23bf..651debc45 100644
      LLM_TENSOR_FFN_GATE_EXPS,
      LLM_TENSOR_FFN_UP_EXPS,
      LLM_TENSOR_FFN_GATE_UP_EXPS,
-@@ -468,52 +487,52 @@ enum llm_tensor {
+@@ -495,52 +514,52 @@ enum llm_tensor {
      LLM_TENSOR_LAYER_OUT_SCALE,
      LLM_TENSOR_POST_ATTN_NORM,
      LLM_TENSOR_POST_MLP_NORM,
@@ -1177,8 +856,8 @@ index 7159e23bf..651debc45 100644
      LLM_TENSOR_TIME_MIX_W0,
      LLM_TENSOR_TIME_MIX_W1,
      LLM_TENSOR_TIME_MIX_W2,
-@@ -656,12 +675,37 @@ enum llm_tensor {
-     LLM_TENSOR_MASKED_EMBD_ORDERING,
+@@ -701,9 +720,28 @@ enum llm_tensor {
+     LLM_TENSOR_HRM_Z_L_INIT,
      LLM_TENSOR_FC,
      LLM_TENSOR_D2T,
 +    // dspark drafter tensors. The decoder blocks reuse the standard
@@ -1203,6 +882,15 @@ index 7159e23bf..651debc45 100644
      LLM_TENSOR_DSPARK_CONF_PROJ,
 +    LLM_TENSOR_DSPARK_LOG_SNR_FC1,
 +    LLM_TENSOR_DSPARK_LOG_SNR_FC2,
+     LLM_TENSOR_DFLASH_ATTN_CONV_BASE,
+     LLM_TENSOR_DFLASH_ATTN_CONV_PROJ,
+     LLM_TENSOR_DFLASH_FFN_CONV_BASE,
+@@ -711,9 +749,17 @@ enum llm_tensor {
+     LLM_TENSOR_DFLASH_SELECTOR_PREV,
+     LLM_TENSOR_DFLASH_SELECTOR_NEXT,
+     LLM_TENSOR_DFLASH_SELECTOR_HIDDEN,
++    // DFly (prism fork): per-layer fusion + "hidden correction" block.
++    // Distinct from upstream's LLM_TENSOR_HC_* hyper-connection tensors above.
 +    LLM_TENSOR_DFLY_LAYER_FUSION,
 +    LLM_TENSOR_DFLY_CTX_NORM,
 +    LLM_TENSOR_DFLY_HC_HIDDEN_NORM,
@@ -1217,7 +905,7 @@ index 7159e23bf..651debc45 100644
      LLM_TENSOR_LAYER_INPUT,
      LLM_TENSOR_LAYER_REPEATING,
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 0402044da..cc8c004eb 100644
+index ef53728d1..64ac43e4b 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -2,14 +2,18 @@
@@ -1363,7 +1051,7 @@ index 0402044da..cc8c004eb 100644
      }
  
      // init backends
-@@ -979,6 +1084,41 @@ float * llama_context::get_embeddings_layer_inp(uint32_t lid) {
+@@ -997,6 +1102,41 @@ float * llama_context::get_embeddings_layer_inp(uint32_t lid) {
      return embd_layer_inp[lid].data;
  }
  
@@ -1405,7 +1093,7 @@ index 0402044da..cc8c004eb 100644
  llama_token llama_context::get_sampled_token_ith(int32_t idx) {
      output_reorder();
  
-@@ -1181,6 +1321,75 @@ void llama_context::set_nextn_layer_offset(int32_t offset) {
+@@ -1199,6 +1339,75 @@ void llama_context::set_nextn_layer_offset(int32_t offset) {
      cparams.nextn_layer_offset = offset;
  }
  
@@ -1481,7 +1169,7 @@ index 0402044da..cc8c004eb 100644
  void llama_context::set_causal_attn(bool value) {
      LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
  
-@@ -1551,6 +1760,21 @@ int llama_context::encode(const llama_batch & batch_inp) {
+@@ -1572,6 +1781,21 @@ int llama_context::encode(const llama_batch & batch_inp) {
          ggml_backend_tensor_get_async(backend_h, t_h_nextn, embd_nextn.data, 0, n_tokens*n_embd*sizeof(float));
      }
  
@@ -1503,7 +1191,7 @@ index 0402044da..cc8c004eb 100644
      // TODO: hacky solution
      if (model.arch == LLM_ARCH_T5 && t_embd) {
          //cross.t_embd = t_embd;
-@@ -1859,6 +2083,25 @@ int llama_context::decode(const llama_batch & batch_inp) {
+@@ -1882,6 +2106,25 @@ int llama_context::decode(const llama_batch & batch_inp) {
              t_embd = res->get_embd_pooled();
          }
  
@@ -1529,7 +1217,7 @@ index 0402044da..cc8c004eb 100644
          // extract logits
          if (logits.data && t_logits && n_outputs > 0 && needs_raw_logits(ubatch, sampling.samplers)) {
              ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
-@@ -2043,6 +2286,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
+@@ -2066,6 +2309,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
      bool has_logits     = true;
      bool has_embd       = cparams.embeddings;
      bool has_embd_nextn = cparams.embeddings_nextn;
@@ -1537,7 +1225,7 @@ index 0402044da..cc8c004eb 100644
  
      // TODO: hacky enc-dec support
      if (model.arch == LLM_ARCH_T5) {
-@@ -2083,9 +2327,11 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
+@@ -2106,9 +2350,11 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
      }
  
      const size_t prev_size = buf_output ? ggml_backend_buffer_get_size(buf_output.get()) : 0;
@@ -1552,7 +1240,7 @@ index 0402044da..cc8c004eb 100644
  
      // alloc only when more than the current capacity is required
      // TODO: also consider shrinking the buffer
-@@ -2102,6 +2348,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
+@@ -2125,6 +2371,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
              logits.data = nullptr;
              embd.data = nullptr;
              embd_nextn.data = nullptr;
@@ -1560,7 +1248,7 @@ index 0402044da..cc8c004eb 100644
              for (auto & layer_inp : embd_layer_inp) {
                  layer_inp = {nullptr, 0};
              }
-@@ -2145,6 +2392,10 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
+@@ -2168,6 +2415,10 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
          }
      }
  
@@ -1571,7 +1259,7 @@ index 0402044da..cc8c004eb 100644
      if (has_sampling) {
          sampling.logits = {(float *) (base + offset), (size_t)(n_vocab*n_outputs_max)};
          offset += sampling.logits.size * sizeof(float);
-@@ -2240,6 +2491,12 @@ void llama_context::output_reorder() {
+@@ -2263,6 +2514,12 @@ void llama_context::output_reorder() {
              }
          }
  
@@ -1584,7 +1272,7 @@ index 0402044da..cc8c004eb 100644
          if (embd_nextn.size > 0) {
              for (uint64_t k = 0; k < n_embd_out; k++) {
                  std::swap(embd_nextn.data[i0*n_embd_out + k], embd_nextn.data[i1*n_embd_out + k]);
-@@ -2430,6 +2687,13 @@ ggml_cgraph * llama_context::graph_reserve(
+@@ -2475,6 +2732,13 @@ ggml_cgraph * llama_context::graph_reserve(
  
      auto * gf = model.build_graph(gparams);
  
@@ -1598,7 +1286,7 @@ index 0402044da..cc8c004eb 100644
      this->n_outputs = save_n_outputs;
  
      // initialize scheduler with the specified graph
-@@ -2454,21 +2718,27 @@ llm_graph_params llama_context::graph_params(
+@@ -2499,21 +2763,27 @@ llm_graph_params llama_context::graph_params(
              const llama_memory_context_i * mctx,
                            llm_graph_type   gtype) const {
      return {
@@ -1641,7 +1329,7 @@ index 0402044da..cc8c004eb 100644
      };
  }
  
-@@ -3534,6 +3804,7 @@ llama_context_params llama_context_default_params() {
+@@ -3671,6 +3941,7 @@ llama_context_params llama_context_default_params() {
          /*.cb_eval_user_data           =*/ nullptr,
          /*.type_k                      =*/ GGML_TYPE_F16,
          /*.type_v                      =*/ GGML_TYPE_F16,
@@ -1649,7 +1337,7 @@ index 0402044da..cc8c004eb 100644
          /*.abort_callback              =*/ nullptr,
          /*.abort_callback_data         =*/ nullptr,
          /*.embeddings                  =*/ false,
-@@ -3622,6 +3893,13 @@ llama_context * llama_init_from_model(
+@@ -3762,6 +4033,13 @@ llama_context * llama_init_from_model(
          }
      }
  
@@ -1663,7 +1351,7 @@ index 0402044da..cc8c004eb 100644
      if (params.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED &&
          params.pooling_type != model->hparams.pooling_type) {
          //user-specified pooling-type is different from the model default
-@@ -3808,6 +4086,41 @@ float * llama_get_embeddings_layer_inp(llama_context * ctx, uint32_t lid) {
+@@ -3956,6 +4234,41 @@ float * llama_get_embeddings_layer_inp(llama_context * ctx, uint32_t lid) {
      return ctx->get_embeddings_layer_inp(lid);
  }
  
@@ -1706,10 +1394,10 @@ index 0402044da..cc8c004eb 100644
      return ctx->set_sampler(seq_id, smpl);
  }
 diff --git a/src/llama-context.h b/src/llama-context.h
-index bf91daa8b..ef0c3a50d 100644
+index b7a9db591..ac9519ee2 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
-@@ -90,6 +90,13 @@ struct llama_context {
+@@ -91,6 +91,13 @@ struct llama_context {
  
      float * get_embeddings_layer_inp(uint32_t lid);
  
@@ -1723,7 +1411,7 @@ index bf91daa8b..ef0c3a50d 100644
      llama_token * get_sampled_tokens() const;
      llama_token   get_sampled_token_ith(int32_t idx);
  
-@@ -114,6 +121,17 @@ struct llama_context {
+@@ -115,6 +122,17 @@ struct llama_context {
  
      void set_embeddings (bool value);
      void set_embeddings_nextn(bool value, bool masked);
@@ -1741,7 +1429,7 @@ index bf91daa8b..ef0c3a50d 100644
      void set_embeddings_layer_inp(uint32_t lid, bool enable);
      void set_nextn_layer_offset(int32_t offset);
      void set_causal_attn(bool value);
-@@ -287,6 +305,10 @@ private:
+@@ -290,6 +308,10 @@ private:
      llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
  
      llama_memory_ptr memory;
@@ -1752,7 +1440,7 @@ index bf91daa8b..ef0c3a50d 100644
  
      // decode output (2-dimensional array: [n_outputs][n_vocab])
      buffer_view<float> logits = {nullptr, 0};
-@@ -304,6 +326,11 @@ private:
+@@ -307,6 +329,11 @@ private:
      // populated when cparams.output_layer_inp[il] is true
      std::vector<buffer_view<float>> embd_layer_inp;
  
@@ -1764,9 +1452,9 @@ index bf91daa8b..ef0c3a50d 100644
      struct sampling_info {
          // !samplers.empty() to check if any samplers are active
          std::map<llama_seq_id, llama_sampler *> samplers;
-@@ -367,6 +394,9 @@ private:
-     llm_graph_result_ptr gf_res_prev;
-     llm_graph_result_ptr gf_res_reserve;
+@@ -373,6 +400,9 @@ private:
+ 
+     llm_graph_result * gf_res_prev_active = nullptr;
  
 +    // one-time Hadamard transform-coverage check on the first built graph
 +    bool hadamard_verified = false;
@@ -1775,7 +1463,7 @@ index bf91daa8b..ef0c3a50d 100644
      ggml_backend_buffer_ptr buf_output;
  
 diff --git a/src/llama-cparams.h b/src/llama-cparams.h
-index 574ce9592..1f013e2f0 100644
+index b592de18c..2754254cf 100644
 --- a/src/llama-cparams.h
 +++ b/src/llama-cparams.h
 @@ -1,7 +1,9 @@
@@ -1806,7 +1494,7 @@ index 574ce9592..1f013e2f0 100644
      bool offload_kqv;
      bool flash_attn;
 diff --git a/src/llama-ext.h b/src/llama-ext.h
-index 35d6e58ad..11f331327 100644
+index 92a759b7a..c6cfc35bc 100644
 --- a/src/llama-ext.h
 +++ b/src/llama-ext.h
 @@ -8,6 +8,7 @@
@@ -1817,7 +1505,7 @@ index 35d6e58ad..11f331327 100644
  
  // Reserve a new compute graph. It is valid until the next call to llama_graph_reserve.
  LLAMA_API struct ggml_cgraph * llama_graph_reserve(
-@@ -124,9 +125,99 @@ LLAMA_API llama_context * llama_get_ctx_other(struct llama_context * ctx);
+@@ -126,9 +127,99 @@ LLAMA_API int32_t llama_model_dflash_selector_top_k(const struct llama_model * m
  LLAMA_API const int32_t * llama_model_target_layer_ids  (const struct llama_model * model);
  // returns the number of extracted layers from target model
  LLAMA_API uint32_t        llama_model_target_layer_ids_n(const struct llama_model * model);
@@ -1918,7 +1606,7 @@ index 35d6e58ad..11f331327 100644
 +                                             std::vector<float> &       w1,
 +                                             std::vector<float> &       w2);
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 8fca8e1bc..99f263e32 100644
+index fd4290cf0..0b996644f 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -66,6 +66,52 @@ static bool can_reuse_kq_mask(
@@ -2054,7 +1742,7 @@ index 8fca8e1bc..99f263e32 100644
  void llm_graph_input_cross_embd::set_input(const llama_ubatch * ubatch) {
      GGML_UNUSED(ubatch);
  
-@@ -1097,17 +1169,7 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
+@@ -1100,17 +1172,7 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
          mctx->get_attn()->set_input_v_rot(inp_attn->self_v_rot);
      }
  
@@ -2073,7 +1761,7 @@ index 8fca8e1bc..99f263e32 100644
  }
  
  bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
-@@ -1122,13 +1184,7 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
+@@ -1125,13 +1187,7 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
  
      res &= can_reuse_kq_mask(inp_attn->self_kq_mask, mctx->get_attn(), params.ubatch, params.cparams);
  
@@ -2088,7 +1776,7 @@ index 8fca8e1bc..99f263e32 100644
  
      return res;
  }
-@@ -1141,17 +1197,7 @@ void llm_graph_input_mem_hybrid_k::set_input(const llama_ubatch * ubatch) {
+@@ -1144,17 +1200,7 @@ void llm_graph_input_mem_hybrid_k::set_input(const llama_ubatch * ubatch) {
  
      mctx->get_attn()->set_input_kq_mask(inp_attn->self_kq_mask, ubatch, cparams.causal_attn);
  
@@ -2107,7 +1795,7 @@ index 8fca8e1bc..99f263e32 100644
  }
  
  bool llm_graph_input_mem_hybrid_k::can_reuse(const llm_graph_params & params) {
-@@ -1165,13 +1211,7 @@ bool llm_graph_input_mem_hybrid_k::can_reuse(const llm_graph_params & params) {
+@@ -1168,13 +1214,7 @@ bool llm_graph_input_mem_hybrid_k::can_reuse(const llm_graph_params & params) {
  
      res &= can_reuse_kq_mask(inp_attn->self_kq_mask, mctx->get_attn(), params.ubatch, params.cparams);
  
@@ -2122,7 +1810,7 @@ index 8fca8e1bc..99f263e32 100644
  
      return res;
  }
-@@ -1215,17 +1255,7 @@ void llm_graph_input_mem_hybrid_iswa::set_input(const llama_ubatch * ubatch) {
+@@ -1218,17 +1258,7 @@ void llm_graph_input_mem_hybrid_iswa::set_input(const llama_ubatch * ubatch) {
          attn_ctx->get_swa()->set_input_v_rot(inp_attn->self_v_rot_swa);
      }
  
@@ -2141,7 +1829,7 @@ index 8fca8e1bc..99f263e32 100644
  }
  
  bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params) {
-@@ -1253,13 +1283,7 @@ bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params)
+@@ -1256,13 +1286,7 @@ bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params)
  
      res &= can_reuse_kq_mask(inp_attn->self_kq_mask_swa, attn_ctx->get_swa(), params.ubatch, params.cparams);
  
@@ -2156,7 +1844,7 @@ index 8fca8e1bc..99f263e32 100644
  
      return res;
  }
-@@ -1323,11 +1347,13 @@ void llm_graph_result::reset() {
+@@ -1326,11 +1350,13 @@ void llm_graph_result::reset() {
      t_embd        = nullptr;
      t_embd_pooled = nullptr;
      t_h_nextn     = nullptr;
@@ -2170,7 +1858,7 @@ index 8fca8e1bc..99f263e32 100644
      t_sampled_probs.clear();
      t_sampled_logits.clear();
      t_candidates.clear();
-@@ -1366,6 +1392,9 @@ void llm_graph_result::set_outputs(const llm_graph_params & params) {
+@@ -1369,6 +1395,9 @@ void llm_graph_result::set_outputs(const llm_graph_params & params) {
      if (t_embd_pooled != nullptr) {
          ggml_set_output(t_embd_pooled);
      }
@@ -2180,106 +1868,20 @@ index 8fca8e1bc..99f263e32 100644
      if (t_h_nextn != nullptr) {
          ggml_set_output(t_h_nextn);
      }
-@@ -1450,49 +1479,55 @@ void llm_graph_result::set_params(const llm_graph_params & params) {
- //
- 
- llm_graph_context::llm_graph_context(const llm_graph_params & params) :
--    arch             (params.arch),
--    hparams          (params.hparams),
--    cparams          (params.cparams),
--    ubatch           (params.ubatch),
--    n_embd           (hparams.n_embd),
--    n_layer          (hparams.n_layer()),
--    n_layer_nextn    (hparams.n_layer_nextn),
--    n_rot            (hparams.n_rot()),
--    n_ctx            (cparams.n_ctx),
--    n_head           (hparams.n_head()),
--    n_head_kv        (hparams.n_head_kv()),
--    n_embd_head_k    (hparams.n_embd_head_k()),
--    n_embd_k_gqa     (hparams.n_embd_k_gqa()),
--    n_embd_head_v    (hparams.n_embd_head_v()),
--    n_embd_v_gqa     (hparams.n_embd_v_gqa()),
--    n_expert         (hparams.n_expert),
--    n_expert_used    (cparams.warmup ? hparams.n_expert : hparams.n_expert_used),
--    freq_base        (cparams.rope_freq_base),
--    freq_scale       (cparams.rope_freq_scale),
--    ext_factor       (cparams.yarn_ext_factor),
--    attn_factor      (cparams.yarn_attn_factor),
--    beta_fast        (cparams.yarn_beta_fast),
--    beta_slow        (cparams.yarn_beta_slow),
--    norm_eps         (hparams.f_norm_eps),
--    norm_rms_eps     (hparams.f_norm_rms_eps),
--    n_tokens         (ubatch.n_tokens),
--    n_outputs        (params.n_outputs),
--    n_ctx_orig       (cparams.n_ctx_orig_yarn),
--    pooling_type     (cparams.pooling_type),
--    rope_type        (hparams.rope_type),
--    sched            (params.sched),
--    backend_cpu      (params.backend_cpu),
--    cvec             (params.cvec),
--    loras            (params.loras),
--    mctx             (params.mctx),
--    cross            (params.cross),
--    samplers         (params.samplers),
--    cb_func          (params.cb),
--    res              (params.res),
--    ctx0             (res->get_ctx()),
--    gf               (res->get_gf()) {
--        res->set_params(params);
--    }
-+    arch(params.arch),
-+    hparams(params.hparams),
-+    cparams(params.cparams),
-+    ubatch(params.ubatch),
-+    n_embd(hparams.n_embd),
-+    n_layer(hparams.n_layer()),
-+    n_layer_nextn(hparams.n_layer_nextn),
-+    n_rot(hparams.n_rot()),
-+    n_ctx(cparams.n_ctx),
-+    n_head(hparams.n_head()),
-+    n_head_kv(hparams.n_head_kv()),
-+    n_embd_head_k(hparams.n_embd_head_k()),
-+    n_embd_k_gqa(hparams.n_embd_k_gqa()),
-+    n_embd_head_v(hparams.n_embd_head_v()),
-+    n_embd_v_gqa(hparams.n_embd_v_gqa()),
-+    n_expert(hparams.n_expert),
-+    n_expert_used(cparams.warmup ? hparams.n_expert : hparams.n_expert_used),
-+    freq_base(cparams.rope_freq_base),
-+    freq_scale(cparams.rope_freq_scale),
-+    ext_factor(cparams.yarn_ext_factor),
-+    attn_factor(cparams.yarn_attn_factor),
-+    beta_fast(cparams.yarn_beta_fast),
-+    beta_slow(cparams.yarn_beta_slow),
-+    norm_eps(hparams.f_norm_eps),
-+    norm_rms_eps(hparams.f_norm_rms_eps),
-+    n_tokens(ubatch.n_tokens),
-+    n_outputs(params.n_outputs),
-+    n_ctx_orig(cparams.n_ctx_orig_yarn),
-+    pooling_type(cparams.pooling_type),
-+    rope_type(hparams.rope_type),
-+    sched(params.sched),
-+    backend_cpu(params.backend_cpu),
-+    cvec(params.cvec),
-+    loras(params.loras),
-+    mctx(params.mctx),
-+    cross(params.cross),
-+    dspark_ctx(params.dspark_ctx),
+@@ -1489,6 +1518,12 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
+     loras            (params.loras),
+     mctx             (params.mctx),
+     cross            (params.cross),
++    dspark_ctx       (params.dspark_ctx),
 +    dspark_has_context(params.dspark_has_context),
-+    dspark_ctx_rows(params.dspark_ctx_rows),
-+    dspark_ctx_width(params.dspark_ctx_width),
++    dspark_ctx_rows  (params.dspark_ctx_rows),
++    dspark_ctx_width (params.dspark_ctx_width),
 +    hadamard_rotations(params.hadamard_rotations),
 +    hadamard_inverses(params.hadamard_inverses),
-+    samplers(params.samplers),
-+    cb_func(params.cb),
-+    res(params.res),
-+    ctx0(res->get_ctx()),
-+    gf(res->get_gf()) {
-+    res->set_params(params);
-+}
- 
- void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
-     if (cb_func) {
-@@ -1512,7 +1547,35 @@ ggml_tensor * llm_graph_context::build_lora_mm(
+     samplers         (params.samplers),
+     cb_func          (params.cb),
+     res              (params.res),
+@@ -1515,7 +1550,35 @@ ggml_tensor * llm_graph_context::build_lora_mm(
            ggml_tensor * w,
            ggml_tensor * cur,
            ggml_tensor * w_s) const {
@@ -2316,7 +1918,7 @@ index 8fca8e1bc..99f263e32 100644
  
      if (w_s) {
          res = ggml_mul(ctx0, res, w_s);
-@@ -1544,7 +1607,35 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
+@@ -1547,7 +1610,35 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
            ggml_tensor * cur, // ggml_tensor * b
            ggml_tensor * ids,
            ggml_tensor * w_s) const {
@@ -2353,7 +1955,7 @@ index 8fca8e1bc..99f263e32 100644
  
      if (w_s) {
          const int64_t n_expert = w_s->ne[0];
-@@ -2332,6 +2423,18 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
+@@ -2382,6 +2473,18 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
  
          cur = ggml_get_rows(ctx0, tok_embd, inp->tokens);
  
@@ -2372,7 +1974,7 @@ index 8fca8e1bc..99f263e32 100644
          // apply lora for embedding tokens if needed
          for (const auto & lora : *loras) {
              llama_adapter_lora_weight * lw = lora.first->get_weight(tok_embd);
-@@ -2821,6 +2924,11 @@ ggml_tensor * llm_graph_context::build_attn(
+@@ -2874,6 +2977,11 @@ ggml_tensor * llm_graph_context::build_attn(
          const auto & k_idxs = inp->get_k_idxs();
          const auto & v_idxs = inp->get_v_idxs();
  
@@ -2384,7 +1986,7 @@ index 8fca8e1bc..99f263e32 100644
          ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
          ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
      }
-@@ -3489,6 +3597,63 @@ ggml_tensor * llm_graph_context::build_rs(
+@@ -3542,6 +3650,63 @@ ggml_tensor * llm_graph_context::build_rs(
                      get_state_rows);
  }
  
@@ -2448,7 +2050,7 @@ index 8fca8e1bc..99f263e32 100644
  ggml_tensor * llm_graph_context::build_rwkv_token_shift_load(
      llm_graph_input_rs * inp,
      const llama_ubatch & ubatch,
-@@ -3737,7 +3902,10 @@ void llm_graph_context::build_sampling() const {
+@@ -3790,7 +3955,10 @@ void llm_graph_context::build_sampling() const {
  
      // add a dummy row to keep the single-output graph static regardless of active samplers
      // multi-output graphs can still vary with the number of output rows
@@ -2460,7 +2062,7 @@ index 8fca8e1bc..99f263e32 100644
  
      for (const auto & entry : samplers) {
          if (entry.second->iface->backend_reset) {
-@@ -3755,6 +3923,15 @@ void llm_graph_context::build_sampling() const {
+@@ -3808,6 +3976,15 @@ void llm_graph_context::build_sampling() const {
          const auto & rows = active ? it->second : dummy_row;
          const int i_out   = active ? 1          : 0;
  
@@ -2477,10 +2079,10 @@ index 8fca8e1bc..99f263e32 100644
              ggml_tensor * logits_seq = ggml_view_1d(ctx0, logits_t, logits_t->ne[0], rows[i] * logits_t->nb[1]);
              ggml_format_name(logits_seq, "logits_seq_%d_%u", seq_id, i);
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index b388e028c..e85c1aa20 100644
+index cc4110639..f0ab1b285 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
-@@ -11,11 +11,27 @@
+@@ -12,11 +12,27 @@
  #include <set>
  #include <functional>
  #include <map>
@@ -2508,7 +2110,7 @@ index b388e028c..e85c1aa20 100644
  struct llama_cparams;
  struct llama_layer;
  
-@@ -91,6 +107,16 @@ struct llama_cross {
+@@ -92,6 +108,16 @@ struct llama_cross {
      std::vector<std::set<llama_seq_id>> seq_ids_enc;
  };
  
@@ -2525,7 +2127,7 @@ index b388e028c..e85c1aa20 100644
  struct llm_graph_params;
  
  //
-@@ -123,6 +149,40 @@ protected:
+@@ -124,6 +150,40 @@ protected:
  
  using llm_graph_input_ptr = std::unique_ptr<llm_graph_input_i>;
  
@@ -2566,7 +2168,7 @@ index b388e028c..e85c1aa20 100644
  class llm_graph_input_embd : public llm_graph_input_i {
  public:
      llm_graph_input_embd(int64_t n_embd) : n_embd(n_embd) {}
-@@ -267,6 +327,12 @@ public:
+@@ -268,6 +328,12 @@ public:
  
      bool can_reuse(const llm_graph_params & params) override;
  
@@ -2579,7 +2181,7 @@ index b388e028c..e85c1aa20 100644
      ggml_tensor * s_copy;  // I32 [n_rs]
  
      // views of s_copy, computed once per graph
-@@ -274,6 +340,12 @@ public:
+@@ -275,6 +341,12 @@ public:
      ggml_tensor * s_copy_main;   // I32 [n_seqs]
      ggml_tensor * s_copy_extra;  // I32 [n_rs - n_seqs]
  
@@ -2592,7 +2194,7 @@ index b388e028c..e85c1aa20 100644
      const llama_memory_recurrent_context * mctx;
  
      // used in view offsets, need to match for valid graph reuse
-@@ -785,6 +857,12 @@ struct llm_graph_params {
+@@ -786,6 +858,12 @@ struct llm_graph_params {
      const llama_adapter_loras    * loras;
      const llama_memory_context_i * mctx;
      const llama_cross            * cross;
@@ -2605,7 +2207,7 @@ index b388e028c..e85c1aa20 100644
  
      std::map<llama_seq_id, llama_sampler *> samplers;
  
-@@ -843,6 +921,12 @@ struct llm_graph_params {
+@@ -844,6 +922,12 @@ struct llm_graph_params {
              return false;
          }
  
@@ -2618,7 +2220,7 @@ index b388e028c..e85c1aa20 100644
          if (n_outputs != other.n_outputs) {
              return false;
          }
-@@ -866,6 +950,10 @@ struct llm_graph_params {
+@@ -867,6 +951,10 @@ struct llm_graph_params {
          }
  
          // TODO: https://github.com/ggml-org/llama.cpp/pull/24340#discussion_r3448035248
@@ -2629,7 +2231,7 @@ index b388e028c..e85c1aa20 100644
          if (cparams.nextn_layer_offset != other.cparams.nextn_layer_offset) {
              return false;
          }
-@@ -903,6 +991,10 @@ public:
+@@ -904,6 +992,10 @@ public:
  
      ggml_tensor * get_layer_inp(int il) const { return t_layer_inp[il]; }
  
@@ -2640,7 +2242,7 @@ index b388e028c..e85c1aa20 100644
      ggml_cgraph  * get_gf()  const { return gf; }
      ggml_context * get_ctx() const { return ctx_compute.get(); }
  
-@@ -934,11 +1026,15 @@ public:
+@@ -935,11 +1027,15 @@ public:
      ggml_tensor * t_logits      = nullptr;
      ggml_tensor * t_embd        = nullptr;
      ggml_tensor * t_embd_pooled = nullptr;
@@ -2656,7 +2258,7 @@ index b388e028c..e85c1aa20 100644
      std::vector<ggml_tensor *> t_sampled_probs;
      std::vector<ggml_tensor *> t_sampled_logits;
      std::vector<ggml_tensor *> t_candidates;
-@@ -1025,6 +1121,16 @@ struct llm_graph_context {
+@@ -1026,6 +1122,16 @@ struct llm_graph_context {
      const llama_adapter_loras    * loras;
      const llama_memory_context_i * mctx;
      const llama_cross            * cross;
@@ -2673,7 +2275,7 @@ index b388e028c..e85c1aa20 100644
  
      std::map<llama_seq_id, llama_sampler *> samplers;
  
-@@ -1326,6 +1432,27 @@ struct llm_graph_context {
+@@ -1341,6 +1447,27 @@ struct llm_graph_context {
                  int32_t   n_seqs,
              const llm_graph_get_rows_fn & get_state_rows = ggml_get_rows) const;
  
@@ -2702,10 +2304,10 @@ index b388e028c..e85c1aa20 100644
          llm_graph_input_rs * inp,
          const llama_ubatch & ubatch,
 diff --git a/src/llama-hparams.h b/src/llama-hparams.h
-index c3c14292c..10e60f0a4 100644
+index 73dffcc9f..f21ee6c37 100644
 --- a/src/llama-hparams.h
 +++ b/src/llama-hparams.h
-@@ -264,6 +264,11 @@ struct llama_hparams {
+@@ -294,6 +294,11 @@ struct llama_hparams {
      uint32_t dsv4_o_group_count        = 0;
      uint32_t dsv4_o_lora_rank          = 0;
      uint32_t dsv4_hc_mult              = 0;
@@ -2717,7 +2319,7 @@ index c3c14292c..10e60f0a4 100644
      uint32_t dsv4_hc_sinkhorn_iters    = 0;
      uint32_t dsv4_hash_layer_count     = 0;
      float    dsv4_compress_rope_base   = 0.0f;
-@@ -292,6 +297,35 @@ struct llama_hparams {
+@@ -349,6 +354,35 @@ struct llama_hparams {
      llama_token dec_start_token_id = LLAMA_TOKEN_NULL;
      uint32_t    dec_n_layer        = 0;
  
@@ -2754,7 +2356,7 @@ index c3c14292c..10e60f0a4 100644
      enum llama_rope_type         rope_type               = LLAMA_ROPE_TYPE_NONE;
      enum llama_rope_scaling_type rope_scaling_type_train = LLAMA_ROPE_SCALING_TYPE_NONE;
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index ec0f5a753..3df5cedd0 100644
+index a342ee119..929792067 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
 @@ -1,5 +1,6 @@
@@ -2775,10 +2377,10 @@ index ec0f5a753..3df5cedd0 100644
  #include <map>
  #include <stdexcept>
 +#include <string>
+ #include <unordered_map>
  
  static bool ggml_is_power_of_2(int n) {
-     return (n & (n - 1)) == 0;
-@@ -1307,6 +1310,18 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
+@@ -1322,6 +1325,18 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
  
      ggml_tensor * k = layers[ikv].k;
  
@@ -2797,7 +2399,7 @@ index ec0f5a753..3df5cedd0 100644
      const int64_t n_embd_head = k_cur->ne[0];
      const int64_t n_head      = k_cur->ne[1];
      const int64_t n_tokens    = k_cur->ne[2];
-@@ -1391,6 +1406,188 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
+@@ -1406,6 +1421,188 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
      return ggml_set_rows(ctx, v_view, v_cur, v_idxs);
  }
  
@@ -2987,10 +2589,10 @@ index ec0f5a753..3df5cedd0 100644
      const uint32_t n_tokens = ubatch.n_tokens;
  
 diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
-index 6cb6dbd2f..4d2229b90 100644
+index c4d8699de..f73acd164 100644
 --- a/src/llama-kv-cache.h
 +++ b/src/llama-kv-cache.h
-@@ -180,6 +180,23 @@ public:
+@@ -193,6 +193,23 @@ public:
      ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const;
      ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const;
  
@@ -3014,7 +2616,7 @@ index 6cb6dbd2f..4d2229b90 100644
      //
      // preparation API
      //
-@@ -289,6 +306,15 @@ private:
+@@ -313,6 +330,15 @@ private:
      // model layer id -> KV cache layer id
      std::unordered_map<int32_t, int32_t> map_layer_ids;
  
@@ -3031,7 +2633,7 @@ index 6cb6dbd2f..4d2229b90 100644
  
      size_t size_k_bytes() const;
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 9b22cb05f..835d172d3 100644
+index 43c396f15..e0b5a3862 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
 @@ -39,6 +39,11 @@ const char * llama_ftype_name(llama_ftype ftype) {
@@ -3046,7 +2648,7 @@ index 9b22cb05f..835d172d3 100644
          case LLAMA_FTYPE_MOSTLY_Q4_0:      name = LLAMA_FTYPE_PREFIX "Q4_0"; break;
          case LLAMA_FTYPE_MOSTLY_Q4_1:      name = LLAMA_FTYPE_PREFIX "Q4_1"; break;
          case LLAMA_FTYPE_MOSTLY_Q5_0:      name = LLAMA_FTYPE_PREFIX "Q5_0"; break;
-@@ -406,6 +411,8 @@ namespace GGUFMeta {
+@@ -408,6 +413,8 @@ namespace GGUFMeta {
          return get_arr(llm_kv(kid), result, required);
      }
  
@@ -3055,7 +2657,7 @@ index 9b22cb05f..835d172d3 100644
      template bool llama_model_loader::get_arr<std::vector<std::string>>(enum llm_kv kid, std::vector<std::string> & result, bool required);
      template bool llama_model_loader::get_arr<std::array<int32_t, 512>>(enum llm_kv kid, std::array<int32_t, 512> & result, bool required);
      template bool llama_model_loader::get_arr<std::vector<int32_t>>(enum llm_kv kid, std::vector<int32_t> & result, bool required);
-@@ -433,6 +440,7 @@ namespace GGUFMeta {
+@@ -438,6 +445,7 @@ namespace GGUFMeta {
      }
  
      template bool llama_model_loader::get_key<bool>       (enum llm_kv kid, bool & result,        bool required);
@@ -3063,7 +2665,7 @@ index 9b22cb05f..835d172d3 100644
      template bool llama_model_loader::get_key<float>      (enum llm_kv kid, float & result,       bool required);
      template bool llama_model_loader::get_key<uint32_t>   (enum llm_kv kid, uint32_t & result,    bool required);
      template bool llama_model_loader::get_key<std::string>(enum llm_kv kid, std::string & result, bool required);
-@@ -767,6 +775,8 @@ llama_model_loader::llama_model_loader(
+@@ -779,6 +787,8 @@ llama_model_loader::llama_model_loader(
              case GGML_TYPE_NVFP4:   ftype = LLAMA_FTYPE_MOSTLY_NVFP4;   break;
              case GGML_TYPE_Q1_0:    ftype = LLAMA_FTYPE_MOSTLY_Q1_0;    break;
              case GGML_TYPE_Q2_0:    ftype = LLAMA_FTYPE_MOSTLY_Q2_0;    break;
@@ -3073,10 +2675,10 @@ index 9b22cb05f..835d172d3 100644
                  {
                      LLAMA_LOG_WARN("%s: unknown type %s\n", __func__, ggml_type_name(type_max));
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index c34700ff5..191d025e2 100644
+index e195f50d0..d77c63451 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -26,8 +26,10 @@
+@@ -27,8 +27,10 @@
  
  #include <algorithm>
  #include <cassert>
@@ -3087,16 +2689,16 @@ index c34700ff5..191d025e2 100644
  #include <cstring>
  #include <cmath>
  #include <functional>
-@@ -333,6 +335,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
-             return new llama_model_kimi_k3(params);
-         case LLM_ARCH_STEP35:
+@@ -344,6 +346,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
              return new llama_model_step35(params);
+         case LLM_ARCH_SPARK2_5:
+             return new llama_model_spark2_5(params);
 +        case LLM_ARCH_DSPARK:
 +            return new llama_model_dspark(params);
          default:
              throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
      }
-@@ -1189,6 +1193,147 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
+@@ -1242,6 +1246,147 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
          gguf_kv.emplace(name, value);
      }
  
@@ -3244,7 +2846,7 @@ index c34700ff5..191d025e2 100644
      // get general kv
      ml.get_key(LLM_KV_GENERAL_NAME, name, false);
  
-@@ -1370,6 +1515,9 @@ void llama_model_base::load_vocab(llama_model_loader & ml) {
+@@ -1430,6 +1575,9 @@ void llama_model_base::load_vocab(llama_model_loader & ml) {
  }
  
  bool llama_model_base::load_tensors(llama_model_loader & ml) {
@@ -3254,7 +2856,7 @@ index c34700ff5..191d025e2 100644
      const auto & split_mode   = params.split_mode;
      const bool use_mlock      = params.load_mode == LLAMA_LOAD_MODE_MLOCK || params.load_mode == LLAMA_LOAD_MODE_MMAP_MLOCK;
      const auto & tensor_split = params.tensor_split;
-@@ -1660,6 +1808,10 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1731,6 +1879,10 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
          }
      }
  
@@ -3265,7 +2867,7 @@ index c34700ff5..191d025e2 100644
      ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
      pimpl->mappings.reserve(ml.mappings.size());
  
-@@ -1754,6 +1906,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1830,6 +1982,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
          ctx_buf_maps.emplace_back(ctx, buf_map);
      }
  
@@ -3273,7 +2875,7 @@ index c34700ff5..191d025e2 100644
      if (llama_supports_gpu_offload()) {
          const int n_gpu = std::min(n_gpu_layers, n_layer_all);
  
-@@ -1795,6 +1948,163 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1879,6 +2032,163 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
          }
      }
  
@@ -3437,48 +3039,16 @@ index c34700ff5..191d025e2 100644
      return true;
  }
  
-@@ -2626,22 +2936,23 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
+@@ -2786,6 +3096,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
  
  llama_model_params llama_model_default_params() {
      llama_model_params result = {
--        /*.devices                     =*/ nullptr,
--        /*.tensor_buft_overrides       =*/ nullptr,
--        /*.n_gpu_layers                =*/ -1,
--        /*.split_mode                  =*/ LLAMA_SPLIT_MODE_LAYER,
--        /*.load_mode                   =*/ LLAMA_LOAD_MODE_AUTO,
--        /*.main_gpu                    =*/ 0,
--        /*.tensor_split                =*/ nullptr,
--        /*.progress_callback           =*/ nullptr,
--        /*.progress_callback_user_data =*/ nullptr,
--        /*.kv_overrides                =*/ nullptr,
--        /*.vocab_only                  =*/ false,
--        /*.check_tensors               =*/ false,
--        /*.use_extra_bufts             =*/ true,
--        /*.no_host                     =*/ false,
--        /*.no_alloc                    =*/ false,
--        /*.load_mtp                    =*/ false,
-+        /*.dspark_head_source          =*/nullptr,
-+        /*.devices                     =*/nullptr,
-+        /*.tensor_buft_overrides       =*/nullptr,
-+        /*.n_gpu_layers                =*/-1,
-+        /*.split_mode                  =*/LLAMA_SPLIT_MODE_LAYER,
-+        /*.load_mode                   =*/LLAMA_LOAD_MODE_AUTO,
-+        /*.main_gpu                    =*/0,
-+        /*.tensor_split                =*/nullptr,
-+        /*.progress_callback           =*/nullptr,
-+        /*.progress_callback_user_data =*/nullptr,
-+        /*.kv_overrides                =*/nullptr,
-+        /*.vocab_only                  =*/false,
-+        /*.check_tensors               =*/false,
-+        /*.use_extra_bufts             =*/true,
-+        /*.no_host                     =*/false,
-+        /*.no_alloc                    =*/false,
-+        /*.load_mtp                    =*/false,
-     };
- 
-     return result;
-@@ -2893,6 +3204,10 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
-         case LLM_ARCH_QWEN35MOE:
++        /*.dspark_head_source          =*/ nullptr,
+         /*.devices                     =*/ nullptr,
+         /*.tensor_buft_overrides       =*/ nullptr,
+         /*.n_gpu_layers                =*/ -1,
+@@ -3068,6 +3379,10 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+         case LLM_ARCH_QWEN4EXP:
          case LLM_ARCH_QWEN3TTS:
              return LLAMA_ROPE_TYPE_IMROPE;
 +        // dspark's own trunk is a plain dense Qwen3-style stack (standard
@@ -3488,7 +3058,7 @@ index c34700ff5..191d025e2 100644
  
          case LLM_ARCH_GLM4:
              return model->hparams.use_mrope() ? LLAMA_ROPE_TYPE_MROPE : LLAMA_ROPE_TYPE_NORM;
-@@ -3058,6 +3373,91 @@ ggml_backend_dev_t llama_model_get_device(const struct llama_model * model, int
+@@ -3233,6 +3548,91 @@ ggml_backend_dev_t llama_model_get_device(const struct llama_model * model, int
      return model->devices[i].dev;
  }
  
@@ -3580,7 +3150,7 @@ index c34700ff5..191d025e2 100644
  //
  // llama_model_base
  //
-@@ -3123,6 +3523,10 @@ uint32_t llama_model_target_layer_ids_n(const struct llama_model * model) {
+@@ -3323,6 +3723,10 @@ uint32_t llama_model_target_layer_ids_n(const struct llama_model * model) {
      return (uint32_t) model->target_layer_ids.size();
  }
  
@@ -3592,12 +3162,17 @@ index c34700ff5..191d025e2 100644
      if (model->vocab.n_tokens() == 0 || model->tok_embd == nullptr) {
          return 0;
 diff --git a/src/llama-model.h b/src/llama-model.h
-index 44bd96757..d73c7341f 100644
+index 984b2cf38..594446520 100644
 --- a/src/llama-model.h
 +++ b/src/llama-model.h
-@@ -649,6 +649,23 @@ struct llama_model {
+@@ -684,10 +684,28 @@ struct llama_model {
      struct ggml_tensor * dspark_conf_proj   = nullptr;
      struct ggml_tensor * dspark_conf_proj_b = nullptr;
+ 
++    // dflash
+     struct ggml_tensor * dflash_selector_prev   = nullptr;
+     struct ggml_tensor * dflash_selector_next   = nullptr;
+     struct ggml_tensor * dflash_selector_hidden = nullptr;
  
 +    // dspark GIDD log-SNR conditioning (only when hparams.dspark_log_snr_conditioning)
 +    struct ggml_tensor * dspark_mode_embedding = nullptr;  // selected request mode, added only to draft input
@@ -3619,7 +3194,7 @@ index 44bd96757..d73c7341f 100644
      // unified vector to store target-model extracted layer ids in eagle3, dflash, etc.
      std::vector<int32_t> target_layer_ids;
  
-@@ -661,9 +678,38 @@ struct llama_model {
+@@ -700,9 +718,38 @@ struct llama_model {
      struct ggml_tensor * dense_2_out_layers_b = nullptr;
      struct ggml_tensor * dense_3_out_layers   = nullptr;
  
@@ -3659,10 +3234,10 @@ index 44bd96757..d73c7341f 100644
      std::vector<llama_device> devices;
  
 diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
-index 20252815d..121e610ab 100644
+index 34ff25db5..edc031d51 100644
 --- a/src/llama-quant.cpp
 +++ b/src/llama-quant.cpp
-@@ -393,6 +393,8 @@ static ggml_type tensor_type_fallback(quantize_state_impl & qs, const ggml_tenso
+@@ -391,6 +391,8 @@ static ggml_type tensor_type_fallback(quantize_state_impl & qs, const ggml_tenso
              case GGML_TYPE_IQ3_S:   // types on the right: block size 32
              case GGML_TYPE_IQ4_XS:  return_type = GGML_TYPE_IQ4_NL; break;
              case GGML_TYPE_Q2_0:
@@ -3671,7 +3246,7 @@ index 20252815d..121e610ab 100644
              case GGML_TYPE_Q2_K:
              case GGML_TYPE_Q3_K:
              case GGML_TYPE_TQ1_0:
-@@ -498,7 +500,7 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type
+@@ -502,7 +504,7 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type
              else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XXS) {
                  new_type = GGML_TYPE_IQ3_S;
              }
@@ -3680,7 +3255,7 @@ index 20252815d..121e610ab 100644
                  new_type = GGML_TYPE_Q4_K;
              }
          }
-@@ -819,6 +821,8 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
+@@ -856,6 +858,8 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
          case LLAMA_FTYPE_ALL_F32:     return GGML_TYPE_F32;
          case LLAMA_FTYPE_MOSTLY_Q1_0: return GGML_TYPE_Q1_0;
          case LLAMA_FTYPE_MOSTLY_Q2_0: return GGML_TYPE_Q2_0;
@@ -3786,7 +3361,7 @@ index ad6612647..ae67400c6 100644
      ggml_tensor * src = ggml_view_3d(ctx0, gdn_out,
          D, n_seqs, n_written,
 diff --git a/src/models/dflash.cpp b/src/models/dflash.cpp
-index ff40c16b2..34fab3dbf 100644
+index ed5366d80..e6f8409cb 100644
 --- a/src/models/dflash.cpp
 +++ b/src/models/dflash.cpp
 @@ -1,5 +1,7 @@
@@ -3797,7 +3372,7 @@ index ff40c16b2..34fab3dbf 100644
  #include "llama-impl.h"
  #include "llama-kv-cache.h"
  #include "llama-kv-cache-iswa.h"
-@@ -14,6 +16,35 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
+@@ -26,6 +28,35 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
  
      hparams.n_embd_inp_enc_impl = (uint32_t) target_layer_ids.size() * hparams.n_embd;
  
@@ -3833,7 +3408,7 @@ index ff40c16b2..34fab3dbf 100644
      std::string layers;
      const char * sep = "";
      for (const auto id : target_layer_ids) {
-@@ -95,11 +126,46 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
+@@ -107,11 +138,46 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
          LLAMA_LOG_INFO("%s: DFlash using d2t mapping (draft_vocab_size = %lld)\n", __func__, (long long) n_vocab_draft);
      }
  
@@ -3880,8 +3455,8 @@ index ff40c16b2..34fab3dbf 100644
      if (markov_meta) {
          const int64_t dspark_markov_rank = markov_meta->ne[0];
  
-@@ -112,9 +178,51 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
-         LLAMA_LOG_INFO("%s: DFlash with DSpark markov head (rank = %lld)\n", __func__, (long long) dspark_markov_rank);
+@@ -148,9 +214,51 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
+                 hparams.dflash_selector_rank, hparams.dflash_selector_top_k);
      }
  
 +    // dspark GIDD log-SNR conditioning (LogSnrEmbed): unlike the markov head, this
@@ -3933,7 +3508,7 @@ index ff40c16b2..34fab3dbf 100644
      output_norm     = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM,    "weight"), { n_embd }, 0); // decoder final norm
  
      // optional: reduced-vocab drafts ship their own lm head, full-vocab drafts can share the target's via ctx_other
-@@ -224,13 +332,46 @@ ggml_tensor * llama_model_dflash::graph<true>::build_inp_embd_enc() const {
+@@ -259,13 +367,46 @@ ggml_tensor * llama_model_dflash::graph<true>::build_inp_embd_enc() const {
  // DFlash Encoder: processes target model features through feature fusion layer
  template <>
  llama_model_dflash::graph<true>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
@@ -3984,8 +3559,8 @@ index ff40c16b2..34fab3dbf 100644
  
      ggml_set_output(cur);
      res->t_h_nextn = cur;
-@@ -346,6 +487,138 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model &
-     ggml_build_forward_expand(g.gf, out);
+@@ -548,6 +689,138 @@ static void build_dflash2_selector(llm_graph_context & g, const llama_model & mo
+     ggml_build_forward_expand(g.gf, packed);
  }
  
 +// DFly (AngelSpec): TreeFlash predecessor correction chained across a block.
@@ -4123,31 +3698,49 @@ index ff40c16b2..34fab3dbf 100644
  // DFlash decoder, dual-mode by batch type:
  //   * embd batch  -> fused target features: project + inject K/V into the cache.
  //   * token batch -> noise-block diffusion: attend over [committed, MASK...] to generate draft tokens
-@@ -370,11 +643,16 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
+@@ -589,9 +862,19 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
  
-     const float kq_scale = 1.0f/sqrtf(float(n_embd_head));
- 
-+
      // KV cache injection
      if (ubatch.embd) {
--        auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
-+        // DFly ships one fused context per draft layer, so the incoming row is n_layer wide
+-        auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
+-
+-        inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_inp, n_tokens);
++        // Two input shapes land here, and they differ in whether the encoder has already run:
++        //   * plain DFlash -- upstream b11065 moved the encoder`s fc + hidden_norm into this
++        //     graph, so the batch carries the RAW target features (n_embd_inp_enc wide) and
++        //     the fusion happens below.
++        //   * DFly -- graph<true> has already produced one fused context per draft layer
++        //     (Qwen3DFlyModel.project_target_hidden), so the row is n_embd_out() == n_layer*n_embd
++        //     and must NOT be run through fc again. A DFly export also ships no output_norm_enc.
 +        const bool    is_dfly      = model.dfly_layer_fusion != nullptr;
-+        const int64_t n_embd_batch = is_dfly ? (int64_t) hparams.n_embd_out() : n_embd;
- 
--        inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_tokens);
++        const int64_t n_embd_batch = is_dfly ? (int64_t) hparams.n_embd_out() : n_embd_inp;
++
 +        auto inp = std::make_unique<llm_graph_input_embd>(n_embd_batch);
 +
 +        inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_batch, n_tokens);
          ggml_set_input(inp->embd);
  
-         ggml_tensor * inp_g = inp->embd;
-@@ -385,8 +663,17 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
+         ggml_tensor * inp_target = inp->embd;
+@@ -599,16 +882,28 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
+ 
+         res->add_input(std::move(inp));
+ 
+-        // fuse the target features through the encoder
+-        ggml_tensor * inp_g = build_lora_mm(model.fc, inp_target, model.fc_s);
+-        inp_g = build_norm(inp_g, model.output_norm_enc, NULL, LLM_NORM_RMS, -1);
++        ggml_tensor * inp_g = inp_target;
++        if (!is_dfly) {
++            // fuse the target features through the encoder
++            inp_g = build_lora_mm(model.fc, inp_target, model.fc_s);
++            inp_g = build_norm(inp_g, model.output_norm_enc, NULL, LLM_NORM_RMS, -1);
++        }
+         cb(inp_g, "inp_g_embeddings", -1);
+ 
          for (int il = 0; il < n_layer; ++il) {
              const auto & layer = model.layers[il];
  
--            ggml_tensor * Kcur = build_lora_mm(layer.wk, inp_g);
--            ggml_tensor * Vcur = build_lora_mm(layer.wv, inp_g);
+-            ggml_tensor * Kcur = build_lora_mm(layer.wk, inp_g, layer.wk_s);
+-            ggml_tensor * Vcur = build_lora_mm(layer.wv, inp_g, layer.wv_s);
 +            // plain DFlash injects one shared context into every layer; DFly slices out this
 +            // layer's own fused context (encoder writes them layer-major within each token)
 +            ggml_tensor * ctx_il = inp_g;
@@ -4157,12 +3750,12 @@ index ff40c16b2..34fab3dbf 100644
 +                cb(ctx_il, "dfly_ctx_layer", il);
 +            }
 +
-+            ggml_tensor * Kcur = build_lora_mm(layer.wk, ctx_il);
-+            ggml_tensor * Vcur = build_lora_mm(layer.wv, ctx_il);
++            ggml_tensor * Kcur = build_lora_mm(layer.wk, ctx_il, layer.wk_s);
++            ggml_tensor * Vcur = build_lora_mm(layer.wv, ctx_il, layer.wv_s);
  
              Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
              Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
-@@ -456,6 +743,66 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
+@@ -675,6 +970,66 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
      ggml_tensor * inpL = ggml_get_rows(ctx0, tok_embd, inp->tokens);
      cb(inpL, "inp_noise_embd", -1);
  
@@ -4229,22 +3822,23 @@ index ff40c16b2..34fab3dbf 100644
      res->add_input(std::move(inp));
  
      for (int il = 0; il < n_layer; ++il) {
-@@ -556,6 +903,14 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
-     if (model.dspark_markov_w1) {
+@@ -805,6 +1160,15 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
          build_dspark_markov_head(*this, model, inp_tokens);
      }
-+
-+
+ 
 +    // DFly: re-derive the draft logits through the chained predecessor correction
 +    // LLAMA_DFLY_NO_CHAIN drops the correction, for A/B measurement only: DFly's acceptance
 +    // depends on it, so a run without it is not a meaningful DFly configuration.
++    // Runs before the DFlash2 selector so that, were an export ever to carry both, the
++    // lattice would be built from the corrected logits.
 +    if (model.dfly_hc_down && getenv("LLAMA_DFLY_NO_CHAIN") == nullptr) {
 +        build_dfly_correction_head(*this, model, inp_embd_raw);
 +    }
- }
- 
- // DSV4 DSpark decoder, dual-mode by batch type (see the DFlash decoder above):
-@@ -628,6 +983,11 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
++
+     if (model.dflash_selector_hidden) {
+         build_dflash2_selector(*this, model, inp_tokens);
+     }
+@@ -886,6 +1250,11 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
  
      ggml_tensor * inpL = ggml_get_rows(ctx0, tok_embd, inp->tokens);
      cb(inpL, "inp_noise_embd", -1);
@@ -4836,10 +4430,10 @@ index 000000000..fbd29c2a4
 +    ggml_build_forward_expand(gf, cur);
 +}
 diff --git a/src/models/models.h b/src/models/models.h
-index 969429e3b..a82133099 100644
+index 3f9c67c63..42265b4ee 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
-@@ -78,6 +78,20 @@ struct llm_build_delta_net_base : public llm_graph_context {
+@@ -88,6 +88,20 @@ struct llm_build_delta_net_base : public llm_graph_context {
  
      // run delta-net attention and write the new recurrent state(s) back to ssm_states_all
      // s: (head_v_dim, head_v_dim, num_v_heads, n_seqs); returns output: (head_v_dim, num_v_heads, n_seq_tokens, n_seqs)
@@ -4860,7 +4454,7 @@ index 969429e3b..a82133099 100644
      ggml_tensor * build_recurrent_attn(
              llm_graph_input_rs * inp,
              ggml_tensor *        ssm_states_all,
-@@ -87,7 +101,8 @@ struct llm_build_delta_net_base : public llm_graph_context {
+@@ -97,7 +111,8 @@ struct llm_build_delta_net_base : public llm_graph_context {
              ggml_tensor *        g,
              ggml_tensor *        b,
              ggml_tensor *        s,
@@ -4870,7 +4464,7 @@ index 969429e3b..a82133099 100644
  };
  
  struct llm_build_rwkv6_base : public llm_graph_context {
-@@ -572,6 +587,23 @@ struct llama_model_qwen3 : public llama_model_base {
+@@ -582,6 +597,23 @@ struct llama_model_qwen3 : public llama_model_base {
      std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
  };
  
@@ -4894,7 +4488,7 @@ index 969429e3b..a82133099 100644
  
  struct llama_model_qwen3moe : public llama_model_base {
      llama_model_qwen3moe(const struct llama_model_params & params) : llama_model_base(params) {}
-@@ -2233,6 +2265,10 @@ struct llama_model_qwen35 : public llama_model_base {
+@@ -2340,6 +2372,10 @@ struct llama_model_qwen35 : public llama_model_base {
  
      struct graph : public llm_build_delta_net_base {
          graph(const llama_model & model, const llm_graph_params & params);
@@ -4906,10 +4500,10 @@ index 969429e3b..a82133099 100644
          ggml_tensor * build_layer_attn(
          llm_graph_input_attn_kv * inp_attn,
 diff --git a/src/models/qwen35.cpp b/src/models/qwen35.cpp
-index 309dd4324..c5f816e96 100644
+index a1e263500..6aa19f00f 100644
 --- a/src/models/qwen35.cpp
 +++ b/src/models/qwen35.cpp
-@@ -140,6 +140,31 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
+@@ -136,6 +136,31 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
  
      GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
  
@@ -4941,7 +4535,7 @@ index 309dd4324..c5f816e96 100644
      int sections[4];
      std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
  
-@@ -155,6 +180,10 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
+@@ -151,6 +176,10 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
      ggml_tensor * inp_pos     = build_inp_pos();
      ggml_tensor * inp_out_ids = build_inp_out_ids();
  
@@ -4952,7 +4546,7 @@ index 309dd4324..c5f816e96 100644
      // MTP/NextN layers are loaded as extra decoder blocks but not executed in the main pass.
      for (int il = 0; il < n_layer; ++il) {
          res->t_layer_inp[il] = inpL;
-@@ -175,7 +204,7 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
+@@ -171,7 +200,7 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
              cur = build_layer_attn(inp->get_attn(), cur, inp_pos, sections, il);
          }
  
@@ -4961,7 +4555,7 @@ index 309dd4324..c5f816e96 100644
              cur   = ggml_get_rows(ctx0, cur,   inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -204,15 +233,50 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
+@@ -200,15 +229,50 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
  
          // Input for next layer
          inpL = cur;
@@ -5013,7 +4607,7 @@ index 309dd4324..c5f816e96 100644
          cur = ggml_get_rows(ctx0, cur, inp_out_ids);
      }
  
-@@ -250,9 +314,9 @@ ggml_tensor * llama_model_qwen35::graph::build_norm_gated(
+@@ -246,9 +310,9 @@ ggml_tensor * llama_model_qwen35::graph::build_norm_gated(
          ggml_tensor * gate,
          int           layer) {
      ggml_tensor * normalized = build_norm(input, weights, nullptr, LLM_NORM_RMS, layer);
@@ -5025,7 +4619,7 @@ index 309dd4324..c5f816e96 100644
  }
  
  ggml_tensor * llama_model_qwen35::graph::build_layer_attn(
-@@ -363,6 +427,8 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
+@@ -359,6 +423,8 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
      beta = ggml_reshape_4d(ctx0, beta, 1, num_v_heads, n_seq_tokens, n_seqs);
      cb(beta, "beta", il);
  
@@ -5034,7 +4628,7 @@ index 309dd4324..c5f816e96 100644
      beta = ggml_sigmoid(ctx0, beta);
      cb(beta, "beta_sigmoid", il);
  
-@@ -370,6 +436,22 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
+@@ -366,6 +432,22 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
      alpha = ggml_reshape_3d(ctx0, alpha, num_v_heads, n_seq_tokens, n_seqs);
      cb(alpha, "alpha", il);
  
@@ -5057,7 +4651,7 @@ index 309dd4324..c5f816e96 100644
      ggml_tensor * alpha_biased   = ggml_add(ctx0, alpha, model.layers[il].ssm_dt);
      ggml_tensor * alpha_softplus = ggml_softplus(ctx0, alpha_biased);
      cb(alpha_softplus, "a_softplus", il);
-@@ -388,9 +470,26 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
+@@ -384,9 +466,26 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
  
      ggml_tensor * conv_input = build_conv_state(inp, conv_states_all, qkv_mixed, conv_kernel_size, conv_channels, il);
  
@@ -5087,20 +4681,23 @@ index 309dd4324..c5f816e96 100644
  
      ggml_tensor * conv_output_proper = ggml_ssm_conv(ctx0, conv_input, conv_kernel);
      cb(conv_output_proper, "conv_output_raw", il);
-@@ -429,8 +528,20 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
+@@ -426,8 +525,23 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
  
      const float eps_norm = hparams.f_norm_rms_eps;
  
--    q_conv = ggml_l2_norm(ctx0, q_conv, eps_norm);
--    k_conv = ggml_l2_norm(ctx0, k_conv, eps_norm);
-+    // q and k are adjacent head groups of the same width in the conv output, so one
-+    // l2_norm over the joint view normalises both; q and k are then views into its result
+-    q_conv = build_gdn_l2_norm(ctx0, q_conv, eps_norm);
+-    k_conv = build_gdn_l2_norm(ctx0, k_conv, eps_norm);
++    // prism: q and k are adjacent head groups of the same width in the conv output, so one
++    // norm over the joint view normalises both; q and k are then views into its result.
++    // The norm itself is upstream's build_gdn_l2_norm (rms_norm-based, ref PR #28068) rather
++    // than ggml_l2_norm -- it normalises along ne[0] == head_k_dim exactly as the two
++    // per-tensor calls it replaces, so fusing the two into one is numerically identical.
 +    ggml_tensor * qk_conv = ggml_view_4d(ctx0, conv_qkv_mix, head_k_dim, 2 * num_k_heads, n_seq_tokens, n_seqs,
 +            ggml_row_size(conv_qkv_mix->type, head_k_dim),
 +            nb1_qkv,
 +            nb1_qkv * n_seq_tokens,
 +            0);
-+    qk_conv = ggml_l2_norm(ctx0, qk_conv, eps_norm);
++    qk_conv = build_gdn_l2_norm(ctx0, qk_conv, eps_norm);
 +    cb(qk_conv, "qk_conv_l2", il);
 +
 +    q_conv = ggml_view_4d(ctx0, qk_conv, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
@@ -5110,7 +4707,7 @@ index 309dd4324..c5f816e96 100644
  
      //q_conv = ggml_cont_4d(ctx0, q_conv, head_k_dim, num_k_heads, n_seq_tokens, n_seqs);
      //k_conv = ggml_cont_4d(ctx0, k_conv, head_k_dim, num_k_heads, n_seq_tokens, n_seqs);
-@@ -448,7 +559,8 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
+@@ -445,7 +559,8 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
      cb(k_conv, "k_conv_predelta", il);
      cb(v_conv, "v_conv_predelta", il);
  
@@ -5121,10 +4718,10 @@ index 309dd4324..c5f816e96 100644
      // z: [head_dim, n_heads, n_tokens, n_seqs] -> [n_heads * n_tokens * n_seqs, head_dim]
      ggml_tensor * z_2d = ggml_reshape_4d(ctx0, z, head_v_dim, num_v_heads, n_seq_tokens, n_seqs);
 diff --git a/src/models/qwen35moe.cpp b/src/models/qwen35moe.cpp
-index 38f2a5798..3184a2677 100644
+index bdf772625..8941c11e7 100644
 --- a/src/models/qwen35moe.cpp
 +++ b/src/models/qwen35moe.cpp
-@@ -274,9 +274,9 @@ ggml_tensor * llama_model_qwen35moe::graph::build_norm_gated(
+@@ -270,9 +270,9 @@ ggml_tensor * llama_model_qwen35moe::graph::build_norm_gated(
          ggml_tensor * gate,
          int           layer) {
      ggml_tensor * normalized = build_norm(input, weights, nullptr, LLM_NORM_RMS, layer);
