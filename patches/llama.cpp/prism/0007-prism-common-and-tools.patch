@@ -1169,7 +1169,7 @@ index 000000000..9da7ffd2e
 +        const std::vector<common_kv_mean_center_layer> & layers,
 +        bool k_rot = false);
 diff --git a/common/speculative.cpp b/common/speculative.cpp
-index 77dfe9535..ffc956943 100644
+index 77dfe9535..02bf7b5e9 100644
 --- a/common/speculative.cpp
 +++ b/common/speculative.cpp
 @@ -1,24 +1,37 @@
@@ -1299,7 +1299,7 @@ index 77dfe9535..ffc956943 100644
 +    std::vector<int32_t> i_batch_end;
 +
 +    common_speculative_impl_draft_dspark(const common_params_speculative & params, uint32_t n_seq) :
-+        common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK, n_seq),
++        common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK, n_seq, params.draft.n_max),
 +        params(params.draft) {
 +        auto * ctx_dft = this->params.ctx_dft;
 +        auto * ctx_tgt = this->params.ctx_tgt;
@@ -1630,12 +1630,12 @@ index 77dfe9535..ffc956943 100644
 +            auto & pos  = ctx_pos[seq_id];
 +
 +            int64_t       L       = n_cache[seq_id];
-+            const int64_t start   = dp.n_past;
++            const int64_t start   = dp.pos0;
 +            int64_t       ctx_len = start - L;
 +
 +            if (ctx_len <= 0) {
 +                LOG_WRN(
-+                    "%s: seq %d has no new context rows staged (n_past=%lld, cache=%lld) -- "
++                    "%s: seq %d has no new context rows staged (pos0=%lld, cache=%lld) -- "
 +                    "skipping this round\n",
 +                    __func__, (int) seq_id, (long long) start, (long long) L);
 +                continue;
@@ -1643,7 +1643,7 @@ index 77dfe9535..ffc956943 100644
 +            if ((int64_t) pos.size() != ctx_len) {
 +                LOG_ERR(
 +                    "%s: seq %d staged context rows (%zu) != expected ctx_len (%lld) -- "
-+                    "n_past bookkeeping is out of sync with process()/accept(); "
++                    "pos0 bookkeeping is out of sync with process()/accept(); "
 +                    "aborting draft for this seq this round\n",
 +                    __func__, (int) seq_id, pos.size(), (long long) ctx_len);
 +                continue;
