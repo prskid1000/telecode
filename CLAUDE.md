@@ -207,7 +207,22 @@ combinations (`mlock+dio`, `mmap+mlock+dio`) are rejected by the parser, so it i
   trusting a flag. Deliberately shaped as *verify a patch before proposing it upstream*, not *maintain a
   fork* — the last attempt at a permanent fork was abandoned, and the cost was never the patch, it was
   keeping it alive across upstream churn.
-  Current series: `0001-common-add-defer_loading-to-tool-definitions.patch` (ggml-org/llama.cpp#28179).
+  Current series: `0001-common-add-defer_loading-to-tool-definitions.patch` (ggml-org/llama.cpp#28179),
+  then `0002..0011-prism-*.patch`.
+
+- **The prism series vendors a whole fork, and breaks the rule above on purpose.** `0002..0011` are the
+  entire [PrismML-Eng/llama.cpp](https://github.com/PrismML-Eng/llama.cpp) `prism` branch — 14,759 added
+  lines over 157 files — split by file group. They add **PQ2_0** (ternary, FP16 scale per **128**
+  weights, 1.71 bpw, ggml type 142) and **PTQ1_0**, plus CPU/CUDA/Metal/Vulkan/HIP kernels, the Hadamard
+  weight-fold runtime, KV mean-centering and the DSpark/DFlash/DFly drafters. That is what the prism-ml
+  Bonsai GGUFs need: upstream's `Q1_0`/`Q2_0` (41/42) are the **group-64** formats and cannot read a
+  group-128 file. The *architecture* (`qwen35`) is already upstream — only the weight format is not.
+  **`llamacpp.custom_build.tag` is therefore pinned to `b10615`**, the fork's own base; empty would float
+  to latest and fail all ten at once. Upstream is ~450 commits past that and growing — refresh by
+  regenerating (`tools/split_prism.py`), never by hand-editing a `.patch`. Full runbook, the
+  which-GGUF-runs-where table, and the expected residual diffs: [docs/prism-patches.md](docs/prism-patches.md).
+  Before reaching for it: `Ternary-Bonsai-27B-Q2_g64.gguf` (7.23 GB) runs on a **stock** build with no
+  patches at all — 400 MB more than the PQ2_0 file buys zero fork maintenance.
 
 **Keep `cache_ram` non-zero.** `--cache-ram N` is the host-RAM prompt cache in MiB (upstream default
 8192; **0 disables it**), and `--cache-idle-slots` saves an idle slot's KV there when a new task claims

@@ -21,6 +21,29 @@ Current series:
   0001-common-add-defer_loading-to-tool-definitions.patch
       Declares a tool to the sampling grammar while leaving its schema out of
       the rendered prompt. Upstream: ggml-org/llama.cpp#28179.
+
+  0002..0011-prism-*.patch
+      The whole PrismML fork (github.com/PrismML-Eng/llama.cpp, branch `prism`),
+      14,759 added lines over 157 files, split by file group. Adds the PQ2_0 and
+      PTQ1_0 group-128 ternary types, their CPU/CUDA/Metal/Vulkan/HIP kernels,
+      the Hadamard weight-fold runtime, KV mean-centering, and the
+      DSpark/DFlash/DFly drafters — i.e. what the prism-ml Bonsai GGUFs need.
+
+      This one breaks the rule in the paragraph above, knowingly. It is not a
+      patch awaiting upstream; it is a fork, vendored. `llamacpp.custom_build.tag`
+      is therefore PINNED to `b10615` — the fork's own base — because the series
+      only applies there. Leaving the tag empty would float to the latest release
+      and every prism patch would fail `--check` at once.
+
+      The cost that pin buys down is real: upstream is ~450 commits past b10615
+      and moving. Refreshing means rebasing the fork, not editing these files.
+      Regenerate rather than hand-patch — see docs/prism-patches.md.
+
+      Split by file group, not by commit, so the groups have disjoint file sets
+      and no apply-time ordering dependency: any one can be deleted without
+      breaking `git apply` on the rest. Compile-time they are not independent —
+      0002 (ggml core) underpins every backend patch. 0009/0010/0011 (conversion
+      scripts, tests, the fork's CI workflow) are inert in a telecode build.
 """
 from __future__ import annotations
 
