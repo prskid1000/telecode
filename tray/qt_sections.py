@@ -1021,9 +1021,18 @@ def _llama_updater_card(window) -> QWidget:
             from llamacpp import patcher as _patcher
             info = _patcher.installed_patch_info()
             if info.get("patched"):
-                names = ", ".join(n.split("-", 1)[-1].replace(".patch", "")
-                                  for n in info.get("patches") or []) or "custom"
-                suffix = f"   ·  PATCHED ({names})"
+                # Naming every patch stopped fitting once a vendored fork
+                # arrived (ten patches, one line each). The build id is a
+                # digest of the installed files, so it also changes when the
+                # series does — which the tag and commit do not.
+                pats = info.get("patches") or []
+                bid = info.get("build_id") or ""
+                what = f"{len(pats)} patch{'es' if len(pats) != 1 else ''}"
+                suffix = f"   ·  PATCHED ({what}" + (f"  ·  {bid}" if bid else "") + ")"
+                cur_label.setToolTip("\n".join(
+                    [f"tag {info.get('tag') or '?'}  commit {info.get('commit') or '?'}",
+                     f"build id {bid or '?'}", ""] +
+                    [f"  {n}" for n in pats]))
         except Exception as exc:
             log.debug("patch-state lookup for updater card failed: %s", exc)
         if v:
@@ -1184,6 +1193,10 @@ def _llama_updater_card(window) -> QWidget:
     update_btn.clicked.connect(_on_update)
 
     _refresh_installed()
+    # Exposed so the Patched Build card can refresh this one after install:
+    # install() rewrites the patch marker this card reads, but the two cards
+    # are siblings and neither owns the other.
+    card._refresh_installed = _refresh_installed  # type: ignore[attr-defined]
     return card
 
 
@@ -1603,6 +1616,17 @@ def _llama_patch_build_card(window) -> QWidget:
             for f in res["failed"]:
                 out.appendPlainText(f"   !! {f['patch']}: {f['reason']}")
         _refresh()
+        if step == "install" and res.get("ok"):
+            # install() rewrites the patch marker, which the Updater card above
+            # also reads. Without this it keeps showing the previous build --
+            # and that card is precisely where you look to check whether the
+            # patched build is still installed.
+            cb = getattr(card, "_on_installed", None)
+            if cb:
+                try:
+                    cb()
+                except Exception as exc:
+                    log.debug("updater-card refresh after install failed: %s", exc)
     bridge.done.connect(_on_done)
 
     def _run(step: str, fn) -> None:
@@ -1771,10 +1795,16 @@ def _llama(window) -> QWidget:
     layout.addWidget(master)
 
     # ── Updater ──────────────────────────────────────────────────────
-    layout.addWidget(_llama_updater_card(window))
+    updater_card = _llama_updater_card(window)
+    layout.addWidget(updater_card)
     version_manager_card = _llama_version_manager_card(window)
     layout.addWidget(version_manager_card)
-    layout.addWidget(_llama_patch_build_card(window))
+    patch_build_card = _llama_patch_build_card(window)
+    # Installing a patched build changes what the Updater card reports, so let
+    # it push a refresh up rather than leaving a stale build number on screen.
+    patch_build_card._on_installed = getattr(  # type: ignore[attr-defined]
+        updater_card, "_refresh_installed", None)
+    layout.addWidget(patch_build_card)
 
     # Server (binary + binding)
     srv_card, srv_body = _card("Server", "llamacpp.* — binary + binding (restart required)")

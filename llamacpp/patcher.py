@@ -646,8 +646,17 @@ def installed_patch_info() -> dict[str, Any]:
             # directory, and a partially-overwritten install is not "patched".
             out["reason"] = f"stock ({name} replaced since it was patched)"
             return out
+    # A short, stable identity for exactly these binaries. Derived from the
+    # per-file digests rather than the git commit, because the commit does not
+    # change when the patch series does — two builds at the same tag with
+    # different patches applied would otherwise be indistinguishable. Naming
+    # the patches instead does not scale: a vendored fork is ten of them, and
+    # the list is longer than the card.
+    payload = "\n".join(f"{n}:{d}" for n, d in sorted(files.items()))
+    out["build_id"] = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
     out.update(patched=True, patches=rec.get("patches") or [],
-               tag=rec.get("tag") or "", reason="")
+               tag=rec.get("tag") or "", commit=rec.get("commit") or "",
+               reason="")
     return out
 
 
