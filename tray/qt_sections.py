@@ -1565,11 +1565,42 @@ def _llama_patch_build_card(window) -> QWidget:
         for b in (build_btn, install_btn):
             b.setEnabled(not v)
 
+    def _clean_patch_name(p: str) -> str:
+        base = p.split("/")[-1]
+        base = re.sub(r"^\d+-", "", base)
+        if base.endswith(".patch"):
+            base = base[:-6]
+        return base
+
+    def _format_patches_summary(all_pats: list[str], applied_pats: list[str]) -> str:
+        if not all_pats:
+            return "none"
+        applied_set = set(applied_pats)
+        groups: dict[str, list[str]] = {}
+        for p in all_pats:
+            g = p.split("/", 1)[0] if "/" in p else "telecode"
+            groups.setdefault(g, []).append(p)
+
+        if len(all_pats) <= 2 and list(groups.keys()) == ["telecode"]:
+            names = [_clean_patch_name(p) for p in all_pats]
+            return f"{len(applied_pats)}/{len(all_pats)} applied ({', '.join(names)})"
+
+        parts = []
+        for g, p_list in groups.items():
+            g_app = sum(1 for p in p_list if p in applied_set)
+            g_tot = len(p_list)
+            if g_app == g_tot:
+                parts.append(f"{g_tot} {g}")
+            else:
+                parts.append(f"{g_app}/{g_tot} {g}")
+        return f"{len(applied_pats)}/{len(all_pats)} applied ({', '.join(parts)})"
+
     def _refresh() -> None:
         try:
             st = patcher.status()
         except Exception as exc:
             status.setText(f"status failed: {exc}")
+            status.setToolTip("")
             return
         tc = st["toolchain"]
         missing = [k for k in ("git", "cmake") if not tc.get(k)]
@@ -1577,30 +1608,66 @@ def _llama_patch_build_card(window) -> QWidget:
             missing.append("Visual Studio C++ tools")
         lines = []
         if st["source_present"]:
-            lines.append(f"checkout: {st['checked_out'] or '?'} ({st['head'] or '?'})"
-                         + ("  [dirty]" if st["dirty"] else ""))
-            lines.append(f"origin:   {st.get('origin') or '?'}")
+            dirty = "  [dirty]" if st["dirty"] else ""
+            lines.append(f"{'checkout:':<11}{st['checked_out'] or '?'} ({st['head'] or '?'}){dirty}")
+            lines.append(f"{'origin:':<11}{st.get('origin') or '?'}")
         else:
-            lines.append("checkout: none — Fetch first")
-        applied = st["patches_applied"]
-        lines.append(f"patches: {len(applied)}/{len(st['patches'])} applied"
-                     + (f" — {', '.join(applied)}" if applied else ""))
-        if st["built_binary"]:
-            lines.append("built: yes" + ("  (installed)" if st["build_is_installed"]
-                                          else "  — NOT the installed binary"))
+            lines.append(f"{'checkout:':<11}none — Fetch first")
+
+        applied = st.get("patches_applied") or []
+        all_patches = st.get("patches") or []
+        lines.append(f"{'patches:':<11}{_format_patches_summary(all_patches, applied)}")
+
+        if st.get("built_binary"):
+            b_status = "yes (installed)" if st["build_is_installed"] else "yes — NOT the installed binary"
+            lines.append(f"{'built:':<11}{b_status}")
         else:
-            lines.append("built: no")
+            lines.append(f"{'built:':<11}no")
+
         ip = st.get("installed_patch") or {}
+        ver = f"b{st.get('installed_version') or '?'}"
         if ip.get("patched"):
-            names = ", ".join(n.split("-", 1)[-1].replace(".patch", "")
-                              for n in ip.get("patches") or []) or "?"
-            lines.append(f"installed: b{st['installed_version'] or '?'}  ·  PATCHED ({names})")
+            pats = ip.get("patches") or []
+            bid = ip.get("build_id") or ""
+            if len(pats) <= 1:
+                p_name = _clean_patch_name(pats[0]) if pats else "custom"
+                detail = f"{p_name}" + (f"  ·  {bid}" if bid else "")
+            else:
+                detail = f"{len(pats)} patches" + (f"  ·  {bid}" if bid else "")
+            lines.append(f"{'installed:':<11}{ver}  ·  PATCHED ({detail})")
         else:
-            lines.append(f"installed: b{st['installed_version'] or '?'}  ·  "
-                         f"{ip.get('reason') or 'stock'}")
+            lines.append(f"{'installed:':<11}{ver}  ·  {ip.get('reason') or 'stock'}")
+
         if missing:
-            lines.append("toolchain missing: " + ", ".join(missing))
+            lines.append(f"{'missing:':<11}{', '.join(missing)}")
         status.setText("\n".join(lines))
+
+        # Tooltip with full breakdown on hover
+        tt_lines = []
+        if st["source_present"]:
+            tt_lines.append(f"Checkout: {st['checked_out'] or '?'} ({st['head'] or '?'})"
+                            + ("  [dirty]" if st["dirty"] else ""))
+            tt_lines.append(f"Origin:   {st.get('origin') or '?'}")
+            tt_lines.append("")
+        if all_patches:
+            applied_set = set(applied)
+            tt_lines.append(f"Series patches ({len(applied)}/{len(all_patches)} applied):")
+            for p in all_patches:
+                mark = "[x]" if p in applied_set else "[ ]"
+                tt_lines.append(f"  {mark} {p}")
+            tt_lines.append("")
+        if ip.get("patched"):
+            tt_lines.append("Installed binary (patched):")
+            if ip.get("tag") or ip.get("commit"):
+                tt_lines.append(f"  tag {ip.get('tag') or '?'}  commit {ip.get('commit') or '?'}")
+            if ip.get("build_id"):
+                tt_lines.append(f"  build id {ip.get('build_id')}")
+            for p in ip.get("patches") or []:
+                tt_lines.append(f"    • {p}")
+        elif ip.get("reason"):
+            tt_lines.append(f"Installed binary: {ip.get('reason')}")
+        status.setToolTip("\n".join(tt_lines).strip() if tt_lines else "")
+
         install_btn.setEnabled(bool(st["built_binary"]) and not _busy[0])
 
     bridge.line.connect(lambda t: out.appendPlainText(t))

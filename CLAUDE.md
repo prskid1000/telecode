@@ -207,8 +207,7 @@ combinations (`mlock+dio`, `mmap+mlock+dio`) are rejected by the parser, so it i
   trusting a flag. Deliberately shaped as *verify a patch before proposing it upstream*, not *maintain a
   fork* — the last attempt at a permanent fork was abandoned, and the cost was never the patch, it was
   keeping it alive across upstream churn.
-  Current series: `0001-common-add-defer_loading-to-tool-definitions.patch` (ggml-org/llama.cpp#28179),
-  then `0002..0011-prism-*.patch`.
+   Current series: `0001-common-add-defer_loading-to-tool-definitions.patch` (ggml-org/llama.cpp#28179).
 
 - **A subdirectory of `patches/llama.cpp/` is a whole third-party fork, vendored.** Different kind of
   thing from a top-level patch: not awaiting upstream, and thousands of lines or nothing — some GGUFs
@@ -217,26 +216,13 @@ combinations (`mlock+dio`, `mmap+mlock+dio`) are rejected by the parser, so it i
   alias each other in `applied_patches()`. Framework, resolution rule and regeneration runbook:
   [docs/vendor-patches.md](docs/vendor-patches.md).
 
-- **`patches/llama.cpp/prism/`** is the [PrismML-Eng](https://github.com/PrismML-Eng/llama.cpp) `prism`
-  branch (14,759 added lines / 157 files) **merged onto upstream b11065 by us**, split by file group.
-  Adds **PQ2_0** (ternary, FP16 scale per **128** weights, 1.71 bpw, ggml type 142) and **PTQ1_0**, plus
-  CPU/CUDA/Metal/Vulkan/HIP kernels, the Hadamard weight-fold runtime, KV mean-centering and the
-  DSpark/DFlash/DFly drafters. Upstream's `Q1_0`/`Q2_0` (41/42) are the **group-64** formats and cannot
-  read a group-128 file; the `qwen35` arch is already upstream, so only the weight format was missing.
-  We carry the merge ourselves rather than tracking their rebases — theirs land every 4–6 weeks in big
-  jumps, and their release tags (`prism-b10709`) encode *their own commit count*, not the upstream base.
-  Before reaching for any of it: `Ternary-Bonsai-27B-Q2_g64.gguf` (7.23 GB) runs on a **stock** build
-  with no patches — 400 MB over the PQ2_0 file buys zero fork maintenance.
-
-- **`tools/vendor_drift.py` is how the port stays current** — `status` (does the series still apply to
+- **`tools/vendor_drift.py` is how vendored ports stay current** — `status` (does the series still apply to
   its own tag? to newest upstream? has the vendor moved or rebased?), `conflicts <vendor> --onto <tag>`
   (3-way applies and prints **only** the hunks git could not resolve, formatted for a model to rewrite),
-  `collisions` (two vendors claiming ggml type 142 or the arch string `dspark` compile fine and then
+  `collisions` (two vendors claiming the same ggml type or arch string compile fine and then
   **silently misread weights** — each vendor declares `claims` in `VENDOR.json` and this is the only
   check that catches it). **Resolution rule: upstream-latest PLUS the vendor's feature, never one side
-  wholesale — and check first whether upstream has since implemented the feature itself.** That last one
-  paid off twice in this port: the fork's DGX-Spark L2 prefetch and its HIP crumb-unpack both exist
-  upstream now, so both resolved toward upstream and the series got smaller.
+  wholesale — and check first whether upstream has since implemented the feature itself.**
 
 **Keep `cache_ram` non-zero.** `--cache-ram N` is the host-RAM prompt cache in MiB (upstream default
 8192; **0 disables it**), and `--cache-idle-slots` saves an idle slot's KV there when a new task claims

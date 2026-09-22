@@ -22,24 +22,6 @@ Current series:
       Declares a tool to the sampling grammar while leaving its schema out of
       the rendered prompt. Upstream: ggml-org/llama.cpp#28179.
 
-  prism/0001..0010-*.patch
-      A whole third-party fork, vendored — see docs/vendor-patches.md. The
-      PrismML branch (github.com/PrismML-Eng/llama.cpp) merged onto upstream by
-      us and split by file group. Adds the PQ2_0 / PTQ1_0 group-128 ternary
-      types and their kernels, so the prism-ml Bonsai GGUFs load.
-
-      Deliberately NOT the shape described above: it is not awaiting upstream,
-      and there is no small version of it — stock llama.cpp cannot read a
-      group-128 file at all. A `--check` failure here is not "it landed
-      upstream", it is "upstream moved under the port"; the response is
-      `tools/vendor_drift.py conflicts prism`, not editing a .patch by hand.
-
-      Split by file group rather than by commit, so the groups own disjoint file
-      sets: no apply-time ordering dependency, and any one can be deleted
-      without breaking `git apply` on the rest. Compile-time they are not
-      independent — the ggml core patch underpins every backend patch, and the
-      conversion/tests/CI patches are inert in a telecode build.
-
 A subdirectory is applied as a unit and keyed by relative path (`patch_key`),
 so two vendors both numbering from 0001 do not alias each other.
 """
