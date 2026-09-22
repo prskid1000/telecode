@@ -512,7 +512,7 @@ def _apply_tool_transforms(
                 # if there's anything deferred. Drop incoming copies so it can't
                 # leak into the deferred listing.
                 continue
-            if name in core_names:
+            if name in core_names or body.get("tool_choice") == "required":
                 core_tools_out.append(t)
             else:
                 # Convert to Anthropic shape for BM25 / ToolSearch results

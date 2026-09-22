@@ -733,27 +733,71 @@ def _anthropic_tools_to_openai(tools: list[dict[str, Any]]) -> list[dict[str, An
     return out
 
 
-def _anthropic_tool_choice_to_openai(tc: Any) -> Any:
-    """Anthropic tool_choice → OpenAI tool_choice."""
+def _normalize_tool_choice(
+    tc: Any, tools: list[dict[str, Any]] | None
+) -> tuple[str | None, list[dict[str, Any]] | None]:
+    """Normalize tool_choice and optionally filter tools for llama-server.
+
+    llama-server expects tool_choice strictly as a string ('auto', 'none', 'required').
+    When a client specifies a named tool choice (Anthropic: {"type": "tool", "name": "X"}
+    or OpenAI: {"type": "function", "function": {"name": "X"}}):
+      1. tool_choice is mapped to "required".
+      2. If tools are present, they are filtered to only the named tool so the
+         sampling grammar forces that specific tool and llama.cpp doesn't throw
+         a type_error expecting a string.
+    """
     if not tc:
-        return None
+        return None, tools
     if isinstance(tc, str):
-        # "auto" / "any" / "none"
         if tc in ("auto", "none"):
-            return tc
-        if tc == "any":
-            return "required"
+            return tc, tools
+        if tc in ("any", "required"):
+            return "required", tools
+        return "auto", tools
     if isinstance(tc, dict):
         ttype = tc.get("type", "")
         if ttype == "auto":
-            return "auto"
-        if ttype == "any":
-            return "required"
+            return "auto", tools
         if ttype == "none":
-            return "none"
+            return "none", tools
+        if ttype == "any":
+            return "required", tools
+
+        target_name = ""
         if ttype == "tool":
-            return {"type": "function", "function": {"name": tc.get("name", "")}}
-    return None
+            target_name = tc.get("name", "")
+        elif ttype == "function":
+            fn = tc.get("function")
+            if isinstance(fn, dict):
+                target_name = fn.get("name", "")
+            elif isinstance(fn, str):
+                target_name = fn
+        elif "name" in tc:
+            target_name = tc.get("name", "")
+        elif "function" in tc and isinstance(tc["function"], dict):
+            target_name = tc["function"].get("name", "")
+
+        if target_name:
+            if tools:
+                filtered = [
+                    t for t in tools
+                    if (t.get("function", {}).get("name")
+                        if isinstance(t.get("function"), dict)
+                        else t.get("name")) == target_name
+                ]
+                if filtered:
+                    tools = filtered
+            return "required", tools
+
+        return "auto", tools
+
+    return None, tools
+
+
+def _anthropic_tool_choice_to_openai(tc: Any) -> Any:
+    """Anthropic tool_choice → OpenAI tool_choice for llama-server."""
+    choice, _ = _normalize_tool_choice(tc, None)
+    return choice
 
 
 def anthropic_request_to_internal(
@@ -924,10 +968,9 @@ def anthropic_request_to_internal(
         out["stop"] = list(stop_seqs)
 
     tools = _anthropic_tools_to_openai(body.get("tools", []))
+    tc, tools = _normalize_tool_choice(body.get("tool_choice"), tools)
     if tools:
         out["tools"] = tools
-
-    tc = _anthropic_tool_choice_to_openai(body.get("tool_choice"))
     if tc is not None:
         out["tool_choice"] = tc
 
@@ -1035,6 +1078,13 @@ def openai_request_to_internal(
         opts = body.get("stream_options") or {}
         opts.setdefault("include_usage", True)
         body["stream_options"] = opts
+
+    if "tool_choice" in body:
+        tc, tools = _normalize_tool_choice(body.get("tool_choice"), body.get("tools"))
+        if tc is not None:
+            body["tool_choice"] = tc
+        if tools is not None:
+            body["tools"] = tools
 
     body.setdefault("cache_prompt", True)
 
