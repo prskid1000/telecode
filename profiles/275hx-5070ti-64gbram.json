@@ -1,0 +1,525 @@
+{
+  "telegram": {
+    "bot_token": "<TELEGRAM_BOT_TOKEN>",
+    "group_id": 0,
+    "allowed_user_ids": [],
+    "auto_start": false
+  },
+  "paths": {
+    "store_path": "./data/telecode.json",
+    "logs_dir": "./data/logs"
+  },
+  "streaming": {
+    "interval_sec": 0.8,
+    "max_message_length": 3800,
+    "idle_timeout_sec": 1800
+  },
+  "voice": {
+    "stt": {
+      "enabled": true,
+      "base_url": "http://localhost:6600/v1",
+      "model": ""
+    },
+    "tts": {
+      "enabled": true,
+      "base_url": "http://localhost:6600/v1"
+    }
+  },
+  "capture": {
+    "image_interval": 15,
+    "video_interval": 60
+  },
+  "mcp_server": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 1236,
+    "tts_url": "http://127.0.0.1:6500",
+    "stt_url": "http://127.0.0.1:6600"
+  },
+  "llamacpp": {
+    "enabled": true,
+    "binary": "llama-server",
+    "host": "127.0.0.1",
+    "port": 1234,
+    "auto_start": false,
+    "idle_unload_sec": 150,
+    "ready_timeout_sec": 300,
+    "default_model": "qwen3.6-35b-a3b",
+    "threads": 8,
+    "threads_batch": 24,
+    "batch_size": 2048,
+    "ubatch_size": 2048,
+    "parallel": 2,
+    "cont_batching": true,
+    "main_gpu": 0,
+    "tensor_split": "",
+    "split_mode": "layer",
+    "numa": "",
+    "seed": -1,
+    "keep": 0,
+    "kv_offload": true,
+    "kv_unified": false,
+    "cache_prompt": true,
+    "cache_idle_slots": true,
+    "context_shift": true,
+    "warmup": true,
+    "cache_ram": 16384,
+    "swa_full": false,
+    "ctx_checkpoints": 32,
+    "checkpoint_min_step": 8192,
+    "sleep_idle_seconds": 0,
+    "slot_save_path": "",
+    "cpu_mask": "c03c03",
+    "cpu_range": "",
+    "cpu_mask_batch": "ffffff",
+    "cpu_range_batch": "",
+    "cpu_strict": true,
+    "cpu_strict_batch": true,
+    "prio": 3,
+    "prio_batch": 3,
+    "poll": 0,
+    "poll_batch": 0,
+    "threads_http": 0,
+    "no_host": false,
+    "repack": true,
+    "op_offload": true,
+    "check_tensors": false,
+    "skip_chat_parsing": false,
+    "n_predict": -1,
+    "timeout": 600,
+    "api_prefix": "",
+    "media_path": "",
+    "metrics": false,
+    "props": false,
+    "slots": false,
+    "embedding": false,
+    "rerank": false,
+    "pooling": "",
+    "spec_type": "none",
+    "spec_default": false,
+    "spec_ngram_size_n": 2,
+    "spec_ngram_size_m": 8,
+    "spec_ngram_min_hits": 0,
+    "spec_ngram_mod_n_min": 0,
+    "spec_ngram_mod_n_max": 0,
+    "spec_ngram_mod_n_match": 0,
+    "threads_draft": 0,
+    "threads_batch_draft": 0,
+    "models": {
+      "qwen3.6-35b-a3b": {
+        "path": "D:\\.models\\qwen3.6\\Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
+        "mmproj": "D:\\.models\\qwen3.6\\mmproj-F16.gguf",
+        "ctx_size": 200000,
+        "n_gpu_layers": 99,
+        "n_cpu_moe": 25,
+        "flash_attn": "on",
+        "cache_type_k": "q4_0",
+        "cache_type_v": "q4_0",
+        "cache_reuse": 256,
+        "jinja": true,
+        "mmproj_offload": false,
+        "reasoning_format": "none",
+        "inference_defaults": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "min_p": 0.0,
+          "presence_penalty": 0.0,
+          "repeat_penalty": 1.0,
+          "max_tokens": -1,
+          "reasoning": {
+            "enabled": true,
+            "start": "<think>",
+            "end": "</think>",
+            "emit_thinking_blocks": true
+          },
+          "thinking": {
+            "template_key": "enable_thinking",
+            "enabled": true
+          },
+          "reasoning_effort": {
+            "template_key": "",
+            "map": {
+              "none": "low",
+              "minimal": "low",
+              "low": "low",
+              "medium": "medium",
+              "high": "high",
+              "xhigh": "high",
+              "max": "high",
+              "adaptive": "medium"
+            }
+          }
+        }
+      },
+      "qwen3.8-27b": {
+        "path": "D:\\.models\\qwen3.8\\Qwen3.8-27B-UD-IQ3_XXS.gguf",
+        "mmproj": "D:\\.models\\qwen3.8\\mmproj-F16.gguf",
+        "ctx_size": 50000,
+        "n_gpu_layers": 99,
+        "override_tensor": "token_embd\\.weight=CPU",
+        "flash_attn": "on",
+        "cache_type_k": "q4_0",
+        "cache_type_v": "q4_0",
+        "jinja": true,
+        "mmproj_offload": false,
+        "reasoning_format": "none",
+        "inference_defaults": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "min_p": 0.0,
+          "presence_penalty": 0.0,
+          "repeat_penalty": 1.0,
+          "max_tokens": -1,
+          "reasoning": {
+            "enabled": true,
+            "start": "<think>",
+            "end": "</think>",
+            "emit_thinking_blocks": true
+          },
+          "thinking": {
+            "template_key": "enable_thinking",
+            "enabled": true
+          },
+          "reasoning_effort": {
+            "template_key": "reasoning_effort",
+            "map": {
+              "none": "low",
+              "minimal": "low",
+              "low": "low",
+              "medium": "medium",
+              "high": "xhigh",
+              "xhigh": "xhigh",
+              "max": "xhigh",
+              "adaptive": "medium"
+            }
+          }
+        }
+      }
+    },
+    "inference": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0,
+      "repeat_penalty": 1.0,
+      "presence_penalty": 1.0,
+      "context_overflow": "truncate_middle",
+      "disable_thinking": false,
+      "reasoning": {
+        "enabled": true,
+        "start": "<think>",
+        "end": "</think>",
+        "emit_thinking_blocks": true
+      },
+      "reasoning_effort_map": {
+        "none": {
+          "thinking_budget_tokens": 256
+        },
+        "minimal": {
+          "thinking_budget_tokens": 512
+        },
+        "low": {
+          "thinking_budget_tokens": 1024
+        },
+        "medium": {
+          "thinking_budget_tokens": 2048
+        },
+        "high": {
+          "thinking_budget_tokens": 4096
+        },
+        "xhigh": {
+          "thinking_budget_tokens": 6144
+        },
+        "max": {
+          "thinking_budget_tokens": 8192
+        },
+        "adaptive": {
+          "thinking_budget_tokens": 4096
+        }
+      },
+      "structured_output": {
+        "enabled": false,
+        "schema": null,
+        "grammar": null
+      },
+      "drop_prior_thinking": false,
+      "thinking_budget": {
+        "enabled": true
+      }
+    },
+    "extra_args": [],
+    "update": {
+      "variant": ""
+    },
+    "load_mode": "mlock",
+    "custom_build": {
+      "source_dir": "",
+      "tag": "",
+      "cuda": true
+    }
+  },
+  "heartbeat": {
+    "enabled": false,
+    "tick_seconds": 60,
+    "ephemeral_ttl_seconds": 3600,
+    "max_concurrent_fires": 2,
+    "min_fire_gap_seconds": 60
+  },
+  "proxy": {
+    "enabled": true,
+    "host": "0.0.0.0",
+    "port": 1235,
+    "protocols": [
+      "anthropic",
+      "openai"
+    ],
+    "cors_origins": [
+      "https://pivot.claude.ai"
+    ],
+    "model_mapping": {
+      "claude-opus-5": "qwen3.6-35b-a3b",
+      "claude-sonnet-5": "qwen3.8-27b"
+    },
+    "client_profiles": [
+      {
+        "name": "e2e-test",
+        "match": {
+          "header": "User-Agent",
+          "contains": "telecode-e2e"
+        },
+        "tool_search": false,
+        "inject_date_location": false,
+        "strip_reminders": false,
+        "auto_load_tools": false,
+        "inject_managed": [
+          "code_execution",
+          "docgraph_call_graph",
+          "docgraph_cypher",
+          "docgraph_definition",
+          "docgraph_explore",
+          "docgraph_file_map",
+          "docgraph_git_blame",
+          "docgraph_git_changes",
+          "docgraph_git_recent",
+          "docgraph_impact_of",
+          "docgraph_list_roots",
+          "docgraph_neighborhood",
+          "docgraph_references",
+          "docgraph_rules_for",
+          "docgraph_search",
+          "docgraph_test_impact",
+          "web_search"
+        ],
+        "keep_claude_md": -1
+      },
+      {
+        "name": "office",
+        "match": {
+          "header": "Referer",
+          "contains": "pivot.claude.ai"
+        },
+        "system_instruction": "office.md",
+        "tool_search": true,
+        "inject_date_location": true,
+        "inject_managed": [
+          "code_execution",
+          "web_search"
+        ],
+        "auto_load_tools": true,
+        "strip_reminders": true,
+        "sort_tools": true,
+        "strip_skills": true,
+        "strip_mcp_instructions": true,
+        "keep_claude_md": 0,
+        "keep_memory": 0
+      },
+      {
+        "name": "claude-code",
+        "match": {
+          "header": "User-Agent",
+          "contains": "claude-cli"
+        },
+        "system_instruction": "system.md",
+        "tool_search": true,
+        "strip_reminders": true,
+        "auto_load_tools": true,
+        "inject_date_location": true,
+        "inject_managed": [
+          "web_search",
+          "docgraph_list_roots",
+          "docgraph_search",
+          "docgraph_definition",
+          "docgraph_references",
+          "docgraph_call_graph",
+          "docgraph_file_map",
+          "docgraph_neighborhood",
+          "docgraph_explore",
+          "docgraph_impact_of",
+          "docgraph_test_impact",
+          "docgraph_git_changes",
+          "docgraph_git_blame",
+          "docgraph_git_recent",
+          "docgraph_rules_for",
+          "docgraph_cypher"
+        ],
+        "core_tools": [
+          "Bash",
+          "Edit",
+          "Read",
+          "Write",
+          "Glob",
+          "Grep",
+          "Agent",
+          "Skill"
+        ],
+        "sort_tools": true,
+        "keep_claude_md": 2,
+        "strip_skills": false,
+        "strip_mcp_instructions": false,
+        "strip_client_system_prompt": true
+      }
+    ],
+    "debug": true,
+    "tool_search": true,
+    "auto_load_tools": true,
+    "strip_reminders": true,
+    "mid_system_messages": "demote",
+    "max_roundtrips": 15,
+    "sort_tools": true,
+    "keep_claude_md": -1,
+    "strip_client_system_prompt": false,
+    "strip_skills": false,
+    "strip_mcp_instructions": false
+  },
+  "tools": {
+    "claude": {
+      "name": "Claude Code",
+      "icon": "🟣",
+      "startup_cmd": [
+        "claude"
+      ],
+      "flags": [
+        "--dangerously-skip-permissions"
+      ],
+      "env": {
+        "ANTHROPIC_API_KEY": "",
+        "ANTHROPIC_BASE_URL": ""
+      },
+      "session": {
+        "resume_id": ""
+      }
+    },
+    "claude-local": {
+      "name": "Claude Code (Local)",
+      "icon": "🟤",
+      "startup_cmd": [
+        "claude"
+      ],
+      "flags": [
+        "--dangerously-skip-permissions",
+        "--max-turns",
+        "100"
+      ],
+      "env": {
+        "ANTHROPIC_BASE_URL": "http://localhost:1235",
+        "ANTHROPIC_AUTH_TOKEN": "local",
+        "ANTHROPIC_MODEL": "qwen3.6-35b",
+        "BASH_DEFAULT_TIMEOUT_MS": "1800000",
+        "BASH_MAX_TIMEOUT_MS": "3600000",
+        "DISABLE_PROMPT_CACHING": "1",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
+        "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+        "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1",
+        "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "8192",
+        "ENABLE_TOOL_SEARCH": "false"
+      },
+      "session": {
+        "resume_id": ""
+      }
+    },
+    "computer": {
+      "name": "Computer Control",
+      "icon": "🖥️",
+      "api": {
+        "base_url": "http://localhost:1235/v1",
+        "api_key": "local",
+        "model": "qwen3.6-35b",
+        "format": "openai"
+      },
+      "capture_interval": 3,
+      "max_history": 20,
+      "system_prompt": ""
+    }
+  },
+  "tray": {
+    "last_section": "llama",
+    "docgraph": {
+      "last_tab": "Index"
+    }
+  },
+  "docgraph": {
+    "binary": "",
+    "host": {
+      "enabled": false,
+      "auto_start": false,
+      "auto_restart": false,
+      "host": "127.0.0.1",
+      "port": 2766,
+      "debounce": 500,
+      "auto_shutdown_on_idle": true
+    },
+    "roots": [
+      {
+        "path": "C:\\Users\\prith\\.docgraph",
+        "watch": true,
+        "pinned": true
+      }
+    ],
+    "embeddings": {
+      "model": "",
+      "gpu": true,
+      "idle_unload_sec": 30,
+      "torch_compile": true,
+      "daemon": {
+        "enabled": false,
+        "port": 5577,
+        "idle_exit_sec": 300
+      }
+    },
+    "rerank": {
+      "model": "",
+      "default": true,
+      "gpu": true,
+      "idle_unload_sec": 30,
+      "torch_compile": true
+    },
+    "llm": {
+      "model": "",
+      "host": "localhost",
+      "port": 1235,
+      "format": "anthropic",
+      "max_tokens": 150,
+      "max_tokens_wiki": 4096,
+      "docstrings": false,
+      "wiki": true,
+      "prompts": {
+        "docstring": "",
+        "wiki": ""
+      },
+      "api_key": "",
+      "timeout": 60
+    },
+    "index": {
+      "workers": 0,
+      "embed_batch_size": 0
+    },
+    "wiki": {
+      "depth": 12
+    },
+    "groups": [],
+    "idle_unload_sec": 300
+  }
+}
