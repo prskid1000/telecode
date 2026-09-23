@@ -58,7 +58,7 @@
     "seed": -1,
     "keep": 0,
     "kv_offload": true,
-    "kv_unified": false,
+    "kv_unified": true,
     "cache_prompt": true,
     "cache_idle_slots": true,
     "context_shift": true,
@@ -111,7 +111,7 @@
         "mmproj": "D:\\.models\\qwen3.6\\mmproj-F16.gguf",
         "ctx_size": 200000,
         "n_gpu_layers": 99,
-        "n_cpu_moe": 25,
+        "n_cpu_moe": 26,
         "flash_attn": "on",
         "cache_type_k": "q4_0",
         "cache_type_v": "q4_0",
@@ -150,14 +150,15 @@
               "adaptive": "medium"
             }
           }
-        }
+        },
+        "reasoning_preserve": true
       },
       "qwen3.8-27b": {
         "path": "D:\\.models\\qwen3.8\\Qwen3.8-27B-UD-IQ3_XXS.gguf",
         "mmproj": "D:\\.models\\qwen3.8\\mmproj-F16.gguf",
-        "ctx_size": 50000,
+        "ctx_size": 72000,
         "n_gpu_layers": 99,
-        "override_tensor": "token_embd\\.weight=CPU",
+        "override_tensor": "^token_embd\\.weight=CPU,^output\\.weight=CPU",
         "flash_attn": "on",
         "cache_type_k": "q4_0",
         "cache_type_v": "q4_0",
@@ -195,7 +196,8 @@
               "adaptive": "medium"
             }
           }
-        }
+        },
+        "reasoning_preserve": true
       }
     },
     "inference": {
@@ -455,7 +457,7 @@
     }
   },
   "tray": {
-    "last_section": "llama",
+    "last_section": "logs",
     "docgraph": {
       "last_tab": "Index"
     }
