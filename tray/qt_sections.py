@@ -2371,7 +2371,15 @@ def _llama(window) -> QWidget:
             tbt.setVisible(not is_unlimited)
             inf_lbl.setVisible(is_unlimited)
 
-        _apply_visibility(not has_budget)
+        # Initial state: only HIDE. These widgets have no parent yet, and
+        # setVisible(True) on a parentless widget shows it as its own top-level
+        # window — the blank box that flashed up when opening the llama.cpp page
+        # (one per effort row). Unhidden ones appear with the row they join.
+        if not has_budget:
+            tbt_lbl.hide()
+            tbt.hide()
+        else:
+            inf_lbl.hide()
 
         def _on_unl_changed(_state, b=base, editor=tbt, toggle=unl):
             if toggle.isChecked():
@@ -6738,15 +6746,23 @@ def _teledesign(window) -> QWidget:
         cb.blockSignals(False)
     bridge.models.connect(_fill)
 
+    def _emit(signal, *args) -> None:
+        # The page (and its bridge) can be destroyed while a probe thread is
+        # still running; a late emit must not crash the thread.
+        try:
+            signal.emit(*args)
+        except RuntimeError:
+            pass
+
     def _load_models() -> None:
         try:
             from services.design import generate as _gen
             for key, binname in (("claude_code", "claude"), ("codex", "codex"), ("antigravity", "agy")):
                 path = shutil.which(binname)
                 items = [(m["id"], m["label"]) for m in _gen._models_for(key, path)] if path else []
-                bridge.models.emit(key, items)
+                _emit(bridge.models, key, items)
             llama = get_path(read_settings(), "llamacpp.models", {}) or {}
-            bridge.models.emit("local", [(m, m) for m in llama])
+            _emit(bridge.models, "local", [(m, m) for m in llama])
         except Exception as exc:  # the tray must never die on a CLI probe
             logging.getLogger("telecode.tray").warning("teledesign: model probe failed: %s", exc)
     threading.Thread(target=_load_models, daemon=True).start()
@@ -6785,7 +6801,7 @@ def _teledesign(window) -> QWidget:
         def _do(_=False, c=client, b=btn, s=state) -> None:
             b.setEnabled(False)
             s.setText("registering…")
-            threading.Thread(target=lambda: bridge.reg.emit(c, _reg.register_sync(c, force=True)),
+            threading.Thread(target=lambda: _emit(bridge.reg, c, _reg.register_sync(c, force=True)),
                              daemon=True).start()
         btn.clicked.connect(_do)
         right = QWidget()
@@ -6821,9 +6837,9 @@ def _teledesign(window) -> QWidget:
     def _probe_all() -> None:
         for c in _reg.CLIENTS:
             try:
-                bridge.reg.emit(c, _reg.client_status(c))
+                _emit(bridge.reg, c, _reg.client_status(c))
             except Exception as exc:
-                bridge.reg.emit(c, {"error": str(exc)})
+                _emit(bridge.reg, c, {"error": str(exc)})
     threading.Thread(target=_probe_all, daemon=True).start()
     return scroll
 
