@@ -106,7 +106,7 @@ def test_notifier_posts_with_buttons_and_edits_on_web_decision(cfg):
     msg = bot.sent[0]
     assert msg["chat_id"] == -100123 and msg["parse_mode"] == "HTML"
     rows = msg["reply_markup"].inline_keyboard
-    assert [b.callback_data for b in rows[0]] == [f"apv:a:{ap['id']}", f"apv:r:{ap['id']}"]
+    assert [b.callback_data for b in rows[0]] == [f"apv:a:{ap['id']}", f"apv:e:{ap['id']}", f"apv:r:{ap['id']}"]
     assert all(len(b.callback_data.encode()) <= 64 for b in rows[0])
     assert approvals.get(ap["id"])["telegram"] == {"chat_id": -100123, "message_id": 101}
     run(n.handle("approval.created", {"id": ap["id"]}))                # already posted → not again

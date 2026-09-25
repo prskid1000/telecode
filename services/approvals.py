@@ -16,9 +16,20 @@
 * A pending row survives a restart — it is the gate's durable state; the run
   stays ``awaiting_input`` until someone decides.
 
-Only ``gate`` has a producer today (the run executor). ``tool`` (a CLI's
-permission prompt routed to a person) and ``memory`` (a proposed memory diff)
-are reserved kinds with the same inbox, for P4/P5.
+Producers: ``gate`` (the run executor), ``tool`` (P5, a CLI's permission prompt
+routed to a person) and ``memory`` (P4, a proposed memory diff).
+
+Deadlines (deferred-P3): :func:`create` takes ``deadline_at`` (UTC ISO) and
+``on_timeout`` (``reject`` | ``approve`` | ``skip``); both are persisted in the
+row's ``payload`` and surfaced as top-level ``deadline_at`` / ``on_timeout``.
+:func:`expire_due` resolves every pending row whose deadline has passed with
+``decided_by = "timeout"`` — reject → ``rejected``, approve → ``approved``,
+skip → ``skipped`` — publishes ``approval.decided`` and calls the kind's handler
+(the gate handler continues or ends the run). A daemon thread
+(:func:`start_timeout_checker`, started by the run executor at startup and
+whenever a gate with a deadline opens) calls it every
+``TIMEOUT_CHECK_SECONDS``; because the deadline lives in the table, a restart
+simply catches up on the next tick.
 """
 
 from __future__ import annotations
@@ -27,6 +38,7 @@ import json
 import logging
 import threading
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from services.db.core import connect, now_iso
@@ -34,13 +46,18 @@ from services.db.core import connect, now_iso
 logger = logging.getLogger("telecode.services.approvals")
 
 KINDS = ("gate", "tool", "memory")
-STATUSES = ("pending", "approved", "rejected", "cancelled")
+STATUSES = ("pending", "approved", "rejected", "cancelled", "skipped")
 DECISIONS = {"approve": "approved", "reject": "rejected"}
+TIMEOUT_POLICIES = {"reject": "rejected", "approve": "approved", "skip": "skipped"}
+TIMEOUT_BY = "timeout"
+TIMEOUT_CHECK_SECONDS = 5.0
 BODY_CAP = 64 * 1024
 NOTE_CAP = 16 * 1024
 
 _lock = threading.RLock()
 _handlers: Dict[str, Callable[[Dict[str, Any]], None]] = {}
+_checker: Optional[threading.Thread] = None
+_checker_stop = threading.Event()
 
 
 class ApprovalError(ValueError):
@@ -67,7 +84,25 @@ def _row(r) -> Dict[str, Any]:
             d[k] = json.loads(d[k]) if d.get(k) else None
         except ValueError:
             d[k] = None
+    p = d.get("payload") or {}
+    d["deadline_at"] = p.get("deadline_at") if isinstance(p, dict) else None
+    d["on_timeout"] = (p.get("on_timeout") or "reject") if d["deadline_at"] else None
     return d
+
+
+def _parse_iso(s: Optional[str]) -> Optional[datetime]:
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def deadline_in(seconds: float) -> str:
+    """UTC ISO timestamp ``seconds`` from now (a gate's deadline)."""
+    return (datetime.now(timezone.utc) + timedelta(seconds=float(seconds))).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _publish(etype: str, ap: Dict[str, Any]) -> None:
@@ -80,9 +115,18 @@ def _publish(etype: str, ap: Dict[str, Any]) -> None:
 
 def create(kind: str, *, title: str, body: str = "", payload: Optional[Dict[str, Any]] = None,
            run_id: Optional[str] = None, step_id: Optional[str] = None,
-           trigger_id: Optional[str] = None) -> Dict[str, Any]:
+           trigger_id: Optional[str] = None, deadline_at: Optional[str] = None,
+           on_timeout: Optional[str] = None) -> Dict[str, Any]:
     if kind not in KINDS:
         raise ApprovalError(f"kind must be one of {KINDS}")
+    payload = dict(payload or {})
+    if deadline_at:
+        if _parse_iso(deadline_at) is None:
+            raise ApprovalError("deadline_at must be an ISO timestamp")
+        pol = (on_timeout or "reject").lower()
+        if pol not in TIMEOUT_POLICIES:
+            raise ApprovalError(f"on_timeout must be one of {tuple(TIMEOUT_POLICIES)}")
+        payload.update({"deadline_at": deadline_at, "on_timeout": pol})
     aid = str(uuid.uuid4())
     with _lock:
         conn = connect()
@@ -90,9 +134,11 @@ def create(kind: str, *, title: str, body: str = "", payload: Optional[Dict[str,
             "INSERT INTO approvals (id, kind, run_id, step_id, trigger_id, title, body, payload, status, created_at) "
             "VALUES (?,?,?,?,?,?,?,?, 'pending', ?)",
             (aid, kind, run_id, step_id, trigger_id, (title or "")[:500], (body or "")[:BODY_CAP],
-             json.dumps(payload or {}, ensure_ascii=False, default=str), now_iso()))
+             json.dumps(payload, ensure_ascii=False, default=str), now_iso()))
         ap = get(aid)
     _publish("approval.created", ap)
+    if deadline_at:
+        start_timeout_checker()
     return ap
 
 
@@ -140,6 +186,14 @@ def decide(approval_id: str, decision: str, *, by: str = "web", note: Optional[s
         raise ApprovalError("decision must be approve or reject")
     if edited_text is not None and status != "approved":
         raise ApprovalError("edited text is only accepted with approve")
+    if (by or "").strip().lower() == TIMEOUT_BY:
+        raise ApprovalError("'timeout' is reserved for expired approvals")
+    return _flip(approval_id, status, by=by or "web", note=note, edited_text=edited_text)
+
+
+def _flip(approval_id: str, status: str, *, by: str, note: Optional[str] = None,
+          edited_text: Optional[str] = None) -> Dict[str, Any]:
+    """pending → ``status`` atomically, publish, then the kind's handler."""
     with _lock:
         conn = connect()
         cur = conn.execute(
@@ -162,6 +216,82 @@ def decide(approval_id: str, decision: str, *, by: str = "web", note: Optional[s
         except Exception:
             logger.exception(f"approval handler for {ap['kind']} failed ({approval_id})")
     return ap
+
+
+# ── Deadlines ───────────────────────────────────────────────────────────────
+
+def expire(approval_id: str) -> Optional[Dict[str, Any]]:
+    """Resolve one pending approval by its ``on_timeout`` policy, whatever its
+    deadline (the checker only calls it for overdue rows). Returns the decided
+    row, or None when it was no longer pending / has no deadline."""
+    ap = get(approval_id)
+    if not ap or ap.get("status") != "pending" or not ap.get("deadline_at"):
+        return None
+    pol = ap.get("on_timeout") or "reject"
+    note = f"no decision by {ap['deadline_at']} — on_timeout: {pol}"
+    try:
+        return _flip(approval_id, TIMEOUT_POLICIES.get(pol, "rejected"), by=TIMEOUT_BY, note=note)
+    except AlreadyDecided:
+        return None
+
+
+def expire_due(now: Optional[datetime] = None) -> List[Dict[str, Any]]:
+    """Resolve every pending approval whose deadline has passed."""
+    now = now or datetime.now(timezone.utc)
+    out: List[Dict[str, Any]] = []
+    for r in connect().execute("SELECT id, payload FROM approvals WHERE status='pending' "
+                               "AND payload LIKE '%deadline_at%'").fetchall():
+        try:
+            dl = _parse_iso((json.loads(r["payload"] or "{}") or {}).get("deadline_at"))
+        except ValueError:
+            continue
+        if dl is not None and dl <= now:
+            try:
+                ap = expire(r["id"])
+            except Exception:
+                logger.exception(f"expiring approval {r['id']} failed")
+                continue
+            if ap:
+                logger.info(f"approval {r['id'][:8]} timed out → {ap['status']}")
+                out.append(ap)
+    return out
+
+
+def has_deadlines() -> bool:
+    return connect().execute("SELECT 1 FROM approvals WHERE status='pending' AND payload LIKE '%deadline_at%' "
+                             "LIMIT 1").fetchone() is not None
+
+
+def _checker_loop(interval: float) -> None:
+    while True:
+        try:
+            expire_due()
+        except Exception:
+            logger.exception("approval timeout check failed")
+        if _checker_stop.wait(interval):
+            return
+
+
+def start_timeout_checker(interval: Optional[float] = None) -> None:
+    """Idempotent: one daemon thread per process. Its first pass runs at once,
+    so a deadline that passed while telecode was down resolves on startup."""
+    global _checker
+    with _lock:
+        if _checker is not None and _checker.is_alive():
+            return
+        _checker_stop.clear()
+        _checker = threading.Thread(target=_checker_loop, args=(interval or TIMEOUT_CHECK_SECONDS,),
+                                    name="approval-timeouts", daemon=True)
+        _checker.start()
+
+
+def stop_timeout_checker(timeout: float = 5.0) -> None:
+    global _checker
+    _checker_stop.set()
+    t = _checker
+    if t is not None:
+        t.join(timeout)
+    _checker = None
 
 
 def cancel_for(run_id: str, step_id: Optional[str] = None, reason: str = "run cancelled") -> int:

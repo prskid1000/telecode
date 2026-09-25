@@ -2,7 +2,7 @@
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Team Mode · Telecode</title>
 <meta name="description" content="Telecode Team Mode: workspaces, agents and their internal files, jobs, pipelines (map / loop / gate / reduce), runs, triggers and approvals." />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' rx='6' fill='%237cc4ff'/><path d='M13 4L6 13.5h5L10 20l7-9.5h-5z' fill='%23052034'/></svg>">
@@ -109,6 +109,39 @@
     .overview { grid-template-columns: 1fr 1fr; }
     .mode-pick { grid-template-columns: 1fr 1fr; }
     .page { padding: 18px 20px 56px; }
+  }
+  /* Tablet / phone (rail = drawer, see manager.css) */
+  @media (max-width: 900px) {
+    .page { padding: 16px max(16px, env(safe-area-inset-right, 0px)) calc(48px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
+    .lane-body { grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); }
+    .runrow { flex-wrap: wrap; row-gap: 4px; min-height: 44px; }
+    .runrow .nm { flex-basis: 40%; }
+    .ifiles textarea { height: 50vh; min-height: 260px; }
+    .kind-box > .row { flex-wrap: wrap; row-gap: 6px; }
+  }
+  @media (max-width: 600px) {
+    .overview { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+    .ov-card { padding: 12px; }
+    .steps-how { grid-template-columns: minmax(0, 1fr); }
+    .steps-how > div { border-right: 0; border-bottom: 1px solid var(--border); }
+    .steps-how > div:last-child { border-bottom: 0; }
+    .mode-pick { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .lane-head { flex-wrap: wrap; }
+    .lane-body { padding: 0 8px 8px; gap: 8px; }
+    .step { padding: 10px; }
+    .run-chip { min-width: 136px; }
+    .monitor { padding: 12px; }
+    .stepblock > .sb-head { flex-wrap: wrap; }
+  }
+  @media (max-width: 900px) and (pointer: coarse), (max-width: 600px) {
+    .stepblock > .sb-head { min-height: 44px; }
+  }
+  @media (max-width: 900px) {
+    .eng-tag { max-width: 100%; }
+    .team-engine { flex-wrap: wrap; }
+    .team-engine .select { flex: 1 1 100%; }
+    .team-engine .input { flex: 1 1 120px; }
+    .kind-pick button { flex: 1 1 auto; justify-content: center; }
   }
 </style>
 </head>
@@ -859,7 +892,7 @@ function kindFields(s, idx, o) {
     const ws = h("select", { class: "select", disabled: o.ro || null, onchange: (e) => { m.worker_session = e.target.value; dirty(); } },
       [["ephemeral", "Ephemeral copy each"], ["fork", "Fork the planner's conversation"]].map(([v, l]) => h("option", { value: v, selected: m.worker_session === v || null }, l)));
     return h("div", { class: "kind-box" },
-      h("div", { class: "field-row" }, field("Items from", src, "a list field of the previous step's handoff"), field("Workers", ws, m.worker_session === "fork" ? "forks share the planner's workspace — they run one at a time" : "each in a throwaway copy of the workspace")),
+      h("div", { class: "field-row" }, field("Items from", src, "a list field of the previous step's handoff"), field("Workers", ws, m.worker_session === "fork" ? "each forks the planner's conversation in its own copy of the planner's workspace — in parallel" : "each in a throwaway copy of the workspace")),
       h("div", { class: "field-row" }, field("Max parallel", numIn(m.max_parallel, 1, 16, v => { m.max_parallel = v; })), field("Max items", numIn(m.max_items, 1, 100, v => { m.max_items = v; }))),
       h("div", { class: "field-hint", style: { marginBottom: "8px" } }, "Each worker gets the previous handoff plus its one item; the step budget is split evenly per worker."));
   }
@@ -911,10 +944,16 @@ function renderStepCard(s, idx, o) {
     const g = s.gate = s.gate || { title: "Approve?", instructions: "" };
     const title = h("input", { class: "input", value: g.title || "", placeholder: "What is being approved", oninput: (e) => { g.title = e.target.value; markJobDirty(); } });
     const instr = h("textarea", { class: "input", rows: "3", placeholder: "What the reviewer should check. The previous handoff is shown with it.", oninput: (e) => { g.instructions = e.target.value; markJobDirty(); } }, g.instructions || "");
+    // Gate timeout (optional): blank = wait forever; on_timeout decides what an expired approval does.
+    const tmo = h("input", { class: "input", type: "number", min: "10", step: "60", placeholder: "none — wait forever", value: g.timeout_sec || "",
+      oninput: (e) => { const v = parseInt(e.target.value, 10); if (v > 0) g.timeout_sec = Math.max(10, v); else { delete g.timeout_sec; delete g.on_timeout; } markJobDirty(); } });
+    const onTmo = h("select", { class: "select", onchange: (e) => { g.on_timeout = e.target.value; markJobDirty(); } },
+      [["reject", "Reject (end the run)"], ["approve", "Approve"], ["skip", "Skip the gate, go on"]].map(([v, l]) => h("option", { value: v, selected: (g.on_timeout || "reject") === v || null }, l)));
     return h("div", { class: "step k-gate" },
       h("div", { class: "step-head" }, icon("gate"), headT, h("span", { class: "pill violet" }, "approval"), o.controls), picker,
       h("div", { class: "field-row" }, field("Approval title", title), field("Step name", nameIn, null, { extra: h("span", { class: "faint" }, "optional") })),
-      field("Instructions", instr, "The run pauses here (status awaiting input) until someone approves in the inbox — top right — or on Telegram. Text edited on approval becomes the handoff to the next step; reject ends the run."));
+      field("Instructions", instr, "The run pauses here (status awaiting input) until someone approves in the inbox — top right — or on Telegram. Text edited on approval becomes the handoff to the next step; reject ends the run."),
+      h("div", { class: "field-row" }, field("Timeout (s)", tmo, "optional — the approval's deadline"), field("When it times out", onTmo, "decided by “timeout”")));
   }
   const agentSel = h("select", { class: "select", disabled: o.ro || null, onchange: (e) => { updatePipelineStep(idx, "agent_id", e.target.value); markJobDirty(); } },
     state.agents.map(a => h("option", { value: a.id, selected: a.id === s.agent_id || null }, a.name)),
@@ -1579,7 +1618,8 @@ function renderKindArea(blk, step, run, kind) {
       mount(blk.kind, skeleton(2));
       api(`/api/approvals/${encodeURIComponent(step.approval_id)}`).then(r => {
         if (blk.kind._sig !== sig) return;
-        mount(blk.kind, approvalCard(r.approval, { compact: true, onDone: () => { blk.kind._sig = null; pollRun(state.activeId); } }));
+        const card = approvalCard(r.approval, { compact: true, onDone: () => { blk.kind._sig = null; pollRun(state.activeId); } });
+        mount(blk.kind, r.approval.deadline_at ? [gateCountdown(r.approval.deadline_at, r.approval.on_timeout), card] : card);
       }).catch(e => mount(blk.kind, errorBox(e.message)));
       return;
     }
@@ -1592,6 +1632,19 @@ function renderKindArea(blk, step, run, kind) {
     return;
   }
   if (blk.kind.childNodes.length) mount(blk.kind);
+}
+// Gate deadline: "decide within 4m 10s — then rejected", ticking; stops once detached.
+function gateCountdown(deadline, onTimeout) {
+  const then = { reject: "rejected", approve: "approved", skip: "skipped" }[onTimeout || "reject"] || "rejected";
+  const el = h("div", { class: "field-hint", title: fmtDateTime(deadline) });
+  const tick = () => {
+    const s = Math.round((Date.parse(deadline) - Date.now()) / 1000);
+    const left = s <= 0 ? "time is up" : s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m` : s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
+    el.textContent = s <= 0 ? `⏳ Time is up — being ${then} by timeout…` : `⏳ Decide within ${left} — otherwise ${then} by timeout`;
+  };
+  tick();
+  const t = setInterval(() => { if (!el.isConnected && el._seen) { clearInterval(t); return; } if (el.isConnected) el._seen = true; tick(); }, 1000);
+  return el;
 }
 // Retry / Retry clean / Diff / Revert for a finished step.
 function stepActions(run, step, runActive) {

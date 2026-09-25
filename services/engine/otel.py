@@ -24,14 +24,22 @@ argv)::
     -c otel.environment=telecode -c otel.log_user_prompt=false
     -c otel.exporter.otlp-http.endpoint=http://127.0.0.1:<p>/otlp/v1/logs
     -c otel.exporter.otlp-http.protocol=json
-    (same for otel.metrics_exporter → /v1/metrics and otel.trace_exporter → /v1/traces)
+    (same for otel.metrics_exporter → /v1/metrics; otel.trace_exporter → /v1/traces
+    only with telemetry.cli_traces, else otel.trace_exporter=none)
 
 (verified on codex-cli 0.157 with ``codex -c … mcp list``, which loads and
 validates the config without a model call: bad variants are rejected by name.)
 
-plus ``OTEL_RESOURCE_ATTRIBUTES`` in the env (honoured if Codex's SDK reads the
-env resource detector; the receiver also keys Codex events by
-``conversation.id``). Antigravity has no OTel export — own spans only.
+plus ``OTEL_RESOURCE_ATTRIBUTES`` in the env — **honoured** (verified with a
+real 0.157 ``codex exec`` through the task handler, 2026-09-25): every
+``resourceLogs`` / ``resourceSpans`` block carried ``service.name=codex_exec``
+and all the ``telecode.*`` ids, so no other correlation is needed (the records
+also carry ``conversation.id``). Log events seen: ``codex.conversation_starts``
+(with ``approval_policy`` / ``sandbox_policy`` / ``model``),
+``codex.user_prompt`` (prompt ``[REDACTED]``), ``codex.api_request``,
+``codex.startup_phase``. Records also carry ``user.email`` /
+``user.account_id``, dropped at ingest (``otlp.PII_KEYS``).
+Antigravity has no OTel export — own spans only.
 """
 
 from __future__ import annotations
@@ -105,15 +113,23 @@ def claude_env(correlation: Mapping[str, object]) -> Dict[str, str]:
 
 
 def codex_overrides() -> List[str]:
+    """``-c otel.*`` for Codex. Logs and metrics always go to the receiver
+    (metrics_exporter's variants include ``statsig`` — pointing it here keeps
+    it on the box). Traces only with ``telemetry.cli_traces``: a real 0.157 run
+    exported ~2,000 internal spans (``fs.get_metadata`` ×1,433, ``auth``,
+    ``append_items``…) ≈ 4.7 MB of OTLP/JSON for one tiny prompt, so otherwise
+    ``otel.trace_exporter=none`` (a valid variant: none|statsig|otlp-http|otlp-grpc)."""
     from services.telemetry import settings
     base = settings.receiver_endpoint()
     out = ["-c", "otel.environment=telecode", "-c", "otel.log_user_prompt=false"]
-    # exporter = logs; metrics_exporter / trace_exporter exist too (verified on 0.157 — the
-    # config loader names them in its "unknown variant" error) and are pointed here as well,
-    # so nothing Codex exports over OTel leaves the machine.
-    for key, path in (("exporter", "logs"), ("metrics_exporter", "metrics"), ("trace_exporter", "traces")):
+    signals = [("exporter", "logs"), ("metrics_exporter", "metrics")]
+    if settings.cli_traces():
+        signals.append(("trace_exporter", "traces"))
+    for key, path in signals:
         out += ["-c", f"otel.{key}.otlp-http.endpoint={base}/v1/{path}",
                 "-c", f"otel.{key}.otlp-http.protocol=json"]
+    if not settings.cli_traces():
+        out += ["-c", "otel.trace_exporter=none"]
     return out
 
 

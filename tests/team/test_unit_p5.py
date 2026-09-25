@@ -128,7 +128,7 @@ def test_codex_otel_overrides_are_quote_free_and_local(monkeypatch):
     assert all(a == "-c" for a in ov[0::2])
     assert "otel.exporter.otlp-http.endpoint=http://127.0.0.1:18999/otlp/v1/logs" in vals
     assert "otel.metrics_exporter.otlp-http.endpoint=http://127.0.0.1:18999/otlp/v1/metrics" in vals
-    assert "otel.trace_exporter.otlp-http.protocol=json" in vals
+    assert "otel.trace_exporter=none" in vals   # traces only with telemetry.cli_traces (test_unit_codex_otel)
     assert not any('"' in v or "'" in v for v in vals)
 
 

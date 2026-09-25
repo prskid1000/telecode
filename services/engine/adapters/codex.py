@@ -13,8 +13,9 @@ import json
 import logging
 import os
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from services.engine.adapters.base import Adapter, Launch, ParseState, todos_from, tool_event
 from services.engine.types import EngineError, EngineRequest, EngineResult
@@ -55,16 +56,80 @@ def local_env(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     return env
 
 
+SKIP_MODES = (None, "", "skip", "bypassPermissions")
+BYPASS_FLAG = "--dangerously-bypass-approvals-and-sandbox"
+
+
+@dataclass(frozen=True)
+class PermissionPlan:
+    """How one telecode permission mode lands on ``codex exec`` (0.157).
+
+    ``exec_args`` are exec-only (must precede ``resume`` / ``fork`` — both
+    ``--sandbox`` and ``--approve-for-me`` are rejected after them, verified);
+    ``overrides`` are ``-c`` pairs; ``bypass`` adds ``BYPASS_FLAG`` (accepted
+    by exec, resume and fork alike)."""
+    mode: str
+    exec_args: Tuple[str, ...]
+    overrides: Tuple[str, ...] = ()
+    bypass: bool = False
+    warning: Optional[str] = None
+
+
+_NEVER = ("-c", "approval_policy=never")   # headless: a sandbox refusal goes back to the model
+_WORKSPACE_WRITE = ("--sandbox", "workspace-write")
+
+
+def permission_plan(permission_mode: Optional[str]) -> PermissionPlan:
+    """telecode permission mode → Codex flags. ``codex exec`` has no host
+    approval channel (``-a/--ask-for-approval`` is not even an exec option), so
+    nothing here can wait for a person:
+
+    * skip / bypassPermissions / none → ``--sandbox danger-full-access`` +
+      ``--dangerously-bypass-approvals-and-sandbox`` (the pre-P5 behaviour)
+    * auto → ``--approve-for-me`` (implies workspace-write): commands run in the
+      workspace sandbox and any escalation request goes to Codex's automatic
+      reviewer (``approvals_reviewer = auto_review``) instead of a person — the
+      counterpart of Claude's classifier-backed ``auto``
+    * acceptEdits / dontAsk → ``--sandbox workspace-write -c approval_policy=never``:
+      writes inside the workspace (+ ``--add-dir``s), no network, nothing asked,
+      anything the sandbox refuses fails back to the model
+    * plan → ``--sandbox read-only -c approval_policy=never``
+    * ask / manual → no headless approvals: the acceptEdits plan + a warning
+      (``codex app-server`` has JSON-RPC approval requests, but driving it is
+      a second adapter, not a flag)
+    """
+    m = permission_mode
+    if m in SKIP_MODES:
+        return PermissionPlan("skip", ("--sandbox", "danger-full-access"), bypass=True)
+    if m == "auto":
+        # --approve-for-me implies the workspace-write sandbox and clap rejects it
+        # together with --sandbox (verified: "cannot be used with '--approve-for-me'").
+        return PermissionPlan("auto", ("--approve-for-me",))
+    if m in ("acceptEdits", "dontAsk"):
+        return PermissionPlan(str(m), _WORKSPACE_WRITE, _NEVER)
+    if m == "plan":
+        return PermissionPlan("plan", ("--sandbox", "read-only"), _NEVER)
+    if m in ("ask", "manual"):
+        return PermissionPlan(str(m), _WORKSPACE_WRITE, _NEVER,
+                              warning=f"permission mode '{m}': codex exec cannot ask a person — running with "
+                                      f"the workspace-write sandbox and approval_policy=never (as acceptEdits)")
+    return PermissionPlan(str(m), _WORKSPACE_WRITE, _NEVER,
+                          warning=f"permission mode '{m}' has no Codex mapping — running as acceptEdits "
+                                  f"(workspace-write sandbox, approval_policy=never)")
+
+
 def build_argv(*, work_dir: Path, resume_id: Optional[str], last_msg_path: Path,
                model: Optional[str], provider_overrides: Optional[List[str]] = None,
-               schema_path: Optional[Path] = None, fork: bool = False, add_dirs=()) -> List[str]:
-    exec_only = ["--sandbox", "danger-full-access", "-C", str(work_dir)]
+               schema_path: Optional[Path] = None, fork: bool = False, add_dirs=(),
+               permission_mode: Optional[str] = None) -> List[str]:
+    plan = permission_plan(permission_mode)
+    exec_only = [*plan.exec_args, "-C", str(work_dir)]
     # --add-dir is exec-only too (verified on 0.157: absent from `exec resume|fork --help`).
     for d in add_dirs or ():
         exec_only += ["--add-dir", str(d)]
     common = [
         "--json",
-        "--dangerously-bypass-approvals-and-sandbox",
+        *([BYPASS_FLAG] if plan.bypass else []),
         "--skip-git-repo-check",
         "--output-last-message", str(last_msg_path),
     ]
@@ -72,7 +137,7 @@ def build_argv(*, work_dir: Path, resume_id: Optional[str], last_msg_path: Path,
         common += ["--model", model]
     if schema_path:
         common += ["--output-schema", str(schema_path)]
-    overrides = list(provider_overrides or [])
+    overrides = [*(provider_overrides or []), *plan.overrides]
     # "-" = read the prompt from stdin. `exec fork <id>` (verified on 0.157)
     # takes the same trailing options as `exec resume <id>`.
     if resume_id:
@@ -148,10 +213,15 @@ class CodexAdapter(Adapter):
             schema_path = d / f"schema-{uuid.uuid4().hex}.json"
             schema_path.write_text(json.dumps(req.schema), encoding="utf-8")
             cleanup.append(schema_path)
+        plan = permission_plan(req.permission_mode)
+        warnings = [plan.warning] if plan.warning else []
+        if plan.warning:
+            logger.warning(plan.warning)
         argv = build_argv(work_dir=req.cwd, resume_id=req.resume_id, last_msg_path=req.last_msg_path,
                           model=model, provider_overrides=overrides, schema_path=schema_path,
-                          fork=req.fork, add_dirs=req.add_dirs)
-        return Launch(argv=argv, stdin=req.prompt, env=env, cleanup=cleanup, extras_at=len(argv) - 1)
+                          fork=req.fork, add_dirs=req.add_dirs, permission_mode=req.permission_mode)
+        return Launch(argv=argv, stdin=req.prompt, env=env, cleanup=cleanup, warnings=warnings,
+                      extras_at=len(argv) - 1)
 
     def parse(self, evt: Dict[str, Any], st: ParseState) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []

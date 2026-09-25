@@ -12,6 +12,17 @@
   and only for callback data of the exact shape ``apv:<a|r>:<approval id>``.
 * ``trigger.notice`` (goal met, auto-paused, a notable reply) is posted to
   General as plain text.
+* A gate with a deadline shows it (and what happens on timeout); a timed-out
+  approval is edited like any other decision (``decided_by`` = ``timeout``).
+* **Edit & approve** (``apv:e:<id>``, gate and tool approvals — not memory):
+  the bot answers with a ForceReply prompt that @-mentions the presser; that
+  user's *reply to the prompt* within :data:`EDIT_WINDOW_SECONDS` (15 min),
+  at most :data:`EDIT_TEXT_CAP` characters, approves with the reply as the
+  edited text — exactly what the web inbox's Edit & approve sends. Replies by
+  anyone else, late replies or replies to other messages do not count. The
+  pending prompts live in memory (a restart forgets them — press the button
+  again). A reply that is handled stops further handlers
+  (``ApplicationHandlerStop``), so it never reaches a CLI session.
 
 All text is HTML-escaped; ParseMode.HTML.
 """
@@ -19,24 +30,34 @@ All text is HTML-escaped; ParseMode.HTML.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
+import threading
+import time
 from html import escape as _esc
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.error import RetryAfter, TelegramError
-from telegram.ext import ContextTypes
+from telegram.ext import ApplicationHandlerStop, ContextTypes
 
 import config
 
 log = logging.getLogger("telecode.handlers.approvals")
 
-CALLBACK_RE = re.compile(r"^apv:([ar]):([A-Za-z0-9_-]{1,64})$")
+CALLBACK_RE = re.compile(r"^apv:([are]):([A-Za-z0-9_-]{1,64})$")
 CALLBACK_PATTERN = r"^apv:"
 _BODY_EXCERPT = 1500
 SWEEP_SECONDS = 30.0
+EDIT_WINDOW_SECONDS = 15 * 60
+EDIT_TEXT_CAP = 4000
+EDITABLE_KINDS = ("gate", "tool")
+
+# (chat_id, prompt message_id) → {approval_id, user_id, expires}
+_edit_prompts: Dict[Tuple[int, int], Dict[str, Any]] = {}
+_edit_lock = threading.Lock()
 
 
 def may_decide(user_id: Optional[int]) -> bool:
@@ -60,7 +81,8 @@ def _link(ap: Dict[str, Any]) -> str:
 
 
 def format_approval(ap: Dict[str, Any]) -> str:
-    icon = {"pending": "⏸", "approved": "✅", "rejected": "⛔", "cancelled": "✖️"}.get(ap.get("status"), "ℹ️")
+    icon = {"pending": "⏸", "approved": "✅", "rejected": "⛔", "cancelled": "✖️",
+            "skipped": "⏭"}.get(ap.get("status"), "ℹ️")
     kind = {"gate": "Pipeline gate", "tool": "Tool permission", "memory": "Memory change"}.get(ap.get("kind"),
                                                                                              "Approval")
     lines = [f"{icon} <b>{_esc(kind)}: {_esc(ap.get('title') or '')}</b>"]
@@ -81,7 +103,14 @@ def format_approval(ap: Dict[str, Any]) -> str:
             tail += "\n<i>(approved with edited text)</i>"
         lines.append(tail)
     else:
-        lines.append("<i>Approve or reject below, or in the web inbox (edit-then-approve is web only).</i>")
+        if ap.get("deadline_at"):
+            what = {"reject": "it is rejected", "approve": "it is approved",
+                    "skip": "the gate is skipped and the run goes on"}.get(ap.get("on_timeout") or "reject",
+                                                                             "it is rejected")
+            lines.append(f"⏳ <i>Decide by</i> <b>{_esc(str(ap['deadline_at']))}</b> <i>— otherwise {_esc(what)}.</i>")
+        lines.append("<i>Approve, edit &amp; approve, or reject below — or in the web inbox.</i>"
+                     if ap.get("kind") in EDITABLE_KINDS else
+                     "<i>Approve or reject below, or in the web inbox.</i>")
     lines.append(f"<code>{_esc(_link(ap))}</code>")
     return "\n\n".join(lines)
 
@@ -89,10 +118,11 @@ def format_approval(ap: Dict[str, Any]) -> str:
 def keyboard(ap: Dict[str, Any]) -> Optional[InlineKeyboardMarkup]:
     if ap.get("status") != "pending":
         return None
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Approve", callback_data=f"apv:a:{ap['id']}"),
-        InlineKeyboardButton("⛔ Reject", callback_data=f"apv:r:{ap['id']}"),
-    ]])
+    row = [InlineKeyboardButton("✅ Approve", callback_data=f"apv:a:{ap['id']}")]
+    if ap.get("kind") in EDITABLE_KINDS:
+        row.append(InlineKeyboardButton("✏️ Edit & approve", callback_data=f"apv:e:{ap['id']}"))
+    row.append(InlineKeyboardButton("⛔ Reject", callback_data=f"apv:r:{ap['id']}"))
+    return InlineKeyboardMarkup([row])
 
 
 def _bot_alive() -> bool:
@@ -157,6 +187,9 @@ async def handle_approval_callback(update: Update, ctx: ContextTypes.DEFAULT_TYP
     if not may_decide(getattr(user, "id", None)):
         await q.answer("Not allowed — only telegram.allowed_user_ids can decide approvals.", show_alert=True)
         return
+    if m.group(1) == "e":
+        await _start_edit(update, ctx, q, m.group(2))
+        return
     decision = "approve" if m.group(1) == "a" else "reject"
     who = f"telegram:{getattr(user, 'username', None) or getattr(user, 'id', '?')}"
     try:
@@ -174,6 +207,134 @@ async def handle_approval_callback(update: Update, ctx: ContextTypes.DEFAULT_TYP
     except TelegramError as e:
         if "not modified" not in str(e).lower():
             log.warning("approval callback edit failed: %s", e)
+
+
+# ── Edit & approve (ForceReply) ─────────────────────────────────────────────
+
+def _who(user) -> str:
+    return f"telegram:{getattr(user, 'username', None) or getattr(user, 'id', '?')}"
+
+
+def _purge_prompts(now: float) -> None:
+    with _edit_lock:
+        for k in [k for k, v in _edit_prompts.items() if v["expires"] < now - EDIT_WINDOW_SECONDS]:
+            _edit_prompts.pop(k, None)
+
+
+async def _start_edit(update: Update, ctx, q, approval_id: str) -> None:
+    from services import approvals
+    ap = await asyncio.to_thread(approvals.get, approval_id)
+    if not ap:
+        await q.answer("Approval not found.", show_alert=True)
+        return
+    if ap.get("status") != "pending":
+        await q.answer(f"Already {ap.get('status')} by {ap.get('decided_by') or '?'}.", show_alert=True)
+        return
+    if ap.get("kind") not in EDITABLE_KINDS:
+        await q.answer("This approval cannot be edited — approve or reject it.", show_alert=True)
+        return
+    user = update.effective_user
+    uid = int(getattr(user, "id", 0) or 0)
+    src = getattr(q, "message", None)
+    chat_id = getattr(src, "chat_id", None) or ((ap.get("telegram") or {}).get("chat_id")) or _group()
+    name = getattr(user, "first_name", None) or getattr(user, "username", None) or str(uid)
+    mention = f'<a href="tg://user?id={uid}">{_esc(str(name))}</a>'
+    what = ("the text the next step should be told (it becomes the gate's handoff)" if ap.get("kind") == "gate"
+            else "the edited tool input, as a JSON object")
+    text = (f"✏️ {mention}, reply to <b>this message</b> with {_esc(what)} to approve "
+            f"<b>{_esc(ap.get('title') or 'the approval')}</b>.\n\n"
+            f"<i>Only your reply counts, within {EDIT_WINDOW_SECONDS // 60} minutes, up to {EDIT_TEXT_CAP} characters.</i>")
+    kwargs: Dict[str, Any] = {"chat_id": chat_id, "text": text, "parse_mode": ParseMode.HTML,
+                              "reply_markup": ForceReply(selective=True, input_field_placeholder="Edited text…"),
+                              "disable_web_page_preview": True}
+    thread = getattr(src, "message_thread_id", None)
+    if thread and getattr(src, "is_topic_message", False):
+        kwargs["message_thread_id"] = thread
+    bot = getattr(ctx, "bot", None) or q.get_bot()
+    try:
+        sent = await bot.send_message(**kwargs)
+    except TelegramError as e:
+        log.warning("edit prompt failed: %s", e)
+        await q.answer("Could not ask for the edited text — try the web inbox.", show_alert=True)
+        return
+    now = time.time()
+    _purge_prompts(now)
+    with _edit_lock:
+        _edit_prompts[(int(getattr(sent, "chat_id", chat_id)), int(sent.message_id))] = {
+            "approval_id": ap["id"], "user_id": uid, "expires": now + EDIT_WINDOW_SECONDS, "name": str(name)}
+    await q.answer("Reply to my message with your edited text.")
+
+
+async def handle_approval_reply(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """A text reply to an Edit & approve prompt → approve with that text.
+    Anything else returns untouched, for the normal handlers."""
+    from services import approvals
+    msg = update.effective_message
+    rt = getattr(msg, "reply_to_message", None) if msg is not None else None
+    if rt is None or not isinstance(getattr(msg, "text", None), str):
+        return
+    key = (int(msg.chat_id), int(rt.message_id))
+    with _edit_lock:
+        entry = _edit_prompts.get(key)
+    if not entry:
+        return
+    user = update.effective_user
+    uid = getattr(user, "id", None)
+
+    async def say(text: str) -> None:
+        try:
+            await msg.reply_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        except TelegramError as e:
+            log.warning("edit reply answer failed: %s", e)
+
+    def drop() -> None:
+        with _edit_lock:
+            _edit_prompts.pop(key, None)
+
+    if uid != entry["user_id"]:
+        await say(f"Only {_esc(entry.get('name') or 'the person who pressed Edit & approve')} can answer this prompt.")
+        raise ApplicationHandlerStop
+    if time.time() > entry["expires"]:
+        drop()
+        await say("⌛ This prompt expired. Press <b>✏️ Edit &amp; approve</b> again.")
+        raise ApplicationHandlerStop
+    if not may_decide(uid):
+        drop()
+        await say("Not allowed — only telegram.allowed_user_ids can decide approvals.")
+        raise ApplicationHandlerStop
+    text = msg.text.strip()
+    if not text:
+        await say("The edited text is empty — reply again with the text, or use plain Approve.")
+        raise ApplicationHandlerStop
+    if len(text) > EDIT_TEXT_CAP:
+        await say(f"Too long ({len(text)} characters; the limit is {EDIT_TEXT_CAP}). Reply again with a shorter text.")
+        raise ApplicationHandlerStop
+    ap = await asyncio.to_thread(approvals.get, entry["approval_id"])
+    if ap and ap.get("kind") == "tool":
+        try:
+            ok = isinstance(json.loads(text), dict)
+        except ValueError:
+            ok = False
+        if not ok:
+            await say("A tool approval's edited text must be a JSON object (the new tool input). Reply again.")
+            raise ApplicationHandlerStop
+    drop()
+    bot = getattr(ctx, "bot", None) or msg.get_bot()
+    try:
+        ap = await asyncio.to_thread(approvals.decide, entry["approval_id"], "approve", by=_who(user),
+                                     edited_text=text)
+    except approvals.AlreadyDecided as exc:
+        ap = exc.approval
+        await say(f"Already {_esc(str(ap.get('status')))} by {_esc(str(ap.get('decided_by') or '?'))} — "
+                  "your text was not used.")
+        await update_message(bot, ap)
+        raise ApplicationHandlerStop
+    except approvals.ApprovalError as exc:
+        await say(_esc(str(exc)[:500]))
+        raise ApplicationHandlerStop
+    await update_message(bot, ap)
+    await say(f"✅ Approved <b>{_esc(ap.get('title') or '')}</b> with your edited text.")
+    raise ApplicationHandlerStop
 
 
 def format_notice(data: Dict[str, Any]) -> str:

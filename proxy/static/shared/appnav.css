@@ -26,8 +26,6 @@ tc-appnav .tc-ind { position: absolute; top: 2px; bottom: 2px; left: 2px; width:
   background: var(--raised, #252a35); box-shadow: 0 0 0 1px var(--border-strong, #3a4150), 0 1px 2px rgba(0,0,0,.18);
   transition: left .24s cubic-bezier(.3,.7,.2,1), width .24s cubic-bezier(.3,.7,.2,1); view-transition-name: tc-appnav-ind; }
 tc-appnav .tc-ind.no-anim { transition: none; }
-tc-appnav .tc-ind::after { content: ""; position: absolute; left: 30%; right: 30%; bottom: -1px; height: 2px; border-radius: 2px;
-  background: var(--accent, #7cc4ff); opacity: .9; }
 tc-appnav .tc-app { position: relative; z-index: 1; height: 26px; padding: 0 11px; display: inline-flex; align-items: center; gap: 6px;
   border-radius: 6px; color: var(--muted, #9aa3b2); text-decoration: none; font-size: 12.5px; font-weight: 500; white-space: nowrap;
   transition: color .15s; outline: none; }
@@ -53,4 +51,36 @@ tc-appnav[variant="switch"] .tc-actions { display: none; }
 @media (prefers-reduced-motion: reduce) {
   tc-appnav .tc-ind { transition: none; }
   ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+}
+
+/* Narrow screens (bar variant only — TeleDesign's variant="switch" is unaffected):
+   safe-area padding, the switch collapses to icons (labels stay for screen readers),
+   and every target is ≥ 44 px on touch. */
+tc-appnav:is([variant="bar"], :not([variant])) {
+  padding-left: max(12px, env(safe-area-inset-left, 0px)); padding-right: max(10px, env(safe-area-inset-right, 0px));
+  padding-top: env(safe-area-inset-top, 0px); height: calc(var(--topbar-h, 46px) + env(safe-area-inset-top, 0px));
+}
+@media (max-width: 900px) {
+  tc-appnav:is([variant="bar"], :not([variant])) { gap: 6px; padding-left: max(8px, env(safe-area-inset-left, 0px)); }
+  tc-appnav:is([variant="bar"], :not([variant])) .tc-brand { font-size: 0; gap: 0; padding: 4px; }
+  tc-appnav:is([variant="bar"], :not([variant])) .tc-brand .tc-mark { width: 24px; height: 24px; }
+  tc-appnav:is([variant="bar"], :not([variant])) .tc-actions { gap: 2px; }
+  tc-appnav:is([variant="bar"], :not([variant])) .tc-actions .conn { font-size: 0; gap: 0; padding: 0 4px; }
+  tc-appnav:is([variant="bar"], :not([variant])) .tc-actions .divider-v { display: none; }
+}
+@media (max-width: 600px) {
+  tc-appnav:is([variant="bar"], :not([variant])) { --topbar-h: 52px; }
+  tc-appnav:is([variant="bar"], :not([variant])) .tc-app { padding: 0 12px; }
+  tc-appnav:is([variant="bar"], :not([variant])) .tc-app .tc-ic { width: 18px; height: 18px; }
+  tc-appnav:is([variant="bar"], :not([variant])) .tc-lbl {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
+@media (max-width: 380px) {
+  tc-appnav:is([variant="bar"], :not([variant])) .tc-brand { display: none; }
+  tc-appnav:is([variant="bar"], :not([variant])) .tc-app { padding: 0 11px; }
+}
+@media (max-width: 900px) and (pointer: coarse), (max-width: 600px) {
+  tc-appnav:is([variant="bar"], :not([variant])) .tc-app { height: 44px; min-width: 44px; justify-content: center; }
+  tc-appnav:is([variant="bar"], :not([variant])) .tc-brand { min-height: 44px; min-width: 44px; justify-content: center; }
+  tc-appnav:is([variant="bar"], :not([variant])) { --topbar-h: 54px; }
 }

@@ -17,7 +17,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from services.engine.adapters.base import Adapter, Launch, ParseState, tool_event
 from services.engine.types import EngineError, EngineRequest, EngineResult
@@ -74,13 +74,53 @@ def local_model_arg(model: str) -> str:
     return f"gemini-api://local/models/{model}"
 
 
+SKIP_MODES = (None, "", "skip", "bypassPermissions")
+
+
+def permission_args(permission_mode: Optional[str]) -> Tuple[List[str], Optional[str]]:
+    """telecode permission mode → agy flags (agy 1.2.11), plus a warning when
+    the mode had to be approximated.
+
+    Headless agy never waits for a person: a tool that would need approval is
+    auto-denied and the model is told so ("required approval that headless mode
+    cannot prompt for, so they were auto-denied"); settings allow-rules do not
+    apply in ``-p`` runs. So:
+
+    * skip / bypassPermissions / none → ``--dangerously-skip-permissions``
+    * auto / acceptEdits → ``--mode accept-edits``: file edits auto-approved,
+      commands (which would prompt) denied
+    * plan → ``--mode plan``: research and plan, no changes
+    * dontAsk → default mode, no flag: everything that would prompt is denied
+    * ask / manual → ``--mode accept-edits`` + a warning. agy has no
+      permission-prompt tool for a host; its ``PreToolUse`` hooks (``hooks.json``
+      in a customization root, decision allow|deny|ask) are the only hook, and
+      wiring them to telecode's approvals is not done.
+    ``--sandbox`` ("terminal restrictions") is not used: unverified on Windows.
+    """
+    m = permission_mode
+    if m in SKIP_MODES:
+        return ["--dangerously-skip-permissions"], None
+    if m in ("auto", "acceptEdits"):
+        return ["--mode", "accept-edits"], None
+    if m == "plan":
+        return ["--mode", "plan"], None
+    if m == "dontAsk":
+        return [], None
+    if m in ("ask", "manual"):
+        return ["--mode", "accept-edits"], (
+            f"permission mode '{m}': agy cannot ask a person in headless mode — running with "
+            f"--mode accept-edits (edits allowed, commands auto-denied)")
+    return ["--mode", "accept-edits"], (
+        f"permission mode '{m}' has no agy mapping — running with --mode accept-edits")
+
+
 def build_argv(*, work_dir: Path, resume_id: Optional[str], model: Optional[str] = None,
-               add_dirs=()) -> List[str]:
+               add_dirs=(), permission_mode: Optional[str] = None) -> List[str]:
     cmd: List[str] = [
         "agy",
         "--input-format", "stream-json",
         "--output-format", "stream-json",
-        "--dangerously-skip-permissions",
+        *permission_args(permission_mode)[0],
         "--add-dir", str(work_dir),
     ]
     for d in add_dirs or ():
@@ -124,9 +164,14 @@ class AntigravityAdapter(Adapter):
             # agy has no fork: the caller seeds a fresh conversation with a handoff instead.
             logger.info("antigravity: no fork support — starting a fresh conversation")
             resume_id = None
-        argv = build_argv(work_dir=req.cwd, resume_id=resume_id, model=model_arg, add_dirs=req.add_dirs)
+        warning = permission_args(req.permission_mode)[1]
+        if warning:
+            logger.warning(warning)
+        argv = build_argv(work_dir=req.cwd, resume_id=resume_id, model=model_arg, add_dirs=req.add_dirs,
+                          permission_mode=req.permission_mode)
         # agy has no OTel export: own spans only. engine_extras args go before the trailing -p=.
-        return Launch(argv=argv, stdin=stdin_message(req.prompt), env=env, extras_at=len(argv) - 1)
+        return Launch(argv=argv, stdin=stdin_message(req.prompt), env=env,
+                      warnings=[warning] if warning else [], extras_at=len(argv) - 1)
 
     def parse(self, evt: Dict[str, Any], st: ParseState) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
@@ -143,6 +188,13 @@ class AntigravityAdapter(Adapter):
                 params = info.get("parameters")
                 summary = json.dumps(params, ensure_ascii=False)[:300] if params is not None else name
                 out.append(tool_event(name, summary, params))
+            elif step.get("step_type") == "tool" and step.get("state") == "ERROR":
+                # e.g. a headless permission denial (verified on 1.2.11): "permission check failed
+                # for command …: user denied permission to run command".
+                err = ((step.get("tool_info") or {}).get("error") or {}).get("message")
+                if err:
+                    name = step.get("tool_name") or "tool"
+                    out.append({"kind": "warning", "text": f"{name}: {str(err).splitlines()[0][:300]}"})
             elif step.get("step_type") == "agent_response" and step.get("text_delta"):
                 st.text_parts.append(step["text_delta"])
                 out.append({"kind": "delta", "text": step["text_delta"]})
@@ -150,6 +202,13 @@ class AntigravityAdapter(Adapter):
             st.final = evt.get("result") or {}
             st.saw_completion = True
             st.session_id = st.final.get("conversation_id") or st.session_id
+            denied = st.final.get("denied_actions") or []
+            if denied:
+                names = ", ".join(str(d.get("display_name") or d.get("action") or "?")
+                                  for d in denied if isinstance(d, dict))
+                out.append({"kind": "warning", "denied_actions": denied,
+                            "text": f"agy auto-denied {len(denied)} action(s) needing approval in headless "
+                                    f"mode: {names}"})
         return out
 
     def _tokens(self, st: ParseState) -> Dict[str, int]:

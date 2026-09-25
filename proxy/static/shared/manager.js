@@ -40,6 +40,7 @@ function mount(el, ...children) { if (!el) return el; clear(el); appendKids(el, 
 const ICON_PATHS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
+  menu: '<path d="M4 6.5h16M4 12h16M4 17.5h16"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/>',
   file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
   folder: '<path d="M3.5 7a2 2 0 0 1 2-2h3.8l2 2h7.2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>',
@@ -310,12 +311,80 @@ function renderTopbar(host, mode) {
     h("span", { class: "conn", id: "connState", title: "Connection to telecode's proxy" }, h("span", { class: "dot ok" }), "Connected"),
     h("span", { class: "divider-v" }),
     approvalsButton(),
-    btn(null, { icon: "keyboard", kind: "quiet", title: "Keyboard shortcuts  (?)", onClick: () => showShortcuts() }),
+    btn(null, { icon: "keyboard", kind: "quiet", id: "shortcutsBtn", title: "Keyboard shortcuts  (?)", onClick: () => showShortcuts() }),
     h("button", { type: "button", class: "btn btn-icon quiet", id: "themeToggle", onclick: toggleTheme }));
   host.replaceWith(nav);
+  setupRailDrawer(nav);
   applyTheme();
   startApprovalsBadge();
   return nav;
+}
+
+// ── Sidebar drawer (≤ 900 px): the page's .rail becomes an off-canvas panel ──
+// Layout only: a hamburger in the top bar, a backdrop, Esc / backdrop / picking an
+// item closes it, Tab is trapped inside while it is open and the rest is inert.
+const DRAWER_MQ = matchMedia("(max-width: 900px)");
+function setupRailDrawer(nav) {
+  const rail = document.querySelector(".rail");
+  if (!rail || !nav) return;
+  if (!rail.id) rail.id = "sidebar";
+  const burger = h("button", { type: "button", class: "btn btn-icon quiet tc-burger", title: "Menu",
+    "aria-label": "Open " + (rail.getAttribute("aria-label") || "navigation"), "aria-controls": rail.id, "aria-expanded": "false" }, icon("menu"));
+  nav.prepend(burger);
+  const backdrop = h("div", { class: "rail-backdrop", "aria-hidden": "true" });
+  rail.after(backdrop);
+  const closeB = h("button", { type: "button", class: "btn btn-icon quiet", title: "Close", "aria-label": "Close " + (rail.getAttribute("aria-label") || "navigation") }, icon("x"));
+  rail.prepend(h("div", { class: "rail-drawer-head" }, h("span", { class: "grow" }, rail.getAttribute("aria-label") || ""), closeB));
+  const isOpen = () => document.body.classList.contains("drawer-open");
+  const others = () => [nav, document.querySelector(".main")].filter(Boolean);
+  const focusables = () => [...rail.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+    .filter(e => e.getClientRects().length && getComputedStyle(e).visibility !== "hidden");
+  function open() {
+    if (!DRAWER_MQ.matches || isOpen()) return;
+    document.body.classList.add("drawer-open");
+    burger.setAttribute("aria-expanded", "true");
+    rail.setAttribute("role", "dialog"); rail.setAttribute("aria-modal", "true");
+    others().forEach(e => { e.inert = true; });
+    requestAnimationFrame(() => { const f = rail.querySelector("input[type=search]") || focusables()[0]; if (f) f.focus({ preventScroll: true }); });
+  }
+  function close(returnFocus = true) {
+    if (!isOpen()) return;
+    document.body.classList.remove("drawer-open");
+    burger.setAttribute("aria-expanded", "false");
+    rail.removeAttribute("role"); rail.removeAttribute("aria-modal");
+    others().forEach(e => { e.inert = false; });
+    if (returnFocus && DRAWER_MQ.matches) burger.focus({ preventScroll: true });
+  }
+  burger.addEventListener("click", () => (isOpen() ? close() : open()));
+  closeB.addEventListener("click", () => close());
+  backdrop.addEventListener("click", () => close());
+  // Picking something in the drawer navigates — get out of the way.
+  rail.addEventListener("click", (e) => {
+    if (!isOpen() || e.defaultPrevented) return;
+    const it = e.target.closest(".item, .trig-row");
+    if (it && !e.target.closest(".act")) close();
+  });
+  rail.addEventListener("keydown", (e) => {
+    if (!isOpen()) return;
+    if (e.key === "Enter" && e.target.classList && e.target.classList.contains("item")) { setTimeout(() => close(), 0); return; }
+    if (e.key !== "Tab") return;
+    const f = focusables(); if (!f.length) return;
+    const first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && (document.activeElement === first || !rail.contains(document.activeElement))) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+  // Esc closes it (capture, so a search box with text still clears first).
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !isOpen() || document.querySelector("dialog.modal[open]")) return;
+    const t = e.target;
+    if (t && t.matches && t.matches('input[type=search]') && t.value) return;
+    e.preventDefault(); close();
+  }, true);
+  // "/" (filter the sidebar) needs the drawer open before the page's shortcut focuses it.
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "/" && !e.ctrlKey && !e.metaKey && !isTyping(e) && DRAWER_MQ.matches && !document.querySelector("dialog.modal[open]")) open();
+  }, true);
+  DRAWER_MQ.addEventListener?.("change", () => { if (!DRAWER_MQ.matches) close(false); });
 }
 let connOk = true;
 function setConn(ok) {

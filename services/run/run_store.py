@@ -405,7 +405,10 @@ class RunStore:
             if not steps:
                 run["status"] = "completed"
             else:
-                statuses = {s.get("status") for s in steps}
+                # A gate passed over by its on_timeout "skip" policy counts as done.
+                statuses = {"completed" if s.get("status") == "skipped"
+                            and (s.get("gate_decision") or {}).get("status") == "skipped" else s.get("status")
+                            for s in steps}
                 if statuses == {"completed"}:
                     run["status"] = "completed"
                 elif "awaiting_input" in statuses and not run.get("cancel_requested"):

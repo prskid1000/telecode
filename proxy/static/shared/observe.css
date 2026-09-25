@@ -90,3 +90,14 @@
 @keyframes obsPulse { 50% { opacity: .55; } }
 @media (prefers-reduced-motion: reduce) { .obs-gantt .seg.live { animation: none; } }
 @media (max-width: 720px) { .obs-gantt { grid-template-columns: minmax(90px, 34%) 1fr 58px; } }
+/* Phone: the Gantt row splits in two — name + cost on one line, the bar full-width under it */
+@media (max-width: 600px) {
+  .obs-gantt { grid-template-columns: minmax(0, 1fr) auto; grid-auto-flow: row dense; gap: 2px 8px; }
+  .obs-gantt > span:first-child, .obs-gantt > .cost.faint:nth-child(3) { display: none; }
+  .obs-gantt .nm { grid-column: 1; flex-wrap: wrap; row-gap: 3px; margin-top: 4px; }
+  .obs-gantt .cost { grid-column: 2; align-self: end; }
+  .obs-gantt .track, .obs-gantt .axis { grid-column: 1 / -1; }
+  .obs-gantt .axis { font-size: 10px; }
+  .obs-gantt .axis span:nth-child(even) { display: none; }
+  .obs-panel { padding: 10px; }
+}

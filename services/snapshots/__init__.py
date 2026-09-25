@@ -353,6 +353,39 @@ def restore(key: str, work_tree: Path, sha: str, label: Optional[str] = None,
     return {"safety": safety, "restored": done}
 
 
+def export(key: str, sha: str, dest: Path) -> int:
+    """Write snapshot ``sha``'s files into ``dest`` (a new, e.g. empty, folder)
+    via ``git archive`` — the work tree the snapshot was taken from is not
+    touched. Files the snapshot excluded (ignored, over the size cap, nested
+    repos) are not there. Returns the number of files written; raises
+    :class:`SnapshotError`."""
+    import io
+    import tarfile
+    if not exists(key, sha):
+        raise SnapshotError("snapshot not found (pruned or never taken)")
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    with _lock(key):
+        raw = _git(key, None, "archive", "--format=tar", sha, timeout=600).stdout
+    n = 0
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as tf:
+        members = [m for m in tf.getmembers() if m.isfile() or m.isdir()]   # no links / devices
+        try:
+            tf.extractall(dest, members=members, filter="data")               # refuses absolute / ../ paths
+        except TypeError:                                                      # Python without extraction filters
+            root = dest.resolve()
+            safe = [m for m in members if (root / m.name).resolve().is_relative_to(root)]
+            tf.extractall(dest, members=safe)
+        n = sum(1 for m in members if m.isfile())
+    return n
+
+
+def latest(key: str) -> Optional[str]:
+    """The newest snapshot's sha (None if the repo has none)."""
+    entries = log(key, limit=1)
+    return entries[0]["sha"] if entries else None
+
+
 def delete_repo(key: str) -> None:
     with _lock(key):
         shutil.rmtree(git_dir(key), ignore_errors=True)

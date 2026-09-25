@@ -202,7 +202,8 @@ tasks, shared Team · Tasks · Design navbar.
   (`items_from`: `next_steps | items | open_questions | decisions | artifacts`; `items` is a new, always-present handoff field and
   the planner gets `<fanout_instructions>` when the next step reads it), `max_items`, `max_parallel`; each worker is an
   ephemeral copy of the workspace with the previous handoff + `<map_item>`, or (`worker_session: fork`) a fork of the planner's
-  conversation in the planner's workspace (serialised by the staging lock). The step budget is split per worker (seconds per
+  conversation in the worker's own copy of the planner's workspace (see "Deferred items as built" below — forks now run in
+  parallel). The step budget is split per worker (seconds per
   wave). Workers live in `step.workers[]` (own snapshots → `…/diff?worker=n`, artifacts under `artifacts/<step>/w<n>/`); the
   step's handoff merges them and the next phase gets one `<handoff>` per worker; `retry` re-runs only unfinished workers.
   **loop** — the body is an agent attempt (`attempts[].mode = iteration`), then a check: `command` (shell in the workspace,
@@ -243,11 +244,48 @@ tasks, shared Team · Tasks · Design navbar.
   schedule, conditions, webhook URL + token + curl, GitHub URL + secret, history filterable by ok / suppressed / skipped / failed)
   / editor. Task Mode: Triggers tab + By-trigger history; Team Mode: rail Triggers section, trigger page, Triggers cards on jobs
   and agents. All global live updates share one EventSource (`globalFeed`).
-- **Deferred**: `tool` and `memory` approval producers (P4/P5: `--permission-prompt-tool` → `approve_tool`, reflection-job memory
-  diffs); gate timeouts / reminders; edit-then-approve from Telegram; per-trigger connector / MCP scoping; a permission-mode
-  equivalent for Codex / agy (they keep their bypass flags); map over a nested structured field other than the handoff lists;
-  a parallel fork mode for map workers (forks share the planner's cwd, so they serialise); trigger-level budgets beyond
-  `max_cost_usd`; an `attempts` table (still records in the step).
+- **Deferred**: ~~`tool` and `memory` approval producers~~ (done in P4/P5); ~~gate timeouts~~, ~~edit-then-approve from
+  Telegram~~, ~~a parallel fork mode for map workers~~ (done — below); gate *reminders* (a nudge before the deadline);
+  per-trigger connector / MCP scoping; a permission-mode equivalent for Codex / agy (they keep their bypass flags); map over a
+  nested structured field other than the handoff lists; trigger-level budgets beyond `max_cost_usd`; an `attempts` table
+  (still records in the step).
+
+### Deferred P3 items as built (2026-09-25)
+- **Gate timeouts** (`job_manager._normalize_kind`, `executor._open_gate` / `_on_gate_decided`, `services/approvals.py`): gate
+  `timeout_sec` (10 s – 30 d, blank = wait forever) + `on_timeout: reject | approve | skip` (default reject). The approval
+  stores `deadline_at` / `on_timeout` in its payload (no migration; surfaced top-level by the row reader), the step mirrors them.
+  `approvals.expire_due()` flips overdue pending rows atomically with `decided_by = "timeout"` (a reserved name — `decide()`
+  refuses it) and runs the gate handler: reject → run `rejected`; approve → continues (handoff "Approved by timeout."); skip →
+  approval `skipped`, gate step `skipped` + `gate_decision.status = "skipped"`, the next phase gets what the gate was shown and
+  the run can still finish `completed` (`_gate_passed`, `run_store.finalise`). One daemon checker thread (5 s, first pass
+  immediate), started from `reconcile_orphaned_runs()` (startup, when a pending deadline exists) and by `create()` of a row with
+  a deadline — a deadline that passed while telecode was down resolves at the next start. `approval.decided` → SSE + Telegram
+  edit as for any decision. UI: pipeline editor "Timeout (s)" + "When it times out"; the gate card ticks "Decide within 4m 10s —
+  otherwise rejected by timeout"; Telegram shows "⏳ Decide by …".
+- **Edit & approve from Telegram** (`bot/approval_handlers.py`): a third button `apv:e:<id>` on gate + tool approvals. Pressing
+  it (allowlisted users only) posts a `ForceReply(selective=True)` prompt that @-mentions the presser (`tg://user?id=` link — the
+  selective target); a text reply *to that prompt* by that user within 15 min, ≤ 4000 chars (tool: a JSON object) calls the same
+  `approvals.decide(…, "approve", edited_text=…)` as the web path, edits the approval message and confirms. Other users' replies,
+  late replies, over-long or empty text are answered and ignored (the prompt stays usable except when expired); replies to any
+  other message pass through untouched. Handler group -2 (`filters.TEXT & filters.REPLY`), `ApplicationHandlerStop` only for a
+  handled reply. Prompts are in memory — a restart forgets them (press again). Everything HTML-escaped.
+- **Parallel forked map workers** (`services/run/fork_workspace.py`, `executor._run_map_worker`): every fork worker is an
+  ephemeral session `run-<run>-<step>-w<n>` populated from the planner's workspace — a fast copy skipping `.git`, `node_modules`,
+  virtualenvs, caches, `.telecode/`, `session.json` (keeps ignored files like `.env`), or an export of the planner's post-step
+  snapshot (`snapshots.export`, `git archive`) when the workspace has been snapshotted since or the planner's folder is gone.
+  **Claude** keeps sessions per project folder — `<CLAUDE_CONFIG_DIR|~/.claude>/projects/<abs cwd, non-alphanumerics → "-">/
+  <id>.jsonl` (verified against the folders Claude 2.1.282 created) — and `--resume` only looks in the cwd's folder, so the
+  planner's `<id>.jsonl` (+ `<id>/` side folder) is copied into the worker folder's project dir; `--resume <id> --fork-session`
+  then forks there; the copy is removed afterwards. Names over 200 chars (Claude hashes those) fall back instead of guessing.
+  **Codex** rollouts are global (`~/.codex/sessions/YYYY/MM/DD/`, `exec fork <id>` by id; only `--last` filters by cwd), so nothing
+  is staged (not run against a real Codex). **agy**, a cross-engine planner, no planner conversation, a missing session file,
+  or a CLI failure matching "no conversation found" (re-run once) → that worker alone runs fresh with the planner's handoff
+  (always in the worker prompt), logged + `worker.fork_fallback`. A gate between the planner and the map passes the planner on.
+  Workers' changed files are collected as artifacts (`artifacts/<step>/w<n>/`) and nothing merges into the planner workspace
+  except through the reduce step; `max_parallel`, the per-worker budget split and the background pool
+  (`tasks.pools.background_workers`) bound concurrency. Verified with a real 2-worker haiku fork map (opt-in test
+  `TELECODE_REAL_CLAUDE=1`): both workers ran at the same time in separate folders and each wrote the codeword that only the
+  planner's conversation contained.
 
 ### P4 as built (2026-09-25)
 - **Git-versioned `internal/`** (`services/memory/repo.py`): `data/agents/<id>/internal/.git`, separate from every workspace git and
@@ -355,8 +393,12 @@ tasks, shared Team · Tasks · Design navbar.
   row (migration 4). 409 while a task runs there. UI: "Continue on…" on Task sessions and finished run steps.
 - Also: Codex `--add-dir` is passed (exec-only, before `resume`/`fork`; verified on 0.157) — P4's `engine_extras` add_dirs reach it.
   The runner calls `services.memory.engine_extras(agent_id, engine, workspace)` for agent runs (lazy import; failures → none).
-- **Deferred**: Codex / agy permission prompts (they keep their bypass flags); Codex resource attributes and OTLP traces are
-  configured but unverified at runtime (no real Codex run); Claude's beta traces behind `telemetry.cli_traces` (off); tool-span
+- **Follow-up (2026-09-25)**: Codex / agy permission modes are mapped (table in CLAUDE.md "Task engines" → Permission modes;
+  `ask` falls back to acceptEdits + a warning — neither CLI can wait for a person headless). Codex honours
+  `OTEL_RESOURCE_ATTRIBUTES` (verified with a real run: logs + traces carried every `telecode.*` id); its traces are now behind
+  `telemetry.cli_traces` (~2,000 internal spans per tiny run). Codex token/cost log events still unseen (the run's ChatGPT
+  login had expired, so no model turn happened).
+- **Deferred**: a real `ask` for Codex / agy (Codex app-server approvals or hooks, agy `PreToolUse` hooks); Claude's beta traces behind `telemetry.cli_traces` (off); tool-span
   durations are estimated; no per-trigger connector / MCP scoping; `session rotation at thresholds` was already P2.
 
 Compatibility: P3 replaced `/api/routines` with `/api/triggers` and the heartbeat job kind with triggers (single user — the UI moved

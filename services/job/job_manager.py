@@ -118,6 +118,9 @@ CHECK_TYPES = ("command", "grader", "schema")
 MAX_MAP_PARALLEL = 16
 MAX_MAP_ITEMS = 100
 MAX_LOOP_ITERATIONS = 10
+GATE_TIMEOUT_POLICIES = ("reject", "approve", "skip")
+MIN_GATE_TIMEOUT = 10
+MAX_GATE_TIMEOUT = 30 * 24 * 3600
 
 
 def _int_in(value: Any, default: int, lo: int, hi: int, name: str) -> int:
@@ -189,6 +192,14 @@ def _normalize_kind(s: Dict[str, Any]) -> Dict[str, Any]:
         g = s.get("gate") if isinstance(s.get("gate"), dict) else {}
         out["gate"] = {"title": str(g.get("title") or s.get("name") or "Approval").strip()[:200],
                        "instructions": str(g.get("instructions") or "").strip()[:8000]}
+        # Deferred-P3: a gate may time out. timeout_sec blank/0 = wait forever.
+        tmo = g.get("timeout_sec")
+        if tmo not in (None, "", 0, "0"):
+            out["gate"]["timeout_sec"] = _int_in(tmo, 0, MIN_GATE_TIMEOUT, MAX_GATE_TIMEOUT, "gate.timeout_sec")
+            pol = str(g.get("on_timeout") or "reject").strip().lower()
+            if pol not in GATE_TIMEOUT_POLICIES:
+                raise ValueError(f"gate.on_timeout must be one of {GATE_TIMEOUT_POLICIES}, got {pol!r}")
+            out["gate"]["on_timeout"] = pol
     return out
 
 

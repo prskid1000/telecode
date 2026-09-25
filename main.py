@@ -21,7 +21,8 @@ from bot.handlers import (
     handle_forum_topic_closed, normalize_mention,
 )
 from bot.design_handlers import cmd_design, start_design_notifier
-from bot.approval_handlers import CALLBACK_PATTERN as APPROVAL_CB, handle_approval_callback, start_approval_notifier
+from bot.approval_handlers import (CALLBACK_PATTERN as APPROVAL_CB, handle_approval_callback,
+                                   handle_approval_reply, start_approval_notifier)
 from bot.rate import set_session_manager
 from proxy.server import start_proxy_background
 from mcp_server.server import start_mcp_background
@@ -267,6 +268,9 @@ async def _async_main(token: str) -> None:
     app.bot_data["_request_stop"] = request_stop
 
     # Register handlers (active regardless of whether polling is running).
+    # Replies to an approval's "Edit & approve" prompt (ForceReply) — ahead of
+    # everything; a reply that is not to one of those prompts passes through.
+    app.add_handler(MessageHandler(filters.TEXT & filters.REPLY, handle_approval_reply), group=-2)
     app.add_handler(MessageHandler(filters.TEXT, normalize_mention), group=-1)
     app.add_handler(CommandHandler("start",    cmd_start))
     app.add_handler(CommandHandler("help",     cmd_help))
@@ -276,7 +280,7 @@ async def _async_main(token: str) -> None:
     app.add_handler(CommandHandler("key",      cmd_key))
     app.add_handler(CommandHandler("design",   cmd_design))
     start_design_notifier(app)
-    # Approvals inbox buttons (apv:a|r:<id>) — before the catch-all callback handler.
+    # Approvals inbox buttons (apv:a|e|r:<id>) — before the catch-all callback handler.
     app.add_handler(CallbackQueryHandler(handle_approval_callback, pattern=APPROVAL_CB))
     start_approval_notifier(app)
     app.add_handler(CallbackQueryHandler(handle_callback))

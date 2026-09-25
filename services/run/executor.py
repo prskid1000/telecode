@@ -10,11 +10,18 @@ Step kinds (``spec.kind``; map / loop / gate / reduce each own their phase)
   map     fan-out: one worker per item of the previous phase's handoff field
           (``map.items_from``: next_steps | items | open_questions | decisions |
           artifacts), ``map.max_parallel`` at a time, each with an even share of
-          the step budget, each in an ephemeral copy of the workspace — or forked
-          from the planner's conversation (``worker_session: fork``; those share
-          the planner's workspace, so its staging lock runs them one at a time).
-          Workers are ``step.workers[]``; the step's handoff merges theirs, and
-          the next phase gets one ``<handoff>`` per worker.
+          the step budget, each in an ephemeral copy of the workspace — or, with
+          ``worker_session: fork``, in its own copy of the *planner's* post-step
+          workspace with a fork of the planner's conversation staged for that
+          folder (``services.run.fork_workspace``), so forked workers run in
+          parallel too; an engine / worker that cannot fork falls back to a fresh
+          conversation seeded with the planner's handoff (``fork_fallback``).
+          Workers are ``step.workers[]``; the step's handoff merges theirs, the
+          next phase gets one ``<handoff>`` per worker, and nothing a worker does
+          reaches the planner's workspace (only its artifacts / changed files).
+  gate    … may carry ``timeout_sec`` + ``on_timeout`` (reject | approve |
+          skip): the deadline is stored on the approval, and
+          ``services.approvals``' checker resolves it (decided_by ``timeout``).
   loop    evaluator-optimizer: the body runs (an agent attempt), then a check —
           ``command`` (run in the workspace, exit 0 = pass), ``grader`` (another
           agent in a FRESH session, in a copy of the workspace, with a rubric →
@@ -80,6 +87,7 @@ from services import approvals
 from services import snapshots
 from services.agent.agent_manager import get_agent_manager
 from services.run import budget as budget_mod
+from services.run import fork_workspace
 from services.run import handoff as handoff_mod
 from services.run.run_store import TERMINAL_RUN_STATUSES, get_run_store, usage_from_result
 from services.session import session_store
@@ -547,6 +555,13 @@ def reconcile_orphaned_runs() -> int:
         touched += 1
     if touched:
         logger.warning(f"Marked {touched} orphaned run(s) from a previous process as interrupted")
+    # Gate deadlines live in the approvals table: the checker catches up on any
+    # that passed while telecode was down.
+    try:
+        if approvals.has_deadlines():
+            approvals.start_timeout_checker()
+    except Exception:
+        logger.exception("starting the approval timeout checker failed")
     return touched
 
 
@@ -591,7 +606,8 @@ def retry_step(run_id: str, step_id: str, mode: str = "retry",
             if s.get("step_id") == step_id or ph > phase:
                 s.update({"status": "pending", "error": None, "completed_at": None})
                 if _kind(s) == "gate":
-                    s.pop("approval_id", None)
+                    for k in ("approval_id", "gate_decision", "deadline_at", "on_timeout"):
+                        s.pop(k, None)
         r.update({"status": "running", "completed_at": None, "cancel_requested": False,
                   "budget_exhausted": False})
     store.mutate(run_id, reset)
@@ -679,7 +695,7 @@ def _on_gate_decided(ap: Dict[str, Any]) -> None:
     """Approve → the gate completes (edited text = its handoff note) and a new
     driver continues from the next phase. Reject → the run ends ``rejected``."""
     run_id, step_id = ap.get("run_id"), ap.get("step_id")
-    if not run_id or not step_id or ap.get("status") not in ("approved", "rejected"):
+    if not run_id or not step_id or ap.get("status") not in ("approved", "rejected", "skipped"):
         return
     store = get_run_store()
     run = store.get_run(run_id)
@@ -703,6 +719,18 @@ def _on_gate_decided(ap: Dict[str, Any]) -> None:
         store.mutate(run_id, rej)
         store.finalise(run_id)
         _verdict(run_id)
+        return
+    if ap["status"] == "skipped":
+        # on_timeout: skip — the gate is passed over without a decision; the next
+        # phase still gets what the gate was shown (gate_input), but no gate note.
+        store.update_step(run_id, step_id, {
+            "status": "skipped", "completed_at": now, "error": None,
+            "gate_decision": {"status": "skipped", "by": who, "note": note, "at": now}})
+        store.update_run(run_id, {"status": "running", "completed_at": None})
+        try:
+            _launch(run_id, run.get("source") or "user", from_phase=phase + 1, retry=None)
+        except RunBusy:
+            logger.warning(f"run {run_id[:8]}: gate skipped while a driver is active")
         return
     edited = ap.get("edited_text")
     summary = (edited or "").strip() or (f"Approved by {who}" + (f": {note}" if note else "."))
@@ -749,6 +777,13 @@ def _verdict(run_id: str) -> None:
         verdict.apply(run_id)
     except Exception:
         logger.exception(f"run {run_id[:8]}: verdict failed")
+
+
+def _gate_passed(step: Dict[str, Any]) -> bool:
+    """A finished gate phase lets the run go on: approved, or skipped by its
+    on_timeout policy (not a gate skipped because the run halted earlier)."""
+    return step.get("status") == "completed" or (
+        step.get("status") == "skipped" and (step.get("gate_decision") or {}).get("status") == "skipped")
 
 
 def _phase_of(step: Dict[str, Any]) -> int:
@@ -814,7 +849,7 @@ def _run_phased(run_id: str, source: str, driver: _RunDriver, from_phase: int,
                 _open_gate(run_id, pending[0], prev_outputs)
                 return                                  # the driver ends; the run waits for a decision
             prev_outputs = _phase_outputs([by_id[i] for i in phases[p]])
-            if any(by_id[i].get("status") != "completed" for i in phases[p]):
+            if any(not _gate_passed(by_id[i]) for i in phases[p]):
                 halt = True
             continue
         dim = budget_mod.exhausted(run)
@@ -896,6 +931,7 @@ def _open_gate(run_id: str, step_id: str, prev_outputs: List[Dict[str, Any]]) ->
                          + (ho.get("summary") or _cap_head_tail(o.get("text") or "", 4000)))
     ap = approvals.find_pending(run_id, step_id)
     if ap is None:
+        tmo = int(gate.get("timeout_sec") or 0)
         ap = approvals.create(
             "gate", run_id=run_id, step_id=step_id,
             title=gate.get("title") or step.get("name") or "Approval",
@@ -904,10 +940,13 @@ def _open_gate(run_id: str, step_id: str, prev_outputs: List[Dict[str, Any]]) ->
                      "instructions": gate.get("instructions") or "",
                      "previous": [{"name": o.get("name"), "status": o.get("status"),
                                    "summary": ((o.get("handoff") or {}).get("summary") or "")[:4000],
-                                   "verdict": (o.get("handoff") or {}).get("verdict")} for o in passthrough]})
+                                   "verdict": (o.get("handoff") or {}).get("verdict")} for o in passthrough]},
+            deadline_at=approvals.deadline_in(tmo) if tmo > 0 else None,
+            on_timeout=(gate.get("on_timeout") or "reject") if tmo > 0 else None)
     store.update_step(run_id, step_id, {"status": "awaiting_input", "started_at": step.get("started_at") or _now_iso(),
                                         "completed_at": None, "error": None, "approval_id": ap["id"],
-                                        "gate_input": passthrough})
+                                        "gate_input": passthrough, "deadline_at": ap.get("deadline_at"),
+                                        "on_timeout": ap.get("on_timeout")})
     store.update_run(run_id, {"status": "awaiting_input"})
     logger.info(f"run {run_id[:8]}: gate {step_id[:8]} waiting for approval {ap['id'][:8]}")
 
@@ -1289,7 +1328,8 @@ def _execute_map(run_id: str, step_id: str, prev_outputs: List[Dict[str, Any]], 
         store.update_step(run_id, step_id, {"status": "budget_exceeded", "completed_at": _now_iso(),
                                             "error": f"budget_exceeded: no {exhausted_dim} left for the workers"})
         return
-    planner = prev_outputs[0] if len(prev_outputs) == 1 else None
+    agents_prev = [o for o in prev_outputs if o.get("kind") != "gate"]     # a gate in between passes the planner on
+    planner = agents_prev[0] if len(agents_prev) == 1 else None
     with ThreadPoolExecutor(max_workers=par, thread_name_prefix=f"map-{step_id[:6]}") as pool:
         futs = [pool.submit(_run_map_worker, run_id, step_id, w, len(workers), prev_outputs, planner, share,
                             driver, source) for w in todo]
@@ -1316,20 +1356,50 @@ def _run_map_worker(run_id: str, step_id: str, w: Dict[str, Any], total: int, pr
     engine = step.get("engine") or "claude_code"
     mcfg = spec.get("map") or {}
     ctl = {**_base_ctl(run, run_id, prev_outputs), "budget": {k: v for k, v in share.items()} or None}
-    fork = (mcfg.get("worker_session") == "fork" and planner and planner.get("engine") == engine
-            and planner.get("engine_session_id") and planner.get("session_policy") != "ephemeral"
-            and planner.get("session_id") and engine != "antigravity")
-    if fork:
-        sid, ns = planner["session_id"], None
-        session_store.ensure(sid)
-        work_dir = session_store._session_dir(sid)
-        ctl.update({"policy": "fork", "session": "fork", "fork_from": planner["engine_session_id"]})
-    else:
-        sid, work_dir = _ephemeral_session(run_id, step_id, snap.get("workspace_id"), False, suffix=f"-w{n}")
-        ns = EPHEMERAL_NS
-        ctl.update({"policy": "ephemeral", "session": "fresh"})
     if not ctl.get("budget"):
         ctl.pop("budget", None)
+    ns = EPHEMERAL_NS
+    fork_info: Optional[Dict[str, Any]] = None
+    fallback: Optional[str] = None
+    ws_from: Optional[Dict[str, Any]] = None
+    if mcfg.get("worker_session") == "fork":
+        # Its own copy of the planner's workspace + a fork of the planner's
+        # conversation staged for that folder (services/run/fork_workspace.py),
+        # so forked workers run in parallel instead of queueing on one cwd.
+        sid, work_dir = _ephemeral_session(run_id, step_id, None, False, suffix=f"-w{n}")
+        pstep = _find_step(run, planner["step_id"]) if planner else None
+        pdir = None
+        if planner and planner.get("session_id"):
+            pns = (pstep or {}).get("session_namespace") or (EPHEMERAL_NS if planner.get("session_policy")
+                                                               == "ephemeral" else None)
+            pdir = session_store._session_dir(planner["session_id"], namespace=pns)
+        elif snap.get("workspace_id"):
+            pdir = session_store._session_dir(snap["workspace_id"])
+        ws_from = fork_workspace.populate_workspace(
+            work_dir, src_dir=pdir, snapshot_key=(pstep or {}).get("snapshot_key"),
+            snapshot_after=(pstep or {}).get("snapshot_after"))
+        if ws_from["from"] == "none" and snap.get("workspace_id"):
+            ws_from = {"from": "copy", "files": fork_workspace.fast_copy(
+                session_store._session_dir(snap["workspace_id"]), work_dir)}
+        if not planner:
+            fallback = "fork needs exactly one step in the previous phase (the planner)"
+        elif planner.get("engine") != engine:
+            fallback = f"the planner ran on {planner.get('engine')}, the workers on {engine}"
+        else:
+            fork_info = fork_workspace.prepare_fork(engine, planner.get("engine_session_id"), src_cwd=pdir,
+                                                    dst_cwd=work_dir)
+            if not fork_info.get("ok"):
+                fallback = fork_info.get("reason") or "fork not possible"
+        if fallback:
+            logger.info(f"run {run_id[:8]} map worker #{n}: cannot fork ({fallback}) — fresh conversation "
+                        f"seeded with the planner's handoff")
+            ctl.update({"policy": "fresh_handoff", "session": "fresh"})
+        else:
+            ctl.update({"policy": "fork", "session": "fork", "fork_from": planner["engine_session_id"]})
+    else:
+        sid, work_dir = _ephemeral_session(run_id, step_id, snap.get("workspace_id"), False, suffix=f"-w{n}")
+        ctl.update({"policy": "ephemeral", "session": "fresh"})
+    fork = ctl["session"] == "fork"
     key = snapshots.key_for(sid, ns)
     lead = (f'<map_item index="{n}" of="{total}">\n{w["item"]}\n</map_item>\n'
             f"You are worker {n} of {total} of a fan-out step: do this one item only — other workers handle "
@@ -1342,26 +1412,44 @@ def _run_map_worker(run_id: str, step_id: str, w: Dict[str, Any], total: int, pr
         _update_worker(run_id, step_id, n, {"status": "running", "task_id": task_id, "started_at": started,
                                             "session_id": sid, "session_namespace": ns,
                                             "snapshot_key": key if before else None, "snapshot_before": before,
-                                            "fork": bool(fork)})
+                                            "fork": bool(fork), "fork_fallback": fallback,
+                                            **({"workspace_from": ws_from} if ws_from else {})})
 
-    out = _run_unit(run, step, driver=driver, source=source, label=label, sid=sid, ns=ns, work_dir=work_dir,
-                    key=key, snap_meta={"run": run_id, "step": step_id, "worker": n}, prompt=prompt, ctl=ctl,
-                    engine=engine, model=step.get("model"), is_local=bool(step.get("is_local")),
-                    agent_id=step.get("agent_id"), schema=handoff_mod.HANDOFF_SCHEMA,
-                    meta={"worker": n, "session_policy": "fork" if fork else "ephemeral",
-                          **({} if fork else {"ephemeral_session": True})},
-                    on_submitted=submitted)
+    def unit() -> Dict[str, Any]:
+        return _run_unit(run, step, driver=driver, source=source, label=label, sid=sid, ns=ns, work_dir=work_dir,
+                         key=key, snap_meta={"run": run_id, "step": step_id, "worker": n}, prompt=prompt, ctl=ctl,
+                         engine=engine, model=step.get("model"), is_local=bool(step.get("is_local")),
+                         agent_id=step.get("agent_id"), schema=handoff_mod.HANDOFF_SCHEMA,
+                         meta={"worker": n, "session_policy": "fork" if fork else "ephemeral",
+                               "ephemeral_session": True},
+                         on_submitted=submitted)
+
+    try:
+        out = unit()
+        if fork and out["status"] == "failed" and not driver.cancel_event.is_set() \
+                and fork_workspace.missing_session(out.get("error"), out.get("events")):
+            fallback = f"the CLI could not find the planner's conversation to fork: {str(out.get('error'))[:200]}"
+            logger.warning(f"run {run_id[:8]} map worker #{n}: {fallback} — re-running fresh with the handoff")
+            fork = False
+            ctl = {**{k: v for k, v in ctl.items() if k != "fork_from"}, "policy": "fresh_handoff",
+                   "session": "fresh"}
+            usage0 = out["usage"]
+            out = unit()
+            out["usage"] = budget_mod.usage_add(usage0, out["usage"]) if usage0 else out["usage"]
+    finally:
+        fork_workspace.cleanup_fork(fork_info)
     ho = handoff_mod.resolve(out["structured"], out["text"], step_status=out["status"], error=out["error"],
                              work_dir=work_dir)
-    handoff_mod.collect_artifacts(run_id, step_id, work_dir, ho, out["files"], include_changed=not fork,
+    handoff_mod.collect_artifacts(run_id, step_id, work_dir, ho, out["files"], include_changed=True,
                                   dest_root=handoff_mod.artifacts_dir(run_id, step_id) / f"w{n}")
     text = out["text"] or ("" if ho.get("derived") else ho.get("summary") or "")
     _update_worker(run_id, step_id, n, {
         "status": out["status"], "error": out["error"], "completed_at": _now_iso(), "handoff": ho,
         "result_text": text[:RESULT_TEXT_CAP] if text else None, "engine_session_id": out["esid"],
-        "snapshot_after": out["after"], "usage": out["usage"], "files_changed": len(out["files"])},
+        "snapshot_after": out["after"], "usage": out["usage"], "files_changed": len(out["files"]),
+        "fork": bool(fork), "fork_fallback": fallback},
         usage=out["usage"])
-    if not fork and out["status"] == "completed":
+    if out["status"] == "completed":
         try:
             session_store.delete(sid, namespace=EPHEMERAL_NS)
         except Exception as exc:
