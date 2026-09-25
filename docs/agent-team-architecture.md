@@ -1,6 +1,6 @@
 # Task Mode + Team Mode — architecture review and target design
 
-Status: **P0–P3 implemented** (2026-09-25; P0 = commit 231d611, P1 = 303dc51, P2 = 0f447fa). P4–P5 remain proposals. Original proposal date 2026-09-25. Inputs: a read-only audit of `services/{session,task,agent,job,run,heartbeat,routine,skills}` +
+Status: **P0–P5 implemented** (2026-09-25; P0 = 231d611, P1 = 303dc51, P2 = 0f447fa, P3 = c0e1b72, P4+P5 = 650a444). Deferred items are listed in each "as built" section. Original proposal date 2026-09-25. Inputs: a read-only audit of `services/{session,task,agent,job,run,heartbeat,routine,skills}` +
 `proxy/api_*`, and web research on 2025–2026 agent platforms (Anthropic context engineering / Agent SDK / headless docs,
 OpenAI Agents SDK + Codex app-server, Google ADK, LangGraph, Microsoft Agent Framework, Letta, Mem0, CrewAI, Goose, Cline,
 Copilot agent HQ, OpenClaw). Flags quoted below were checked against the installed CLIs (claude 2.1.282, codex-cli 0.157,
