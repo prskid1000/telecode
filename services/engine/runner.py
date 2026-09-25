@@ -16,6 +16,14 @@ be copied across the three CLI handlers and TeleDesign lives here:
    period, then ``TerminateJobObject``/tree-kill
 7. result + usage normalised, ``usage``/``done`` (or ``error``) events
 
+Budgets (P2): ``max_seconds`` is a second wall clock on the same watcher and
+``max_tokens`` is checked on every normalised ``usage`` event (budget tokens =
+input + cache writes + output); either stops the tree the same graceful way
+and raises :class:`EngineBudgetExceeded` ("budget_exceeded: …"). ``max_usd``
+is enforced by Claude itself (``--max-budget-usd``). The final ``usage``
+event is emitted *before* the adapter's ``finish`` so a run that ends in an
+error still reports what it spent.
+
 Cancellation raises :class:`EngineCancelled` ("Task cancelled"), a timeout
 :class:`EngineTimeout` ("timeout"), a CLI failure :class:`EngineError` with
 the CLI's own stderr — the messages the handlers always raised, which
@@ -37,8 +45,8 @@ from services.engine.adapters import get_adapter
 from services.engine.adapters.base import ParseState
 from services.engine.drain import StreamDrain
 from services.engine.spawn import spawn
-from services.engine.types import (EngineCancelled, EngineError, EngineRequest, EngineResult,
-                                   EngineTimeout)
+from services.engine.types import (EngineBudgetExceeded, EngineCancelled, EngineError, EngineRequest,
+                                   EngineResult, EngineTimeout)
 
 logger = logging.getLogger("telecode.services.engine.runner")
 
@@ -56,6 +64,12 @@ def prompt_digest(prompt: str) -> Dict[str, Any]:
         "prompt_sha256": hashlib.sha256(text.encode("utf-8", "replace")).hexdigest(),
         "prompt_truncated": len(text) > PROMPT_HEAD_CHARS,
     }
+
+
+def budget_tokens(tokens: Optional[Dict[str, Any]]) -> int:
+    """input + cache writes + output (cache reads excluded) — see services.run.budget."""
+    t = tokens or {}
+    return int(t.get("input") or 0) + int(t.get("cache_write") or 0) + int(t.get("output") or 0)
 
 
 def _safe(fn, *args) -> None:
@@ -86,7 +100,11 @@ def run_engine(req: EngineRequest) -> EngineResult:
     emit({"kind": "start", "engine": req.engine, "session_id": req.session_id, "cwd": str(req.cwd),
           **prompt_digest(req.prompt), "resumed": bool(req.resume_id),
           adapter.resume_start_key: req.resume_id, "is_local": req.is_local,
-          **({"model": req.model} if req.model else {})})
+          **({"model": req.model} if req.model else {}),
+          **({"fork": True} if req.fork and req.resume_id else {}),
+          **({"budget": {k: v for k, v in (("max_usd", req.max_usd), ("max_tokens", req.max_tokens),
+                                           ("max_seconds", req.max_seconds)) if v}}
+             if (req.max_usd or req.max_tokens or req.max_seconds) else {})})
 
     started = time.monotonic()
     try:
@@ -99,14 +117,15 @@ def run_engine(req: EngineRequest) -> EngineResult:
         raise
 
     stop_lock = threading.Lock()
-    stop: Dict[str, Optional[str]] = {"reason": None}
+    stop: Dict[str, Optional[str]] = {"reason": None, "detail": None}
 
-    def request_stop(reason: str = "cancelled") -> None:
+    def request_stop(reason: str = "cancelled", detail: Optional[str] = None) -> None:
         """Non-blocking: the graceful → kill sequence runs on its own thread."""
         with stop_lock:
             if stop["reason"]:
                 return
             stop["reason"] = reason
+            stop["detail"] = detail
         logger.info(f"{adapter.label}: stopping pid {sp.pid} ({reason})")
         threading.Thread(target=sp.stop, args=(req.kill_grace_sec,), daemon=True,
                          name=f"engine-stop-{sp.pid}").start()
@@ -131,8 +150,12 @@ def run_engine(req: EngineRequest) -> EngineResult:
                         return
                 except Exception:
                     pass
-            if req.timeout_sec and time.monotonic() - started > req.timeout_sec:
+            elapsed = time.monotonic() - started
+            if req.timeout_sec and elapsed > req.timeout_sec:
                 request_stop("timeout")
+                return
+            if req.max_seconds and elapsed > req.max_seconds:
+                request_stop("budget", f"wall clock {elapsed:.0f}s > max_seconds {req.max_seconds:g}")
                 return
 
     threading.Thread(target=watch, daemon=True, name=f"engine-watch-{sp.pid}").start()
@@ -165,6 +188,10 @@ def run_engine(req: EngineRequest) -> EngineResult:
                         tool_n += 1
                         progress(min(0.9, 0.1 + 0.05 * tool_n), f"step {tool_n}: {e.get('tool')}")
                     emit(e)
+                    if e.get("kind") == "usage" and req.max_tokens:
+                        used = budget_tokens(e.get("tokens"))
+                        if used > req.max_tokens:
+                            request_stop("budget", f"tokens {used} > max_tokens {req.max_tokens}")
                 if st.session_id and st.session_id != last_sid:
                     last_sid = st.session_id
                     _safe(req.on_resume_id, st.session_id)
@@ -191,6 +218,10 @@ def run_engine(req: EngineRequest) -> EngineResult:
     if reason == "timeout":
         emit({"kind": "error", "message": f"timeout after {req.timeout_sec}s"})
         raise EngineTimeout()
+    if reason == "budget":
+        exc = EngineBudgetExceeded(stop["detail"] or "")
+        emit({"kind": "error", "message": str(exc), "budget_exceeded": True})
+        raise exc
     if reason:
         emit({"kind": "error", "message": "cancelled"})
         raise EngineCancelled()
@@ -198,15 +229,16 @@ def run_engine(req: EngineRequest) -> EngineResult:
     stderr = drain.text()
     for e in adapter.trailing_events(st):
         emit(e)
-    try:
-        result = adapter.finish(req, st, getattr(proc, "returncode", None), stderr, wall_ms)
-    except EngineError as exc:
-        emit({"kind": "error", "message": str(exc)})
-        raise
-    result.log_path = str(req.log_path) if req.log_path else None
     ue = adapter.usage_event(st)
     if ue:
         emit(ue)
+    try:
+        result = adapter.finish(req, st, getattr(proc, "returncode", None), stderr, wall_ms)
+    except EngineError as exc:
+        emit({"kind": "error", "message": str(exc),
+              **({"budget_exceeded": True} if isinstance(exc, EngineBudgetExceeded) else {})})
+        raise
+    result.log_path = str(req.log_path) if req.log_path else None
     progress(1.0, "done")
     tok = result.tokens or {}
     emit({"kind": "done", "tool_count": len(result.tool_calls), "cost_usd": result.cost_usd,

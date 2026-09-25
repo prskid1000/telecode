@@ -10,7 +10,11 @@
   non-blocking ``stop`` so ``TaskQueue.cancel`` and the timeout watchdog take
   the graceful → tree-kill path;
 * the task's ``timeout_seconds`` is also handed to the runner;
-* after a successful run, one row of session lineage (``sessions_index``).
+* after a successful run, one row of session lineage (``sessions_index``);
+* P2: every observed CLI session id is also kept on the task
+  (``metadata.engine_session_id``) and the latest normalised usage
+  (``metadata.usage_live``), so the run executor can resume or account for an
+  attempt that failed, was cancelled or hit its budget.
 """
 
 from __future__ import annotations
@@ -37,7 +41,8 @@ def task_request(engine: str, *, prompt: str, cwd: Path, sid: Optional[str], mod
                  is_local: bool = False, resume_id: Optional[str] = None,
                  on_resume_id: Optional[Callable[[str], None]] = None, log_path: Optional[Path] = None,
                  last_msg_path: Optional[Path] = None, system_append_file: Optional[Path] = None,
-                 schema: Optional[Dict[str, Any]] = None) -> EngineRequest:
+                 schema: Optional[Dict[str, Any]] = None, fork: bool = False,
+                 budget: Optional[Dict[str, Any]] = None, add_dirs=()) -> EngineRequest:
     from services.task import task_utils
     from services.task.task_manager import get_task_queue
 
@@ -47,6 +52,9 @@ def task_request(engine: str, *, prompt: str, cwd: Path, sid: Optional[str], mod
     task = queue.get_task(task_id) if task_id else None
 
     def on_event(evt: Dict[str, Any]) -> None:
+        if evt.get("kind") == "usage" and task is not None:
+            with queue.lock:
+                task.metadata["usage_live"] = {"tokens": evt.get("tokens") or {}, "cost_usd": evt.get("cost_usd")}
         if evt.get("kind") == "delta":
             if adapter.persist_deltas:
                 task_utils.append_event({**evt, "kind": "narrative_delta"})
@@ -61,11 +69,22 @@ def task_request(engine: str, *, prompt: str, cwd: Path, sid: Optional[str], mod
     def on_exit(pid: int) -> None:
         queue.unregister_pid(task_id, pid)
 
+    def on_resume(esid: str) -> None:
+        if task is not None:
+            with queue.lock:
+                task.metadata["engine_session_id"] = esid
+        if on_resume_id is not None:
+            on_resume_id(esid)
+
+    b = budget or {}
+
     import config as app_config
     return EngineRequest(
         engine=engine, prompt=prompt, cwd=Path(cwd), model=model, is_local=bool(is_local),
-        resume_id=resume_id, on_resume_id=on_resume_id, log_path=log_path, last_msg_path=last_msg_path,
-        system_append_file=system_append_file, schema=schema,
+        resume_id=resume_id, on_resume_id=on_resume, log_path=log_path, last_msg_path=last_msg_path,
+        system_append_file=system_append_file, schema=schema, fork=bool(fork and resume_id),
+        max_usd=b.get("max_usd"), max_tokens=b.get("max_tokens"), max_seconds=b.get("max_seconds"),
+        add_dirs=[Path(d) for d in add_dirs or ()],
         timeout_sec=(task.timeout_seconds if task else None),
         on_event=on_event, on_progress=lambda p, m: task_utils.update_progress(p, m),
         cancel_check=task_utils.is_cancelled, on_spawn=on_spawn, on_exit=on_exit,
@@ -86,8 +105,11 @@ def _lineage_kind(md: Dict[str, Any]) -> str:
 
 
 def run_in_task(req: EngineRequest, *, sid: Optional[str], ns: Optional[str],
-                agent_id: Optional[str] = None) -> Dict[str, Any]:
-    """Run the engine and return the handler result dict (shape unchanged)."""
+                agent_id: Optional[str] = None, lineage: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Run the engine and return the handler result dict (shape unchanged).
+
+    ``lineage`` (optional): {lineage, policy, forked_from_session, rotated_from}
+    for the sessions_index row."""
     from services.engine.runner import run_engine
     from services.task import task_utils
     from services.task.task_manager import get_task_queue
@@ -102,7 +124,7 @@ def run_in_task(req: EngineRequest, *, sid: Optional[str], ns: Optional[str],
             namespace=ns, workspace_id=sid, agent_id=agent_id, engine=req.engine, is_local=req.is_local,
             engine_session_id=result.engine_session_id, kind=_lineage_kind(md),
             created_by=str(md.get("source") or "user"), task_id=tid, tokens=result.tokens,
-            cost_usd=result.cost_usd)
+            cost_usd=result.cost_usd, **(lineage or {}))
     except Exception:
         logger.exception("session lineage write failed")
     return result.to_dict(sid, with_schema=bool(req.schema))

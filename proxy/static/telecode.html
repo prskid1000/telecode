@@ -539,7 +539,9 @@ async function renderWorkspaceViewer(id) {
             : emptyState("workflow", "No jobs use this workspace", null, btn("New job", { icon: "plus", size: "sm", kind: "ghost", onClick: () => createJobPrompt(id) }), true))),
       card(`Files`, "folder", { hint: `${files.length}`, flush: true,
           actions: btn("Download all", { icon: "download", kind: "ghost", size: "sm", onClick: () => downloadAllFiles("ws", id) }) },
-        fileRows("ws", id, files, { emptyText: "No files in this workspace" })));
+        fileRows("ws", id, files, { emptyText: "No files in this workspace" })),
+      card("Snapshots", "history", { flush: true, hint: "before / after every step" }, h("div", { id: "ws-snapshots" })));
+    renderSnapshotTimeline($("ws-snapshots"), { sid: id, ns: ws.namespace || null, onRestored: () => renderWorkspaceViewer(id) });
   } catch (e) { errorView(e.message, () => renderWorkspaceViewer(id)); }
 }
 
@@ -747,7 +749,7 @@ function renderPipelineSteps(isHb) {
     if (gi > 0) {
       const feeds = g.items.some(({ step }) => step.depends_on_text);
       nodes.push(h("div", { class: "connector" }, h("span", { class: feeds ? "feeds" : "" }, icon("arrowDown"),
-        feeds ? `previous reply → <previous_output${groups[gi - 1].items.length > 1 ? "s" : ""}>` : "then")));
+        feeds ? `previous handoff${groups[gi - 1].items.length > 1 ? "s" : ""} → <handoff>` : "then")));
     }
     const parallel = g.items.length > 1 || mode === "parallel";
     const laneTools = [];
@@ -764,7 +766,7 @@ function renderPipelineSteps(isHb) {
         if (mode === "sequential" && idx < steps.length - 1) ctl.push(btn(null, { icon: "chevronDown", kind: "quiet", size: "sm", title: "Move down", onClick: () => movePipelineStep(idx, 1) }));
         if (mode === "custom" || mode !== "single" || steps.length > 1) ctl.push(btn(null, { icon: "trash", kind: "quiet", size: "sm", title: "Remove step", onClick: () => removePipelineStep(idx) }));
       }
-      return renderStepCard(step, idx, { isHb, showFeed, controls: ctl, label: `step ${idx + 1}` });
+      return renderStepCard(step, idx, { isHb, showFeed, controls: ctl, label: `step ${idx + 1}`, parallel });
     });
     nodes.push(h("div", { class: "lane" + (parallel ? " parallel" : "") },
       h("div", { class: "lane-head" }, h("span", { class: "lbl" }, h("span", { class: "num" }, gi + 1), `Phase ${gi + 1}`),
@@ -785,7 +787,7 @@ function renderStepCard(s, idx, o) {
     oninput: (e) => { updatePipelineStep(idx, "prompt_override", e.target.value); markJobDirty(); } }, s.prompt_override || "");
   const feed = o.showFeed ? h("label", { class: "check" }, h("input", { type: "checkbox", checked: !!s.depends_on_text, disabled: o.isHb || null,
     onchange: (e) => { updatePipelineStep(idx, "depends_on_text", e.target.checked); markJobDirty(); renderPipelineSteps(o.isHb); } }),
-    h("span", null, "Feed previous phase's reply as ", h("code", null, "<previous_output>"))) : null;
+    h("span", null, "Give it the previous phase's ", h("code", null, "<handoff>"))) : null;
   const eng = teamEngine({ engine: s.engine || "", model: s.model || "", local: !!s.is_local, inherit: true, disabled: o.isHb,
     onChange: (v) => {
       const st = state.pipelineDraft.steps[idx]; if (!st) return;
@@ -795,12 +797,27 @@ function renderStepCard(s, idx, o) {
       markJobDirty();
       const tag = eng.el.closest(".step") && eng.el.closest(".step").querySelector(".eng-tag"); if (tag) tag.textContent = engTagText(st);
     } });
+  const pol = policySelect(s.session_policy || "", { disabled: o.isHb || o.parallel });
+  const polHint = h("span", { class: "field-hint" }, o.parallel ? "Parallel phase — every step runs in its own ephemeral copy of the workspace." : POLICY_HINTS[s.session_policy || ""]);
+  pol.addEventListener("change", () => { updatePipelineStep(idx, "session_policy", pol.value); polHint.textContent = POLICY_HINTS[pol.value]; markJobDirty(); });
+  const bud = budgetFields(s.budget, { placeholder: "share", disabled: o.isHb, onChange: (v) => { updatePipelineStep(idx, "budget", v); markJobDirty(); } });
+  const retries = h("input", { class: "input", type: "number", min: "0", max: "5", value: s.auto_retry || 0, disabled: o.isHb || null,
+    oninput: (e) => { const n = Math.max(0, Math.min(5, parseInt(e.target.value, 10) || 0)); updatePipelineStep(idx, "auto_retry", n); markJobDirty(); } });
+  const advN = [s.session_policy, Object.keys(s.budget || {}).length, s.auto_retry].filter(Boolean).length;
+  const adv = h("details", { class: "adv" },
+    h("summary", null, icon("chevronRight"), "Session, budget, retries", advN ? h("span", { class: "count accent" }, advN) : null),
+    h("div", { style: { paddingTop: "10px" } },
+      h("div", { class: "field-row" },
+        h("label", { class: "field" }, h("span", { class: "field-label" }, "Session policy"), pol, polHint),
+        h("label", { class: "field", style: { maxWidth: "150px" } }, h("span", { class: "field-label" }, "Auto-retry"), retries,
+          h("span", { class: "field-hint" }, "transient failures, 0–5"))),
+      h("div", { class: "field" }, h("span", { class: "field-label" }, "Step budget", h("span", { class: "faint" }, "blank = an even share of the run budget")), bud.el)));
   return h("div", { class: "step" },
     h("div", { class: "step-head" }, icon("agent"), h("span", { class: "t" }, o.label + (s.name ? " — " + s.name : "")), h("span", { class: "eng-tag faint" }, engTagText(s)), o.controls),
     h("div", { class: "field-row" }, field("Agent", agentSel), field("Step name", nameIn, null, { extra: h("span", { class: "faint" }, "optional") })),
     h("div", { class: "field" }, h("span", { class: "field-label" }, "Engine", h("span", { class: "faint" }, "override — “Run default” inherits")), eng.el),
     field("Prompt override", promptIn, null, { extra: h("span", { class: "faint" }, "optional") }),
-    feed);
+    feed, adv);
 }
 function engTagText(st) { return st && st.engine ? `${engineLabel(st.engine)}${st.model ? " · " + st.model : ""}${st.is_local ? " · local" : ""}` : ""; }
 function updatePipelineStep(idx, fieldName, value) {
@@ -903,6 +920,8 @@ async function renderJobViewer(id) {
     const he = job.heartbeat_entry || {};
 
     const titleIn = h("input", { class: "input", id: "job-title", value: job.title || "", readonly: isHb || null, oninput: () => markJobDirty() });
+    const jobBudget = budgetFields(job.budget, { disabled: isHb, onChange: () => markJobDirty() });
+    state.jobBudget = jobBudget;
     const promptIn = h("textarea", { class: "input code", id: "job-prompt", rows: "8", readonly: isHb || null, oninput: () => markJobDirty(),
       placeholder: "What should the agents do? Each step gets this unless it has a prompt override." }, job.task_description || "");
     const upload = h("input", { type: "file", id: "job-file-upload", multiple: true, style: { display: "none" }, onchange: () => uploadJobFiles(id) });
@@ -937,7 +956,9 @@ async function renderJobViewer(id) {
           h("div", { class: "field-row" },
             field("Job title", titleIn, null, { req: !isHb }),
             field("Linked workspace", h("input", { class: "input", readonly: true, value: ws ? wsName(ws) : (isHb ? (he.workspace || "ephemeral") : "Missing Workspace") }), isHb ? null : "Set when the job was created.")),
-          field(isHb ? "Heartbeat prompt" : "Job prompt", promptIn, isHb ? "Read-only — edit via HEARTBEAT.md." : "The execution plan. Ctrl+Enter saves."))),
+          field(isHb ? "Heartbeat prompt" : "Job prompt", promptIn, isHb ? "Read-only — edit via HEARTBEAT.md." : "The execution plan. Ctrl+Enter saves."),
+          h("div", { class: "field", id: "job-budget-field" }, h("span", { class: "field-label" }, "Run budget",
+            h("span", { class: "faint" }, "split evenly across the steps; blank = no cap")), jobBudget.el))),
       card("Pipeline", "workflow", { hint: isHb ? "read-only — edit via HEARTBEAT.md" : "how agents are chained" },
         h("div", { id: "pipeline-mode", class: "mode-pick", role: "group", "aria-label": "Pipeline mode" }),
         h("div", { style: { height: "14px" } }),
@@ -1115,6 +1136,7 @@ async function updateJob(id, opts = {}) {
   }
   const payload = { title, task_description };
   if (state.pipelineDraft) payload.pipeline = state.pipelineDraft;
+  if (state.jobBudget && !(job && job.kind === "heartbeat")) payload.budget = state.jobBudget.get();
   try {
     await api(`/api/jobs/${id}`, jsonOpts("PUT", payload));
     state.jobDirty = false;
@@ -1220,18 +1242,21 @@ function openRunModal(jobId) {
   const steps = ((state.activeType === "job" && state.activeId === jobId) ? state.pipelineDraft : ((job && job.pipeline) || {})).steps || [];
   const overridden = steps.filter(st => st.engine).length;
   const eng = teamEngine({ ids: { engine: "run-type", model: "run-model", local: "run-local" }, engine: "claude_code" });
+  const runBud = budgetFields({}, { placeholder: "job budget" });
   modal({ title: "Run job", subtitle: job ? job.title : null, width: "560px",
     body: h("div", null,
       h("div", { class: "field" }, h("span", { class: "field-label" }, "Engine"), eng.el,
         h("span", { class: "field-hint" }, "The run default. ", overridden ? `${overridden} step${overridden === 1 ? " has its" : "s have their"} own override and keep${overridden === 1 ? "s" : ""} it. ` : "", "Model blank = the engine's default.")),
+      h("div", { class: "field" }, h("span", { class: "field-label" }, "Budget for this run", h("span", { class: "faint" }, "blank = the job's budget")), runBud.el),
       h("div", { class: "info-box" }, icon("info"), h("span", null, `Saves the job first, then runs ${steps.length} step${steps.length === 1 ? "" : "s"} (${(state.pipelineDraft || {}).mode || "single"}).`))),
-    actions: [{ label: "Cancel", kind: "ghost" }, { label: "Start run", kind: "primary", icon: "play", id: "modal-confirm", onClick: () => { runJob(jobId, eng.get()); } }] });
+    actions: [{ label: "Cancel", kind: "ghost" }, { label: "Start run", kind: "primary", icon: "play", id: "modal-confirm", onClick: () => { runJob(jobId, { ...eng.get(), budget: runBud.get() }); } }] });
 }
 async function runJob(jobId, choice) {
   choice = choice || { engine: "claude_code", model: "", is_local: false };
   const isLocal = !!choice.is_local;
   const runBody = { is_local: isLocal, source: "user", engine: choice.engine || "claude_code" };
   if (choice.model) runBody.model = choice.model;
+  if (choice.budget && Object.keys(choice.budget).length) runBody.budget = choice.budget;
   // Auto-save the job (title, prompt, pipeline) before running
   if (state.activeType === "job" && state.activeId === jobId) {
     let ok = true;
@@ -1284,7 +1309,7 @@ function renderRunMonitor(run, stepTasks) {
   const isActive = !TERMINAL_RUN.includes(run.status);
   if (area._runId !== run.run_id || !area.querySelector(".monitor")) {
     area._runId = run.run_id; area._steps = {};
-    mount(area, h("div", { class: "monitor" }, h("div", { class: "mon-head", id: "mon-head" }), h("div", { class: "bar", id: "mon-bar" }, h("i")), h("div", { class: "col", id: "mon-steps", style: { gap: "10px" } })));
+    mount(area, h("div", { class: "monitor" }, h("div", { class: "mon-head", id: "mon-head" }), h("div", { class: "bar", id: "mon-bar" }, h("i")), h("div", { id: "mon-budget" }), h("div", { class: "col", id: "mon-steps", style: { gap: "10px" } })));
   }
   const done = run.steps.filter(s => ["completed", "failed", "cancelled", "skipped"].includes(s.status)).length;
   const dur = durationBetween(run.started_at, run.completed_at);
@@ -1293,6 +1318,8 @@ function renderRunMonitor(run, stepTasks) {
     h("span", { class: "faint", style: { fontSize: "12px" } }, `${done}/${run.steps.length} steps · started ${relTime(run.started_at)}${dur != null ? " · " + fmtMs(dur) : ""}`),
     h("span", { class: "grow" }),
     isActive ? btn("Cancel run", { icon: "stop", kind: "danger", size: "sm", onClick: () => cancelActiveRun() }) : null);
+  const bsig = JSON.stringify([run.budget, run.spent]);
+  if ($("mon-budget")._sig !== bsig) { $("mon-budget")._sig = bsig; mount($("mon-budget"), budgetMeter(run.budget, run.spent)); }
   const bar = $("mon-bar"); bar.className = "bar" + (run.status === "completed" ? " ok" : ["failed", "cancelled"].includes(run.status) ? " err" : "");
   bar.firstChild.style.width = (run.steps.length ? Math.round(100 * done / run.steps.length) : 0) + "%";
   const host = $("mon-steps");
@@ -1307,10 +1334,10 @@ function renderRunMonitor(run, stepTasks) {
       blk.root.append(blk.head, h("div", { class: "sb-body" }, blk.prog, blk.stream, blk.result));
       area._steps[s.step_id] = blk; host.appendChild(blk.root);
     }
-    renderStepBlock(blk, s, stepTasks[i], i, run.steps.length);
+    renderStepBlock(blk, s, stepTasks[i], i, run.steps.length, run, isActive);
   });
 }
-function renderStepBlock(blk, step, task, i, n) {
+function renderStepBlock(blk, step, task, i, n, run, runActive) {
   const t = task || {};
   // The task queue is in-memory: after a proxy restart a finished step's task is
   // gone, so fall back to what the run record kept (status + result_preview).
@@ -1327,20 +1354,67 @@ function renderStepBlock(blk, step, task, i, n) {
     t.result && r.cost_usd != null ? h("span", { class: "faint mono" }, fmtCost(r.cost_usd)) : null,
     t.result && r.tokens ? h("span", { class: "faint mono" }, `${fmtTokens(r.tokens.input)} in · ${fmtTokens(r.tokens.output)} out`) : null,
     dur != null && step.started_at ? h("span", { class: "faint mono" }, fmtMs(dur)) : null,
+    step.session_policy ? h("span", { class: "pill", title: POLICY_HINTS[step.session_policy] || "" }, step.session_policy.replace("_", " + ")) : null,
+    (step.attempts || []).length > 1 ? h("span", { class: "pill warn", title: (step.attempts || []).map(a => `#${a.n} ${a.mode}: ${a.status}`).join("\n") }, `${step.attempts.length} attempts`) : null,
     step.task_id ? idChip(step.task_id, 6, "Task " + step.task_id) : null);
   mount(blk.prog, h("div", { class: "bar" + (step.status === "completed" ? " ok" : step.status === "failed" ? " err" : "") }, h("i", { style: { width: pct + "%" } })),
     h("span", null, `${progressMsg} · ${pct}%`));
   blk.stream.style.display = gone ? "none" : "";
   if (!gone) updateStream(blk.stream, evList, { key: step.step_id, limit: 100, status: step.status, emptyText: step.status === "pending" ? "Waiting for the previous phase…" : "Waiting for events..." });
-  const rsig = JSON.stringify([t.result || null, step.error || null, step.status]).length + ":" + step.status;
+  const rsig = JSON.stringify([t.result || null, step.error || null, step.status, step.handoff || null, step.attempts || [], runActive, step.reverted || null]);
   if (blk.result._sig !== rsig) {
     blk.result._sig = rsig;
     const parts = [];
+    const acts = stepActions(run, step, runActive);
+    if (acts) parts.push(acts);
+    if (step.handoff) parts.push(renderHandoffCard(step.handoff, { artifactUrl: (p) => `/api/runs/${encodeURIComponent(run.run_id)}/steps/${encodeURIComponent(step.step_id)}/artifacts/${p.split("/").map(encodeURIComponent).join("/")}` }));
     if (t.result) parts.push(renderResultBlock(t.result, { title: "Agent reply", fallback: step.status === "completed" ? "Step finished without a final text response." : "" }));
     else if (gone && step.result_preview) parts.push(renderResultBlock(step.result_preview, { title: "Agent reply (preview)" }));
     if (step.error) parts.push(renderErrorBlock(step.error, "Step error"));
     mount(blk.result, parts);
   }
+}
+// Retry / Retry clean / Diff / Revert for a finished step.
+function stepActions(run, step, runActive) {
+  const st = step.status;
+  const last = (step.attempts || []).slice(-1)[0] || {};
+  const failedish = ["failed", "cancelled", "interrupted", "budget_exceeded"].includes(st);
+  const out = [];
+  if (!runActive && failedish) out.push(btn("Retry", { icon: "refresh", kind: "primary", size: "sm", title: last.engine_session_id ? "Resume the same CLI conversation: continue from where it stopped" : "Run the step again (no conversation to resume — starts fresh)", onClick: () => retryStep(run, step, "retry") }));
+  if (!runActive && (failedish || st === "completed")) out.push(btn("Retry clean", { icon: "history", kind: "ghost", size: "sm", title: "Restore the pre-step snapshot, then run the step in a fresh conversation (downstream phases re-run)", onClick: () => retryStep(run, step, "retry_clean") }));
+  if (last.snapshot_before && last.snapshot_after) out.push(btn("Diff", { icon: "code", kind: "ghost", size: "sm", title: "What this attempt changed in its workspace", onClick: () => openStepDiff(run, step) }));
+  if (!runActive && last.snapshot_before && step.session_policy !== "ephemeral" && st !== "pending" && st !== "running") out.push(btn("Revert", { icon: "trash", kind: "danger", size: "sm", title: "Restore the job workspace to its state before this step", onClick: () => revertStep(run, step) }));
+  if (!out.length && !step.budget && !step.reverted) return null;
+  const b = step.budget || {};
+  const caps = [b.max_usd != null ? fmtCost(b.max_usd) : null, b.max_tokens != null ? fmtTokens(b.max_tokens) + " tok" : null, b.max_seconds != null ? fmtMs(b.max_seconds * 1000) : null].filter(Boolean);
+  return h("div", { class: "step-acts" }, out, h("span", { class: "grow" }),
+    step.reverted ? h("span", { class: "pill violet", title: fmtDateTime(step.reverted.at) }, "reverted " + relTime(step.reverted.at)) : null,
+    caps.length ? h("span", { class: "pill", title: "This attempt's budget (" + Object.entries(b.source || {}).map(([k, v]) => `${k}: ${v}`).join(", ") + ")" }, icon("coins"), "budget " + caps.join(" · ")) : null);
+}
+async function retryStep(run, step, mode) {
+  const clean = mode === "retry_clean";
+  if (!(await confirmDialog(clean ? "Retry clean?" : "Retry step?", clean
+    ? "The workspace goes back to its snapshot from before this step, the step runs in a fresh conversation, and every later phase runs again."
+    : "The step resumes its CLI conversation (“continue from where you stopped”); later phases run again after it succeeds.", { confirm: clean ? "Retry clean" : "Retry" }))) return;
+  try {
+    await api(`/api/runs/${encodeURIComponent(run.run_id)}/steps/${encodeURIComponent(step.step_id)}/retry`, jsonOpts("POST", { mode }));
+    toast(clean ? "Retrying clean…" : "Retrying…");
+    state.watchedLive = true; startExecTimer(state.activeId); pollRun(state.activeId);
+  } catch (e) { showToast(e.message, true); }
+}
+function openStepDiff(run, step) {
+  const base = `/api/runs/${encodeURIComponent(run.run_id)}/steps/${encodeURIComponent(step.step_id)}/diff`;
+  const n = (step.attempts || []).length;
+  openDiffModal({ title: "Step diff", subtitle: `${step.name || step.agent_name || "step"} · attempt ${n} · before → after`,
+    load: (path) => api(base + (path ? "?path=" + encodeURIComponent(path) : "")) });
+}
+async function revertStep(run, step) {
+  if (!(await confirmDialog("Revert this step?", h("p", { class: "muted" }, "The job workspace's tracked files go back to what they were before ",
+    h("b", null, step.name || step.agent_name || "this step"), " ran. The current state is snapshotted first (see the workspace's snapshot timeline), so this can be undone."), { confirm: "Revert", danger: true }))) return;
+  try {
+    await api(`/api/runs/${encodeURIComponent(run.run_id)}/steps/${encodeURIComponent(step.step_id)}/revert`, jsonOpts("POST", {}));
+    showToast("Workspace reverted"); pollRun(state.activeId);
+  } catch (e) { showToast(e.message, true); }
 }
 async function cancelActiveRun() {
   if (!state.activeRunId) return;

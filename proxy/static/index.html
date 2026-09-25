@@ -128,6 +128,11 @@
               <div class="sect-h"><h3><span class="ti" data-ic="file"></span>Session files <span class="hint" id="fileCount"></span></h3><span id="downloadAllHost"></span></div>
               <div id="fileList"></div>
             </div>
+
+            <div class="sect">
+              <div class="sect-h"><h3><span class="ti" data-ic="history"></span>Snapshots <span class="hint">shadow git of the session folder</span></h3></div>
+              <div id="snapList" class="filelist"></div>
+            </div>
           </div><!-- /tabSession -->
 
           <div id="tabSkills" class="pane-scroll" style="display:none">
@@ -313,9 +318,15 @@ $("downloadAll").onclick = async () => {
   }
 };
 
+function refreshSnapshots() {
+  const sid = $("sid").value.trim();
+  if (!sid) { mount($("snapList"), emptyState("history", "No session yet", "Snapshots of the session folder appear here once a pipeline step or Snapshot now records one.", null, true)); return; }
+  renderSnapshotTimeline($("snapList"), { sid, ns: $("ns").value.trim() || null, onRestored: () => refreshFiles() });
+}
 async function refreshSession() {
   const sid = $("sid").value.trim();
   const b = $("sessionBadge");
+  refreshSnapshots();
   if (!sid) { mount(b, h("span", null, "No session yet — one is created when you upload or submit.")); refreshFiles(); return; }
   try {
     const r = await api(withNs(`/api/sessions/${encodeURIComponent(sid)}`));

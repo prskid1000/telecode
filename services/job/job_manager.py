@@ -23,6 +23,10 @@ def _now_iso() -> str:
 
 
 VALID_PIPELINE_MODES = ("single", "sequential", "parallel", "custom")
+# Per-step session policy (P2). "" = the default for the step's position:
+# resume for a single-step phase (the job workspace), ephemeral in a parallel phase.
+SESSION_POLICIES = ("resume", "fork", "fresh", "fresh_handoff", "ephemeral")
+MAX_AUTO_RETRY = 5
 
 
 def _normalize_pipeline(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -58,6 +62,9 @@ def _normalize_pipeline(data: Dict[str, Any]) -> Dict[str, Any]:
             "engine": _normalize_step_engine(s.get("engine")),
             "model": (s.get("model") or "").strip() if isinstance(s.get("model"), str) else "",
             "is_local": _normalize_tristate(s.get("is_local")),
+            "session_policy": _normalize_policy(s.get("session_policy")),
+            "budget": _normalize_budget(s.get("budget")),
+            "auto_retry": _normalize_auto_retry(s.get("auto_retry")),
         }
         if not step["agent_id"]:
             continue  # drop malformed steps
@@ -104,6 +111,30 @@ def _normalize_step_engine(engine: Any) -> str:
     if e and e not in supported_engines():
         raise ValueError(f"step engine must be one of {supported_engines()} or blank, got {engine!r}")
     return e
+
+
+def _normalize_policy(value: Any) -> str:
+    """'' = default for the step's position; else one of SESSION_POLICIES."""
+    v = str(value or "").strip().lower().replace("+", "_").replace("-", "_")
+    if v and v not in SESSION_POLICIES:
+        raise ValueError(f"session_policy must be one of {SESSION_POLICIES} or blank, got {value!r}")
+    return v
+
+
+def _normalize_budget(value: Any) -> Dict[str, Any]:
+    """{max_usd, max_tokens, max_seconds}; blank / 0 = inherit (unlimited)."""
+    from services.run.budget import normalize
+    return {k: v for k, v in normalize(value).items() if v is not None}
+
+
+def _normalize_auto_retry(value: Any) -> int:
+    try:
+        n = int(value or 0)
+    except (TypeError, ValueError):
+        raise ValueError(f"auto_retry must be an integer 0..{MAX_AUTO_RETRY}, got {value!r}") from None
+    if n < 0 or n > MAX_AUTO_RETRY:
+        raise ValueError(f"auto_retry must be 0..{MAX_AUTO_RETRY}")
+    return n
 
 
 def _normalize_tristate(value: Any) -> Optional[bool]:
@@ -170,6 +201,8 @@ class JobManager:
             "tasks": data.get("tasks", []),
             "task_description": data.get("task_description", ""),
             "pipeline": pipeline,
+            # Run-level budget {max_usd, max_tokens, max_seconds} split across the steps.
+            "budget": _normalize_budget(data.get("budget")),
             "kind": kind,
             "heartbeat_entry": data.get("heartbeat_entry"),  # dict or None; only for kind=="heartbeat"
             "archived": bool(data.get("archived", False)),
@@ -206,6 +239,8 @@ class JobManager:
                 job[key] = data[key]
         if "pipeline" in data:
             job["pipeline"] = _normalize_pipeline(data["pipeline"])
+        if "budget" in data:
+            job["budget"] = _normalize_budget(data["budget"])
 
         job["updated_at"] = _now_iso()
         self._get_job_path(job_id).write_text(json.dumps(job, indent=2), encoding="utf-8")

@@ -116,6 +116,18 @@ MIGRATIONS = [
         value TEXT
     );
     """,
+    # 2 — P2: session policy / fork / rotation lineage, budget tokens, step handoffs
+    """
+    ALTER TABLE sessions_index ADD COLUMN lineage TEXT;
+    ALTER TABLE sessions_index ADD COLUMN policy TEXT;
+    ALTER TABLE sessions_index ADD COLUMN forked_from TEXT;
+    ALTER TABLE sessions_index ADD COLUMN rotated_from TEXT;
+    ALTER TABLE sessions_index ADD COLUMN cumulative_tokens INTEGER DEFAULT 0;
+    UPDATE sessions_index SET lineage = CASE WHEN parent_id IS NULL THEN 'fresh' ELSE 'resume' END,
+                              cumulative_tokens = cumulative_output_tokens;
+    CREATE INDEX idx_sessions_engine_sid ON sessions_index(engine_session_id);
+    ALTER TABLE run_steps ADD COLUMN handoff TEXT;
+    """,
 ]
 
 

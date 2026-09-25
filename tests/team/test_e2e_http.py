@@ -28,7 +28,14 @@ def _server_up() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(not _server_up(), reason="proxy server at :1235 not reachable")
+# Opt-in: these tests drive the *live* telecode at :1235 and start runs with
+# is_local=True, which makes that telecode load the local llama model. A plain
+# `pytest` must never do that, so they only run with TELECODE_E2E_HTTP=1.
+import os  # noqa: E402
+
+pytestmark = pytest.mark.skipif(
+    os.environ.get("TELECODE_E2E_HTTP") != "1" or not _server_up(),
+    reason="live-server e2e: set TELECODE_E2E_HTTP=1 with a proxy at :1235 (starts local-mode runs)")
 
 
 def req(method, path, body=None, timeout=30):

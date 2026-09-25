@@ -1,6 +1,6 @@
 # Task Mode + Team Mode — architecture review and target design
 
-Status: **P0 and P1 implemented** (2026-09-25; P0 = commit 231d611). P2–P5 remain proposals. Original proposal date 2026-09-25. Inputs: a read-only audit of `services/{session,task,agent,job,run,heartbeat,routine,skills}` +
+Status: **P0, P1 and P2 implemented** (2026-09-25; P0 = commit 231d611, P1 = 303dc51). P3–P5 remain proposals. Original proposal date 2026-09-25. Inputs: a read-only audit of `services/{session,task,agent,job,run,heartbeat,routine,skills}` +
 `proxy/api_*`, and web research on 2025–2026 agent platforms (Anthropic context engineering / Agent SDK / headless docs,
 OpenAI Agents SDK + Codex app-server, Google ADK, LangGraph, Microsoft Agent Framework, Letta, Mem0, CrewAI, Goose, Cline,
 Copilot agent HQ, OpenClaw). Flags quoted below were checked against the installed CLIs (claude 2.1.282, codex-cli 0.157,
@@ -138,7 +138,7 @@ tasks, shared Team · Tasks · Design navbar.
 |---|---|---|
 | **P0 — Fix-first** (S) — **done** | B1 (no absolute TTL on workspaces; expiry archives), B2 (full handoff text, capped at 16 KB, + artifact list), B3 (engine/model/local per step & heartbeat), B4, B5, B9 (path validation), B10 (tree-kill via shared helper), B11 (codex usage), B12 (separate pool for heartbeat/routine), B13 (enforce timeout; lock skip-if-running), cancel no longer overwrites finished tasks | low, contained |
 | **P1 — Engine Runner + Store** (M) — **done** | `services/engine/` used by all modes incl. TeleDesign; SQLite store for tasks/events/runs/steps/attempts/sessions + startup reconcile; SSE for Task/Team; resume scope (workspace, agent, engine); explicit context via `--append-system-prompt-file`; stop clobbering workspace CLAUDE.md | medium — touches every mode; keep the REST surface backward compatible |
-| **P2 — Handoffs, budgets, snapshots** (M) | structured step outputs + artifacts; budgets; retries; shadow-git snapshots + diff/revert; session policy per step (resume/fork/fresh/ephemeral) | medium |
+| **P2 — Handoffs, budgets, snapshots** (M) — **done** | structured step outputs + artifacts; budgets; retries; shadow-git snapshots + diff/revert; session policy per step (resume/fork/fresh/ephemeral) | medium |
 | **P3 — New step kinds + triggers** (M) | map / loop / gate / reduce; approvals inbox + Telegram; unified Triggers (cron/interval/at/webhook/github/file) with heartbeat cost controls and goals | medium |
 | **P4 — Memory** (S–M) | git-versioned `internal/`, index + topic files, pinned constraints, autoMemoryDirectory, portable skills, reflection job with approval | low |
 | **P5 — Observability + safety** (M) | OTLP receiver + GenAI spans + cost dashboards; verdicts/evals; auto permission mode + approve_tool; session rotation at thresholds; cross-engine continue | medium |
@@ -148,6 +148,53 @@ tasks, shared Team · Tasks · Design navbar.
 - `data/telecode.db` (`services/db/`): tasks + capped task events (write-through via one background writer), runs + run_steps (run_store is SQLite-only; one-time import of `data/runs/*.json`, files kept), `sessions_index` lineage. Startup reconcile of tasks. Logs and raw CLI logs unchanged.
 - SSE: `GET /api/tasks/{id}/events` (replay + live), `GET /api/runs/{id}/events`, `GET /api/events?kinds=task,run`; Task and Team UIs subscribe and fall back to polling.
 - Not in P1 (deferred): Attempt as a separate table (a step still maps to one task), `fork|fresh|ephemeral` session policies and rotation (P2), OTEL env on spawn (P5), a REST route for `sessions_index`, agy structured output.
+
+### P2 as built (2026-09-25)
+- **Run → Step → Attempt.** Attempts are records inside the step (`run_steps.data.attempts[]`: mode, task, status, CLI
+  session, snapshots, usage, budget), not a table. Everything a retry needs is copied into the run at creation
+  (`job_snapshot`, per-step `spec`). The executor (`services/run/executor.py`) was rewritten around `_attempt()`.
+- **Handoffs** (`services/run/handoff.py`): shared strict JSON Schema → Claude `--json-schema` / Codex `--output-schema`;
+  agy is told to write `.telecode/handoff.json` (read + removed by the handler). Invalid/missing → derived from the final
+  text (`status/verdict: unknown`, `derived: true`). The next step gets `<handoff>` block(s) (summary, decisions, open
+  questions, next steps, verdict, artifact stored paths + descriptions, files changed) + `--add-dir` of those artifact
+  dirs; the full reply stays on the step (`result_text`, 256 KB) and the task row. Stored per step in the step record and
+  a `run_steps.handoff` column (migration 2). Artifacts are copied to `data/runs/<run>/artifacts/<step>/`; an ephemeral
+  step also keeps every added/modified file there (the "parallel files lost" fix). `GET …/steps/{id}/artifacts/{path}`.
+- **Budgets** (`services/run/budget.py`): `job.budget` / POST body `budget` / `step.budget`, `{max_usd, max_tokens,
+  max_seconds}`; unset dimensions of a step get an even share of what the run has left ($/tokens per remaining step,
+  seconds per remaining phase). Claude `--max-budget-usd` (result `subtype: error_max_budget_usd`); the runner enforces
+  wall clock + tokens from normalised `usage` events (Claude now emits a live `usage` per `message_delta`) and raises
+  `EngineBudgetExceeded` → step `budget_exceeded`. **Budget tokens = input + cache writes + output** (cache reads excluded,
+  or one Claude turn would eat any cap). A phase whose run budget is used up is not started. Run shows `budget` vs `spent`.
+  Codex/agy report no cost, so `max_usd` is not enforceable for them (shown in the UI).
+- **Retries**: `POST /api/runs/{run}/steps/{step}/retry {mode: retry|retry_clean, budget?}` (409 while the run is live);
+  `retry` resumes the attempt's CLI session with "continue from where you stopped" (fresh when it has none),
+  `retry_clean` restores the step's first pre-step snapshot and starts fresh. The step and all later phases reset to
+  pending and a new driver continues. `spec.auto_retry` (0–5) re-runs after transient failures (overloaded / rate limit /
+  5xx / network, matched in the error and the attempt's events) with backoff `tasks.retry_backoff_sec · 2^(n-1)`.
+- **Snapshots** (`services/snapshots/`): parentless commits + `refs/snapshots/<ms>-<seq>` in
+  `data/snapshots/<ns|root>--<sid>.git` (so pruning never rewrites a sha a step points at); `GIT_CONFIG_GLOBAL=devnull`,
+  `CREATE_NO_WINDOW`, excludes `.telecode/`, `session.json`, `node_modules/`, venvs, files > `max_file_mb`; honours the
+  workspace's own `.gitignore`; nested repos become gitlinks. Restore = safety snapshot → `read-tree -m -u` → restore
+  snapshot (undoable). Keep `tasks.snapshots.keep` (200) / `max_repo_mb` (2048). API: step `diff` / `revert`,
+  `GET|POST /api/sessions/{sid}/snapshots`, `…/snapshots/{sha}/diff`, `…/snapshots/{sha}/restore`.
+- **Session policy** per step: `resume | fork | fresh | fresh_handoff | ephemeral`; blank = resume for a single-step phase,
+  **ephemeral forced** for every step of a parallel phase (Claude resumes only in the cwd a session began in). fork =
+  Claude `--resume <id> --fork-session`, Codex `codex exec … fork <id>` (verified on 0.157), agy → fresh + handoff. Fork
+  source = the previous step's session when it is the same engine in the same workspace, else the scope's own.
+  `sessions_index` gains `lineage` (fresh/resume/fork/rotation/ephemeral), `policy`, `forked_from`, `rotated_from`,
+  `cumulative_tokens` (migration 2); `GET /api/sessions/{sid}/lineage`.
+- **Rotation** (`handlers/_common.py`, every task, not only runs): resuming a conversation whose `cumulative_tokens` ≥
+  `tasks.rotate_after_tokens` (400k) — or a routine's whose `runs_count` ≥ `tasks.rotate_after_fires` (50) — first asks it
+  for a structured handoff, then continues fresh with `<rotated_session>` (that handoff + the agent's `## Pinned
+  constraints` section of AGENT.md) prepended; lineage `rotation`.
+- **UI**: pipeline step "Session, budget, retries" (policy, auto-retry, step budget), job run budget, run-modal budget
+  override; run monitor budget meter, per-step handoff card with artifact downloads, attempts pill, Retry / Retry clean /
+  Diff (file list + coloured unified diff) / Revert; snapshot timeline with diff + restore in the Team workspace view and
+  the Task-mode session tab. Shared pieces in `shared/manager.js` / `manager.css`.
+- **Deferred**: an `attempts` table and step-level idempotency keys; cross-engine continue (P5); map/loop/gate kinds (P3);
+  the "fork from here" snapshot+fork action; dollar caps for Codex/agy (no cost reported); agy's token cap (it reports
+  usage only at the end, so only its wall clock is enforced mid-run).
 
 Backward compatibility rule: existing `/api/*` routes keep their shapes (new fields only); existing agents/jobs/routines/heartbeats
 migrate on first load; the old pages keep working until the redesign lands.

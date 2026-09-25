@@ -13,30 +13,44 @@ Record shape (unchanged, what every API returns):
     {
       "run_id": ..., "job_id": ..., "mode": "single|sequential|parallel",
       "source": "user|manual_run|heartbeat",
-      "status": "pending|running|completed|failed|partial|cancelled|interrupted",
+      "status": "pending|running|completed|failed|partial|cancelled|interrupted|budget_exceeded",
       "started_at": ..., "completed_at": ...,
       "overrides": {"engine", "model", "is_local"},     # run-level, from POST body
+      "job_snapshot": {title, task_description, workspace_id},  # what the steps were built from
+      "budget": {max_usd, max_tokens, max_seconds},     # resolved run budget (null = unlimited)
+      "spent": {usd, usd_complete, tokens, seconds},    # vs budget (tokens = budget tokens)
+      "active_seconds": float,                          # driver wall time, summed per phase
       "usage": {cost_usd, cost_complete, input_tokens, output_tokens,
                 cache_read_tokens, cache_write_tokens, num_turns, duration_ms},
       "steps": [
         {
           "step_id", "agent_id", "agent_name", "name",
           "engine", "model", "is_local",               # resolved for this step
-          "task_id" | null,
-          "session_id" | null,
-          "status": "pending|running|completed|failed|cancelled|skipped|interrupted",
+          "spec": {phase, prompt_override, depends_on_text, session_policy, budget, auto_retry},
+          "session_policy": "resume|fork|fresh|fresh_handoff|ephemeral",   # resolved
+          "task_id" | null,                 # latest attempt's task
+          "session_id" | null, "session_namespace" | null,
+          "engine_session_id" | null,       # latest attempt's CLI conversation
+          "status": "pending|running|completed|failed|cancelled|skipped|interrupted|budget_exceeded",
           "started_at" | null, "completed_at" | null,
           "result_preview": "..." | null,   # first 400 chars (list views)
-          "result_text": "..." | null,      # handoff text, capped 16 KB head+tail
-          "files_changed": [{path, change}] | null,
-          "usage": {...} | null,
+          "result_text": "..." | null,      # the full final reply (capped 256 KB)
+          "handoff": {status, summary, decisions, artifacts, open_questions,
+                      next_steps, verdict, derived} | null,
+          "files_changed": [{path, change, additions, deletions}] | null,
+          "snapshot_before" | "snapshot_after": sha | null, "snapshot_key": str | null,
+          "budget": {...} | null,           # effective budget of the latest attempt
+          "usage": {...} | null,            # summed over all attempts (what was spent)
+          "attempts": [{n, mode, task_id, status, error, started_at, completed_at,
+                        engine_session_id, snapshot_before, snapshot_after, usage, budget}],
           "error": "..." | null,
         }, ...
       ]
     }
 
 "interrupted" = the step's task was not alive when telecode (re)started —
-see services.run.executor.reconcile_orphaned_runs.
+see services.run.executor.reconcile_orphaned_runs. "budget_exceeded" = an
+attempt hit its budget, or the run's budget was used up before it ran.
 """
 
 from __future__ import annotations
@@ -55,8 +69,11 @@ from services.task.safe_paths import validate_id
 
 logger = logging.getLogger("telecode.services.run")
 
-VALID_RUN_STATUSES = ("pending", "running", "completed", "failed", "partial", "cancelled", "interrupted")
-VALID_STEP_STATUSES = ("pending", "running", "completed", "failed", "cancelled", "skipped", "interrupted")
+VALID_RUN_STATUSES = ("pending", "running", "completed", "failed", "partial", "cancelled", "interrupted",
+                      "budget_exceeded")
+VALID_STEP_STATUSES = ("pending", "running", "completed", "failed", "cancelled", "skipped", "interrupted",
+                       "budget_exceeded")
+TERMINAL_RUN_STATUSES = ("completed", "failed", "partial", "cancelled", "interrupted", "budget_exceeded")
 
 _USAGE_INT_FIELDS = ("input_tokens", "output_tokens", "cache_read_tokens",
                      "cache_write_tokens", "num_turns", "duration_ms")
@@ -147,11 +164,13 @@ def _write_run(conn, run: Dict[str, Any]) -> None:
 
 
 def _write_step(conn, run_id: str, idx: int, step: Dict[str, Any]) -> None:
+    ho = step.get("handoff")
     conn.execute(
-        "INSERT INTO run_steps (run_id, idx, step_id, status, task_id, data) VALUES (?,?,?,?,?,?) "
+        "INSERT INTO run_steps (run_id, idx, step_id, status, task_id, data, handoff) VALUES (?,?,?,?,?,?,?) "
         "ON CONFLICT(run_id, step_id) DO UPDATE SET idx=excluded.idx, status=excluded.status, "
-        "task_id=excluded.task_id, data=excluded.data",
-        (run_id, idx, step.get("step_id"), step.get("status"), step.get("task_id"), _dumps(step)))
+        "task_id=excluded.task_id, data=excluded.data, handoff=excluded.handoff",
+        (run_id, idx, step.get("step_id"), step.get("status"), step.get("task_id"), _dumps(step),
+         _dumps(ho) if ho else None))
 
 
 def _read_run(conn, run_id: str) -> Optional[Dict[str, Any]]:
@@ -266,6 +285,8 @@ class RunStore:
         source: str,
         steps: List[Dict[str, Any]],
         overrides: Optional[Dict[str, Any]] = None,
+        budget: Optional[Dict[str, Any]] = None,
+        job_snapshot: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         run_id = str(uuid.uuid4())
         now = _now_iso()
@@ -278,6 +299,10 @@ class RunStore:
             "started_at": now,
             "completed_at": None,
             "overrides": dict(overrides or {}),
+            "job_snapshot": dict(job_snapshot or {}),
+            "budget": dict(budget or {}),
+            "spent": {"usd": 0.0, "usd_complete": True, "tokens": 0, "seconds": 0.0},
+            "active_seconds": 0.0,
             "usage": None,
             "steps": [
                 {
@@ -298,6 +323,16 @@ class RunStore:
                     "files_changed": None,
                     "usage": None,
                     "error": None,
+                    "spec": dict(s.get("spec") or {}),
+                    "session_policy": s.get("session_policy") or "resume",
+                    "session_namespace": None,
+                    "engine_session_id": None,
+                    "handoff": None,
+                    "snapshot_key": None,
+                    "snapshot_before": None,
+                    "snapshot_after": None,
+                    "budget": None,
+                    "attempts": [],
                 }
                 for s in steps
             ],
@@ -351,6 +386,10 @@ class RunStore:
                     for k, v in (patch or {}).items():
                         s[k] = v
                     _write_step(conn, run_id, idx, s)
+                    if "usage" in (patch or {}):
+                        from services.run.budget import spent
+                        run["spent"] = spent(run)
+                        _write_run(conn, run)
                     return run
             return None
         return self._mutate(run_id, fn)
@@ -369,6 +408,8 @@ class RunStore:
                     run["status"] = "running"
                 elif run.get("cancel_requested"):
                     run["status"] = "cancelled"
+                elif "budget_exceeded" in statuses or run.get("budget_exhausted"):
+                    run["status"] = "budget_exceeded"
                 elif "interrupted" in statuses:
                     run["status"] = "interrupted"
                 elif "cancelled" in statuses and not (statuses & {"running", "pending"}):
@@ -380,9 +421,22 @@ class RunStore:
             if run["status"] not in ("running", "pending"):
                 run["completed_at"] = run.get("completed_at") or _now_iso()
             run["usage"] = rollup_usage(steps)
+            from services.run.budget import spent
+            run["spent"] = spent(run)
             _write_run(conn, run)
             return run
         return self._mutate(run_id, fn)
+
+    def mutate(self, run_id: str, fn) -> Optional[Dict[str, Any]]:
+        """``fn(run) -> None`` edits the record in place inside one
+        transaction (the whole run is rewritten); returns the new record."""
+        def wrap(conn, run):
+            fn(run)
+            from services.run.budget import spent
+            run["spent"] = spent(run)
+            _write_run(conn, run)
+            return run
+        return self._mutate(run_id, wrap)
 
     def delete_run(self, run_id: str) -> bool:
         if not _check_id(run_id):

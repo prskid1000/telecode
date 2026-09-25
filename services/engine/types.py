@@ -38,6 +38,17 @@ class EngineTimeout(EngineError):
         super().__init__(message)
 
 
+class EngineBudgetExceeded(EngineError):
+    """A budget cap (tokens / wall clock / Claude's --max-budget-usd) stopped
+    the run. The message always starts with ``budget_exceeded:`` — the run
+    executor maps that to the step status ``budget_exceeded``."""
+
+    PREFIX = "budget_exceeded"
+
+    def __init__(self, detail: str = ""):
+        super().__init__(f"{self.PREFIX}: {detail}" if detail else self.PREFIX)
+
+
 @dataclass
 class EngineRequest:
     engine: str                                  # claude_code | codex | antigravity
@@ -57,6 +68,15 @@ class EngineRequest:
     # Structured output: Claude --json-schema, Codex --output-schema, agy none yet.
     schema: Optional[Dict[str, Any]] = None
     timeout_sec: Optional[float] = None
+    # Fork the resumed session instead of continuing it (Claude --fork-session,
+    # Codex `exec fork`; agy has no fork — the adapter runs fresh).
+    fork: bool = False
+    # Budget caps for this run (None = unlimited). Tokens are budget tokens
+    # (input + cache writes + output) from the normalised usage events;
+    # max_usd goes to Claude's --max-budget-usd (other engines report no cost).
+    max_usd: Optional[float] = None
+    max_tokens: Optional[int] = None
+    max_seconds: Optional[float] = None
     env_extra: Dict[str, str] = field(default_factory=dict)
     add_dirs: List[Path] = field(default_factory=list)
     # Sinks (all optional). on_event gets every normalised event dict.

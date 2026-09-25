@@ -144,9 +144,10 @@ function shortId(id, n = 8) { id = String(id || ""); return id.length > n ? id.s
 const STATUS_TONE = {
   pending: "warn", queued: "warn", running: "accent", active: "accent", completed: "ok", done: "ok", success: "ok",
   failed: "err", error: "err", cancelled: "err", canceled: "err", partial: "warn", paused: "warn", skipped: "", resumed: "accent",
+  budget_exceeded: "warn", interrupted: "warn",
 };
 const LIVE_STATUSES = ["pending", "running"];
-const TERMINAL_RUN = ["completed", "failed", "partial", "cancelled"];
+const TERMINAL_RUN = ["completed", "failed", "partial", "cancelled", "interrupted", "budget_exceeded"];
 function statusPill(status, opts = {}) {
   const s = String(status || "unknown");
   const tone = opts.tone != null ? opts.tone : (STATUS_TONE[s.toLowerCase()] ?? "");
@@ -590,4 +591,165 @@ function wireDrop(el, onFiles) {
   ["dragenter", "dragover"].forEach(ev => el.addEventListener(ev, (e) => { e.preventDefault(); el.classList.add("over"); }));
   ["dragleave", "drop"].forEach(ev => el.addEventListener(ev, (e) => { e.preventDefault(); el.classList.remove("over"); }));
   el.addEventListener("drop", (e) => { if (e.dataTransfer && e.dataTransfer.files.length) onFiles(e.dataTransfer.files); });
+}
+
+// ── P2: session policy, budgets, handoffs, diffs, snapshots ───────────
+// Shared by Team Mode (pipeline editor, run monitor, workspace view) and Task
+// Mode (session snapshots). All server text lands in text nodes via h().
+const SESSION_POLICIES = [
+  ["", "Default (by position)"], ["resume", "Resume"], ["fork", "Fork"], ["fresh", "Fresh"],
+  ["fresh_handoff", "Fresh + handoff"], ["ephemeral", "Ephemeral copy"],
+];
+const POLICY_HINTS = {
+  "": "Resume in the job workspace for a single-step phase; an ephemeral copy in a parallel phase.",
+  resume: "Continue this agent's conversation in the job workspace.",
+  fork: "Branch the previous step's (same engine) or this agent's conversation — Claude --fork-session, Codex exec fork. Antigravity: fresh + handoff.",
+  fresh: "New conversation in the job workspace.",
+  fresh_handoff: "New conversation, always given the previous step's handoff.",
+  ephemeral: "New conversation in a throwaway copy of the workspace; changed files are kept as artifacts.",
+};
+function policySelect(value, o = {}) {
+  const sel = h("select", { class: "select", disabled: o.disabled || null, title: "Session policy" },
+    SESSION_POLICIES.map(([v, l]) => h("option", { value: v, selected: (value || "") === v || null }, l)));
+  return sel;
+}
+// budgetFields({max_usd, max_tokens, max_seconds}, {placeholder, disabled, onChange}) → {el, get()}
+function budgetFields(b, o = {}) {
+  b = b || {};
+  const mk = (key, ph, step) => {
+    const i = h("input", { class: "input", type: "number", min: "0", step, value: b[key] != null ? b[key] : "",
+      placeholder: ph, disabled: o.disabled || null, "data-budget": key });
+    if (o.onChange) i.addEventListener("input", () => o.onChange(get()));
+    return i;
+  };
+  const usd = mk("max_usd", o.placeholder || "no cap", "0.01"), tok = mk("max_tokens", o.placeholder || "no cap", "1000"),
+    sec = mk("max_seconds", o.placeholder || "no cap", "1");
+  const get = () => {
+    const out = {};
+    for (const [k, i] of [["max_usd", usd], ["max_tokens", tok], ["max_seconds", sec]]) {
+      const v = i.value.trim(); if (v !== "" && Number(v) > 0) out[k] = k === "max_usd" ? Number(v) : Math.round(Number(v));
+    }
+    return out;
+  };
+  const cell = (label, input, unit) => h("label", { class: "field", style: { marginBottom: 0 } }, h("span", { class: "field-label" }, label),
+    h("span", { class: "suffix" }, input, h("span", null, unit)));
+  const el = h("div", { class: "budget-row" }, cell("Max cost", usd, "$"), cell("Max tokens", tok, "tok"), cell("Max time", sec, "sec"));
+  return { el, get, inputs: { usd, tok, sec } };
+}
+// Spent vs budget. budget: {max_usd,max_tokens,max_seconds}, spent: {usd, usd_complete, tokens, seconds}
+function budgetMeter(budget, spent) {
+  budget = budget || {}; spent = spent || {};
+  const row = (ic, k, used, cap, fmt, note) => {
+    const pct = cap ? Math.min(100, Math.round(100 * (used || 0) / cap)) : 0;
+    return h("div", { class: "m", title: note || null },
+      h("div", { class: "k" }, icon(ic), k, cap ? h("span", { class: "grow" }) : null, cap ? h("span", null, pct + "%") : null),
+      h("div", { class: "v" }, fmt(used), cap ? " / " + fmt(cap) : " · no cap"),
+      cap ? h("div", { class: "bar" + (pct >= 100 ? " err" : pct >= 80 ? " warn" : "") }, h("i", { style: { width: pct + "%" } })) : null);
+  };
+  return h("div", { class: "meter" },
+    row("coins", "Cost", spent.usd, budget.max_usd, (v) => fmtCost(v || 0), spent.usd_complete === false ? "Codex / Antigravity report no cost — the dollar total is incomplete" : null),
+    row("hash", "Tokens", spent.tokens, budget.max_tokens, (v) => fmtTokens(v || 0), "input + cache writes + output (cache reads not counted)"),
+    row("clock", "Time", spent.seconds, budget.max_seconds, (v) => fmtMs(Math.round((v || 0) * 1000))));
+}
+const HANDOFF_TONE = { done: "ok", partial: "warn", blocked: "warn", failed: "err", unknown: "" };
+const VERDICT_TONE = { pass: "ok", fail: "err", unknown: "" };
+// renderHandoffCard(handoff, {artifactUrl(path) → url|null})
+function renderHandoffCard(ho, o = {}) {
+  if (!ho) return null;
+  const list = (title, items) => items && items.length ? h("div", null, h("h4", null, title), h("ul", null, items.map(x => h("li", null, x)))) : null;
+  const arts = (ho.artifacts || []);
+  return h("div", { class: "handoff" },
+    h("div", { class: "handoff-head" }, icon("flag"), h("b", null, "Handoff"),
+      statusPill(ho.status || "unknown", { tone: HANDOFF_TONE[ho.status] ?? "" }),
+      h("span", { class: "pill " + (VERDICT_TONE[ho.verdict] ?? "") }, "verdict: " + (ho.verdict || "unknown")),
+      ho.derived ? h("span", { class: "pill", title: ho.derive_reason || "" }, "derived from reply") : null,
+      h("span", { class: "grow" }),
+      ho.summary ? btn("Copy", { icon: "copy", kind: "quiet", size: "sm", onClick: () => copyText(ho.summary, "Summary copied") }) : null),
+    h("div", { class: "handoff-body" },
+      ho.summary ? h("div", { class: "summary" }, ho.summary) : null,
+      list("Decisions", ho.decisions), list("Open questions", ho.open_questions), list("Next steps", ho.next_steps),
+      arts.length ? h("div", { class: "arts" }, h("h4", null, `Artifacts (${arts.length})`), h("div", { class: "files" }, arts.map(a => {
+        const url = o.artifactUrl && a.stored_path && !a.is_dir ? o.artifactUrl(a.path) : null;
+        return h("div", { class: "frow" }, icon(a.is_dir ? "folder" : "file"), h("span", { class: "nm", title: a.stored_path || a.path }, a.path),
+          a.kind ? h("span", { class: "pill" }, a.kind) : null,
+          h("span", { class: "meta ellipsis", style: { maxWidth: "45%" }, title: a.description || "" }, a.missing ? "missing" : a.skipped || a.description || ""),
+          a.bytes != null ? h("span", { class: "meta" }, formatBytes(a.bytes)) : null,
+          url ? h("span", { class: "acts" }, h("a", { class: "btn quiet sm btn-icon", href: url, title: "Download artifact" }, icon("download"))) : null);
+      }))) : null));
+}
+// Unified diff → coloured lines (text nodes only).
+function diffView(text, truncated) {
+  const lines = String(text || "").split("\n");
+  return h("pre", { class: "diff-view" }, lines.map(l => {
+    const cls = l.startsWith("diff --git") ? "dl-file" : l.startsWith("@@") ? "dl-hunk"
+      : (l.startsWith("+++") || l.startsWith("---") || l.startsWith("index ") || l.startsWith("new file") || l.startsWith("deleted file") || l.startsWith("Binary")) ? "dl-meta"
+      : l.startsWith("+") ? "dl-add" : l.startsWith("-") ? "dl-del" : "";
+    return h("span", { class: cls || null }, l || " ");
+  }), truncated ? h("span", { class: "dl-meta" }, "… diff truncated — pick a file for its full diff") : null);
+}
+// openDiffModal({title, subtitle, load(path|null) → Promise<{files, diff, truncated}>, footLeft})
+async function openDiffModal(o) {
+  const filesHost = h("div", { class: "diff-files" }, skeleton(4, "sk-row"));
+  const viewHost = h("div", { style: { minWidth: 0 } }, skeleton(8));
+  const m = modal({ title: o.title, subtitle: o.subtitle, cls: "wide", width: "1100px",
+    body: h("div", { class: "diff-grid" }, filesHost, viewHost), footLeft: o.footLeft || h("span"),
+    actions: [{ label: "Close", kind: "primary" }] });
+  let current = null;
+  const show = async (path) => {
+    current = path;
+    [...filesHost.querySelectorAll("button")].forEach(b => b.classList.toggle("on", (b.dataset.path || null) === path));
+    mount(viewHost, skeleton(8));
+    try {
+      const d = await o.load(path);
+      if (current !== path) return;
+      mount(viewHost, d.diff ? diffView(d.diff, d.truncated) : emptyState("check", "No changes", path ? "This file did not change." : "Nothing changed between these snapshots.", null, true));
+      return d;
+    } catch (e) { mount(viewHost, errorBox(e.message)); }
+  };
+  const d = await show(null);
+  if (!d) { mount(filesHost, h("div", { class: "empty sm" }, h("p", null, "—"))); return m; }
+  const files = d.files || [];
+  const glyph = { added: "A", modified: "M", deleted: "D" };
+  mount(filesHost,
+    h("button", { type: "button", class: "on", onclick: () => show(null) }, icon("layers"), h("span", { class: "nm" }, `All files (${files.length})`)),
+    files.map(f => h("button", { type: "button", "data-path": f.path, title: f.path, onclick: () => show(f.path) },
+      h("span", { class: "st " + f.change }, glyph[f.change] || "M"), h("span", { class: "nm" }, f.path),
+      h("span", { class: "n" }, f.binary ? "bin" : `+${f.additions ?? 0} −${f.deletions ?? 0}`))));
+  return m;
+}
+const SNAP_TONE = { before: "", after: "accent", manual: "violet", restore: "ok", safety: "warn" };
+// renderSnapshotTimeline(host, {sid, ns, title}) — list + diff vs previous + restore + snapshot now.
+async function renderSnapshotTimeline(host, o) {
+  const q = o.ns ? `?namespace=${encodeURIComponent(o.ns)}` : "";
+  const base = `/api/sessions/${encodeURIComponent(o.sid)}/snapshots`;
+  const reload = () => renderSnapshotTimeline(host, o);
+  mount(host, skeleton(3, "sk-row"));
+  let r;
+  try { r = await api(base + q); } catch (e) { mount(host, h("div", { class: "card-body" }, errorBox(e.message, reload))); return; }
+  const snaps = r.snapshots || [];
+  const head = h("div", { class: "row", style: { padding: "8px 12px", borderBottom: "1px solid var(--border)" } },
+    h("span", { class: "faint grow", style: { fontSize: "12px" } }, r.enabled ? `${snaps.length} snapshot${snaps.length === 1 ? "" : "s"} · shadow git, the workspace's own .git is never touched` : "Snapshots are off (tasks.snapshots.enabled) or git is not on PATH"),
+    r.enabled ? btn("Snapshot now", { icon: "save", kind: "ghost", size: "sm", onClick: async () => {
+      try { await api(base + q, jsonOpts("POST", { label: "manual snapshot" })); toast("Snapshot taken", { kind: "success" }); reload(); }
+      catch (e) { toast(e.message, { kind: "error" }); }
+    } }) : null,
+    btn(null, { icon: "refresh", kind: "quiet", size: "sm", title: "Refresh", onClick: reload }));
+  if (!snaps.length) { mount(host, head, emptyState("history", "No snapshots yet", "A snapshot is taken before and after every pipeline step, or press Snapshot now.", null, true)); return; }
+  mount(host, head, h("div", { class: "files snaps" }, snaps.map((s, i) => h("div", { class: "frow" },
+    h("span", { class: "kind" }, h("span", { class: "pill " + (SNAP_TONE[s.kind] ?? "") }, s.kind || "snap")),
+    h("span", { class: "nm", title: s.label }, s.label || s.sha.slice(0, 8)),
+    s.run ? h("span", { class: "meta mono", title: "run " + s.run + (s.step ? "\nstep " + s.step : "") }, "run " + shortId(s.run, 6)) : null,
+    h("span", { class: "meta mono", title: s.sha }, s.sha.slice(0, 8)),
+    h("span", { class: "meta", title: fmtDateTime(s.created_at) }, relTime(s.created_at)),
+    h("span", { class: "acts" },
+      i < snaps.length - 1 ? btn(null, { icon: "code", kind: "quiet", size: "sm", title: "Diff vs the previous snapshot", onClick: () => openDiffModal({
+        title: "Snapshot diff", subtitle: `${snaps[i + 1].sha.slice(0, 8)} → ${s.sha.slice(0, 8)} · ${s.label || ""}`,
+        load: (path) => api(`${base}/${s.sha}/diff${q}${q ? "&" : "?"}base=${snaps[i + 1].sha}${path ? "&path=" + encodeURIComponent(path) : ""}`) }) }) : null,
+      btn(null, { icon: "history", kind: "quiet", size: "sm", title: "Restore the workspace to this snapshot", onClick: async () => {
+        const ok = await confirmDialog("Restore this snapshot?", h("p", { class: "muted" }, "The workspace's tracked files become exactly what they were at ",
+          h("code", null, s.sha.slice(0, 8)), " (", s.label || "", "). The current state is snapshotted first, so this can be undone."), { confirm: "Restore", danger: true });
+        if (!ok) return;
+        try { await api(`${base}/${s.sha}/restore${q}`, jsonOpts("POST", {})); toast("Workspace restored", { kind: "success" }); reload(); if (o.onRestored) o.onRestored(); }
+        catch (e) { toast(e.message, { kind: "error" }); }
+      } }))))));
 }

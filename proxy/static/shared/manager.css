@@ -351,3 +351,40 @@ dialog.modal.wide { width: 880px; }
 .keys { display: grid; grid-template-columns: 1fr auto; gap: 8px 16px; font-size: 12.5px; align-items: center; }
 .keys .grp { grid-column: 1 / -1; font-size: 11px; color: var(--faint); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; margin-top: 6px; }
 .keys kbd + kbd { margin-left: 3px; }
+
+/* ── P2: handoffs, budgets, diffs, snapshots ───────────────────────────── */
+.bar.warn > i { background: var(--warn); }
+.handoff { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); overflow: hidden; }
+.handoff-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 7px 10px 7px 12px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+.handoff-head .ic { width: 14px; height: 14px; }
+.handoff-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 9px; font-size: 12.5px; }
+.handoff-body .summary { white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; line-height: 1.5; }
+.handoff-body h4 { margin: 0 0 3px; font-size: 11px; font-weight: 600; color: var(--faint); text-transform: uppercase; letter-spacing: .05em; }
+.handoff-body ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }
+.handoff-body .arts .frow { padding: 5px 8px; }
+.meter { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.meter .m { background: var(--panel2); border: 1px solid var(--border); border-radius: 9px; padding: 7px 10px; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.meter .m .k { font-size: 11px; color: var(--faint); display: flex; align-items: center; gap: 5px; }
+.meter .m .k .ic { width: 12px; height: 12px; }
+.meter .m .v { font: 500 12px var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.budget-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.step-acts { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.diff-grid { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 10px; min-height: 360px; }
+.diff-files { border: 1px solid var(--border); border-radius: 9px; overflow: auto; max-height: 62vh; background: var(--panel2); }
+.diff-files button { display: flex; width: 100%; gap: 6px; align-items: center; padding: 6px 9px; border: 0; border-bottom: 1px solid var(--border); background: none; color: var(--text); text-align: left; cursor: pointer; font: 11.5px var(--mono); min-width: 0; }
+.diff-files button:hover { background: var(--hover); }
+.diff-files button.on { background: var(--accent-soft); color: var(--accent); }
+.diff-files button .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-files .st { width: 14px; flex-shrink: 0; font-weight: 600; text-align: center; }
+.diff-files .st.added { color: var(--ok); } .diff-files .st.deleted { color: var(--err); } .diff-files .st.modified { color: var(--warn); }
+.diff-files .n { color: var(--faint); font-size: 10.5px; flex-shrink: 0; }
+.diff-view { margin: 0; font: 11.5px/1.5 var(--mono); background: var(--well); border: 1px solid var(--border); border-radius: 9px; overflow: auto; max-height: 62vh; padding: 6px 0; min-width: 0; }
+.diff-view span { display: block; padding: 0 10px; white-space: pre; }
+.diff-view .dl-add { background: var(--ok-soft); color: var(--ok); }
+.diff-view .dl-del { background: var(--err-soft); color: var(--err); }
+.diff-view .dl-hunk { color: var(--accent); background: var(--accent-soft); }
+.diff-view .dl-file { color: var(--text); font-weight: 600; background: var(--panel2); border-top: 1px solid var(--border); margin-top: 4px; padding-top: 3px; padding-bottom: 3px; }
+.diff-view .dl-meta { color: var(--faint); }
+.snaps .frow .kind { width: 58px; flex-shrink: 0; }
+.snaps .frow .nm { font-family: var(--sans, inherit); font-size: 12.5px; }
+@media (max-width: 760px) { .diff-grid { grid-template-columns: 1fr; } .budget-row { grid-template-columns: 1fr; } }

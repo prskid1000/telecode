@@ -2,6 +2,12 @@
 
 Local mode points the CLI at telecode's proxy through ``ANTHROPIC_*`` env
 (``ANTHROPIC_BASE_URL`` without ``/v1`` — the SDK appends it).
+
+P2: ``--resume <id> --fork-session`` forks a conversation; ``--max-budget-usd``
+caps dollars (the CLI ends with ``subtype: error_max_budget_usd``, raised as
+:class:`EngineBudgetExceeded`); each ``message_delta`` carries the message's
+final usage, summed into a live ``usage`` event so the runner can enforce a
+token cap mid-run.
 """
 
 from __future__ import annotations
@@ -13,14 +19,14 @@ from typing import Any, Dict, List, Optional
 
 from services.engine.adapters.base import (Adapter, Launch, ParseState, describe_tool,
                                            todos_from, tool_event)
-from services.engine.types import EngineError, EngineRequest, EngineResult
+from services.engine.types import EngineBudgetExceeded, EngineError, EngineRequest, EngineResult
 
 logger = logging.getLogger("telecode.services.engine.claude")
 
 
 def build_argv(*, resume_id: Optional[str], model: Optional[str], is_local: bool,
                append_system_prompt_file=None, schema: Optional[Dict[str, Any]] = None,
-               add_dirs=()) -> List[str]:
+               add_dirs=(), fork: bool = False, max_budget_usd: Optional[float] = None) -> List[str]:
     cmd = [
         "claude", "-p",
         "--dangerously-skip-permissions",
@@ -30,6 +36,10 @@ def build_argv(*, resume_id: Optional[str], model: Optional[str], is_local: bool
     ]
     if resume_id:
         cmd += ["--resume", resume_id]
+        if fork:
+            cmd.append("--fork-session")
+    if max_budget_usd:
+        cmd += ["--max-budget-usd", f"{float(max_budget_usd):.4f}"]
     # Cloud: an alias (fable/opus/sonnet/haiku) or full name. Local: the llama
     # model travels as ANTHROPIC_MODEL instead.
     if model and not is_local:
@@ -62,6 +72,21 @@ def local_env(model: str, proxy_port: int, max_output_tokens: int,
     }
 
 
+_LIVE_USAGE = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+
+
+def _norm(usage: Dict[str, Any]) -> Dict[str, int]:
+    cache_reads = usage.get("cache_read_input_tokens") or 0
+    cache_writes = usage.get("cache_creation_input_tokens") or 0
+    return {
+        "input": usage.get("input_tokens") or 0,
+        "output": usage.get("output_tokens") or 0,
+        "cache_read": cache_reads,
+        "cache_write": cache_writes,
+        "total_input_incl_cache": (usage.get("input_tokens") or 0) + cache_reads + cache_writes,
+    }
+
+
 class ClaudeAdapter(Adapter):
     engine = "claude_code"
     label = "claude"
@@ -79,7 +104,8 @@ class ClaudeAdapter(Adapter):
             env = {**(env or os.environ), **req.env_extra}
         argv = build_argv(resume_id=req.resume_id, model=req.model, is_local=req.is_local,
                           append_system_prompt_file=req.system_append_file, schema=req.schema,
-                          add_dirs=req.add_dirs)
+                          add_dirs=req.add_dirs, fork=req.fork,
+                          max_budget_usd=None if req.is_local else req.max_usd)
         return Launch(argv=argv, stdin=req.prompt, env=env)
 
     def parse(self, evt: Dict[str, Any], st: ParseState) -> List[Dict[str, Any]]:
@@ -94,6 +120,13 @@ class ClaudeAdapter(Adapter):
             if inner.get("type") == "content_block_delta" and delta.get("type") == "text_delta" \
                     and delta.get("text"):
                 out.append({"kind": "delta", "text": delta["text"]})
+            elif inner.get("type") == "message_delta" and isinstance(inner.get("usage"), dict):
+                # The message's final usage: sum across messages = the result's usage.
+                for k in _LIVE_USAGE:
+                    v = inner["usage"].get(k)
+                    if isinstance(v, (int, float)):
+                        st.usage[k] = st.usage.get(k, 0) + int(v)
+                out.append({"kind": "usage", "tokens": _norm(st.usage), "cost_usd": None, "partial": True})
         elif t == "assistant":
             for block in (evt.get("message") or {}).get("content") or []:
                 btype = block.get("type")
@@ -121,27 +154,21 @@ class ClaudeAdapter(Adapter):
         return []
 
     def _tokens(self, st: ParseState) -> Dict[str, int]:
-        usage = (st.final or {}).get("usage") or {}
-        cache_reads = usage.get("cache_read_input_tokens") or 0
-        cache_writes = usage.get("cache_creation_input_tokens") or 0
-        total_input = (usage.get("input_tokens") or 0) + cache_reads + cache_writes
-        return {
-            "input": usage.get("input_tokens") or 0,
-            "output": usage.get("output_tokens") or 0,
-            "cache_read": cache_reads,
-            "cache_write": cache_writes,
-            "total_input_incl_cache": total_input,
-        }
+        usage = (st.final or {}).get("usage")
+        return _norm(usage if isinstance(usage, dict) else st.usage)
 
     def usage_event(self, st: ParseState) -> Optional[Dict[str, Any]]:
         if not st.final:
-            return None
+            return {"kind": "usage", "tokens": _norm(st.usage), "cost_usd": None} if st.usage else None
         return {"kind": "usage", "tokens": self._tokens(st), "cost_usd": st.final.get("total_cost_usd")}
 
     def finish(self, req, st, returncode, stderr, wall_ms) -> EngineResult:
         if returncode not in (0, None) and st.final is None and not st.raw_lines:
             raise EngineError(f"claude exited with code {returncode}: {stderr.strip()[:500]}")
         fin = st.final or {}
+        if fin.get("subtype") == "error_max_budget_usd":
+            cost = fin.get("total_cost_usd")
+            raise EngineBudgetExceeded(f"cost ${float(cost or 0):.4f} reached max_usd ${float(req.max_usd or 0):.4f}")
         return EngineResult(
             engine=self.engine,
             text=fin.get("result") or "\n".join(st.raw_lines),

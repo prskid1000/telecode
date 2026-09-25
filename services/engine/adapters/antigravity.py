@@ -119,7 +119,12 @@ class AntigravityAdapter(Adapter):
             env = {**(env or os.environ), **req.env_extra}
         if req.schema:
             logger.info("antigravity: no structured-output flag yet — schema ignored")
-        argv = build_argv(work_dir=req.cwd, resume_id=req.resume_id, model=model_arg, add_dirs=req.add_dirs)
+        resume_id = req.resume_id
+        if req.fork and resume_id:
+            # agy has no fork: the caller seeds a fresh conversation with a handoff instead.
+            logger.info("antigravity: no fork support — starting a fresh conversation")
+            resume_id = None
+        argv = build_argv(work_dir=req.cwd, resume_id=resume_id, model=model_arg, add_dirs=req.add_dirs)
         return Launch(argv=argv, stdin=stdin_message(req.prompt), env=env)
 
     def parse(self, evt: Dict[str, Any], st: ParseState) -> List[Dict[str, Any]]:

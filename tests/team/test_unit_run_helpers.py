@@ -57,9 +57,10 @@ def test_build_step_prompt_threads_single_previous_output():
     step = {"depends_on_text": True}
     prev = [{"step_id": "s1", "name": "first", "text": "PRIOR REPLY", "status": "completed"}]
     out = _build_step_prompt(job, step, prev)
-    assert "<previous_output>" in out
-    assert "PRIOR REPLY" in out
-    assert "</previous_output>" in out
+    # P2: a structured <handoff> block (derived from the text when the step gave none)
+    assert '<handoff from="first" status="unknown" verdict="unknown">' in out
+    assert "<summary>\nPRIOR REPLY\n</summary>" in out
+    assert out.rstrip().endswith("</handoff>")
 
 
 def test_build_step_prompt_wraps_multiple_previous_outputs():
@@ -70,10 +71,10 @@ def test_build_step_prompt_wraps_multiple_previous_outputs():
         {"step_id": "s2", "name": "branchB", "text": "B says hello", "status": "completed"},
     ]
     out = _build_step_prompt(job, step, prev)
-    assert "<previous_outputs>" in out
-    assert '<output step="branchA">' in out
+    assert "<handoffs>" in out and "</handoffs>" in out
+    assert '<handoff from="branchA"' in out
     assert "A says hi" in out
-    assert '<output step="branchB">' in out
+    assert '<handoff from="branchB"' in out
     assert "B says hello" in out
 
 
@@ -82,7 +83,7 @@ def test_build_step_prompt_skips_threading_when_disabled():
     step = {"depends_on_text": False}
     prev = [{"step_id": "s1", "text": "ignored"}]
     out = _build_step_prompt(job, step, prev)
-    assert "previous_output" not in out
+    assert "<handoff" not in out
 
 
 def test_build_step_prompt_skips_empty_prev():
@@ -90,4 +91,4 @@ def test_build_step_prompt_skips_empty_prev():
     step = {"depends_on_text": True}
     prev = [{"step_id": "s1", "text": ""}]    # text empty → skipped
     out = _build_step_prompt(job, step, prev)
-    assert "previous_output" not in out
+    assert "<handoff" not in out

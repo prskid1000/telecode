@@ -21,7 +21,7 @@ from services.engine.adapters.antigravity import (  # noqa: F401 - re-exported f
     stdin_message as _stdin_message,
 )
 from services.engine.task_bridge import legacy_resume_writer, run_in_task, task_request
-from services.task.handlers._common import prepare
+from services.task.handlers._common import prepare, run as run_step
 from services.task.staging import stage_for_run
 
 ENGINE = "antigravity"
@@ -40,20 +40,23 @@ def antigravity_task(
     job_files: Optional[List[Any]] = None,
     model: Optional[str] = None,
     schema: Optional[Dict[str, Any]] = None,
+    step_ctl: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Run Antigravity (``agy``) in the session folder. ``model``: an ``agy
     models`` id in cloud mode, the llama model in local mode. ``schema`` is
-    accepted for signature parity; agy has no structured-output flag yet."""
+    accepted for signature parity; agy has no structured-output flag yet — a
+    pipeline step's handoff comes from ``.telecode/handoff.json`` instead
+    (``step_ctl.handoff``)."""
     ctx = prepare(ENGINE, prompt=prompt, is_local=is_local, agent_id=agent_id, agent=agent, job=job,
-                  agent_files=agent_files, job_files=job_files)
+                  agent_files=agent_files, job_files=job_files, step_ctl=step_ctl)
     with stage_for_run(ctx.agent_id, ctx.sid, ctx.work_dir, engine="antigravity"):
-        kw: Dict[str, Any] = {}
-        if schema:
-            kw["schema"] = schema
-        return _run_antigravity_subprocess(
-            prompt=ctx.prompt, work_dir=ctx.work_dir, sid=ctx.sid, ns=ctx.ns, resume_id=ctx.resume_id,
-            log_path=ctx.log_dir / f"{ctx.task_id}.txt", is_local=is_local, model=model,
-            resume_store=ctx.resume_store, agent_id=ctx.agent_id, **kw)
+        def run_fn(*, prompt, resume_id, fork, schema, budget, add_dirs, lineage, log_suffix=""):
+            return _run_antigravity_subprocess(
+                prompt=prompt, work_dir=ctx.work_dir, sid=ctx.sid, ns=ctx.ns, resume_id=resume_id,
+                log_path=ctx.log_dir / f"{ctx.task_id}{log_suffix}.txt", is_local=is_local, model=model,
+                resume_store=ctx.resume_store, agent_id=ctx.agent_id, schema=schema, fork=fork,
+                budget=budget, add_dirs=add_dirs, lineage=lineage)
+        return run_step(ctx, run_fn, schema=schema)
 
 
 def _run_antigravity_subprocess(
@@ -69,6 +72,10 @@ def _run_antigravity_subprocess(
     resume_store: Optional[Callable[[str], None]] = None,
     schema: Optional[Dict[str, Any]] = None,
     agent_id: Optional[str] = None,
+    fork: bool = False,
+    budget: Optional[Dict[str, Any]] = None,
+    add_dirs=(),
+    lineage: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Run ``agy`` for the current task. Without ``resume_store`` the legacy
     flat key (cloud or local) is written."""
@@ -76,5 +83,5 @@ def _run_antigravity_subprocess(
     req = task_request(
         ENGINE, prompt=prompt, cwd=work_dir, sid=sid, model=model, is_local=is_local,
         resume_id=resume_id, on_resume_id=resume_store or legacy_resume_writer(sid, ns, key),
-        log_path=log_path, schema=schema)
-    return run_in_task(req, sid=sid, ns=ns, agent_id=agent_id)
+        log_path=log_path, schema=schema, fork=fork, budget=budget, add_dirs=add_dirs)
+    return run_in_task(req, sid=sid, ns=ns, agent_id=agent_id, lineage=lineage)

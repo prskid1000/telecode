@@ -453,6 +453,39 @@ def tasks_kill_grace_seconds() -> float:
         return 3.0
 
 
+def _float_setting(path: str, default: float, minimum: float = 0.0) -> float:
+    try:
+        return max(minimum, float(get_nested(path, default)))
+    except (TypeError, ValueError):
+        return default
+
+
+# Session rotation (P2): a resumed conversation whose cumulative budget tokens
+# (input + cache writes + output; cache reads excluded) pass this is asked for
+# a handoff and continued in a fresh session. 0 = never rotate on tokens.
+def _count_setting(path: str, default: int) -> int:
+    """Like _int_setting, but 0 is a real value (= off), not "unset"."""
+    v = get_nested(path, default)
+    try:
+        return max(0, int(default if v is None or v == "" else v))
+    except (TypeError, ValueError):
+        return default
+
+
+def tasks_rotate_after_tokens() -> int: return _count_setting("tasks.rotate_after_tokens", 400_000)
+# A routine's conversation is rotated after this many fires (0 = never).
+def tasks_rotate_after_fires()  -> int: return _count_setting("tasks.rotate_after_fires", 50)
+# Auto-retry backoff for transient step failures: base * 2**(n-1) seconds.
+def tasks_retry_backoff_seconds() -> float: return _float_setting("tasks.retry_backoff_sec", 10.0)
+
+
+# Workspace snapshots (shadow git under data/snapshots/<workspace>.git).
+def snapshots_enabled()     -> bool: return bool(get_nested("tasks.snapshots.enabled", True))
+def snapshots_keep()        -> int:  return _int_setting("tasks.snapshots.keep", 200)
+def snapshots_max_file_mb() -> int:  return _int_setting("tasks.snapshots.max_file_mb", 50)
+def snapshots_max_repo_mb() -> int:  return _int_setting("tasks.snapshots.max_repo_mb", 2048)
+
+
 def tasks_local_max_output_tokens() -> int:
     """CLAUDE_CODE_MAX_OUTPUT_TOKENS for local-mode Claude Code runs. Default
     16384, matching the hand-run `claudel.bat` launcher."""

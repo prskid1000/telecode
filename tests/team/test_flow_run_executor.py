@@ -76,7 +76,7 @@ def test_sequential_threads_previous_output_when_depends_on_text(tmp_data_root, 
 
     # The 2nd step's prompt must contain the 1st step's output
     second_call = fake_task_queue.last_calls[1]
-    assert "<previous_output>" in second_call["prompt"]
+    assert '<handoff from="first"' in second_call["prompt"]
     assert "STEP1-RESULT" in second_call["prompt"]
 
 
@@ -94,7 +94,7 @@ def test_sequential_does_not_thread_output_when_disabled(tmp_data_root, fake_tas
     run = _start(j)
     _wait_for_run(run["run_id"], lambda r: r["status"] in ("completed", "failed", "partial"))
     second_call = fake_task_queue.last_calls[1]
-    assert "previous_output" not in second_call["prompt"]
+    assert "<handoff from=" not in second_call["prompt"]
 
 
 def test_first_failure_halts_remaining_marked_skipped(tmp_data_root, fake_task_queue):
@@ -165,10 +165,9 @@ def test_custom_phases_run_in_order(tmp_data_root, fake_task_queue):
     assert by_name["B"]["session_id"] != ws
     assert by_name["C"]["session_id"] != ws
 
-    # D should have received B+C outputs as <previous_outputs>
-    d_call = next(c for c in fake_task_queue.last_calls if "phase-out" in (c.get("prompt") or "") and "<previous_outputs>" in (c.get("prompt") or ""))
-    assert "<previous_outputs>" in d_call["prompt"]
-    assert d_call["prompt"].count("<output ") == 2
+    # D should have received B+C handoffs as <handoffs>
+    d_call = next(c for c in fake_task_queue.last_calls if "phase-out" in (c.get("prompt") or "") and "<handoffs>" in (c.get("prompt") or ""))
+    assert d_call["prompt"].count("<handoff from=") == 2
 
 
 def test_cancel_run_marks_remaining_skipped(tmp_data_root, fake_task_queue):

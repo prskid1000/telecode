@@ -8,7 +8,8 @@ resume ids, session lineage). Engine specifics are thin adapters under
 """
 
 from services.engine.types import (  # noqa: F401
-    ENGINES, EVENT_KINDS, EngineCancelled, EngineError, EngineRequest, EngineResult, EngineTimeout,
+    ENGINES, EVENT_KINDS, EngineBudgetExceeded, EngineCancelled, EngineError, EngineRequest, EngineResult,
+    EngineTimeout,
 )
 
 

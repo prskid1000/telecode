@@ -112,7 +112,8 @@ def test_b2_handoff_lists_files_changed_by_step(tmp_data_root, fake_task_queue, 
         final = _wait(_run(j)["run_id"], lambda r: r["status"] in TERMINAL)
     finally:
         q.register_handler("CLAUDE_CODE", orig)
-    assert final["steps"][0]["files_changed"] == [{"path": "out/summary.md", "change": "added"}]
+    assert [{k: f[k] for k in ("path", "change")} for f in final["steps"][0]["files_changed"]] == \
+        [{"path": "out/summary.md", "change": "added"}]
     assert "<files_changed>" in calls[1] and "added: out/summary.md" in calls[1]
 
 

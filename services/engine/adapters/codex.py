@@ -57,7 +57,7 @@ def local_env(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
 
 def build_argv(*, work_dir: Path, resume_id: Optional[str], last_msg_path: Path,
                model: Optional[str], provider_overrides: Optional[List[str]] = None,
-               schema_path: Optional[Path] = None) -> List[str]:
+               schema_path: Optional[Path] = None, fork: bool = False) -> List[str]:
     exec_only = ["--sandbox", "danger-full-access", "-C", str(work_dir)]
     common = [
         "--json",
@@ -70,9 +70,10 @@ def build_argv(*, work_dir: Path, resume_id: Optional[str], last_msg_path: Path,
     if schema_path:
         common += ["--output-schema", str(schema_path)]
     overrides = list(provider_overrides or [])
-    # "-" = read the prompt from stdin.
+    # "-" = read the prompt from stdin. `exec fork <id>` (verified on 0.157)
+    # takes the same trailing options as `exec resume <id>`.
     if resume_id:
-        return ["codex", "exec", *overrides, *exec_only, "resume", resume_id, *common, "-"]
+        return ["codex", "exec", *overrides, *exec_only, "fork" if fork else "resume", resume_id, *common, "-"]
     return ["codex", "exec", *overrides, *exec_only, *common, "-"]
 
 
@@ -143,7 +144,8 @@ class CodexAdapter(Adapter):
         if req.add_dirs:
             logger.info("codex: add_dirs not supported by codex exec — ignored")
         argv = build_argv(work_dir=req.cwd, resume_id=req.resume_id, last_msg_path=req.last_msg_path,
-                          model=model, provider_overrides=overrides, schema_path=schema_path)
+                          model=model, provider_overrides=overrides, schema_path=schema_path,
+                          fork=req.fork)
         return Launch(argv=argv, stdin=req.prompt, env=env, cleanup=cleanup)
 
     def parse(self, evt: Dict[str, Any], st: ParseState) -> List[Dict[str, Any]]:
