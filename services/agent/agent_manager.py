@@ -1,4 +1,12 @@
-"""Persistent Agent storage for Telecode."""
+"""Persistent Agent storage for Telecode.
+
+``data/agents/<id>.json`` (record) + ``data/agents/<id>/files/`` (uploaded
+context files) + ``data/agents/<id>/internal/`` — the agent's own files, a git
+repository since P4 (:mod:`services.memory`): SOUL.md, USER.md, AGENT.md,
+HEARTBEAT.md, ``memory/`` (MEMORY.md index + topic files) and ``skills/``.
+The API name ``MEMORY.md`` is the index, stored at ``internal/memory/MEMORY.md``.
+Every write here is a commit.
+"""
 
 from __future__ import annotations
 
@@ -18,20 +26,20 @@ from services.task.safe_paths import resolve_in, validate_id
 logger = logging.getLogger("telecode.services.agent")
 
 INTERNAL_FILES = ("SOUL.md", "USER.md", "AGENT.md", "MEMORY.md", "HEARTBEAT.md")
-
-# Per-agent lock — protects writeback to data/agents/<id>/internal/ when
-# multiple parallel runs across different workspaces target the same agent.
-_agent_locks_guard = threading.Lock()
-_agent_locks: Dict[str, threading.Lock] = {}
+# API name → path inside internal/ (the memory index lives in memory/).
+INTERNAL_PATHS = {"MEMORY.md": "memory/MEMORY.md"}
 
 
-def _agent_lock(agent_id: str) -> threading.Lock:
-    with _agent_locks_guard:
-        lock = _agent_locks.get(agent_id)
-        if lock is None:
-            lock = threading.Lock()
-            _agent_locks[agent_id] = lock
-        return lock
+def internal_rel(fname: str) -> str:
+    return INTERNAL_PATHS.get(fname, fname)
+
+
+def _agent_lock(agent_id: str) -> threading.RLock:
+    """Per-agent lock — the internal repo's lock, shared with staging write-back
+    and the memory API, so parallel runs across workspaces serialise their
+    commits to data/agents/<id>/internal/."""
+    from services.memory import repo
+    return repo.lock_for(get_agent_manager()._get_agent_internal_dir(agent_id))
 
 def get_agents_base_dir() -> Path:
     return Path(config._settings_dir()) / "data" / "agents"
@@ -84,9 +92,15 @@ class AgentManager:
 
         internal_dir = self._get_agent_internal_dir(agent_id)
         internal_dir.mkdir(parents=True, exist_ok=True)
+        from services.memory import repo
         for fname in INTERNAL_FILES:
             content = soul if fname == "SOUL.md" else ""
-            (internal_dir / fname).write_text(content, encoding="utf-8")
+            repo.write_text(internal_dir / internal_rel(fname), content)
+        if repo.available():
+            try:
+                repo.init(internal_dir, f"agent created: {name}")
+            except Exception:
+                logger.exception(f"could not start the memory history of agent {agent_id}")
         return agent_data
 
     def get_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:
@@ -122,10 +136,15 @@ class AgentManager:
     def delete_agent(self, agent_id: str) -> bool:
         p = self._get_agent_path(agent_id)
         if p.exists():
+            try:
+                from services.memory import reflection
+                reflection.forget(agent_id)
+            except Exception:
+                logger.exception(f"removing the reflection trigger of {agent_id} failed")
             p.unlink()
             files_dir = self.base_dir / validate_id(agent_id, "agent_id")
             if files_dir.exists():
-                shutil.rmtree(files_dir)
+                shutil.rmtree(files_dir, onerror=_force_remove)   # git objects are read-only on Windows
             return True
         return False
 
@@ -170,23 +189,43 @@ class AgentManager:
 
     def get_internal_files(self, agent_id: str) -> Dict[str, str]:
         d = self._get_agent_internal_dir(agent_id)
+        if d.is_dir():
+            from services.memory import store
+            store.ensure(agent_id)          # first read of a pre-P4 agent migrates it
         out: Dict[str, str] = {}
         for fname in INTERNAL_FILES:
-            p = d / fname
+            p = d / internal_rel(fname)
             out[fname] = p.read_text(encoding="utf-8") if p.exists() else ""
         return out
 
-    def set_internal_files(self, agent_id: str, files: Dict[str, str]) -> bool:
+    def set_internal_files(self, agent_id: str, files: Dict[str, str],
+                           message: Optional[str] = None) -> bool:
+        """Write the whitelisted files and commit them (``ui: edit …`` unless
+        ``message`` is given)."""
         if not self.get_agent(agent_id):
             return False
+        from services.memory import repo, store
+        store.ensure(agent_id)
         with _agent_lock(agent_id):
             d = self._get_agent_internal_dir(agent_id)
             d.mkdir(parents=True, exist_ok=True)
+            written = []
             for fname, content in (files or {}).items():
                 if fname not in INTERNAL_FILES:
                     continue
-                (d / fname).write_text(content or "", encoding="utf-8")
+                repo.write_text(d / internal_rel(fname), content or "")
+                written.append(fname)
+            if written and repo.available() and repo.is_repo(d):
+                repo.commit_all(d, message or repo.message(f"ui: edit {', '.join(written)}", kind="ui"))
         return True
+
+def _force_remove(func, path, _exc):
+    try:
+        os.chmod(path, 0o700)
+        func(path)
+    except OSError:
+        pass
+
 
 def normalize_engine(engine: Optional[str]) -> str:
     """'' (inherit / default) or one of the supported engine keys."""

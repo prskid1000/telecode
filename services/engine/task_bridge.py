@@ -11,6 +11,9 @@
   the graceful → tree-kill path;
 * the task's ``timeout_seconds`` is also handed to the runner;
 * after a successful run, one row of session lineage (``sessions_index``);
+* P5: the task's ids (task / run / step / agent / job / trigger) become the
+  request's ``correlation`` — OTel resource attributes for the CLI and the
+  ids on the run's own ``invoke_agent`` / ``execute_tool`` spans;
 * P2: every observed CLI session id is also kept on the task
   (``metadata.engine_session_id``) and the latest normalised usage
   (``metadata.usage_live``), so the run executor can resume or account for an
@@ -77,6 +80,10 @@ def task_request(engine: str, *, prompt: str, cwd: Path, sid: Optional[str], mod
             on_resume_id(esid)
 
     b = budget or {}
+    md = (task.metadata if task else {}) or {}
+    correlation = {"task_id": task_id, "run_id": md.get("run_id"), "step_id": md.get("step_id"),
+                   "agent_id": md.get("agent_id"), "job_id": md.get("job_id"), "trigger_id": md.get("trigger_id"),
+                   "attempt": md.get("attempt"), "source": md.get("source"), "workspace_id": sid} if task_id else None
 
     import config as app_config
     return EngineRequest(
@@ -90,6 +97,7 @@ def task_request(engine: str, *, prompt: str, cwd: Path, sid: Optional[str], mod
         cancel_check=task_utils.is_cancelled, on_spawn=on_spawn, on_exit=on_exit,
         session_id=sid, kill_grace_sec=app_config.tasks_kill_grace_seconds(),
         permission_mode=((task.metadata or {}).get("permission_mode") if task else None) or None,
+        correlation=correlation,
     )
 
 
@@ -113,6 +121,8 @@ def run_in_task(req: EngineRequest, *, sid: Optional[str], ns: Optional[str],
     from services.task import task_utils
     from services.task.task_manager import get_task_queue
 
+    if req.correlation is not None and agent_id and not req.correlation.get("agent_id"):
+        req.correlation["agent_id"] = agent_id
     result = run_engine(req)
     try:
         from services.db import sessions_repo

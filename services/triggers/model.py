@@ -34,7 +34,8 @@ STATUSES = ("active", "paused", "disabled")
 SOURCES = ("user", "heartbeat", "routine")
 CATCH_UP = ("skip", "once")
 # Claude --permission-mode values, plus "skip" (= --dangerously-skip-permissions).
-PERMISSION_MODES = ("auto", "acceptEdits", "dontAsk", "plan", "manual", "bypassPermissions", "skip")
+# "ask" (P5): Claude's permission prompts go to telecode's approve_tool → approvals inbox + Telegram.
+PERMISSION_MODES = ("auto", "ask", "acceptEdits", "dontAsk", "plan", "manual", "bypassPermissions", "skip")
 DEFAULT_PERMISSION_MODE = "auto"
 DEFAULT_OK_TOKENS = ["HEARTBEAT_OK", "NO_REPLY"]
 NAME_MAX = 200

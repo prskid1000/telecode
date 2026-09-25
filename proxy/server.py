@@ -40,6 +40,8 @@ from proxy import api_jobs
 from proxy import api_skills
 from proxy import api_runs
 from proxy import api_events
+from proxy import api_telemetry
+from proxy import api_continue
 from proxy import api_design
 from proxy import api_design_agents
 from proxy import api_design_editor
@@ -2816,6 +2818,8 @@ def create_app() -> web.Application:
     api_events.register_routes(app)
     api_triggers.register_routes(app)
     api_approvals.register_routes(app)
+    api_telemetry.register_routes(app)       # P5: OTLP receiver (loopback only) + dashboards
+    api_continue.register_routes(app)        # P5: cross-engine continue
     api_design.register_routes(app)
     api_design_export.register_routes(app)
     api_design_systems.register_routes(app)
@@ -2855,6 +2859,13 @@ async def start_proxy_background() -> web.AppRunner | None:
         trigger_scheduler.start()
     except Exception:
         log.exception("trigger scheduler: failed to start")
+
+    # P4 agent memory: one-time layout migration + reflection results → approvals.
+    try:
+        from services.memory import reflection as memory_reflection
+        memory_reflection.start()
+    except Exception:
+        log.exception("memory reflection: failed to start")
 
     # TeleDesign preview origin: a second site on design.preview_port serving
     # generated pages cross-origin from this API (docs/teledesign-contract.md §5).

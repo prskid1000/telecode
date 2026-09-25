@@ -488,6 +488,16 @@ def snapshots_max_file_mb() -> int:  return _int_setting("tasks.snapshots.max_fi
 def snapshots_max_repo_mb() -> int:  return _int_setting("tasks.snapshots.max_repo_mb", 2048)
 
 
+# ── Agent memory (P4, services/memory/) ──────────────────────────────────────
+# Reflection: after N runs of an agent (0 = off), and nightly on the cron (UTC by
+# default) when switched on per agent. Runs in the cloud unless reflect_local.
+def tasks_memory_reflect_after_runs() -> int: return _count_setting("tasks.memory.reflect_after_runs", 10)
+def tasks_memory_reflect_cron() -> str: return str(get_nested("tasks.memory.reflect_cron", "30 3 * * *") or "30 3 * * *")
+def tasks_memory_reflect_tz() -> str: return str(get_nested("tasks.memory.reflect_tz", "UTC") or "UTC")
+def tasks_memory_reflect_local() -> bool: return bool(get_nested("tasks.memory.reflect_local", False))
+def tasks_memory_reflect_model() -> str: return str(get_nested("tasks.memory.reflect_model", "") or "").strip()
+
+
 def tasks_local_max_output_tokens() -> int:
     """CLAUDE_CODE_MAX_OUTPUT_TOKENS for local-mode Claude Code runs. Default
     16384, matching the hand-run `claudel.bat` launcher."""

@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" />
 <link rel="stylesheet" href="/shared/appnav.css" />
 <link rel="stylesheet" href="/shared/manager.css" />
+<link rel="stylesheet" href="/shared/observe.css" />
 <script>
   // Apply the saved theme (shared with TeleDesign) before first paint.
   try {
@@ -177,6 +178,7 @@
           <div class="tabs" role="tablist">
             <button class="tab on" data-rtab="active" role="tab"><span class="ti" data-ic="pulse"></span>Active task</button>
             <button class="tab" data-rtab="bytrigger" role="tab"><span class="ti" data-ic="history"></span>By trigger</button>
+            <button class="tab" data-rtab="usage" role="tab"><span class="ti" data-ic="coins"></span>Usage</button>
           </div>
           <div id="rtabActive" class="pane-scroll">
             <div id="active"></div>
@@ -184,6 +186,9 @@
           <div id="rtabByTrigger" class="pane-scroll" style="display:none">
             <div class="row"><span class="muted grow" style="font-size:12px">Click a trigger to see its fires; click a fire to open its task.</span><span id="byTriggerRefreshHost"></span></div>
             <div id="byTriggerList"></div>
+          </div>
+          <div id="rtabUsage" class="pane-scroll" style="display:none">
+            <div id="usageDash"></div>
           </div>
         </section>
       </div>
@@ -193,7 +198,9 @@
 
 <script src="/shared/appnav.js"></script>
 <script src="/shared/manager.js"></script>
+<script src="/shared/observe.js"></script>
 <script src="/shared/triggers.js"></script>
+<script src="/shared/memory.js"></script>
 <script>
 "use strict";
 // ═══ Task Mode ═══════════════════════════════════════════════════════════
@@ -294,7 +301,10 @@ async function refreshSession() {
       s.namespace ? h("span", { class: "pill" }, "ns " + s.namespace) : null,
       h("span", { class: "pill" }, icon("history"), `${(s.task_ids || []).length} task${(s.task_ids || []).length === 1 ? "" : "s"}`),
       s.last_used_at ? h("span", { class: "pill", title: fmtDateTime(s.last_used_at) }, icon("clock"), "last used " + fmtTime(s.last_used_at)) : null,
-      claudeSid ? h("span", { class: "pill accent", title: "Claude session " + claudeSid }, icon("refresh"), "resumable · claude=" + claudeSid.slice(0, 8) + "…") : null);
+      claudeSid ? h("span", { class: "pill accent", title: "Claude session " + claudeSid }, icon("refresh"), "resumable · claude=" + claudeSid.slice(0, 8) + "…") : null,
+      // P5: carry this session's work over to another engine
+      window.TCObserve && (s.task_ids || []).length ? TCObserve.continueButton({ sessionId: sid, namespace: s.namespace || null,
+        onStarted: (res) => { watchTask(res.task_id); refreshTasks(); } }) : null);
   } catch (e) {
     mount(b, h("span", { class: "pill err" }, icon("alert"), e.message));
   }
@@ -554,7 +564,9 @@ function showRightTab(t) {
   document.querySelectorAll(".tab[data-rtab]").forEach(b => { b.classList.toggle("on", b.dataset.rtab === t); b.setAttribute("aria-selected", String(b.dataset.rtab === t)); });
   $("rtabActive").style.display = t === "active" ? "" : "none";
   $("rtabByTrigger").style.display = t === "bytrigger" ? "" : "none";
+  $("rtabUsage").style.display = t === "usage" ? "" : "none";
   if (t === "bytrigger") refreshByTrigger();
+  if (t === "usage" && window.TCObserve) TCObserve.mountDashboard($("usageDash"), { group: "engine", range: "7d" });   // P5
 }
 document.querySelectorAll(".tab[data-tab]").forEach(b => b.onclick = () => showLeftTab(b.dataset.tab));
 document.querySelectorAll(".tab[data-rtab]").forEach(b => b.onclick = () => showRightTab(b.dataset.rtab));

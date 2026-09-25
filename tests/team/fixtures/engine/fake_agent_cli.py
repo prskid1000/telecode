@@ -21,6 +21,8 @@ told to. Options:
                         sleep --hang-sec (for the token-cap test)
   --hang-sec S          sleep S seconds before the result
   --budget-hit          end with subtype error_max_budget_usd
+  --tool NAME[=CMD]     emit an assistant tool_use block for NAME (repeatable; P5 spans)
+  --model NAME          report NAME as the model in the init event
 """
 
 import argparse
@@ -45,6 +47,8 @@ def main() -> int:
     ap.add_argument("--tokens", type=int, default=0)
     ap.add_argument("--hang-sec", type=float, default=0.0)
     ap.add_argument("--budget-hit", action="store_true")
+    ap.add_argument("--tool", action="append", default=[])
+    ap.add_argument("--model")
     a, rest = ap.parse_known_args()
 
     prompt = sys.stdin.buffer.read().decode("utf-8")
@@ -64,7 +68,12 @@ def main() -> int:
     if a.agy:
         out({"event": "init", "conversation_id": sid})
     else:
-        out({"type": "system", "subtype": "init", "session_id": sid})
+        out({"type": "system", "subtype": "init", "session_id": sid, **({"model": a.model} if a.model else {})})
+        for i, spec in enumerate(a.tool):
+            name, _, cmd = spec.partition("=")
+            out({"type": "assistant", "session_id": sid, "message": {"id": f"t{i}", "content": [
+                {"type": "tool_use", "id": f"tu{i}", "name": name, "input": {"command": cmd or "true"}}]}})
+            time.sleep(0.02)
 
     if a.fail_times and a.counter:
         n = int(open(a.counter).read()) if os.path.exists(a.counter) else 0

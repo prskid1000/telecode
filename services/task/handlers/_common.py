@@ -143,6 +143,9 @@ def prepare(engine: str, *, prompt: Optional[str], is_local: bool, agent_id: Opt
         else:
             resume_id = None   # agy has no fork (or nothing to fork): fresh, seeded by the handoff
             lineage["lineage"] = "fresh"
+    if isinstance(ctl.get("lineage"), dict):
+        # P5 cross-engine continue: {lineage: "engine_switch", switched_from: <row id>}
+        lineage.update({k: v for k, v in ctl["lineage"].items() if k in ("lineage", "switched_from")})
     ctx = TaskContext(
         prompt=text, agent_id=agent_id, task_id=get_task_id() or "no-task", sid=sid, ns=ns,
         work_dir=work_dir, log_dir=log_dir, resume_id=resume_id,
@@ -155,24 +158,11 @@ def prepare(engine: str, *, prompt: Optional[str], is_local: bool, agent_id: Opt
 
 # ── Rotation ────────────────────────────────────────────────────────────────
 
-_PINNED_RE = re.compile(r"^#{1,6}\s*pinned constraints\s*$", re.I | re.M)
-
-
 def pinned_constraints(agent_id: Optional[str]) -> str:
-    """The ``## Pinned constraints`` section of the agent's AGENT.md (to the next heading)."""
-    if not agent_id:
-        return ""
-    try:
-        from services.agent.agent_manager import get_agent_manager
-        text = get_agent_manager().get_internal_files(agent_id).get("AGENT.md", "") or ""
-    except Exception:
-        return ""
-    m = _PINNED_RE.search(text)
-    if not m:
-        return ""
-    rest = text[m.end():]
-    nxt = re.search(r"^#{1,6}\s", rest, re.M)
-    return (rest[: nxt.start()] if nxt else rest).strip()
+    """The ``## Pinned constraints`` section of the agent's AGENT.md — one
+    source, :func:`services.memory.pinned_constraints` (triggers call this name)."""
+    from services.memory import pinned_constraints as _pinned
+    return _pinned(agent_id)
 
 
 ROTATION_ASK = (

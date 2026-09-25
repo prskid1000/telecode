@@ -15,6 +15,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from services.engine.adapters.base import (Adapter, Launch, ParseState, describe_tool,
@@ -27,23 +29,50 @@ logger = logging.getLogger("telecode.services.engine.claude")
 SKIP_MODES = (None, "", "skip", "bypassPermissions")
 
 
-def permission_args(permission_mode: Optional[str]) -> List[str]:
+ASK_MODE = "ask"
+# The MCP server name telecode's own entry gets in the per-run --mcp-config (not
+# "telecode": the user may already have a server by that name in their config).
+APPROVE_SERVER = "telecode_safety"
+APPROVE_TOOL = f"mcp__{APPROVE_SERVER}__approve_tool"
+
+
+def permission_args(permission_mode: Optional[str], *, approve_mcp_config=None) -> List[str]:
     """``--dangerously-skip-permissions`` (interactive / pipeline runs), or for
     autonomous runs ``--permission-mode <mode> --permission-prompts none``: the
     mode decides what is allowed, and anything that would prompt is denied —
-    nobody is there to answer (verified on claude 2.1.282)."""
+    nobody is there to answer (verified on claude 2.1.282).
+
+    ``ask`` (P5): the default permission mode, and every prompt goes to
+    telecode's ``approve_tool`` MCP tool (``--permission-prompt-tool``), which
+    asks a person through the approvals inbox + Telegram and denies on timeout.
+    Needs the per-run ``--mcp-config`` naming telecode's MCP server."""
+    if permission_mode == ASK_MODE and approve_mcp_config:
+        # The mode is pinned: with none given the CLI uses the user's settings
+        # ``defaultMode`` (verified: bypassPermissions on this machine), and nothing
+        # would ever be asked. ``manual`` is 2.1.282's name for the prompting mode.
+        return ["--permission-mode", "manual", "--permission-prompts", "host",
+                "--permission-prompt-tool", APPROVE_TOOL, "--mcp-config", str(approve_mcp_config)]
     if permission_mode in SKIP_MODES:
         return ["--dangerously-skip-permissions"]
     return ["--permission-mode", str(permission_mode), "--permission-prompts", "none"]
 
 
+def approve_mcp_config(correlation: Optional[Dict[str, Any]], mcp_url: str) -> Dict[str, Any]:
+    """``--mcp-config`` JSON for ``ask`` mode: telecode's MCP server over HTTP,
+    with the run's ids as headers so ``approve_tool`` knows whose call it is."""
+    c = correlation or {}
+    headers = {f"X-Telecode-{k.replace('_id', '').replace('_', '-').title()}": str(c[k])
+               for k in ("task_id", "run_id", "step_id", "agent_id", "trigger_id") if c.get(k)}
+    return {"mcpServers": {APPROVE_SERVER: {"type": "http", "url": mcp_url, "headers": headers}}}
+
+
 def build_argv(*, resume_id: Optional[str], model: Optional[str], is_local: bool,
                append_system_prompt_file=None, schema: Optional[Dict[str, Any]] = None,
                add_dirs=(), fork: bool = False, max_budget_usd: Optional[float] = None,
-               permission_mode: Optional[str] = None) -> List[str]:
+               permission_mode: Optional[str] = None, approve_mcp_config_path=None) -> List[str]:
     cmd = [
         "claude", "-p",
-        *permission_args(permission_mode),
+        *permission_args(permission_mode, approve_mcp_config=approve_mcp_config_path),
         "--output-format", "stream-json",
         "--verbose",
         "--include-partial-messages",
@@ -116,12 +145,36 @@ class ClaudeAdapter(Adapter):
             logger.info(f"Local mode: using model {model} at http://localhost:{app_config.proxy_port()}")
         if req.env_extra:
             env = {**(env or os.environ), **req.env_extra}
+        from services.engine import otel
+        if otel.active(req.correlation):
+            env = otel.with_env(env, otel.claude_env(req.correlation or {}))
+        warnings: List[str] = []
+        cleanup: List[Path] = []
+        mode = req.permission_mode
+        cfg_path = None
+        if mode == ASK_MODE:
+            from services.telemetry import settings as p5
+            if not p5.mcp_enabled():
+                warnings.append("permission mode 'ask' needs telecode's MCP server (mcp_server.enabled) for "
+                                "approve_tool — falling back to 'auto'")
+                logger.warning(warnings[-1])
+                mode = "auto"
+            else:
+                import config as app_config
+                d = Path(app_config._settings_dir()) / "data" / "runtime" / "engine"
+                d.mkdir(parents=True, exist_ok=True)
+                cfg_path = d / f"mcp-approve-{uuid.uuid4().hex}.json"
+                cfg_path.write_text(json.dumps(approve_mcp_config(req.correlation, p5.mcp_url())), encoding="utf-8")
+                cleanup.append(cfg_path)
+                # The tool waits for a person; Claude's MCP tool timeout must outlast it.
+                env = {**(env or os.environ),
+                       "MCP_TOOL_TIMEOUT": str(int((p5.approval_timeout_sec() + 60) * 1000))}
         argv = build_argv(resume_id=req.resume_id, model=req.model, is_local=req.is_local,
                           append_system_prompt_file=req.system_append_file, schema=req.schema,
                           add_dirs=req.add_dirs, fork=req.fork,
                           max_budget_usd=None if req.is_local else req.max_usd,
-                          permission_mode=req.permission_mode)
-        return Launch(argv=argv, stdin=req.prompt, env=env)
+                          permission_mode=mode, approve_mcp_config_path=cfg_path)
+        return Launch(argv=argv, stdin=req.prompt, env=env, cleanup=cleanup, warnings=warnings)
 
     def parse(self, evt: Dict[str, Any], st: ParseState) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
@@ -154,6 +207,9 @@ class ClaudeAdapter(Adapter):
                     out.append(tool_event(name, describe_tool(name, tin)))
                     if name == "TodoWrite" and isinstance(tin, dict):
                         out.append({"kind": "todo", "todos": todos_from(tin.get("todos"), "content")})
+        elif t == "system" and evt.get("subtype") == "init":
+            if isinstance(evt.get("model"), str) and evt["model"]:
+                st.model = evt["model"]
         elif t == "system" and evt.get("subtype") == "api_retry":
             out.append({"kind": "retry", "attempt": evt.get("attempt"),
                         "max_retries": evt.get("max_retries"), "error": evt.get("error")})

@@ -11,6 +11,8 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" />
 <link rel="stylesheet" href="/shared/appnav.css" />
 <link rel="stylesheet" href="/shared/manager.css" />
+<link rel="stylesheet" href="/shared/memory.css" />
+<link rel="stylesheet" href="/shared/observe.css" />
 <script>
   // Apply the saved theme (shared with TeleDesign) before first paint.
   try {
@@ -149,7 +151,9 @@
 
 <script src="/shared/appnav.js"></script>
 <script src="/shared/manager.js"></script>
+<script src="/shared/observe.js"></script>
 <script src="/shared/triggers.js"></script>
+<script src="/shared/memory.js"></script>
 <script>
 "use strict";
 // ═══ Team Mode ═══════════════════════════════════════════════════════════
@@ -166,7 +170,7 @@ const INTERNAL_HINTS = {
   "SOUL.md": "Core identity, purpose and values. Staged into every run's workspace.",
   "USER.md": "Who the agent works for — preferences, context, constraints.",
   "AGENT.md": "Operating instructions. Staged as CLAUDE.md / AGENTS.md for the engine.",
-  "MEMORY.md": "Long-term memory. Written back after each run.",
+  "MEMORY.md": "Memory index (memory/MEMORY.md) — one line per memory; topic files, history and reflection are in the Memory & skills card below.",
   "HEARTBEAT.md": "Schedules as YAML inside ```yaml fences — each entry compiles to a trigger on save. Not staged into runs.",
 };
 
@@ -338,7 +342,11 @@ function renderOverview() {
         h("div", null, h("b", null, "3"), h("div", null, h("strong", null, "Build a job and run it"), "Chain agents sequentially, fan out in parallel, or mix both in phases.")))),
     h("section", { class: "card" }, h("div", { class: "card-head" }, h("h3", null, icon("history"), "Recent runs"),
       btn(null, { icon: "refresh", kind: "quiet", size: "sm", title: "Refresh", onClick: () => refreshRecentRuns(true) })),
-      h("div", { class: "card-body flush", id: "recent-runs" }, state.recentRuns ? null : skeleton(3, "sk-row"))));
+      h("div", { class: "card-body flush", id: "recent-runs" }, state.recentRuns ? null : skeleton(3, "sk-row"))),
+    // P5: cost, tokens, outcomes (shared/observe.js)
+    h("section", { class: "card" }, h("div", { class: "card-head" }, h("h3", null, icon("coins"), "Cost & outcomes", h("span", { class: "hint" }, "every engine run: tasks, run steps, trigger fires"))),
+      h("div", { class: "card-body", id: "obs-overview" })));
+  if (window.TCObserve) TCObserve.mountDashboard($("obs-overview"));
   if (state.recentRuns) renderRecentRuns(); else refreshRecentRuns();
 }
 async function refreshRecentRuns() {
@@ -611,6 +619,7 @@ async function renderAgentViewer(id, openFile) {
           h("div", { class: "row" }, btn("Validate", { icon: "checkCircle", kind: "ghost", size: "sm", id: "hb-validate", onClick: () => validateHeartbeat() }),
             h("span", { class: "field-hint" }, "Entries inside ", h("code", null, "```yaml"), " fences compile to triggers on save (cron / every / at, tz, active_hours, skip_if_empty, goal…). Saving validates first.")),
           h("div", { id: "hb-validate-status", class: "hb-result" }))),
+      h("div", { id: "agent-memory-host" }),  // P4: Memory & skills panel (shared/memory.js)
       card("Agent context files", "folder", { hint: `${files.length}`, flush: true,
           actions: h("div", { class: "row" },
             btn("Upload", { icon: "upload", kind: "ghost", size: "sm", onClick: () => upload.click() }),
@@ -621,6 +630,9 @@ async function renderAgentViewer(id, openFile) {
         h("div", { id: "agent-triggers", style: { padding: "6px" } })),
       jobs.length ? card("Jobs using this agent", "workflow", { flush: true }, h("div", { class: "files" }, jobs.map(j => h("div", { class: "frow", style: { cursor: "pointer" }, onclick: () => selectJob(j.id) },
         icon("workflow"), h("span", { class: "nm", style: { fontFamily: "var(--sans)" } }, j.title), h("span", { class: "pill" }, (j.pipeline || {}).mode || "single"), icon("chevronRight"))))) : null);
+    if (window.TCMemory) TCMemory.mount($("agent-memory-host"), id, {   // P4 memory panel; keep the internal-file tabs in step
+      onInternalChanged: async () => { try { const r = await api(`/api/agents/${id}/internal`); for (const f of INTERNAL_FILES) if (!state.internalDirty[f]) state.internalContent[f] = (r.files || {})[f] || ""; const ta = $("agent-internal-content"); if (ta && !state.internalDirty[state.activeInternalFile]) ta.value = state.internalContent[state.activeInternalFile] || ""; } catch { /* ignore */ } },
+      openTrigger: (tid) => selectTrigger(tid) });
     renderTriggerList($("agent-triggers"), { filter: { agent_id: id }, names: triggerNames(), onOpen: (t) => selectTrigger(t.id),
       emptyText: "Add ```yaml entries to HEARTBEAT.md (they compile to triggers on save), or create an agent-prompt trigger." });
     renderInternalTabs();
@@ -1046,6 +1058,10 @@ async function renderJobViewer(id) {
     const titleIn = h("input", { class: "input", id: "job-title", value: job.title || "", oninput: () => markJobDirty() });
     const jobBudget = budgetFields(job.budget, { onChange: () => markJobDirty() });
     state.jobBudget = jobBudget;
+    const outcomeIn = h("input", { class: "input mono", id: "job-outcome", value: (job.outcome_check || {}).command || "", placeholder: "e.g. npm test", spellcheck: "false", oninput: () => markJobDirty() });
+    const permSel = h("select", { class: "select", id: "job-perm", onchange: () => markJobDirty() },
+      [["", "skip (default)"], ["ask", "ask — approve each tool"], ["auto", "auto"], ["acceptEdits", "acceptEdits"], ["dontAsk", "dontAsk"], ["plan", "plan"]]
+        .map(([v, l]) => h("option", { value: v, selected: (job.permission_mode || "") === v }, l)));
     const promptIn = h("textarea", { class: "input code", id: "job-prompt", rows: "8", oninput: () => markJobDirty(),
       placeholder: "What should the agents do? Each step gets this unless it has a prompt override." }, job.task_description || "");
     const upload = h("input", { type: "file", id: "job-file-upload", multiple: true, style: { display: "none" }, onchange: () => uploadJobFiles(id) });
@@ -1074,7 +1090,11 @@ async function renderJobViewer(id) {
             field("Linked workspace", h("input", { class: "input", readonly: true, value: ws ? wsName(ws) : "Missing Workspace" }), "Set when the job was created.")),
           field("Job prompt", promptIn, "The execution plan. Ctrl+Enter saves."),
           h("div", { class: "field", id: "job-budget-field" }, h("span", { class: "field-label" }, "Run budget",
-            h("span", { class: "faint" }, "split evenly across the steps; blank = no cap")), jobBudget.el))),
+            h("span", { class: "faint" }, "split evenly across the steps; blank = no cap")), jobBudget.el),
+          // P5: outcome check + permission mode
+          h("div", { class: "field-row" },
+            field("Outcome check", outcomeIn, "Shell command run in the workspace after each run — exit 0 = the task succeeded (the run's verdict). Blank = use the final handoff's verdict."),
+            field("Permission mode", permSel, "ask = Claude's permission prompts go to the approvals inbox + Telegram (needs the MCP server); blank = skip permissions.")))),
       card("Pipeline", "workflow", { hint: "agents, map fan-outs, loops, approval gates, reduces" },
         h("div", { id: "pipeline-mode", class: "mode-pick", role: "group", "aria-label": "Pipeline mode" }),
         h("div", { style: { height: "14px" } }),
@@ -1257,6 +1277,8 @@ async function updateJob(id, opts = {}) {
   const payload = { title, task_description };
   if (state.pipelineDraft) payload.pipeline = state.pipelineDraft;
   if (state.jobBudget) payload.budget = state.jobBudget.get();
+  if ($("job-outcome")) payload.outcome_check = $("job-outcome").value.trim() ? { command: $("job-outcome").value.trim() } : null;
+  if ($("job-perm")) payload.permission_mode = $("job-perm").value;
   try {
     await api(`/api/jobs/${id}`, jsonOpts("PUT", payload));
     state.jobDirty = false;
@@ -1429,7 +1451,7 @@ function renderRunMonitor(run, stepTasks) {
   const isActive = !TERMINAL_RUN.includes(run.status);
   if (area._runId !== run.run_id || !area.querySelector(".monitor")) {
     area._runId = run.run_id; area._steps = {};
-    mount(area, h("div", { class: "monitor" }, h("div", { class: "mon-head", id: "mon-head" }), h("div", { class: "bar", id: "mon-bar" }, h("i")), h("div", { id: "mon-budget" }), h("div", { class: "col", id: "mon-steps", style: { gap: "10px" } })));
+    mount(area, h("div", { class: "monitor" }, h("div", { class: "mon-head", id: "mon-head" }), h("div", { class: "bar", id: "mon-bar" }, h("i")), h("div", { id: "mon-budget" }), h("div", { id: "mon-observe" }), h("div", { class: "col", id: "mon-steps", style: { gap: "10px" } })));
   }
   const done = run.steps.filter(s => ["completed", "failed", "cancelled", "skipped", "rejected", "budget_exceeded", "interrupted"].includes(s.status)).length;
   const dur = durationBetween(run.started_at, run.completed_at);
@@ -1442,6 +1464,7 @@ function renderRunMonitor(run, stepTasks) {
     isActive ? btn("Cancel run", { icon: "stop", kind: "danger", size: "sm", onClick: () => cancelActiveRun() }) : null);
   const bsig = JSON.stringify([run.budget, run.spent]);
   if ($("mon-budget")._sig !== bsig) { $("mon-budget")._sig = bsig; mount($("mon-budget"), budgetMeter(run.budget, run.spent)); }
+  if (window.TCObserve) TCObserve.mountRunTimeline($("mon-observe"), run);   // P5: verdict + Gantt
   const bar = $("mon-bar"); bar.className = "bar" + (run.status === "completed" ? " ok" : ["failed", "cancelled"].includes(run.status) ? " err" : "");
   bar.firstChild.style.width = (run.steps.length ? Math.round(100 * done / run.steps.length) : 0) + "%";
   const host = $("mon-steps");
@@ -1585,6 +1608,9 @@ function stepActions(run, step, runActive) {
   if (!runActive && failedish) out.push(btn("Retry", { icon: "refresh", kind: "primary", size: "sm", title: last.engine_session_id ? "Resume the same CLI conversation: continue from where it stopped" : "Run the step again (no conversation to resume — starts fresh)", onClick: () => retryStep(run, step, "retry") }));
   if (!runActive && (failedish || st === "completed")) out.push(btn("Retry clean", { icon: "history", kind: "ghost", size: "sm", title: "Restore the pre-step snapshot, then run the step in a fresh conversation (downstream phases re-run)", onClick: () => retryStep(run, step, "retry_clean") }));
   if (last.snapshot_before && last.snapshot_after) out.push(btn("Diff", { icon: "code", kind: "ghost", size: "sm", title: "What this attempt changed in its workspace", onClick: () => openStepDiff(run, step) }));
+  if (window.TCObserve && !runActive && step.session_id && step.session_policy !== "ephemeral" && !["pending", "running"].includes(st))
+    out.push(TCObserve.continueButton({ sessionId: step.session_id, namespace: step.session_namespace || null, engine: step.engine, runId: run.run_id, stepId: step.step_id,
+      onStarted: (r) => openTaskModal(r.task_id, `Continue on ${r.to_engine}`) }));   // P5: cross-engine continue
   if (!runActive && last.snapshot_before && step.session_policy !== "ephemeral" && st !== "pending" && st !== "running") out.push(btn("Revert", { icon: "trash", kind: "danger", size: "sm", title: "Restore the job workspace to its state before this step", onClick: () => revertStep(run, step) }));
   if (!out.length && !step.budget && !step.reverted) return null;
   const b = step.budget || {};

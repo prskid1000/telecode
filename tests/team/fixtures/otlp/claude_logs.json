@@ -1,0 +1,1519 @@
+{
+ "resourceLogs": [
+  {
+   "resource": {
+    "attributes": [
+     {
+      "key": "service.namespace",
+      "value": {
+       "stringValue": "telecode"
+      }
+     },
+     {
+      "key": "telecode.task_id",
+      "value": {
+       "stringValue": "task-real-1"
+      }
+     },
+     {
+      "key": "telecode.run_id",
+      "value": {
+       "stringValue": "run-real-1"
+      }
+     },
+     {
+      "key": "telecode.step_id",
+      "value": {
+       "stringValue": "step-real-1"
+      }
+     },
+     {
+      "key": "telecode.agent_id",
+      "value": {
+       "stringValue": "agent-real-1"
+      }
+     },
+     {
+      "key": "telecode.job_id",
+      "value": {
+       "stringValue": "job-real-1"
+      }
+     },
+     {
+      "key": "telecode.attempt",
+      "value": {
+       "stringValue": "1"
+      }
+     },
+     {
+      "key": "telecode.source",
+      "value": {
+       "stringValue": "p5-e2e"
+      }
+     },
+     {
+      "key": "host.arch",
+      "value": {
+       "stringValue": "amd64"
+      }
+     },
+     {
+      "key": "os.type",
+      "value": {
+       "stringValue": "windows"
+      }
+     },
+     {
+      "key": "os.version",
+      "value": {
+       "stringValue": "10.0.26200"
+      }
+     },
+     {
+      "key": "service.name",
+      "value": {
+       "stringValue": "claude-code"
+      }
+     },
+     {
+      "key": "service.version",
+      "value": {
+       "stringValue": "2.1.282"
+      }
+     }
+    ],
+    "droppedAttributesCount": 0
+   },
+   "scopeLogs": [
+    {
+     "scope": {
+      "name": "com.anthropic.claude_code.events",
+      "version": "2.1.282"
+     },
+     "logRecords": [
+      {
+       "timeUnixNano": "1790324603130000000",
+       "observedTimeUnixNano": "1790324603130000000",
+       "body": {
+        "stringValue": "claude_code.mcp_server_connection"
+       },
+       "attributes": [
+        {
+         "key": "service.namespace",
+         "value": {
+          "stringValue": "telecode"
+         }
+        },
+        {
+         "key": "telecode.task_id",
+         "value": {
+          "stringValue": "task-real-1"
+         }
+        },
+        {
+         "key": "telecode.run_id",
+         "value": {
+          "stringValue": "run-real-1"
+         }
+        },
+        {
+         "key": "telecode.step_id",
+         "value": {
+          "stringValue": "step-real-1"
+         }
+        },
+        {
+         "key": "telecode.agent_id",
+         "value": {
+          "stringValue": "agent-real-1"
+         }
+        },
+        {
+         "key": "telecode.job_id",
+         "value": {
+          "stringValue": "job-real-1"
+         }
+        },
+        {
+         "key": "telecode.attempt",
+         "value": {
+          "stringValue": "1"
+         }
+        },
+        {
+         "key": "telecode.source",
+         "value": {
+          "stringValue": "p5-e2e"
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000001"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "mcp_server_connection"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-09-25T08:23:23.130Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 11
+         }
+        },
+        {
+         "key": "status",
+         "value": {
+          "stringValue": "failed"
+         }
+        },
+        {
+         "key": "transport_type",
+         "value": {
+          "stringValue": "stdio"
+         }
+        },
+        {
+         "key": "server_scope",
+         "value": {
+          "stringValue": "user"
+         }
+        },
+        {
+         "key": "duration_ms",
+         "value": {
+          "stringValue": "114"
+         }
+        },
+        {
+         "key": "is_plugin",
+         "value": {
+          "boolValue": false
+         }
+        },
+        {
+         "key": "error_code",
+         "value": {
+          "stringValue": "CONNECTION_CLOSED"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0
+      },
+      {
+       "timeUnixNano": "1790324603137000000",
+       "observedTimeUnixNano": "1790324603137000000",
+       "body": {
+        "stringValue": "claude_code.mcp_server_connection"
+       },
+       "attributes": [
+        {
+         "key": "service.namespace",
+         "value": {
+          "stringValue": "telecode"
+         }
+        },
+        {
+         "key": "telecode.task_id",
+         "value": {
+          "stringValue": "task-real-1"
+         }
+        },
+        {
+         "key": "telecode.run_id",
+         "value": {
+          "stringValue": "run-real-1"
+         }
+        },
+        {
+         "key": "telecode.step_id",
+         "value": {
+          "stringValue": "step-real-1"
+         }
+        },
+        {
+         "key": "telecode.agent_id",
+         "value": {
+          "stringValue": "agent-real-1"
+         }
+        },
+        {
+         "key": "telecode.job_id",
+         "value": {
+          "stringValue": "job-real-1"
+         }
+        },
+        {
+         "key": "telecode.attempt",
+         "value": {
+          "stringValue": "1"
+         }
+        },
+        {
+         "key": "telecode.source",
+         "value": {
+          "stringValue": "p5-e2e"
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000001"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "mcp_server_connection"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-09-25T08:23:23.137Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 12
+         }
+        },
+        {
+         "key": "status",
+         "value": {
+          "stringValue": "failed"
+         }
+        },
+        {
+         "key": "transport_type",
+         "value": {
+          "stringValue": "http"
+         }
+        },
+        {
+         "key": "server_scope",
+         "value": {
+          "stringValue": "user"
+         }
+        },
+        {
+         "key": "duration_ms",
+         "value": {
+          "stringValue": "29"
+         }
+        },
+        {
+         "key": "is_plugin",
+         "value": {
+          "boolValue": false
+         }
+        },
+        {
+         "key": "error_code",
+         "value": {
+          "stringValue": "ECONNREFUSED"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "resource": {
+    "attributes": [
+     {
+      "key": "service.namespace",
+      "value": {
+       "stringValue": "telecode"
+      }
+     },
+     {
+      "key": "telecode.task_id",
+      "value": {
+       "stringValue": "task-real-1"
+      }
+     },
+     {
+      "key": "telecode.run_id",
+      "value": {
+       "stringValue": "run-real-1"
+      }
+     },
+     {
+      "key": "telecode.step_id",
+      "value": {
+       "stringValue": "step-real-1"
+      }
+     },
+     {
+      "key": "telecode.agent_id",
+      "value": {
+       "stringValue": "agent-real-1"
+      }
+     },
+     {
+      "key": "telecode.job_id",
+      "value": {
+       "stringValue": "job-real-1"
+      }
+     },
+     {
+      "key": "telecode.attempt",
+      "value": {
+       "stringValue": "1"
+      }
+     },
+     {
+      "key": "telecode.source",
+      "value": {
+       "stringValue": "p5-e2e"
+      }
+     },
+     {
+      "key": "host.arch",
+      "value": {
+       "stringValue": "amd64"
+      }
+     },
+     {
+      "key": "os.type",
+      "value": {
+       "stringValue": "windows"
+      }
+     },
+     {
+      "key": "os.version",
+      "value": {
+       "stringValue": "10.0.26200"
+      }
+     },
+     {
+      "key": "service.name",
+      "value": {
+       "stringValue": "claude-code"
+      }
+     },
+     {
+      "key": "service.version",
+      "value": {
+       "stringValue": "2.1.282"
+      }
+     }
+    ],
+    "droppedAttributesCount": 0
+   },
+   "scopeLogs": [
+    {
+     "scope": {
+      "name": "com.anthropic.claude_code.events",
+      "version": "2.1.282"
+     },
+     "logRecords": [
+      {
+       "timeUnixNano": "1790324606032000000",
+       "observedTimeUnixNano": "1790324606032000000",
+       "body": {
+        "stringValue": "claude_code.user_prompt"
+       },
+       "attributes": [
+        {
+         "key": "service.namespace",
+         "value": {
+          "stringValue": "telecode"
+         }
+        },
+        {
+         "key": "telecode.task_id",
+         "value": {
+          "stringValue": "task-real-1"
+         }
+        },
+        {
+         "key": "telecode.run_id",
+         "value": {
+          "stringValue": "run-real-1"
+         }
+        },
+        {
+         "key": "telecode.step_id",
+         "value": {
+          "stringValue": "step-real-1"
+         }
+        },
+        {
+         "key": "telecode.agent_id",
+         "value": {
+          "stringValue": "agent-real-1"
+         }
+        },
+        {
+         "key": "telecode.job_id",
+         "value": {
+          "stringValue": "job-real-1"
+         }
+        },
+        {
+         "key": "telecode.attempt",
+         "value": {
+          "stringValue": "1"
+         }
+        },
+        {
+         "key": "telecode.source",
+         "value": {
+          "stringValue": "p5-e2e"
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000001"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "user_prompt"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-09-25T08:23:26.032Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 33
+         }
+        },
+        {
+         "key": "prompt.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000001"
+         }
+        },
+        {
+         "key": "prompt_length",
+         "value": {
+          "stringValue": "94"
+         }
+        },
+        {
+         "key": "prompt",
+         "value": {
+          "stringValue": "<REDACTED>"
+         }
+        },
+        {
+         "key": "message.uuid",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000001"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "resource": {
+    "attributes": [
+     {
+      "key": "service.namespace",
+      "value": {
+       "stringValue": "telecode"
+      }
+     },
+     {
+      "key": "telecode.task_id",
+      "value": {
+       "stringValue": "task-real-1"
+      }
+     },
+     {
+      "key": "telecode.run_id",
+      "value": {
+       "stringValue": "run-real-1"
+      }
+     },
+     {
+      "key": "telecode.step_id",
+      "value": {
+       "stringValue": "step-real-1"
+      }
+     },
+     {
+      "key": "telecode.agent_id",
+      "value": {
+       "stringValue": "agent-real-1"
+      }
+     },
+     {
+      "key": "telecode.job_id",
+      "value": {
+       "stringValue": "job-real-1"
+      }
+     },
+     {
+      "key": "telecode.attempt",
+      "value": {
+       "stringValue": "1"
+      }
+     },
+     {
+      "key": "telecode.source",
+      "value": {
+       "stringValue": "p5-e2e"
+      }
+     },
+     {
+      "key": "host.arch",
+      "value": {
+       "stringValue": "amd64"
+      }
+     },
+     {
+      "key": "os.type",
+      "value": {
+       "stringValue": "windows"
+      }
+     },
+     {
+      "key": "os.version",
+      "value": {
+       "stringValue": "10.0.26200"
+      }
+     },
+     {
+      "key": "service.name",
+      "value": {
+       "stringValue": "claude-code"
+      }
+     },
+     {
+      "key": "service.version",
+      "value": {
+       "stringValue": "2.1.282"
+      }
+     }
+    ],
+    "droppedAttributesCount": 0
+   },
+   "scopeLogs": [
+    {
+     "scope": {
+      "name": "com.anthropic.claude_code.events",
+      "version": "2.1.282"
+     },
+     "logRecords": [
+      {
+       "timeUnixNano": "1790324607987000000",
+       "observedTimeUnixNano": "1790324607987000000",
+       "body": {
+        "stringValue": "claude_code.tool_decision"
+       },
+       "attributes": [
+        {
+         "key": "service.namespace",
+         "value": {
+          "stringValue": "telecode"
+         }
+        },
+        {
+         "key": "telecode.task_id",
+         "value": {
+          "stringValue": "task-real-1"
+         }
+        },
+        {
+         "key": "telecode.run_id",
+         "value": {
+          "stringValue": "run-real-1"
+         }
+        },
+        {
+         "key": "telecode.step_id",
+         "value": {
+          "stringValue": "step-real-1"
+         }
+        },
+        {
+         "key": "telecode.agent_id",
+         "value": {
+          "stringValue": "agent-real-1"
+         }
+        },
+        {
+         "key": "telecode.job_id",
+         "value": {
+          "stringValue": "job-real-1"
+         }
+        },
+        {
+         "key": "telecode.attempt",
+         "value": {
+          "stringValue": "1"
+         }
+        },
+        {
+         "key": "telecode.source",
+         "value": {
+          "stringValue": "p5-e2e"
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000001"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "tool_decision"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-09-25T08:23:27.987Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 36
+         }
+        },
+        {
+         "key": "prompt.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000001"
+         }
+        },
+        {
+         "key": "decision",
+         "value": {
+          "stringValue": "accept"
+         }
+        },
+        {
+         "key": "source",
+         "value": {
+          "stringValue": "config"
+         }
+        },
+        {
+         "key": "tool_name",
+         "value": {
+          "stringValue": "Bash"
+         }
+        },
+        {
+         "key": "tool_use_id",
+         "value": {
+          "stringValue": "toolu_011N3xfyy6Ak47iWv2g2Kh94"
+         }
+        },
+        {
+         "key": "tool_source",
+         "value": {
+          "stringValue": "builtin"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0
+      },
+      {
+       "timeUnixNano": "1790324608004000000",
+       "observedTimeUnixNano": "1790324608004000000",
+       "body": {
+        "stringValue": "claude_code.api_request"
+       },
+       "attributes": [
+        {
+         "key": "service.namespace",
+         "value": {
+          "stringValue": "telecode"
+         }
+        },
+        {
+         "key": "telecode.task_id",
+         "value": {
+          "stringValue": "task-real-1"
+         }
+        },
+        {
+         "key": "telecode.run_id",
+         "value": {
+          "stringValue": "run-real-1"
+         }
+        },
+        {
+         "key": "telecode.step_id",
+         "value": {
+          "stringValue": "step-real-1"
+         }
+        },
+        {
+         "key": "telecode.agent_id",
+         "value": {
+          "stringValue": "agent-real-1"
+         }
+        },
+        {
+         "key": "telecode.job_id",
+         "value": {
+          "stringValue": "job-real-1"
+         }
+        },
+        {
+         "key": "telecode.attempt",
+         "value": {
+          "stringValue": "1"
+         }
+        },
+        {
+         "key": "telecode.source",
+         "value": {
+          "stringValue": "p5-e2e"
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000001"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "api_request"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-09-25T08:23:28.004Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 37
+         }
+        },
+        {
+         "key": "prompt.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000001"
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "claude-haiku-4-5-20251001"
+         }
+        },
+        {
+         "key": "input_tokens",
+         "value": {
+          "intValue": 10
+         }
+        },
+        {
+         "key": "output_tokens",
+         "value": {
+          "intValue": 114
+         }
+        },
+        {
+         "key": "cache_read_tokens",
+         "value": {
+          "intValue": 17513
+         }
+        },
+        {
+         "key": "cache_creation_tokens",
+         "value": {
+          "intValue": 12036
+         }
+        },
+        {
+         "key": "cost_usd",
+         "value": {
+          "doubleValue": 0.0264033
+         }
+        },
+        {
+         "key": "cost_usd_micros",
+         "value": {
+          "intValue": 26403
+         }
+        },
+        {
+         "key": "duration_ms",
+         "value": {
+          "intValue": 1933
+         }
+        },
+        {
+         "key": "ttft_ms",
+         "value": {
+          "intValue": 973
+         }
+        },
+        {
+         "key": "request_id",
+         "value": {
+          "stringValue": "req_011CfPqRUKH7RutXkKk5vsPu"
+         }
+        },
+        {
+         "key": "client_request_id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000001"
+         }
+        },
+        {
+         "key": "speed",
+         "value": {
+          "stringValue": "normal"
+         }
+        },
+        {
+         "key": "query_source",
+         "value": {
+          "stringValue": "sdk"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "resource": {
+    "attributes": [
+     {
+      "key": "service.namespace",
+      "value": {
+       "stringValue": "telecode"
+      }
+     },
+     {
+      "key": "telecode.task_id",
+      "value": {
+       "stringValue": "task-real-1"
+      }
+     },
+     {
+      "key": "telecode.run_id",
+      "value": {
+       "stringValue": "run-real-1"
+      }
+     },
+     {
+      "key": "telecode.step_id",
+      "value": {
+       "stringValue": "step-real-1"
+      }
+     },
+     {
+      "key": "telecode.agent_id",
+      "value": {
+       "stringValue": "agent-real-1"
+      }
+     },
+     {
+      "key": "telecode.job_id",
+      "value": {
+       "stringValue": "job-real-1"
+      }
+     },
+     {
+      "key": "telecode.attempt",
+      "value": {
+       "stringValue": "1"
+      }
+     },
+     {
+      "key": "telecode.source",
+      "value": {
+       "stringValue": "p5-e2e"
+      }
+     },
+     {
+      "key": "host.arch",
+      "value": {
+       "stringValue": "amd64"
+      }
+     },
+     {
+      "key": "os.type",
+      "value": {
+       "stringValue": "windows"
+      }
+     },
+     {
+      "key": "os.version",
+      "value": {
+       "stringValue": "10.0.26200"
+      }
+     },
+     {
+      "key": "service.name",
+      "value": {
+       "stringValue": "claude-code"
+      }
+     },
+     {
+      "key": "service.version",
+      "value": {
+       "stringValue": "2.1.282"
+      }
+     }
+    ],
+    "droppedAttributesCount": 0
+   },
+   "scopeLogs": [
+    {
+     "scope": {
+      "name": "com.anthropic.claude_code.events",
+      "version": "2.1.282"
+     },
+     "logRecords": [
+      {
+       "timeUnixNano": "1790324609443000000",
+       "observedTimeUnixNano": "1790324609443000000",
+       "body": {
+        "stringValue": "claude_code.tool_result"
+       },
+       "attributes": [
+        {
+         "key": "service.namespace",
+         "value": {
+          "stringValue": "telecode"
+         }
+        },
+        {
+         "key": "telecode.task_id",
+         "value": {
+          "stringValue": "task-real-1"
+         }
+        },
+        {
+         "key": "telecode.run_id",
+         "value": {
+          "stringValue": "run-real-1"
+         }
+        },
+        {
+         "key": "telecode.step_id",
+         "value": {
+          "stringValue": "step-real-1"
+         }
+        },
+        {
+         "key": "telecode.agent_id",
+         "value": {
+          "stringValue": "agent-real-1"
+         }
+        },
+        {
+         "key": "telecode.job_id",
+         "value": {
+          "stringValue": "job-real-1"
+         }
+        },
+        {
+         "key": "telecode.attempt",
+         "value": {
+          "stringValue": "1"
+         }
+        },
+        {
+         "key": "telecode.source",
+         "value": {
+          "stringValue": "p5-e2e"
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000001"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "tool_result"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-09-25T08:23:29.443Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 38
+         }
+        },
+        {
+         "key": "prompt.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000001"
+         }
+        },
+        {
+         "key": "tool_name",
+         "value": {
+          "stringValue": "Bash"
+         }
+        },
+        {
+         "key": "tool_use_id",
+         "value": {
+          "stringValue": "toolu_011N3xfyy6Ak47iWv2g2Kh94"
+         }
+        },
+        {
+         "key": "success",
+         "value": {
+          "stringValue": "true"
+         }
+        },
+        {
+         "key": "duration_ms",
+         "value": {
+          "stringValue": "1454"
+         }
+        },
+        {
+         "key": "tool_input_size_bytes",
+         "value": {
+          "stringValue": "75"
+         }
+        },
+        {
+         "key": "tool_result_size_bytes",
+         "value": {
+          "stringValue": "15"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "resource": {
+    "attributes": [
+     {
+      "key": "service.namespace",
+      "value": {
+       "stringValue": "telecode"
+      }
+     },
+     {
+      "key": "telecode.task_id",
+      "value": {
+       "stringValue": "task-real-1"
+      }
+     },
+     {
+      "key": "telecode.run_id",
+      "value": {
+       "stringValue": "run-real-1"
+      }
+     },
+     {
+      "key": "telecode.step_id",
+      "value": {
+       "stringValue": "step-real-1"
+      }
+     },
+     {
+      "key": "telecode.agent_id",
+      "value": {
+       "stringValue": "agent-real-1"
+      }
+     },
+     {
+      "key": "telecode.job_id",
+      "value": {
+       "stringValue": "job-real-1"
+      }
+     },
+     {
+      "key": "telecode.attempt",
+      "value": {
+       "stringValue": "1"
+      }
+     },
+     {
+      "key": "telecode.source",
+      "value": {
+       "stringValue": "p5-e2e"
+      }
+     },
+     {
+      "key": "host.arch",
+      "value": {
+       "stringValue": "amd64"
+      }
+     },
+     {
+      "key": "os.type",
+      "value": {
+       "stringValue": "windows"
+      }
+     },
+     {
+      "key": "os.version",
+      "value": {
+       "stringValue": "10.0.26200"
+      }
+     },
+     {
+      "key": "service.name",
+      "value": {
+       "stringValue": "claude-code"
+      }
+     },
+     {
+      "key": "service.version",
+      "value": {
+       "stringValue": "2.1.282"
+      }
+     }
+    ],
+    "droppedAttributesCount": 0
+   },
+   "scopeLogs": [
+    {
+     "scope": {
+      "name": "com.anthropic.claude_code.events",
+      "version": "2.1.282"
+     },
+     "logRecords": [
+      {
+       "timeUnixNano": "1790324611231000000",
+       "observedTimeUnixNano": "1790324611231000000",
+       "body": {
+        "stringValue": "claude_code.api_request"
+       },
+       "attributes": [
+        {
+         "key": "service.namespace",
+         "value": {
+          "stringValue": "telecode"
+         }
+        },
+        {
+         "key": "telecode.task_id",
+         "value": {
+          "stringValue": "task-real-1"
+         }
+        },
+        {
+         "key": "telecode.run_id",
+         "value": {
+          "stringValue": "run-real-1"
+         }
+        },
+        {
+         "key": "telecode.step_id",
+         "value": {
+          "stringValue": "step-real-1"
+         }
+        },
+        {
+         "key": "telecode.agent_id",
+         "value": {
+          "stringValue": "agent-real-1"
+         }
+        },
+        {
+         "key": "telecode.job_id",
+         "value": {
+          "stringValue": "job-real-1"
+         }
+        },
+        {
+         "key": "telecode.attempt",
+         "value": {
+          "stringValue": "1"
+         }
+        },
+        {
+         "key": "telecode.source",
+         "value": {
+          "stringValue": "p5-e2e"
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000001"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "api_request"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-09-25T08:23:31.231Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 40
+         }
+        },
+        {
+         "key": "prompt.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000001"
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "claude-haiku-4-5-20251001"
+         }
+        },
+        {
+         "key": "input_tokens",
+         "value": {
+          "intValue": 8
+         }
+        },
+        {
+         "key": "output_tokens",
+         "value": {
+          "intValue": 67
+         }
+        },
+        {
+         "key": "cache_read_tokens",
+         "value": {
+          "intValue": 29549
+         }
+        },
+        {
+         "key": "cache_creation_tokens",
+         "value": {
+          "intValue": 14031
+         }
+        },
+        {
+         "key": "cost_usd",
+         "value": {
+          "doubleValue": 0.0313599
+         }
+        },
+        {
+         "key": "cost_usd_micros",
+         "value": {
+          "intValue": 31360
+         }
+        },
+        {
+         "key": "duration_ms",
+         "value": {
+          "intValue": 1745
+         }
+        },
+        {
+         "key": "ttft_ms",
+         "value": {
+          "intValue": 956
+         }
+        },
+        {
+         "key": "request_id",
+         "value": {
+          "stringValue": "req_011CfPqRiVKYejD4Tv9QjRDU"
+         }
+        },
+        {
+         "key": "client_request_id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000001"
+         }
+        },
+        {
+         "key": "speed",
+         "value": {
+          "stringValue": "normal"
+         }
+        },
+        {
+         "key": "query_source",
+         "value": {
+          "stringValue": "sdk"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0
+      },
+      {
+       "timeUnixNano": "1790324611231000000",
+       "observedTimeUnixNano": "1790324611231000000",
+       "body": {
+        "stringValue": "claude_code.assistant_response"
+       },
+       "attributes": [
+        {
+         "key": "service.namespace",
+         "value": {
+          "stringValue": "telecode"
+         }
+        },
+        {
+         "key": "telecode.task_id",
+         "value": {
+          "stringValue": "task-real-1"
+         }
+        },
+        {
+         "key": "telecode.run_id",
+         "value": {
+          "stringValue": "run-real-1"
+         }
+        },
+        {
+         "key": "telecode.step_id",
+         "value": {
+          "stringValue": "step-real-1"
+         }
+        },
+        {
+         "key": "telecode.agent_id",
+         "value": {
+          "stringValue": "agent-real-1"
+         }
+        },
+        {
+         "key": "telecode.job_id",
+         "value": {
+          "stringValue": "job-real-1"
+         }
+        },
+        {
+         "key": "telecode.attempt",
+         "value": {
+          "stringValue": "1"
+         }
+        },
+        {
+         "key": "telecode.source",
+         "value": {
+          "stringValue": "p5-e2e"
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000001"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "assistant_response"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-09-25T08:23:31.231Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 41
+         }
+        },
+        {
+         "key": "prompt.id",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000001"
+         }
+        },
+        {
+         "key": "response_length",
+         "value": {
+          "intValue": 4
+         }
+        },
+        {
+         "key": "response",
+         "value": {
+          "stringValue": "<REDACTED>"
+         }
+        },
+        {
+         "key": "request_id",
+         "value": {
+          "stringValue": "req_011CfPqRiVKYejD4Tv9QjRDU"
+         }
+        },
+        {
+         "key": "message.uuid",
+         "value": {
+          "stringValue": "00000000-0000-4000-8000-000000000001"
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "claude-haiku-4-5-20251001"
+         }
+        },
+        {
+         "key": "query_source",
+         "value": {
+          "stringValue": "sdk"
+         }
+        }
+       ],
+       "droppedAttributesCount": 0
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

@@ -1,40 +1,52 @@
 """Per-run staging of agent internal files into a workspace.
 
-Stages SOUL.md / USER.md / MEMORY.md verbatim, plus the agent's AGENT.md —
-either into the workspace under the engine's bridge name (AGENTS.md for
-Codex / Antigravity, CLAUDE.md for the legacy Claude path) or, when the caller
-passes ``agent_md_file``, into that file outside the workspace (the Claude
-handler hands it to ``claude --append-system-prompt-file``, so the
-workspace's own CLAUDE.md is never touched).
+Stages SOUL.md / USER.md / MEMORY.md (the memory **index** — topic files stay
+in the agent's ``internal/memory/`` and are reached through ``--add-dir``, see
+:func:`services.memory.engine_extras`), plus the agent's AGENT.md — either
+into the workspace under the engine's bridge name (AGENTS.md for Codex /
+Antigravity, CLAUDE.md for the legacy Claude path) or, when the caller passes
+``agent_md_file``, into that file outside the workspace (the Claude handler
+hands it to ``claude --append-system-prompt-file``, so the workspace's own
+CLAUDE.md is never touched). The agent's portable skills
+(``internal/skills/<name>/``) are staged into ``.agents/skills/`` and
+``.claude/skills/`` (:mod:`services.skills.agent_skills`).
 
 The workspace's own files are never destroyed (B8): any pre-existing file
 with a staged name is backed up to ``data/staging_backups/<key>/`` before
-staging and restored on exit. The backup is on disk, so a crash mid-run is
-repaired by the next stage of the same workspace.
+staging and restored on exit; a skill folder the workspace already has is not
+staged over. The backup manifest is on disk, so a crash mid-run is repaired
+by the next stage of the same workspace.
 
-Write-back is a three-way merge (base = what was staged, ours = what the run
-left, theirs = what agent storage holds now — another run on another
-workspace may have written it meanwhile). Non-overlapping edits merge
-cleanly, and so do two appends at the same point (theirs then ours); a real
-overlap keeps both sides between conflict markers and is logged.
+Write-back (P4) is a git commit in the agent's internal repo
+(:mod:`services.memory.repo`): ``run:<run_id> step:<step_id>`` (or
+``task:<task_id>``) built on the commit staged from, then fast-forwarded — or,
+when another run / an edit committed meanwhile, merged as a per-run branch.
+Files git cannot merge go through :func:`merge3` (same-point appends keep both
+sides; a true overlap keeps both between conflict markers and is logged).
+Files an engine wrote straight into the memory dir during the run (Claude's
+auto memory, topic files via ``--add-dir``) are committed with it.
 
-HEARTBEAT.md is intentionally NOT staged — it is read by the heartbeat
-scheduler directly from agent storage and never touches the workspace.
+A memory-reflection fire (:mod:`services.memory.reflection`) is staged with its
+input digest and never writes back — its proposal goes through an approval.
+
+HEARTBEAT.md is intentionally NOT staged — the trigger scheduler reads it
+directly from agent storage and it never touches the workspace.
 """
 
 from __future__ import annotations
 
-import difflib
 import hashlib
 import json
 import logging
+import re
 import shutil
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, Optional
 
-from services.agent.agent_manager import get_agent_manager
+from services.agent.agent_manager import get_agent_manager, internal_rel
+from services.memory.merge import CONFLICT_OURS, CONFLICT_SEP, CONFLICT_THEIRS, merge3  # noqa: F401 (re-exported)
 
 logger = logging.getLogger("telecode.services.task.staging")
 
@@ -54,6 +66,8 @@ _workspace_locks_guard = threading.Lock()
 _workspace_locks: Dict[str, threading.Lock] = {}
 
 _MANIFEST = "manifest.json"
+# First line of a staged MEMORY.md when the agent has topic files: where they are.
+_TOPICS_HEADER_RE = re.compile(r"\A<!-- memory topic files: .* -->\n")
 
 
 def _get_workspace_lock(session_id: str) -> threading.Lock:
@@ -79,96 +93,6 @@ def _staged_filenames(engine: str, external_agent_md: bool = False) -> tuple:
     return PASSTHROUGH_FILES + (_bridge_filename(engine),)
 
 
-# ── Three-way merge ─────────────────────────────────────────────────────────
-
-CONFLICT_OURS = "<<<<<<< this run"
-CONFLICT_SEP = "======="
-CONFLICT_THEIRS = ">>>>>>> concurrent write"
-
-
-def _hunks(base: List[str], other: List[str], side: str) -> List[Tuple[int, int, List[str], str]]:
-    sm = difflib.SequenceMatcher(None, base, other, autojunk=False)
-    return [(i1, i2, other[j1:j2], side)
-            for tag, i1, i2, j1, j2 in sm.get_opcodes() if tag != "equal"]
-
-
-def _apply(base: List[str], lo: int, hi: int, hunks) -> List[str]:
-    out: List[str] = []
-    pos = lo
-    for i1, i2, lines, _ in sorted(hunks, key=lambda h: (h[0], h[1])):
-        out += base[pos:i1] + lines
-        pos = i2
-    return out + base[pos:hi]
-
-
-def _nl(lines: List[str]) -> List[str]:
-    if lines and not lines[-1].endswith("\n"):
-        return lines[:-1] + [lines[-1] + "\n"]
-    return lines
-
-
-def merge3(base: str, ours: str, theirs: str) -> Tuple[str, bool]:
-    """Line-based three-way merge. Returns (text, had_conflict)."""
-    if ours == theirs or theirs == base:
-        return ours, False
-    if ours == base:
-        return theirs, False
-    # A last line without "\n" differs from the same line with one, which
-    # would turn two appends to a newline-less file into a conflict on the
-    # last line. Merge on newline-terminated text; drop the added final
-    # newline again when neither side had one.
-    had_nl = ours.endswith("\n") or theirs.endswith("\n")
-    base, ours, theirs = (t if (not t or t.endswith("\n")) else t + "\n" for t in (base, ours, theirs))
-    text, conflict = _merge3_lines(base, ours, theirs)
-    if not had_nl and text.endswith("\n") and not conflict:
-        text = text[:-1]
-    return text, conflict
-
-
-def _merge3_lines(base: str, ours: str, theirs: str) -> Tuple[str, bool]:
-    if ours == theirs or theirs == base:
-        return ours, False
-    if ours == base:
-        return theirs, False
-    b = base.splitlines(keepends=True)
-    hunks = sorted(_hunks(b, ours.splitlines(keepends=True), "ours")
-                   + _hunks(b, theirs.splitlines(keepends=True), "theirs"),
-                   key=lambda h: (h[0], h[1]))
-    out: List[str] = []
-    pos = 0
-    conflict = False
-    i = 0
-    while i < len(hunks):
-        group = [hunks[i]]
-        lo, hi = hunks[i][0], hunks[i][1]
-        i += 1
-        while i < len(hunks) and hunks[i][0] <= hi:
-            group.append(hunks[i])
-            hi = max(hi, hunks[i][1])
-            i += 1
-        out += b[pos:lo]
-        pos = hi
-        mine = [h for h in group if h[3] == "ours"]
-        other = [h for h in group if h[3] == "theirs"]
-        if not mine or not other:
-            out += _apply(b, lo, hi, group)
-            continue
-        o_text = _apply(b, lo, hi, mine)
-        t_text = _apply(b, lo, hi, other)
-        if o_text == t_text:
-            out += o_text
-        elif lo == hi and all(h[0] == h[1] for h in group):
-            # Both sides only inserted at the same point (typically two runs
-            # appending to MEMORY.md): keep both, concurrent write first.
-            out += _nl(t_text) + o_text
-        else:
-            conflict = True
-            out += ([CONFLICT_OURS + "\n"] + _nl(o_text) + [CONFLICT_SEP + "\n"]
-                    + _nl(t_text) + [CONFLICT_THEIRS + "\n"])
-    out += b[pos:]
-    return "".join(out), conflict
-
-
 # ── Backups of the workspace's own files ────────────────────────────────────
 
 def _backup_dir(work_dir: Path) -> Path:
@@ -177,15 +101,26 @@ def _backup_dir(work_dir: Path) -> Path:
     return Path(config._settings_dir()) / "data" / "staging_backups" / key
 
 
-def _restore_backups(work_dir: Path, bdir: Path) -> None:
-    """Put the workspace's own files back; remove files that did not exist."""
-    manifest_path = bdir / _MANIFEST
-    if not manifest_path.exists():
-        return
+def _read_manifest(bdir: Path) -> Optional[Dict[str, Any]]:
+    p = bdir / _MANIFEST
+    if not p.exists():
+        return None
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        return json.loads(p.read_text(encoding="utf-8"))
     except Exception as exc:
-        logger.error(f"Unreadable staging manifest {manifest_path}: {exc}")
+        logger.error(f"Unreadable staging manifest {p}: {exc}")
+        return None
+
+
+def _write_manifest(bdir: Path, manifest: Dict[str, Any]) -> None:
+    (bdir / _MANIFEST).write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def _restore_backups(work_dir: Path, bdir: Path) -> None:
+    """Put the workspace's own files back; remove files (and staged skill
+    folders / extras) that did not exist."""
+    manifest = _read_manifest(bdir)
+    if manifest is None:
         return
     for fname, had in (manifest.get("files") or {}).items():
         target = work_dir / fname
@@ -197,6 +132,13 @@ def _restore_backups(work_dir: Path, bdir: Path) -> None:
         except Exception as exc:
             logger.warning(f"Could not restore {target}: {exc}")
             return  # keep the backup dir for the next attempt
+    for rel in manifest.get("extras") or ():
+        try:
+            (work_dir / rel).unlink(missing_ok=True)
+        except Exception:
+            pass
+    from services.skills import agent_skills
+    agent_skills.unstage(work_dir, manifest.get("skills"))
     shutil.rmtree(bdir, ignore_errors=True)
 
 
@@ -214,22 +156,67 @@ def _backup_existing(work_dir: Path, fnames, bdir: Path) -> None:
             files[fname] = True
         else:
             files[fname] = False
-    (bdir / _MANIFEST).write_text(json.dumps({"work_dir": str(work_dir), "files": files}),
-                                  encoding="utf-8")
+    _write_manifest(bdir, {"work_dir": str(work_dir), "files": files})
+
+
+def _manifest_add(work_dir: Path, key: str, value: Any) -> None:
+    bdir = _backup_dir(work_dir)
+    m = _read_manifest(bdir)
+    if m is None:
+        return
+    m[key] = value
+    _write_manifest(bdir, m)
+
+
+# ── Task context ────────────────────────────────────────────────────────────
+
+def _task_info() -> Dict[str, Any]:
+    """{task_id, run_id, step_id, trigger_id, engine} of the task running this stage."""
+    try:
+        from services.task.task_manager import get_task_queue
+        from services.task.task_utils import get_task_id
+        tid = get_task_id()
+        t = get_task_queue().get_task(tid) if tid else None
+        md = (t.metadata if t else {}) or {}
+    except Exception:
+        tid, md = None, {}
+    return {"task_id": tid, "run_id": md.get("run_id"), "step_id": md.get("step_id"),
+            "trigger_id": md.get("trigger_id"), "engine": md.get("engine")}
+
+
+def _label(info: Dict[str, Any]) -> tuple:
+    if info.get("run_id"):
+        return (f"run:{info['run_id']} step:{info.get('step_id') or '-'}",
+                {"kind": "run", "run": info["run_id"], "step": info.get("step_id"), "task": info.get("task_id"),
+                 "engine": info.get("engine")})
+    if info.get("task_id"):
+        return (f"task:{info['task_id']}", {"kind": "task", "task": info["task_id"],
+                                            "trigger": info.get("trigger_id"), "engine": info.get("engine")})
+    return "writeback: staged outside a task", {"kind": "task"}
 
 
 # ── Stage / write back ──────────────────────────────────────────────────────
+
+def _topics_header(agent_id: str) -> str:
+    from services.memory import store
+    mdir = store.memory_dir(agent_id)
+    if any(p.name != store.INDEX for p in mdir.glob("*.md")):
+        return (f"<!-- memory topic files: {mdir} — the index below links to them; read one when it is "
+                f"relevant, edit or add topic files there -->\n")
+    return ""
+
 
 def _stage(agent_id: str, work_dir: Path, engine: str,
            agent_md_file: Optional[Path] = None) -> Dict[str, str]:
     """Copy agent internal files into work_dir; return snapshot of staged contents."""
     mgr = get_agent_manager()
-    internal = mgr.get_internal_files(agent_id)  # dict, includes all 5 internal names
+    internal = mgr.get_internal_files(agent_id)  # dict, includes all 5 internal names (MEMORY.md = index)
     snapshot: Dict[str, str] = {}
     work_dir.mkdir(parents=True, exist_ok=True)
     for fname in PASSTHROUGH_FILES:
         content = internal.get(fname, "") or ""
-        (work_dir / fname).write_text(content, encoding="utf-8")
+        staged = (_topics_header(agent_id) + content) if fname == "MEMORY.md" else content
+        (work_dir / fname).write_text(staged, encoding="utf-8")
         snapshot[fname] = content
     agent_md = internal.get("AGENT.md", "") or ""
     if agent_md_file is not None:
@@ -251,23 +238,75 @@ def _read(p: Path) -> Optional[str]:
         return None
 
 
-def _writeback(agent_id: str, work_dir: Path, engine: str, snapshot: Dict[str, str],
-               agent_md_file: Optional[Path] = None) -> Dict[str, str]:
-    """Three-way merge every changed staged file into agent storage."""
-    mgr = get_agent_manager()
+def _changed(work_dir: Path, engine: str, snapshot: Dict[str, str],
+             agent_md_file: Optional[Path]) -> Dict[str, str]:
     sources = {fname: work_dir / fname for fname in PASSTHROUGH_FILES}
     sources["AGENT.md"] = agent_md_file if agent_md_file is not None else work_dir / _bridge_filename(engine)
-
     changed: Dict[str, str] = {}
     for fname, path in sources.items():
         if fname not in snapshot:
             continue
         current = _read(path)
+        if current is not None and fname == "MEMORY.md":
+            current = _TOPICS_HEADER_RE.sub("", current, count=1)
         if current is not None and current != snapshot[fname]:
             changed[fname] = current
-    if not changed:
+    return changed
+
+
+def _writeback(agent_id: str, work_dir: Path, engine: str, snapshot: Dict[str, str],
+               agent_md_file: Optional[Path] = None, *, base: Optional[str] = None,
+               info: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    """Commit the run's changes to the agent's internal repo (a fast-forward,
+    or a merge of the run's branch when something else committed meanwhile).
+    Returns {fname: new stored text} for the staged files that changed."""
+    from services.memory import repo, store
+    mgr = get_agent_manager()
+    changed = _changed(work_dir, engine, snapshot, agent_md_file)
+    d = store.internal_dir(agent_id)
+    label, trailers = _label(info or _task_info())
+    use_git = repo.available() and repo.is_repo(d)
+    if not use_git:
+        return _writeback_plain(agent_id, snapshot, changed)
+    try:
+        with repo.lock_for(d):
+            if not changed:
+                # Direct writes into the memory dir (auto memory, topic files) still get their commit.
+                repo.commit_all(d, repo.message(f"{label} (memory files)", **trailers))
+                return {}
+            base = base or repo.head(d)
+            files = {internal_rel(f): text for f, text in changed.items()}
+            if repo.head(d) == base:
+                # Nothing else committed since staging: one commit on main carrying the staged
+                # files and whatever the engine wrote straight into the memory dir.
+                for rel, text in files.items():
+                    repo.write_text(d / rel, text)
+                res = {"head": repo.commit_all(d, repo.message(label, **trailers)), "fast_forward": True,
+                       "conflicts": [], "resolved": []}
+            else:
+                sha = repo.commit_tree_on(d, base, files, repo.message(label, **trailers))
+                res = repo.integrate(d, base, sha, label,
+                                     direct_msg=repo.message(f"{label} (memory files)", **trailers),
+                                     trailers=trailers)
+        for p in res["conflicts"]:
+            logger.warning(f"Write-back conflict in {p} for agent {agent_id}: another run changed it "
+                           f"concurrently; kept both versions between conflict markers")
+        if res["resolved"]:
+            logger.info(f"Write-back for agent {agent_id} merged concurrent edits in {res['resolved']}")
+        stored = mgr.get_internal_files(agent_id)
+        logger.info(f"Wrote back {list(changed)} for agent {agent_id} ({label}, "
+                    f"{'fast-forward' if res['fast_forward'] else 'merge'} → {str(res['head'])[:8]})")
+        return {f: stored.get(f, "") for f in changed}
+    except Exception as exc:
+        logger.error(f"Writeback failed for agent {agent_id}: {exc}")
         return {}
 
+
+def _writeback_plain(agent_id: str, snapshot: Dict[str, str], changed: Dict[str, str]) -> Dict[str, str]:
+    """No git on PATH: three-way merge each file against what storage holds now."""
+    mgr = get_agent_manager()
+    if not changed:
+        return {}
     stored = mgr.get_internal_files(agent_id)
     merged: Dict[str, str] = {}
     for fname, ours in changed.items():
@@ -278,11 +317,7 @@ def _writeback(agent_id: str, work_dir: Path, engine: str, snapshot: Dict[str, s
         if text != (stored.get(fname, "") or ""):
             merged[fname] = text
     if merged:
-        try:
-            mgr.set_internal_files(agent_id, merged)
-            logger.info(f"Wrote back {list(merged)} for agent {agent_id}")
-        except Exception as exc:
-            logger.error(f"Writeback failed for agent {agent_id}: {exc}")
+        mgr.set_internal_files(agent_id, merged)
     return merged
 
 
@@ -292,11 +327,20 @@ def _writeback_and_unstage(
     engine: str,
     snapshot: Dict[str, str],
     agent_md_file: Optional[Path] = None,
+    *,
+    base: Optional[str] = None,
+    info: Optional[Dict[str, Any]] = None,
+    discard: bool = False,
 ) -> None:
-    """Merge changes back to agent storage, then restore the workspace's own files."""
+    """Commit changes to the agent's repo, then restore the workspace's own files."""
     try:
-        if snapshot:
-            _writeback(agent_id, work_dir, engine, snapshot, agent_md_file)
+        if snapshot and not discard:
+            _writeback(agent_id, work_dir, engine, snapshot, agent_md_file, base=base, info=info)
+        elif snapshot and discard:
+            dropped = _changed(work_dir, engine, snapshot, agent_md_file)
+            if dropped:
+                logger.warning(f"memory reflection for agent {agent_id} edited {list(dropped)} directly — "
+                               f"discarded (reflection proposes changes through an approval)")
     finally:
         bdir = _backup_dir(work_dir)
         if (bdir / _MANIFEST).exists():
@@ -326,8 +370,8 @@ def stage_for_run(
     *,
     agent_md_file: Optional[Path] = None,
 ) -> Iterator[Dict[str, str]]:
-    """Acquire workspace lock, stage agent files, yield snapshot. On exit:
-    merge-writeback + restore the workspace's own files.
+    """Acquire workspace lock, stage agent files + skills, yield snapshot. On
+    exit: commit the write-back + restore the workspace's own files.
 
     If agent_id is falsy, yields an empty snapshot and does no staging — useful
     for legacy code paths or tasks not bound to an agent.
@@ -336,6 +380,7 @@ def stage_for_run(
         yield {}
         return
 
+    from services.memory import reflection, repo, store
     lock = _get_workspace_lock(workspace_id)
     if not lock.acquire(blocking=False):
         try:
@@ -345,13 +390,33 @@ def stage_for_run(
             pass
         lock.acquire()
     snapshot: Dict[str, str] = {}
+    info = _task_info()
+    is_reflection = reflection.is_reflection_task(agent_id, info)
+    base: Optional[str] = None
     try:
+        d = store.ensure(agent_id)
+        if repo.available() and repo.is_repo(d):
+            with repo.lock_for(d):
+                # Anything uncommitted (e.g. auto memory written outside a run) gets its own commit
+                # first, so the run's commit only carries the run's changes.
+                repo.commit_all(d, repo.message("sync: uncommitted memory changes", kind="direct"))
+                base = repo.head(d)
         _backup_existing(work_dir, _staged_filenames(engine, agent_md_file is not None),
                          _backup_dir(work_dir))
         snapshot = _stage(agent_id, work_dir, engine, agent_md_file)
+        from services.skills import agent_skills
+        _manifest_add(work_dir, "skills", agent_skills.stage(agent_id, work_dir))
+        if is_reflection:
+            _manifest_add(work_dir, "extras", reflection.stage_input(agent_id, work_dir))
         yield snapshot
     finally:
         try:
-            _writeback_and_unstage(agent_id, work_dir, engine, snapshot, agent_md_file)
+            _writeback_and_unstage(agent_id, work_dir, engine, snapshot, agent_md_file,
+                                   base=base, info=info, discard=is_reflection)
         finally:
             lock.release()
+    if not is_reflection and info.get("task_id"):
+        try:
+            reflection.note_run(agent_id, info)
+        except Exception:
+            logger.exception(f"reflection bookkeeping failed for agent {agent_id}")

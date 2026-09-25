@@ -38,6 +38,7 @@ import signal as _sig
 import socket
 import subprocess
 import sys
+import threading
 import time
 from typing import Optional
 
@@ -71,11 +72,27 @@ _TRACKED_PIDS: set[int] = set()
 _TRACKED_PROCS: list = []
 
 
+_JOB_CREATE_LOCK = threading.Lock()
+
+
 def _create_kill_on_close_job():
-    """Idempotent: create the Job Object on first call. No-op off Windows."""
+    """Idempotent: create the Job Object on first call. No-op off Windows.
+
+    Under a lock: two first-time callers racing (a parallel pipeline phase
+    spawning its CLIs at once) used to create two Jobs; the loser's handle was
+    garbage-collected — closing a KILL_ON_JOB_CLOSE Job — which killed the
+    child just assigned to it (NtResumeProcess → STATUS_PROCESS_IS_TERMINATING)."""
     global _JOB_HANDLE
     if sys.platform != "win32" or _JOB_HANDLE is not None:
         return _JOB_HANDLE
+    with _JOB_CREATE_LOCK:
+        if _JOB_HANDLE is not None:
+            return _JOB_HANDLE
+        return _create_job_locked()
+
+
+def _create_job_locked():
+    global _JOB_HANDLE
     try:
         import win32job
         job = win32job.CreateJobObject(None, "")

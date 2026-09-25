@@ -57,8 +57,11 @@ def local_env(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
 
 def build_argv(*, work_dir: Path, resume_id: Optional[str], last_msg_path: Path,
                model: Optional[str], provider_overrides: Optional[List[str]] = None,
-               schema_path: Optional[Path] = None, fork: bool = False) -> List[str]:
+               schema_path: Optional[Path] = None, fork: bool = False, add_dirs=()) -> List[str]:
     exec_only = ["--sandbox", "danger-full-access", "-C", str(work_dir)]
+    # --add-dir is exec-only too (verified on 0.157: absent from `exec resume|fork --help`).
+    for d in add_dirs or ():
+        exec_only += ["--add-dir", str(d)]
     common = [
         "--json",
         "--dangerously-bypass-approvals-and-sandbox",
@@ -133,6 +136,10 @@ class CodexAdapter(Adapter):
                         f"http://localhost:{app_config.proxy_port()}/v1/responses (model={model})")
         if req.env_extra:
             env = {**(env or os.environ), **req.env_extra}
+        from services.engine import otel
+        if otel.active(req.correlation):
+            overrides = overrides + otel.codex_overrides()
+            env = otel.with_env(env, otel.codex_env(req.correlation or {}))
         cleanup: List[Path] = []
         schema_path = None
         if req.schema:
@@ -141,12 +148,10 @@ class CodexAdapter(Adapter):
             schema_path = d / f"schema-{uuid.uuid4().hex}.json"
             schema_path.write_text(json.dumps(req.schema), encoding="utf-8")
             cleanup.append(schema_path)
-        if req.add_dirs:
-            logger.info("codex: add_dirs not supported by codex exec — ignored")
         argv = build_argv(work_dir=req.cwd, resume_id=req.resume_id, last_msg_path=req.last_msg_path,
                           model=model, provider_overrides=overrides, schema_path=schema_path,
-                          fork=req.fork)
-        return Launch(argv=argv, stdin=req.prompt, env=env, cleanup=cleanup)
+                          fork=req.fork, add_dirs=req.add_dirs)
+        return Launch(argv=argv, stdin=req.prompt, env=env, cleanup=cleanup, extras_at=len(argv) - 1)
 
     def parse(self, evt: Dict[str, Any], st: ParseState) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []

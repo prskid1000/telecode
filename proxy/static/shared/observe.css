@@ -1,0 +1,92 @@
+/* Observability (P5) — dashboards, run timeline, verdicts, cross-engine continue.
+   Served from /shared/observe.css next to manager.css; logic in observe.js.
+   Chart colours are roles, stepped separately for each theme (validated with the
+   dataviz validator against --panel: light #fff, dark #171a21). */
+:root {
+  --viz-1: #3987e5; --viz-2: #d95926; --viz-3: #199e70;
+  --viz-grid: rgba(154, 163, 178, .16); --viz-axis: var(--faint);
+  --viz-ok: var(--ok); --viz-err: var(--err); --viz-warn: var(--warn); --viz-live: var(--accent); --viz-idle: #4b5364;
+}
+:root[data-theme="light"] {
+  --viz-1: #1a73c9; --viz-2: #eb6834; --viz-3: #1baf7a;
+  --viz-grid: rgba(90, 99, 113, .14); --viz-idle: #c3c9d3;
+}
+
+.obs { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.obs-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.obs-bar .grow { flex: 1; }
+.obs-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(128px, 100%), 1fr)); gap: 8px; }
+.obs-kpi { background: var(--panel2); border: 1px solid var(--border); border-radius: 9px; padding: 8px 11px; min-width: 0; }
+.obs-kpi .k { font-size: 11px; color: var(--faint); display: flex; gap: 5px; align-items: center; }
+.obs-kpi .k .ic { width: 12px; height: 12px; }
+.obs-kpi .v { font: 600 17px/1.25 var(--mono); font-variant-numeric: tabular-nums; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.obs-kpi .s { font-size: 11px; color: var(--muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.obs-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 12px; }
+.obs-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px 12px; min-width: 0; }
+.obs-panel > header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.obs-panel > header h4 { margin: 0; font-size: 12.5px; font-weight: 600; }
+.obs-panel > header .hint { color: var(--faint); font-size: 11px; font-weight: 400; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.obs-panel > header h4 { white-space: nowrap; }
+.obs-scroll { overflow-x: auto; }
+.obs-panel > header .grow { flex: 1; }
+.obs-chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.obs-chart .gridline { stroke: var(--viz-grid); stroke-width: 1; }
+.obs-chart .axis { fill: var(--viz-axis); font: 10.5px var(--sans); }
+.obs-chart .hit { fill: transparent; cursor: default; }
+.obs-chart .hit:hover + .mark, .obs-chart .mark.hov { filter: brightness(1.18); }
+.obs-legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 11.5px; color: var(--muted); margin-top: 6px; }
+.obs-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.obs-empty { color: var(--faint); font-size: 12px; padding: 18px 4px; text-align: center; }
+.obs-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.obs-table th { text-align: left; font-weight: 500; color: var(--faint); font-size: 11px; padding: 4px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.obs-table td { padding: 5px 6px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.obs-table td.num, .obs-table th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.obs-table tr:last-child td { border-bottom: 0; }
+.obs-table .lbl { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.obs-inbar { display: flex; align-items: center; gap: 8px; min-width: 150px; }
+.obs-inbar > span { flex: 0 0 64px; text-align: right; }
+.obs-inbar > b { flex: 1; height: 6px; position: relative; }
+.obs-inbar > b > i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 0 3px 3px 0; background: var(--viz-1); }
+.obs-passk { display: inline-flex; gap: 3px; vertical-align: middle; }
+.obs-passk b { width: 14px; height: 14px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; font: 600 9.5px var(--mono); color: #fff; }
+.obs-passk b.pass { background: var(--viz-ok); color: var(--bg); }
+.obs-passk b.fail { background: var(--viz-err); color: var(--bg); }
+.obs-passk b.unknown { background: var(--viz-idle); color: var(--text); }
+.obs-hbar { display: grid; grid-template-columns: minmax(90px, 36%) 1fr auto; gap: 4px 8px; align-items: center; font-size: 12px; }
+.obs-hbar .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11.5px; }
+.obs-hbar .tr { height: 10px; background: transparent; position: relative; }
+.obs-hbar .tr i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--viz-1); border-radius: 0 4px 4px 0; }
+.obs-hbar .tr i.err { background: var(--viz-err); border-radius: 0; }
+.obs-hbar .val { font: 11.5px var(--mono); color: var(--muted); text-align: right; white-space: nowrap; }
+.obs-outcomes { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+
+/* tooltip */
+.obs-tip { position: fixed; z-index: 1000; pointer-events: none; background: var(--raised); color: var(--text); border: 1px solid var(--border-strong);
+  border-radius: 8px; padding: 7px 9px; font-size: 11.5px; line-height: 1.45; box-shadow: var(--shadow-pop); max-width: 320px; opacity: 0; transition: opacity .08s; }
+.obs-tip.on { opacity: 1; }
+.obs-tip b { font-weight: 600; }
+.obs-tip .r { display: flex; justify-content: space-between; gap: 14px; }
+.obs-tip .r span:last-child { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+/* run timeline (Gantt) */
+.obs-tl { display: flex; flex-direction: column; gap: 8px; }
+.obs-verdict { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; }
+.obs-verdict pre { width: 100%; margin: 4px 0 0; max-height: 160px; overflow: auto; font: 11px/1.4 var(--mono); background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; white-space: pre-wrap; }
+.obs-gantt { display: grid; grid-template-columns: minmax(120px, 200px) 1fr 74px; gap: 3px 10px; align-items: center; font-size: 12px; }
+.obs-gantt .ph { grid-column: 1 / -1; font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--faint); margin-top: 4px; }
+.obs-gantt .nm { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.obs-gantt .nm span.t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.obs-gantt .track { position: relative; height: 18px; border-radius: 4px; background: linear-gradient(90deg, var(--viz-grid) 1px, transparent 1px) 0 0 / 25% 100%; }
+.obs-gantt .seg { position: absolute; top: 3px; bottom: 3px; min-width: 3px; border-radius: 4px; background: var(--viz-idle); box-shadow: 0 0 0 1px var(--panel); }
+.obs-gantt .seg.ok { background: var(--viz-ok); } .obs-gantt .seg.err { background: var(--viz-err); }
+.obs-gantt .seg.warn { background: var(--viz-warn); } .obs-gantt .seg.live { background: var(--viz-live); animation: obsPulse 1.4s ease-in-out infinite; }
+.obs-gantt .seg.sub { top: 6px; bottom: 6px; opacity: .85; }
+.obs-gantt .cost { text-align: right; font: 11.5px var(--mono); color: var(--muted); white-space: nowrap; }
+.obs-gantt .axis { grid-column: 2; position: relative; height: 14px; font: 10px var(--mono); color: var(--faint); }
+.obs-gantt .axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.obs-gantt .axis span:first-child { transform: none; } .obs-gantt .axis span:last-child { transform: translateX(-100%); }
+.obs-gantt .kk { grid-column: 1 / -1; display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--muted); margin-top: 4px; }
+.obs-gantt .kk i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
+@keyframes obsPulse { 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .obs-gantt .seg.live { animation: none; } }
+@media (max-width: 720px) { .obs-gantt { grid-template-columns: minmax(90px, 34%) 1fr 58px; } }

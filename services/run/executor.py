@@ -398,6 +398,8 @@ def create_and_launch(job: Dict[str, Any], *, is_local: Optional[bool] = None, s
                  "is_local": None if is_local is None else bool(is_local)}
     if trigger.get("permission_mode"):
         overrides["permission_mode"] = trigger["permission_mode"]
+    elif job.get("permission_mode") and job.get("permission_mode") not in ("skip", "bypassPermissions"):
+        overrides["permission_mode"] = job["permission_mode"]      # P5: a job can ask for "ask" / "auto"
     if trigger.get("session_policy"):
         overrides["session_policy"] = trigger["session_policy"]
     run_budget = {k: v for k, v in budget_mod.merge(budget, job.get("budget")).items() if v is not None}
@@ -428,6 +430,8 @@ def create_and_launch(job: Dict[str, Any], *, is_local: Optional[bool] = None, s
 
     snap = {"title": job.get("title", ""), "task_description": job.get("task_description", ""),
             "workspace_id": job.get("workspace_id")}
+    if job.get("outcome_check"):
+        snap["outcome_check"] = job["outcome_check"]              # P5: run after the run, exit 0 = pass
     if trigger.get("context"):
         snap["context"] = trigger["context"]
     if trigger.get("pinned"):
@@ -500,6 +504,8 @@ def cancel_run(run_id: str) -> bool:
         r["status"] = "cancelled"
     store.mutate(run_id, fn)
     store.finalise(run_id)
+    if not driver:
+        _verdict(run_id)
     return True
 
 
@@ -696,6 +702,7 @@ def _on_gate_decided(ap: Dict[str, Any]) -> None:
                     s["status"] = "skipped"
         store.mutate(run_id, rej)
         store.finalise(run_id)
+        _verdict(run_id)
         return
     edited = ap.get("edited_text")
     summary = (edited or "").strip() or (f"Approved by {who}" + (f": {note}" if note else "."))
@@ -732,6 +739,16 @@ def _drive_run(run_id: str, source: str, driver: _RunDriver, from_phase: Optiona
         with _drivers_lock:
             _drivers.pop(run_id, None)
         store.finalise(run_id)
+        _verdict(run_id)
+
+
+def _verdict(run_id: str) -> None:
+    """P5: verdict + outcome check + the run's invoke_workflow span (never raises)."""
+    try:
+        from services.telemetry import verdict
+        verdict.apply(run_id)
+    except Exception:
+        logger.exception(f"run {run_id[:8]}: verdict failed")
 
 
 def _phase_of(step: Dict[str, Any]) -> int:

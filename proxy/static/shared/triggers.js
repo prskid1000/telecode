@@ -13,6 +13,7 @@
 const TRIGGER_TARGETS = [["task", "Task prompt"], ["agent_prompt", "Agent prompt"], ["job", "Team job run"]];
 const TRIGGER_ENGINES = [["claude_code", "Claude Code"], ["codex", "Codex"], ["antigravity", "Antigravity"]];
 const TRIGGER_PERMS = [
+  ["ask", "ask — each tool prompt goes to the approvals inbox + Telegram (needs the MCP server)"],
   ["auto", "auto — risky actions denied, never prompts (default)"],
   ["acceptEdits", "acceptEdits — file edits allowed, other prompts denied"],
   ["dontAsk", "dontAsk — only pre-approved tools"],
@@ -139,7 +140,10 @@ async function renderTriggerDetail(host, id, o = {}) {
     statTile("check", "OK / done", `${st.ok_fires || 0} / ${st.completed_fires || 0}`, "ok = replied HEARTBEAT_OK / NO_REPLY (no notification)"),
     statTile("alert", "Failed", fmtNum(st.failed_fires || 0), st.consecutive_failures ? `${st.consecutive_failures} in a row` : null),
     statTile("pause", "Skipped", fmtNum(st.skipped_fires || 0), st.last_skip_reason || null),
-    statTile("coins", "Cost", fmtCost(st.cost_usd || 0)));
+    statTile("coins", "Cost", fmtCost(st.cost_usd || 0)),
+    // P5: pass^k over the last 5 decided fires (run verdict, else process status)
+    window.TCObserve ? h("div", { class: "stat", title: "Last 5 decided fires — a job fire counts its run's verdict, a task fire its process status" },
+      h("div", { class: "k" }, icon("target"), "Last 5 (pass^k)"), h("div", { class: "v" }, TCObserve.passkStrip(t.id, 5))) : null);
   const kv = (k, v) => v == null || v === "" ? null : h("div", { class: "trig-kv" }, h("span", null, k), h("span", null, v));
   const engine = (TRIGGER_ENGINES.find(e => e[0] === tg.engine) || [0, tg.engine || ""])[1];
   const what = h("div", { class: "trig-grid" },
@@ -149,7 +153,7 @@ async function renderTriggerDetail(host, id, o = {}) {
       kv("Model override", t.model_override || null),
       kv("Session", t.session === "fresh" ? "fresh — a throwaway copy per fire" : tg.kind === "job" ? "shared — the job's workspace" : "shared — one permanent session"),
       tg.kind !== "job" && t.session_id ? kv("Session id", t.session_id) : null,
-      kv("Permissions", t.permission_mode === "skip" ? "skip (dangerously)" : `--permission-mode ${t.permission_mode} · prompts denied`),
+      kv("Permissions", t.permission_mode === "skip" ? "skip (dangerously)" : t.permission_mode === "ask" ? "ask · prompts → approvals inbox + Telegram" : `--permission-mode ${t.permission_mode} · prompts denied`),
       tg.kind !== "job" ? kv("Timeout", fmtMs((t.task_timeout_seconds || 0) * 1000)) : null,
       tg.prompt ? h("details", { class: "trig-prompt" }, h("summary", null, icon("chevronRight"), "Prompt"), h("pre", null, tg.prompt)) : null,
       t.pinned ? h("details", { class: "trig-prompt" }, h("summary", null, icon("chevronRight"), "Pinned constraints"), h("pre", null, t.pinned)) : null),

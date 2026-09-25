@@ -235,6 +235,21 @@ def _normalize_budget(value: Any) -> Dict[str, Any]:
     return {k: v for k, v in normalize(value).items() if v is not None}
 
 
+def _normalize_outcome_check(value: Any) -> Optional[Dict[str, Any]]:
+    from services.telemetry.verdict import normalize_outcome_check
+    return normalize_outcome_check(value)
+
+
+JOB_PERMISSION_MODES = ("", "skip", "ask", "auto", "acceptEdits", "dontAsk", "plan", "manual")
+
+
+def _normalize_job_permission_mode(value: Any) -> str:
+    v = str(value or "").strip()
+    if v not in JOB_PERMISSION_MODES:
+        raise ValueError(f"permission_mode must be one of {JOB_PERMISSION_MODES}")
+    return v
+
+
 def _normalize_auto_retry(value: Any) -> int:
     try:
         n = int(value or 0)
@@ -307,6 +322,10 @@ class JobManager:
             "pipeline": pipeline,
             # Run-level budget {max_usd, max_tokens, max_seconds} split across the steps.
             "budget": _normalize_budget(data.get("budget")),
+            # P5: shell command run in the workspace after each run (exit 0 = pass) and
+            # the Claude permission mode for its runs ("" = skip, "ask" = approve_tool).
+            "outcome_check": _normalize_outcome_check(data.get("outcome_check")),
+            "permission_mode": _normalize_job_permission_mode(data.get("permission_mode")),
             "kind": "user",   # the only kind since P3 (heartbeat jobs became triggers)
             "archived": bool(data.get("archived", False)),
             "created_at": now,
@@ -341,6 +360,10 @@ class JobManager:
             job["pipeline"] = _normalize_pipeline(data["pipeline"])
         if "budget" in data:
             job["budget"] = _normalize_budget(data["budget"])
+        if "outcome_check" in data:
+            job["outcome_check"] = _normalize_outcome_check(data["outcome_check"])
+        if "permission_mode" in data:
+            job["permission_mode"] = _normalize_job_permission_mode(data["permission_mode"])
 
         job["updated_at"] = _now_iso()
         self._get_job_path(job_id).write_text(json.dumps(job, indent=2), encoding="utf-8")

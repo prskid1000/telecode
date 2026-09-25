@@ -81,19 +81,81 @@ def _safe(fn, *args) -> None:
         logger.exception("engine sink %r failed", getattr(fn, "__name__", fn))
 
 
+def engine_extras(req: EngineRequest) -> Dict[str, Any]:
+    """P4's per-agent extras — ``services.memory.engine_extras(agent_id, engine,
+    workspace) -> {args, env, add_dirs}`` — for runs that belong to an agent.
+    A missing module (P4 not installed) or any failure means no extras."""
+    agent_id = (req.correlation or {}).get("agent_id")
+    if not agent_id:
+        return {}
+    try:
+        from services import memory  # noqa: WPS433 — optional, lazily imported
+        fn = getattr(memory, "engine_extras", None)
+        if fn is None:
+            return {}
+        out = fn(agent_id, req.engine, Path(req.cwd)) or {}
+        return out if isinstance(out, dict) else {}
+    except ImportError:
+        return {}
+    except Exception:
+        logger.exception("engine_extras failed — running without them")
+        return {}
+
+
+def _apply_extras(launch, extras: Dict[str, Any]) -> None:
+    args = [str(a) for a in extras.get("args") or [] if a is not None]
+    if args:
+        at = launch.extras_at if launch.extras_at is not None else len(launch.argv)
+        launch.argv[at:at] = args
+    env = {str(k): str(v) for k, v in (extras.get("env") or {}).items() if v is not None}
+    if env:
+        import os
+        launch.env = {**(launch.env if launch.env is not None else os.environ), **env}
+
+
 def run_engine(req: EngineRequest) -> EngineResult:
+    """Run one CLI; with ``req.correlation`` set (and ``telemetry.enabled``) the
+    run is also an ``invoke_agent`` span with ``execute_tool`` children."""
+    span = None
+    if req.correlation is not None:
+        from services.telemetry.spans import start_agent_span
+        span = start_agent_span(engine=req.engine, correlation=req.correlation, model=req.model,
+                                is_local=req.is_local, session_id=req.session_id)
+    if span is None:
+        return _run(req, None)
+    try:
+        result = _run(req, span)
+    except BaseException as exc:
+        u = getattr(span, "last_usage", None) or {}
+        _safe(lambda: span.finish(status="error", message=str(exc) or type(exc).__name__,
+                                  tokens=u.get("tokens"), cost_usd=u.get("cost_usd")))
+        raise
+    _safe(lambda: span.finish(status="ok", tokens=result.tokens, cost_usd=result.cost_usd,
+                              engine_session_id=result.engine_session_id, num_turns=result.num_turns))
+    return result
+
+
+def _run(req: EngineRequest, span) -> EngineResult:
     adapter = get_adapter(req.engine)
     if req.engine == "codex" and req.last_msg_path is None:
         base = Path(req.log_path) if req.log_path else Path(req.cwd) / ".codex_last_message"
         req.last_msg_path = base.with_name(base.stem + ".codex_last_message.txt")
 
     def emit(evt: Dict[str, Any]) -> None:
+        if span is not None:
+            if evt.get("kind") == "usage":
+                span.last_usage = {"tokens": evt.get("tokens"), "cost_usd": evt.get("cost_usd")}
+            _safe(span.on_event, evt)
         _safe(req.on_event, evt)
 
     def progress(p: float, msg: str) -> None:
         _safe(req.on_progress, p, msg)
 
+    extras = engine_extras(req)
+    if extras.get("add_dirs"):
+        req.add_dirs = list(req.add_dirs or []) + [Path(d) for d in extras["add_dirs"] if d]
     launch = adapter.build(req)
+    _apply_extras(launch, extras)
     logger.info(f"{adapter.label} starting: cwd={req.cwd} session={req.session_id} "
                 f"resume={req.resume_id or 'none'}")
     progress(0.05, f"launching {adapter.label}")
@@ -105,6 +167,8 @@ def run_engine(req: EngineRequest) -> EngineResult:
           **({"budget": {k: v for k, v in (("max_usd", req.max_usd), ("max_tokens", req.max_tokens),
                                            ("max_seconds", req.max_seconds)) if v}}
              if (req.max_usd or req.max_tokens or req.max_seconds) else {})})
+    for w in launch.warnings or ():
+        emit({"kind": "warning", "text": w, "message": w})
 
     started = time.monotonic()
     try:
@@ -192,6 +256,8 @@ def run_engine(req: EngineRequest) -> EngineResult:
                         used = budget_tokens(e.get("tokens"))
                         if used > req.max_tokens:
                             request_stop("budget", f"tokens {used} > max_tokens {req.max_tokens}")
+                if span is not None and st.model and span.model != st.model:
+                    span.set_model(st.model)
                 if st.session_id and st.session_id != last_sid:
                     last_sid = st.session_id
                     _safe(req.on_resume_id, st.session_id)

@@ -185,6 +185,102 @@ MIGRATIONS = [
     CREATE INDEX idx_trigger_fires_task ON trigger_fires(task_id);
     CREATE INDEX idx_trigger_fires_run ON trigger_fires(run_id);
     """,
+    # 4 — P5: telemetry (own GenAI spans + the OTLP receiver's spans / metric points / log events),
+    #     engine_switch lineage edge
+    """
+    CREATE TABLE spans (
+        trace_id           TEXT NOT NULL,
+        span_id            TEXT NOT NULL,
+        parent_span_id     TEXT,
+        name               TEXT,
+        operation          TEXT,
+        kind               TEXT,
+        source             TEXT,
+        start_ms           INTEGER,
+        end_ms             INTEGER,
+        duration_ms        INTEGER,
+        status             TEXT,
+        status_message     TEXT,
+        task_id            TEXT,
+        run_id             TEXT,
+        step_id            TEXT,
+        agent_id           TEXT,
+        job_id             TEXT,
+        trigger_id         TEXT,
+        engine             TEXT,
+        model              TEXT,
+        tool_name          TEXT,
+        input_tokens       INTEGER,
+        output_tokens      INTEGER,
+        cache_read_tokens  INTEGER,
+        cache_write_tokens INTEGER,
+        cost_usd           REAL,
+        attributes         TEXT,
+        resource           TEXT,
+        received_ms        INTEGER,
+        PRIMARY KEY (trace_id, span_id)
+    );
+    CREATE INDEX idx_spans_start ON spans(start_ms);
+    CREATE INDEX idx_spans_run ON spans(run_id, step_id);
+    CREATE INDEX idx_spans_task ON spans(task_id);
+    CREATE INDEX idx_spans_op ON spans(operation, start_ms);
+
+    CREATE TABLE metric_points (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts_ms       INTEGER,
+        name        TEXT,
+        value       REAL,
+        unit        TEXT,
+        kind        TEXT,
+        temporality TEXT,
+        type        TEXT,
+        model       TEXT,
+        session_id  TEXT,
+        task_id     TEXT,
+        run_id      TEXT,
+        step_id     TEXT,
+        agent_id    TEXT,
+        trigger_id  TEXT,
+        attributes  TEXT,
+        resource    TEXT,
+        received_ms INTEGER
+    );
+    CREATE INDEX idx_metric_points_ts ON metric_points(ts_ms);
+    CREATE INDEX idx_metric_points_run ON metric_points(run_id, step_id);
+    CREATE INDEX idx_metric_points_task ON metric_points(task_id);
+
+    CREATE TABLE log_events (
+        id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts_ms              INTEGER,
+        name               TEXT,
+        severity           TEXT,
+        body               TEXT,
+        model              TEXT,
+        tool_name          TEXT,
+        success            INTEGER,
+        duration_ms        INTEGER,
+        cost_usd           REAL,
+        input_tokens       INTEGER,
+        output_tokens      INTEGER,
+        cache_read_tokens  INTEGER,
+        cache_write_tokens INTEGER,
+        session_id         TEXT,
+        task_id            TEXT,
+        run_id             TEXT,
+        step_id            TEXT,
+        agent_id           TEXT,
+        trigger_id         TEXT,
+        attributes         TEXT,
+        resource           TEXT,
+        received_ms        INTEGER
+    );
+    CREATE INDEX idx_log_events_ts ON log_events(ts_ms);
+    CREATE INDEX idx_log_events_run ON log_events(run_id, step_id);
+    CREATE INDEX idx_log_events_task ON log_events(task_id);
+    CREATE INDEX idx_log_events_name ON log_events(name, ts_ms);
+
+    ALTER TABLE sessions_index ADD COLUMN switched_from TEXT;
+    """,
 ]
 
 

@@ -166,7 +166,160 @@ async def delete_skill_file(request: web.Request) -> web.Response:
     return web.json_response(out)
 
 
+# ── P4: per-agent skills (internal/skills/<name>/, staged into each run) ──
+# GET    /api/agents/{id}/skills                          list
+# GET|PUT|DELETE /api/agents/{id}/skills/{name}           SKILL.md ({"content"} or raw text)
+# GET|PUT|DELETE /api/agents/{id}/skills/{name}/files/{rel}
+# POST   /api/agents/{id}/skills/{name}/copy-to-global    {overwrite?}
+# POST   /api/skills/{name}/promote                       {agent_id, overwrite?}
+
+def _agent_guard(fn):
+    import functools
+
+    @functools.wraps(fn)
+    async def wrapper(request: web.Request) -> web.Response:
+        from services.agent.agent_manager import get_agent_manager
+        from services.task.safe_paths import validate_id
+        rid = _log_req(request)
+        try:
+            validate_id(request.match_info.get("agent_id", ""), "agent_id")
+        except ValueError as e:
+            return _err(rid, str(e), 400)
+        if not get_agent_manager().get_agent(request.match_info["agent_id"]):
+            return _err(rid, "Agent not found", 404)
+        try:
+            resp = await fn(request)
+        except FileNotFoundError as e:
+            return _err(rid, str(e), 404)
+        except ValueError as e:
+            from services.skills.agent_skills import SkillExists
+            return _err(rid, str(e), 409 if isinstance(e, SkillExists) else 400)
+        request_log.finish(rid, resp.status)
+        return resp
+    return wrapper
+
+
+async def _skill_content(request: web.Request) -> str:
+    ctype = (request.headers.get("Content-Type") or "").split(";")[0].strip()
+    if ctype == "application/json":
+        try:
+            body = await request.json()
+        except Exception:
+            raise ValueError("invalid JSON body")
+        content = body.get("content") if isinstance(body, dict) else None
+        if not isinstance(content, str):
+            raise ValueError("'content' (string) is required")
+        return content
+    return await request.text()
+
+
+async def _json_or_empty(request: web.Request) -> dict:
+    if not request.can_read_body:
+        return {}
+    try:
+        body = await request.json()
+    except Exception:
+        raise ValueError("invalid JSON body")
+    return body if isinstance(body, dict) else {}
+
+
+async def agent_list_skills(request: web.Request) -> web.Response:
+    from services.skills import agent_skills
+    return web.json_response({"skills": agent_skills.list_skills(request.match_info["agent_id"])})
+
+
+async def agent_get_skill(request: web.Request) -> web.Response:
+    from services.skills import agent_skills
+    s = agent_skills.get_skill(request.match_info["agent_id"], request.match_info["name"])
+    if not s:
+        raise FileNotFoundError(f"skill '{request.match_info['name']}' not found")
+    return web.json_response(s)
+
+
+async def agent_put_skill(request: web.Request) -> web.Response:
+    from services.skills import agent_skills
+    content = await _skill_content(request)
+    return web.json_response(agent_skills.upsert_skill(request.match_info["agent_id"], request.match_info["name"],
+                                                       content))
+
+
+async def agent_delete_skill(request: web.Request) -> web.Response:
+    from services.skills import agent_skills
+    if not agent_skills.delete_skill(request.match_info["agent_id"], request.match_info["name"]):
+        raise FileNotFoundError(f"skill '{request.match_info['name']}' not found")
+    return web.json_response({"deleted": request.match_info["name"]})
+
+
+async def agent_get_skill_file(request: web.Request) -> web.Response:
+    from services.skills import agent_skills
+    data = agent_skills.read_skill_file(request.match_info["agent_id"], request.match_info["name"],
+                                        request.match_info["rel"])
+    return web.Response(body=data, content_type="application/octet-stream")
+
+
+async def agent_put_skill_file(request: web.Request) -> web.Response:
+    from services.skills import agent_skills
+    data = await request.read()
+    if not data:
+        raise ValueError("empty body")
+    return web.json_response(agent_skills.write_skill_file(request.match_info["agent_id"], request.match_info["name"],
+                                                           request.match_info["rel"], data))
+
+
+async def agent_delete_skill_file(request: web.Request) -> web.Response:
+    from services.skills import agent_skills
+    if not agent_skills.delete_skill_file(request.match_info["agent_id"], request.match_info["name"],
+                                          request.match_info["rel"]):
+        raise FileNotFoundError(f"file '{request.match_info['rel']}' not found")
+    return web.json_response({"deleted": request.match_info["rel"]})
+
+
+async def agent_copy_to_global(request: web.Request) -> web.Response:
+    from services.skills import agent_skills
+    body = await _json_or_empty(request)
+    return web.json_response(agent_skills.copy_to_global(request.match_info["agent_id"], request.match_info["name"],
+                                                         overwrite=bool(body.get("overwrite"))))
+
+
+async def promote_skill(request: web.Request) -> web.Response:
+    from services.agent.agent_manager import get_agent_manager
+    from services.skills import agent_skills
+    from services.skills.agent_skills import SkillExists
+    from services.task.safe_paths import validate_id
+    rid = _log_req(request)
+    try:
+        body = await _json_or_empty(request)
+        agent_id = validate_id(str(body.get("agent_id") or ""), "agent_id")
+        if not get_agent_manager().get_agent(agent_id):
+            return _err(rid, "Agent not found", 404)
+        out = agent_skills.promote_to_agent(request.match_info["name"], agent_id,
+                                            overwrite=bool(body.get("overwrite")))
+    except FileNotFoundError as e:
+        return _err(rid, str(e), 404)
+    except SkillExists as e:
+        return _err(rid, str(e), 409)
+    except ValueError as e:
+        return _err(rid, str(e), 400)
+    request_log.finish(rid, 200)
+    return web.json_response(out)
+
+
+def register_agent_skill_routes(app: web.Application):
+    g = _agent_guard
+    base = "/api/agents/{agent_id}/skills"
+    app.router.add_get(base, g(agent_list_skills))
+    app.router.add_get(base + "/{name}", g(agent_get_skill))
+    app.router.add_put(base + "/{name}", g(agent_put_skill))
+    app.router.add_delete(base + "/{name}", g(agent_delete_skill))
+    app.router.add_post(base + "/{name}/copy-to-global", g(agent_copy_to_global))
+    app.router.add_get(base + "/{name}/files/{rel:.+}", g(agent_get_skill_file))
+    app.router.add_put(base + "/{name}/files/{rel:.+}", g(agent_put_skill_file))
+    app.router.add_delete(base + "/{name}/files/{rel:.+}", g(agent_delete_skill_file))
+    app.router.add_post("/api/skills/{name}/promote", promote_skill)
+
+
 def register_routes(app: web.Application):
+    register_agent_skill_routes(app)
     app.router.add_get("/api/skills", list_skills)
     app.router.add_get("/api/skills/", list_skills)
     app.router.add_get("/api/skills/_roots", list_roots)

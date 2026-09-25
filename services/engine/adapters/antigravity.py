@@ -125,7 +125,8 @@ class AntigravityAdapter(Adapter):
             logger.info("antigravity: no fork support — starting a fresh conversation")
             resume_id = None
         argv = build_argv(work_dir=req.cwd, resume_id=resume_id, model=model_arg, add_dirs=req.add_dirs)
-        return Launch(argv=argv, stdin=stdin_message(req.prompt), env=env)
+        # agy has no OTel export: own spans only. engine_extras args go before the trailing -p=.
+        return Launch(argv=argv, stdin=stdin_message(req.prompt), env=env, extras_at=len(argv) - 1)
 
     def parse(self, evt: Dict[str, Any], st: ParseState) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []

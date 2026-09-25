@@ -140,7 +140,7 @@ tasks, shared Team · Tasks · Design navbar.
 | **P1 — Engine Runner + Store** (M) — **done** | `services/engine/` used by all modes incl. TeleDesign; SQLite store for tasks/events/runs/steps/attempts/sessions + startup reconcile; SSE for Task/Team; resume scope (workspace, agent, engine); explicit context via `--append-system-prompt-file`; stop clobbering workspace CLAUDE.md | medium — touches every mode; keep the REST surface backward compatible |
 | **P2 — Handoffs, budgets, snapshots** (M) — **done** | structured step outputs + artifacts; budgets; retries; shadow-git snapshots + diff/revert; session policy per step (resume/fork/fresh/ephemeral) | medium |
 | **P3 — New step kinds + triggers** (M) — **done** | map / loop / gate / reduce; approvals inbox + Telegram; unified Triggers (cron/interval/at/webhook/github/file) with heartbeat cost controls and goals | medium |
-| **P4 — Memory** (S–M) | git-versioned `internal/`, index + topic files, pinned constraints, autoMemoryDirectory, portable skills, reflection job with approval | low |
+| **P4 — Memory** (S–M) — **done** | git-versioned `internal/`, index + topic files, pinned constraints, autoMemoryDirectory, portable skills, reflection job with approval | low |
 | **P5 — Observability + safety** (M) | OTLP receiver + GenAI spans + cost dashboards; verdicts/evals; auto permission mode + approve_tool; session rotation at thresholds; cross-engine continue | medium |
 
 ### P1 as built (2026-09-25)
@@ -248,6 +248,116 @@ tasks, shared Team · Tasks · Design navbar.
   equivalent for Codex / agy (they keep their bypass flags); map over a nested structured field other than the handoff lists;
   a parallel fork mode for map workers (forks share the planner's cwd, so they serialise); trigger-level budgets beyond
   `max_cost_usd`; an `attempts` table (still records in the step).
+
+### P4 as built (2026-09-25)
+- **Git-versioned `internal/`** (`services/memory/repo.py`): `data/agents/<id>/internal/.git`, separate from every workspace git and
+  the snapshot repos; `CREATE_NO_WINDOW`, `GIT_CONFIG_GLOBAL=devnull`, LF files. Every change is a commit with `telecode-*`
+  trailers: write-back `run:<run> step:<step>` / `task:<id>`, `ui: …`, `reflection: …`, `revert: …`, `migrate: …`. One re-entrant
+  lock per repo (`repo.lock_for`) shared by staging, the memory API and `agent_manager`.
+- **Merge-on-write-back replaces the P0 merge**: when nothing committed since the run was staged, one commit on main (it also
+  carries files the engine wrote straight into `memory/`); otherwise the run's commit is built on the staged base in a temporary
+  index and merged as a per-run branch (`git merge --no-ff`, `merge run:…`). Only files git reports conflicted go through the P0
+  `merge3` (moved to `services/memory/merge.py`, still re-exported by staging): same-point appends keep both, true overlaps keep
+  both between `<<<<<<< this run` markers + a warning. API: `GET /api/agents/{id}/memory/history?limit&path`,
+  `GET …/memory/diff?commit&path`, `POST …/memory/revert {commit}` (a new commit; 409 when later changes overlap; the root is refused).
+- **Index + typed topic files** (`services/memory/store.py`): `memory/MEMORY.md` is the index (the API still calls it `MEMORY.md`;
+  ≤200 lines / 25 KB, warned not enforced for agent writes, `- [Name](file.md) — description`) + topic files with frontmatter
+  `name / description / type: user|feedback|project|reference` (+ `helpful` / `harmful` on feedback) — Claude Code's own auto-memory
+  shape. Only the index is staged; its first line names the topic dir when topics exist (stripped on write-back). REST:
+  `GET /api/agents/{id}/memory`, `PUT …/memory/index`, `POST …/memory/index/rebuild`, `GET|PUT|DELETE …/memory/topics/{file}`.
+- **Migration, once per agent** (`store.ensure`, on first touch; `reflection.start()` sweeps every agent at proxy start): `git init`
+  of the existing files (CRLF normalised) → `MEMORY.md` renamed `MEMORY.legacy.md` (a commit, so the original stays in history) →
+  split by the shallowest repeating heading (usually `##`; text before it → "General"; no headings → one "Notes" topic; type from
+  heading keywords) → legacy file removed. An interrupted migration resumes from `MEMORY.legacy.md`.
+- **One memory per agent across engines** — `services.memory.engine_extras(agent_id, engine, workspace)`, applied by the Engine
+  Runner (P5 wiring): Claude `--settings <data/agents/<id>/claude-memory-settings.json>` = `{"autoMemoryDirectory": "<internal/memory>"}`
+  (flag settings are honoured for this key, project settings are not; verified with claude 2.1.282 + haiku: the index is loaded
+  from there) + `add_dirs [memory]`; Codex / agy `add_dirs [memory]` (codex 0.157 `exec --add-dir` exists); returns `settings` too,
+  for a runner that must merge several `--settings`. A reflection fire gets `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` and no memory dir.
+- **Pinned constraints**: the `## Pinned constraints` section of AGENT.md, one parser — `services.memory.pinned_constraints()`
+  (`_common.pinned_constraints`, which triggers and rotation call, delegates to it). `GET|PUT /api/agents/{id}/pinned`.
+- **Portable skills** (`services/skills/agent_skills.py`): `internal/skills/<name>/` staged into `.agents/skills/` and
+  `.claude/skills/` for the run and removed after (only what staging created, incl. empty parents; recorded in the staging manifest,
+  so a crash is cleaned by the next stage); a skill folder the workspace already has is never staged over. REST:
+  `/api/agents/{id}/skills[/{name}[/files/{rel}]]`, `POST …/skills/{name}/copy-to-global`, `POST /api/skills/{name}/promote {agent_id}`.
+- **Reflection** (`services/memory/reflection.py`): one `agent_prompt` trigger per agent through `services.triggers.service`
+  (fresh session, the agent's engine / model — or `tasks.memory.reflect_model` —, cloud unless `tasks.memory.reflect_local`, cron
+  `tasks.memory.reflect_cron` in `reflect_tz`, paused unless nightly is switched on). Fires nightly, after
+  `tasks.memory.reflect_after_runs` runs (default 10; 0 = off; per-agent override; a pipeline run counts once), or on Reflect now
+  (409 while one runs). The fire is staged with `.telecode/memory_reflection_input.md` (index, every topic with counters, pinned
+  constraints, the runs since the last reflection: handoffs, replies, errors) and its write-back is discarded. The JSON reply
+  (Mem0 ADD / UPDATE / DELETE / NOOP per candidate, ACE helpful / harmful deltas) becomes a proposal commit on the current memory
+  (`refs/proposals/<task>`, work tree untouched) and an approval of kind `memory` whose body is the diff; approve → merged
+  (fast-forward, or a merge when memory moved), reject → the ref is dropped; a newer proposal supersedes a pending one; an
+  unparseable reply or nothing to change is recorded, not proposed. A 30 s ticker in the proxy turns finished fires into approvals.
+- **UI** (`shared/memory.js` + `memory.css`, mounted in the Team agent view): Memory & skills card — Memory (index + topic list with
+  type / counters / unindexed flags, editors, new memory, rebuild index, per-file history), History (commit timeline with kind,
+  run / task, per-commit diff, revert), Skills (CRUD, from global, copy to global), Pinned (editor), Reflection (Reflect now,
+  nightly switch, after-N-runs, trigger link, last proposal with its operations, review). The approvals inbox renders a `memory`
+  approval's summary + coloured diff (no "Edit & approve").
+- **Deferred**: writing back skill edits a run makes in `.agents/skills` (they are discarded with the staged copy); injecting the
+  agent's pinned constraints at the tail of every *pipeline step* (they reach steps through AGENT.md; triggers and rotation append
+  them); local-model reflection behind a `design.local_helpers`-style switch beyond `tasks.memory.reflect_local`; semantic dedupe /
+  embeddings for reflection; editing a memory proposal before approving it; a Telegram rendering of the diff (the inbox shows it).
+
+### P5 as built (2026-09-25)
+- **OTLP receiver** (`proxy/api_telemetry.py`, `services/telemetry/`): `POST /otlp/v1/{metrics,logs,traces}`, OTLP/JSON and
+  OTLP/protobuf (a dependency-free, schema-driven decoder in `telemetry/protobuf.py`; unknown fields skipped), gzip accepted,
+  **loopback peers only** (403 otherwise, whatever `proxy.host` is). Rows go to migration-4 tables `spans` / `metric_points` /
+  `log_events`, keyed by the `telecode.*` resource attributes (task / run / step / agent / job / trigger); account identity
+  attributes (`user.email`, `user.account_uuid`, `organization.id`…) are dropped at ingest. Retention `telemetry.retention_days`
+  (14), pruned at most hourly. `telemetry.enabled` (default true) gates the CLI env, own spans and ingest.
+- **CLI env** (`services/engine/otel.py`, applied by the adapters when the request carries `correlation`): Claude gets
+  `CLAUDE_CODE_ENABLE_TELEMETRY=1`, `OTEL_{METRICS,LOGS}_EXPORTER=otlp`, `OTEL_EXPORTER_OTLP_PROTOCOL=http/json`,
+  `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:<proxy>/otlp`, delta temporality, short export intervals and
+  `OTEL_RESOURCE_ATTRIBUTES=telecode.task_id=…,telecode.run_id=…,telecode.step_id=…,…` (percent-encoded); inherited `OTEL_*`
+  exporter/endpoint/header vars are scrubbed first so nothing leaves the box. **Verified on claude 2.1.282** with a real haiku run:
+  it posts `/otlp/v1/logs` and `/otlp/v1/metrics` as OTLP/JSON, every record carries the resource ids, the events are
+  `claude_code.{api_request,tool_result,tool_decision,user_prompt,assistant_response,mcp_server_connection,…}` (api_request has
+  `cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, duration_ms, model`), metrics
+  `claude_code.{cost.usage,token.usage(type=input|output|cacheRead|cacheCreation),session.count,active_time.total}`; the OTLP cost
+  summed to exactly the stream's `total_cost_usd`. Codex: `-c otel.environment=telecode -c otel.log_user_prompt=false` +
+  `otel.{exporter,metrics_exporter,trace_exporter}.otlp-http.{endpoint,protocol=json}` (dotted, unquoted; **verified on 0.157**
+  that the config loader accepts them — `codex -c … mcp list` validates without a model call and names every variant) plus
+  `OTEL_RESOURCE_ATTRIBUTES` in the env (not verified to be honoured). agy: no OTel export.
+- **Own spans** (`telemetry/spans.py`, GenAI semconv): `invoke_workflow` per run (executor, on every driver exit), `invoke_agent`
+  per Engine Runner call (step attempt, map worker, loop iteration / grader, Task-mode task, design turn) with `gen_ai.usage.*`,
+  cost, the CLI-reported model, conversation id; `execute_tool` per normalised tool event (ends at the next event —
+  `telecode.duration_estimated`). Deterministic trace id per run and workflow span id, so parents link without coordination;
+  written through the ordered DB writer.
+- **Dashboards**: `GET /api/telemetry/summary?group=agent|job|trigger|engine|model&since=7d` (totals, zero-filled by-day series,
+  groups with failure rate + cache-read ratio + run outcomes, top tools, OTLP cost per model), `…/runs/{id}/timeline` (phases →
+  steps → attempts/workers with times, cost, tokens, model, tool counts, OTLP cost per step), `…/triggers/{id}/passk?k=`,
+  `…/tasks/{id}`, `…/status`. UI `proxy/static/shared/observe.{js,css}` (inline SVG / HTML, hover tooltips, table toggle,
+  light/dark roles validated with the dataviz validator): Team overview "Cost & outcomes" card, run-monitor verdict + Gantt,
+  Task-mode "Usage" tab, pass^k tile on trigger pages.
+- **Verdicts** (`telemetry/verdict.py`): every finished run gets `process_ok`, `verdict` (pass | fail | unknown),
+  `verdict_source` (outcome_check | handoff | process), `verdict_detail`; job `outcome_check {command, timeout_seconds}` runs in the
+  workspace after the run (also after a failed one) and decides the verdict; cancelled → unknown; else a non-completed run → fail;
+  else the final phase's handoff verdicts. pass^k per trigger over the last k decided fires (run verdict, else process status):
+  strict `pass_k`, `p_hat`, `p_hat^k`.
+- **Safety** — permission mode `ask` (trigger `permission_mode`, job `permission_mode`, or task metadata): Claude gets
+  `--permission-mode manual --permission-prompts host --permission-prompt-tool mcp__telecode_safety__approve_tool --mcp-config
+  <per-run file>` naming telecode's MCP server with `X-Telecode-Task|Run|Step|Agent|Trigger` headers; `MCP_TOOL_TIMEOUT` outlasts
+  the wait. `mcp_server/tools/approvals.py::approve_tool` opens a `tool` approval (web inbox + Telegram), waits
+  (`safety.approval_timeout_sec`, 600) and answers `{"behavior":"allow","updatedInput":…}` (edited JSON replaces the input) /
+  `{"behavior":"deny","message":…}`; timeout or a stopped task → cancelled + deny. With `mcp_server.enabled` off, `ask` falls back
+  to `auto` with a warning event. Verified with real haiku runs: the flag is accepted, the MCP server connects, Claude calls the
+  tool for Bash, the approval appears with the run/step ids and is decided over REST; two findings fixed from it — the mode must be
+  pinned (with none, the user's `defaultMode: bypassPermissions` applied and nothing was asked), and the result must be a single
+  text block (FastMCP's default `structuredContent` for a `str` return was rejected; now `structured_output=False`, wire shape
+  checked with the MCP client). Auto-pause after K consecutive failures is P3's `_maybe_auto_pause` (covered by the P3 tests).
+- **Cross-engine continue** (`services/engine/handover.py`, `proxy/api_continue.py`): `POST /api/sessions/{sid}/continue {engine,
+  model?, is_local?, namespace?, prompt?, run_id?, step_id?}` → neutral package (latest handoff — the named step's, else the newest
+  run step / Task-mode rotation handoff / structured output, else the last reply; workspace diff since the first snapshot, taken
+  fresh now; PROGRESS.md) written to `<ws>/.telecode/continue/<ts>-<engine>.{json,md}`, a capped rendering prepended to a fresh
+  conversation on the target engine in the same workspace; `sessions_index.lineage = engine_switch`, `switched_from` = the source
+  row (migration 4). 409 while a task runs there. UI: "Continue on…" on Task sessions and finished run steps.
+- Also: Codex `--add-dir` is passed (exec-only, before `resume`/`fork`; verified on 0.157) — P4's `engine_extras` add_dirs reach it.
+  The runner calls `services.memory.engine_extras(agent_id, engine, workspace)` for agent runs (lazy import; failures → none).
+- **Deferred**: Codex / agy permission prompts (they keep their bypass flags); Codex resource attributes and OTLP traces are
+  configured but unverified at runtime (no real Codex run); Claude's beta traces behind `telemetry.cli_traces` (off); tool-span
+  durations are estimated; no per-trigger connector / MCP scoping; `session rotation at thresholds` was already P2.
 
 Compatibility: P3 replaced `/api/routines` with `/api/triggers` and the heartbeat job kind with triggers (single user — the UI moved
 with it and the data migrated once); every other `/api/*` route keeps its shape (new fields only).

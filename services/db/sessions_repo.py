@@ -14,6 +14,9 @@ it. ``lineage`` says why the conversation changed:
 * ``rotation`` — the old conversation passed ``tasks.rotate_after_tokens`` /
   ``rotate_after_fires`` and handed off; ``rotated_from`` is its row
 * ``ephemeral`` — a throwaway session (parallel / ephemeral step)
+* ``engine_switch`` — P5 cross-engine continue: a fresh conversation on another
+  engine seeded with a neutral context package; ``switched_from`` is the row of
+  the conversation it continues (any engine)
 
 Cumulative tokens/cost are summed per row; ``cumulative_tokens`` counts budget
 tokens (input + cache writes + output, cache reads excluded — see
@@ -28,7 +31,7 @@ from typing import Any, Dict, List, Optional
 
 from services.db.core import connect, now_iso
 
-LINEAGES = ("fresh", "resume", "fork", "rotation", "ephemeral")
+LINEAGES = ("fresh", "resume", "fork", "rotation", "ephemeral", "engine_switch")
 
 
 def _row(r) -> Dict[str, Any]:
@@ -57,12 +60,13 @@ def record_run(*, namespace: Optional[str], workspace_id: Optional[str], agent_i
                created_by: str, task_id: Optional[str], tokens: Optional[Dict[str, Any]] = None,
                cost_usd: Optional[float] = None, lineage: Optional[str] = None,
                policy: Optional[str] = None, forked_from_session: Optional[str] = None,
-               rotated_from: Optional[str] = None) -> Optional[str]:
+               rotated_from: Optional[str] = None, switched_from: Optional[str] = None) -> Optional[str]:
     """Add one finished engine run to the lineage index. Returns the row id.
 
     ``forked_from_session`` is the CLI id that was forked (its row is looked
     up in any scope); ``rotated_from`` is the row id of the rotated-out
-    conversation."""
+    conversation; ``switched_from`` the row id of the conversation an
+    ``engine_switch`` continues."""
     if not engine_session_id:
         return None
     conn = connect()
@@ -94,11 +98,11 @@ def record_run(*, namespace: Optional[str], workspace_id: Optional[str], agent_i
         "INSERT INTO sessions_index (id, namespace, workspace_id, agent_id, engine, is_local, engine_session_id, "
         "parent_id, kind, created_by, cumulative_input_tokens, cumulative_output_tokens, cumulative_cost_usd, "
         "cost_complete, runs_count, last_task_id, status, created_at, updated_at, lineage, policy, forked_from, "
-        "rotated_from, cumulative_tokens) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,'active',?,?,?,?,?,?,?)",
+        "rotated_from, cumulative_tokens, switched_from) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,'active',?,?,?,?,?,?,?,?)",
         (rid, *scope[:4], scope[4], engine_session_id, parent, kind, created_by, tin, tout,
          float(cost_usd or 0), 0 if cost_usd is None else 1, task_id, now, now, lineage, policy,
-         forked_row["id"] if forked_row else None, rotated_from, tbud))
+         forked_row["id"] if forked_row else None, rotated_from, tbud, switched_from))
     return rid
 
 

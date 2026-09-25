@@ -181,6 +181,19 @@ def cancel_for(run_id: str, step_id: Optional[str] = None, reason: str = "run ca
     return len(rows)
 
 
+def cancel(approval_id: str, reason: str = "cancelled") -> Optional[Dict[str, Any]]:
+    """One pending approval → cancelled (P5: a tool approval that timed out, or
+    whose task stopped). No handler runs. Returns the row (None if unknown)."""
+    with _lock:
+        cur = connect().execute("UPDATE approvals SET status='cancelled', decided_at=?, decided_by='system', "
+                                "decision_note=? WHERE id=? AND status='pending'",
+                                (now_iso(), (reason or "")[:NOTE_CAP], approval_id))
+        ap = get(approval_id)
+    if ap and cur.rowcount:
+        _publish("approval.decided", ap)
+    return ap
+
+
 def set_telegram(approval_id: str, info: Optional[Dict[str, Any]]) -> None:
     """Remember where the Telegram notifier posted this approval (to edit it later)."""
     connect().execute("UPDATE approvals SET telegram=? WHERE id=?",

@@ -832,7 +832,8 @@ function approvalCard(ap, o = {}) {
     h("span", { class: "pill violet" }, APPROVAL_KIND[ap.kind] || ap.kind),
     statusPill(ap.status),
     h("span", { class: "faint", title: fmtDateTime(ap.created_at), style: { fontSize: "11.5px" } }, relTime(ap.created_at)));
-  const body = ap.body ? h("pre", { class: "apv-body" }, ap.body) : null;
+  const body = ap.kind === "memory" && window.TCMemory ? TCMemory.approvalBody(ap)   // P4: a memory diff (shared/memory.js)
+    : ap.body ? h("pre", { class: "apv-body" }, ap.body) : null;
   const meta = h("div", { class: "row wrap faint", style: { fontSize: "11.5px", gap: "10px" } }, jobLink,
     ap.run_id ? h("span", { class: "mono" }, "run " + shortId(ap.run_id, 8)) : null,
     ap.telegram ? h("span", { title: "Also posted to Telegram with Approve / Reject buttons" }, icon("send"), " on Telegram") : null);
@@ -860,7 +861,7 @@ function approvalCard(ap, o = {}) {
   } });
   box.append(h("div", { class: "field", style: { margin: 0 } }, edit), note,
     h("div", { class: "row apv-acts" },
-      btn("Approve", { icon: "check", kind: "primary", size: "sm", onClick: () => go("approve", false) }), editBtn,
+      btn("Approve", { icon: "check", kind: "primary", size: "sm", onClick: () => go("approve", false) }), ap.kind === "memory" ? null : editBtn,
       h("span", { class: "grow" }),
       btn("Reject", { icon: "x", kind: "danger", size: "sm", onClick: () => go("reject", false) })));
   return box;

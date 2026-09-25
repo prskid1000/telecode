@@ -21,6 +21,11 @@ class Launch:
     env: Optional[Dict[str, str]] = None
     # Temp files the runner deletes after the run (e.g. a Codex schema file).
     cleanup: List[Path] = field(default_factory=list)
+    # Non-fatal notes the runner emits as ``warning`` events (e.g. a permission
+    # mode that had to fall back).
+    warnings: List[str] = field(default_factory=list)
+    # Where engine_extras args go: index into argv (None = append).
+    extras_at: Optional[int] = None
 
 
 @dataclass
@@ -33,6 +38,7 @@ class ParseState:
     usage: Dict[str, int] = field(default_factory=dict)
     turns: int = 0
     saw_completion: bool = False
+    model: Optional[str] = None     # the model the CLI reports it is using (Claude's init event)
 
 
 def describe_tool(name: str, tool_input: Any) -> str:

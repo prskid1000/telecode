@@ -1,0 +1,31 @@
+/* Agent memory panel (P4) — /shared/memory.js; tokens from /shared/manager.css */
+.mem-card .tabs { padding: 0 8px; }
+.mem-body { min-height: 120px; }
+.mem-split { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); min-height: 380px; }
+.mem-left { border-right: 1px solid var(--border); display: flex; flex-direction: column; min-width: 0; }
+.mem-tools { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.mem-list { overflow: auto; max-height: 520px; }
+.mem-item { cursor: pointer; gap: 8px; }
+.mem-item.on { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.mem-item .nm { display: flex; flex-direction: column; font-family: inherit; font-size: 12.5px; gap: 1px; white-space: normal; }
+.mem-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mem-desc { color: var(--faint); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; font-family: inherit; }
+.frow .nm .mem-desc { margin-top: 1px; }
+.mem-editor { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.mem-ed-head { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.mem-ed-head b { font-size: 13px; }
+.mem-ed-head .faint { font-size: 11.5px; }
+.mem-ta { min-height: 260px; height: 36vh; resize: vertical; background: var(--well); padding: 10px 12px; }
+.mem-warn { display: flex; flex-direction: column; gap: 3px; color: var(--warn); font-size: 12px; }
+.mem-warn .ic { width: 13px; height: 13px; vertical-align: -2px; margin-right: 4px; }
+.mem-history .frow .kind { width: 74px; flex-shrink: 0; }
+.mem-history .frow .nm { font-family: inherit; font-size: 12.5px; }
+.mem-last { border: 1px solid var(--border); border-radius: 10px; background: var(--panel2); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.mem-ops { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.mem-ops .frow { padding: 5px 10px; }
+.mem-ops .frow .meta { max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 760px) {
+  .mem-split { grid-template-columns: 1fr; }
+  .mem-left { border-right: 0; border-bottom: 1px solid var(--border); }
+  .mem-list { max-height: 260px; }
+}

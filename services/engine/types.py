@@ -81,6 +81,7 @@ class EngineRequest:
     add_dirs: List[Path] = field(default_factory=list)
     # Autonomous runs (triggers): Claude --permission-mode <mode> --permission-prompts none
     # instead of --dangerously-skip-permissions. None / "skip" / "bypassPermissions" = skip.
+    # "ask" (P5): permission prompts go to telecode's MCP approve_tool (web inbox + Telegram).
     permission_mode: Optional[str] = None
     # Sinks (all optional). on_event gets every normalised event dict.
     on_event: Optional[Callable[[Dict[str, Any]], None]] = None
@@ -93,6 +94,10 @@ class EngineRequest:
     # Echoed into the start event (the workspace/session the run belongs to).
     session_id: Optional[str] = None
     kill_grace_sec: float = 3.0
+    # P5 correlation ids {task_id, run_id, step_id, agent_id, job_id, trigger_id,
+    # attempt, source, workspace_id, agent_name}: OTEL_RESOURCE_ATTRIBUTES for the
+    # CLI, own GenAI spans, approve_tool headers. None = no telemetry for this run.
+    correlation: Optional[Dict[str, Any]] = None
 
 
 @dataclass
