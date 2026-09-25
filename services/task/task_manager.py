@@ -8,19 +8,26 @@ background work can never occupy every worker an interactive request needs.
 Cancellation and timeouts go through one path, :meth:`TaskQueue.cancel` /
 :meth:`TaskQueue._on_timeout`: flip the status (never over a finished task),
 stamp ``completed_at``, then kill every CLI process tree the handler
-registered with :meth:`TaskQueue.register_pid`. Killing the tree is what
-actually stops the CLI — with ``shell=True`` a bare ``terminate()`` only
-reaches ``cmd.exe``.
+registered with :meth:`TaskQueue.register_pid` — through the Engine Runner's
+non-blocking stop (graceful CTRL_BREAK, then Job/tree kill) when it registered
+one, else a direct tree kill.
 
 Finished tasks are evicted after ``FINISHED_RETENTION_SECONDS`` (the newest
 ``FINISHED_KEEP_MIN`` finished tasks are always kept) so the queue does not
 grow for the life of the process.
+
+Every state change is written through to ``data/telecode.db``
+(``services.db.task_repo``) and published on the live bus (``services.bus``),
+so ``GET /api/tasks[/{id}]`` survives a restart (:meth:`get_task_record`,
+:meth:`list_task_records`) and the SSE routes can replay. A DB failure is
+logged, never raised into a task.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
+import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -71,8 +78,12 @@ class Task:
     future: Optional[Future] = None
     pool: str = POOL_INTERACTIVE
     timeout_seconds: Optional[int] = None
-    # PIDs of CLI process trees the handler spawned (shell pids on Windows).
+    # PIDs of CLI process trees the handler spawned.
     pids: List[int] = field(default_factory=list)
+    # pid -> non-blocking stop(reason) from the Engine Runner (graceful, then
+    # tree-kill). A pid without one is tree-killed directly.
+    killers: Dict[int, Callable[[str], None]] = field(default_factory=dict)
+    last_persist: float = 0.0
 
 
 def _classify_pool(metadata: Dict[str, Any]) -> str:
@@ -170,7 +181,9 @@ class TaskQueue:
             task.status = TaskStatus.FAILED
             task.error = f"No handler for {task_type}"
             task.completed_at = datetime.now()
+            self.persist(task_id)
             return task_id
+        self.persist(task_id)
 
         future = self.pools[pool].submit(self._execute_task, task_id, handler, params)
         with self.lock:
@@ -192,6 +205,7 @@ class TaskQueue:
                 timer.daemon = True
                 self._timers[task_id] = timer
                 timer.start()
+        self.persist(task_id)
 
         try:
             result = handler(**params)
@@ -204,6 +218,7 @@ class TaskQueue:
                 cur.completed_at = datetime.now()
                 cur.result = result
                 cur.progress = 1.0
+            self.persist(task_id)
         except Exception as exc:
             with self.lock:
                 cur = self.tasks.get(task_id)
@@ -212,6 +227,7 @@ class TaskQueue:
                 cur.status = TaskStatus.FAILED
                 cur.completed_at = datetime.now()
                 cur.error = str(exc)
+            self.persist(task_id)
         finally:
             _local.task_id = None
             with self.lock:
@@ -221,9 +237,12 @@ class TaskQueue:
 
     # ── Process registry / cancel / timeout ─────────────────────────────
 
-    def register_pid(self, task_id: Optional[str], pid: int) -> None:
-        """Record a CLI process tree for this task; kill it at once if the
-        task was already cancelled/timed out before the spawn finished."""
+    def register_pid(self, task_id: Optional[str], pid: int,
+                     killer: Optional[Callable[[str], None]] = None) -> None:
+        """Record a CLI process tree for this task; stop it at once if the
+        task was already cancelled/timed out before the spawn finished.
+        ``killer(reason)`` (the Engine Runner's graceful stop) is used instead
+        of a direct tree-kill when given; it must not block."""
         if not task_id or not pid:
             return
         with self.lock:
@@ -231,9 +250,11 @@ class TaskQueue:
             if not task:
                 return
             task.pids.append(int(pid))
+            if killer is not None:
+                task.killers[int(pid)] = killer
             late = task.status in TERMINAL_STATUSES
         if late:
-            _kill_pid_tree(int(pid))
+            self._kill_one(int(pid), killer, "cancelled")
 
     def unregister_pid(self, task_id: Optional[str], pid: int) -> None:
         if not task_id:
@@ -242,13 +263,26 @@ class TaskQueue:
             task = self.tasks.get(task_id)
             if task and pid in task.pids:
                 task.pids.remove(pid)
+            if task:
+                task.killers.pop(pid, None)
 
-    def kill_processes(self, task_id: str) -> int:
+    @staticmethod
+    def _kill_one(pid: int, killer: Optional[Callable[[str], None]], reason: str) -> None:
+        if killer is not None:
+            try:
+                killer(reason)
+                return
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"engine stop for pid {pid} failed ({exc}) — tree-killing")
+        _kill_pid_tree(pid)
+
+    def kill_processes(self, task_id: str, reason: str = "cancelled") -> int:
         with self.lock:
             task = self.tasks.get(task_id)
             pids = list(task.pids) if task else []
+            killers = dict(task.killers) if task else {}
         for pid in pids:
-            _kill_pid_tree(pid)
+            self._kill_one(pid, killers.get(pid), reason)
         return len(pids)
 
     def cancel(self, task_id: str, reason: str = "cancelled") -> bool:
@@ -279,8 +313,82 @@ class TaskQueue:
             timer = self._timers.pop(task_id, None)
         if timer:
             timer.cancel()
-        self.kill_processes(task_id)
+        self.persist(task_id)
+        self.kill_processes(task_id, reason)
         return True
+
+    # ── Persistence + live bus ──────────────────────────────────────────
+
+    def persist(self, task_id: str, throttle: bool = False) -> None:
+        """Write the task through to data/telecode.db and publish its status.
+        ``throttle`` (progress updates) skips writes closer than 0.5 s apart."""
+        with self.lock:
+            task = self.tasks.get(task_id)
+            if not task:
+                return
+            now = time.monotonic()
+            if throttle and now - task.last_persist < 0.5:
+                return
+            task.last_persist = now
+            d = task_to_dict(task)
+        try:
+            from services.db import task_repo
+            task_repo.save_task(d)
+        except Exception:
+            logger.exception(f"task {task_id}: DB write failed")
+        _publish_status(d)
+
+    def record_event(self, task: Task, seq: int, evt: Dict[str, Any]) -> None:
+        try:
+            from services.db import task_repo
+            task_repo.append_event(task.task_id, seq, evt)
+        except Exception:
+            logger.exception(f"task {task.task_id}: DB event write failed")
+        try:
+            from services import bus
+            framed = {**evt, "seq": seq, "task_id": task.task_id}
+            bus.publish("task", task.task_id, "event", framed)
+            run_id = (task.metadata or {}).get("run_id")
+            if run_id:
+                bus.publish("run", run_id, "event", framed)
+        except Exception:
+            logger.exception("bus publish failed")
+
+    def get_task_record(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """``task_to_dict`` of a live task, else the persisted record (with its
+        events) of one from before a restart or evicted from memory."""
+        task = self.get_task(task_id)
+        if task:
+            with self.lock:
+                return task_to_dict(task)
+        try:
+            from services.db import task_repo
+            return task_repo.load_task(task_id)
+        except Exception:
+            logger.exception("task DB read failed")
+            return None
+
+    def list_task_records(self, limit: int = FINISHED_KEEP_MIN) -> List[Dict[str, Any]]:
+        """Live tasks plus up to ``limit`` persisted ones not in memory."""
+        tasks = self.list_tasks()
+        with self.lock:
+            live = [task_to_dict(t) for t in tasks]
+        try:
+            from services.db import task_repo
+            live += task_repo.list_tasks(limit=limit, exclude={d["task_id"] for d in live})
+        except Exception:
+            logger.exception("task DB list failed")
+        return live
+
+    def reconcile_persisted(self) -> int:
+        """Startup: persisted pending/running tasks this process is not running
+        → failed ("interrupted: telecode restarted …")."""
+        try:
+            from services.db import task_repo
+            return task_repo.reconcile_interrupted(self.is_active)
+        except Exception:
+            logger.exception("task reconcile failed")
+            return 0
 
     # ── Queries / housekeeping ──────────────────────────────────────────
 
@@ -345,6 +453,31 @@ def get_task_queue() -> TaskQueue:
 def cancel_task(task_id: str, reason: str = "cancelled") -> bool:
     """Shared cancel entry point (API, run executor, …). See TaskQueue.cancel."""
     return get_task_queue().cancel(task_id, reason)
+
+
+def task_status_summary(d: Dict[str, Any]) -> Dict[str, Any]:
+    """The ``status`` / ``task.status`` SSE payload for a ``task_to_dict`` record."""
+    md = d.get("metadata") or {}
+    return {
+        "task_id": d["task_id"], "task_type": d["task_type"], "status": d["status"],
+        "progress": d.get("progress"), "progress_message": md.get("progress_message"),
+        "session_id": d.get("session_id"), "session_namespace": d.get("session_namespace"),
+        "error": d.get("error"), "created_at": d.get("created_at"),
+        "completed_at": d.get("completed_at"), "run_id": md.get("run_id"),
+        "step_id": md.get("step_id"), "source": md.get("source"),
+    }
+
+
+def _publish_status(d: Dict[str, Any]) -> None:
+    try:
+        from services import bus
+        summary = task_status_summary(d)
+        bus.publish("task", d["task_id"], "status", summary)
+        if summary["run_id"]:
+            bus.publish("run", summary["run_id"], "status", summary)
+        bus.publish_global("task", "task.status", summary)
+    except Exception:
+        logger.exception("bus publish failed")
 
 
 def task_to_dict(task: Task) -> Dict[str, Any]:

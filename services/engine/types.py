@@ -1,0 +1,116 @@
+"""Engine Runner request/result types and the normalised event vocabulary."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
+
+# Normalised event kinds every adapter emits (``kind`` field of an event dict):
+#   start      spawn is about to happen (session/cwd/prompt digest/resume info)
+#   delta      a streamed text fragment (live only; persisted for agy as
+#              ``narrative_delta``, its only text channel)
+#   narrative  a complete assistant text block
+#   tool       a tool call {tool, name, summary, input}
+#   todo       the agent's todo list {todos: [{text, status}]}
+#   usage      token usage so far {tokens, cost_usd}
+#   warning    a non-fatal CLI error item
+#   retry      an API retry {attempt, max_retries, error}
+#   done       the run finished {tool_count, cost_usd, num_turns, *_tokens}
+#   error      the run failed {message}
+EVENT_KINDS = ("start", "delta", "narrative", "tool", "todo", "usage",
+               "warning", "retry", "done", "error")
+
+ENGINES = ("claude_code", "codex", "antigravity")
+
+
+class EngineError(RuntimeError):
+    """The CLI failed (non-zero exit with no output, error result, spawn failure)."""
+
+
+class EngineCancelled(EngineError):
+    def __init__(self, message: str = "Task cancelled"):
+        super().__init__(message)
+
+
+class EngineTimeout(EngineError):
+    def __init__(self, message: str = "timeout"):
+        super().__init__(message)
+
+
+@dataclass
+class EngineRequest:
+    engine: str                                  # claude_code | codex | antigravity
+    prompt: str
+    cwd: Path
+    model: Optional[str] = None
+    is_local: bool = False
+    resume_id: Optional[str] = None
+    # Persist a newly observed CLI session/thread/conversation id.
+    on_resume_id: Optional[Callable[[str], None]] = None
+    # Raw CLI stdout is copied here line by line (data/task_logs/<task>.jsonl|.txt).
+    log_path: Optional[Path] = None
+    # Codex --output-last-message target (defaults next to log_path).
+    last_msg_path: Optional[Path] = None
+    # Claude: --append-system-prompt-file (the agent's AGENT.md).
+    system_append_file: Optional[Path] = None
+    # Structured output: Claude --json-schema, Codex --output-schema, agy none yet.
+    schema: Optional[Dict[str, Any]] = None
+    timeout_sec: Optional[float] = None
+    env_extra: Dict[str, str] = field(default_factory=dict)
+    add_dirs: List[Path] = field(default_factory=list)
+    # Sinks (all optional). on_event gets every normalised event dict.
+    on_event: Optional[Callable[[Dict[str, Any]], None]] = None
+    on_progress: Optional[Callable[[float, str], None]] = None
+    cancel_check: Optional[Callable[[], bool]] = None
+    # on_spawn(pid, stop) — stop(reason) asks the runner to stop the CLI tree
+    # (non-blocking); on_exit(pid) once the process is gone.
+    on_spawn: Optional[Callable[[int, Callable[[str], None]], None]] = None
+    on_exit: Optional[Callable[[int], None]] = None
+    # Echoed into the start event (the workspace/session the run belongs to).
+    session_id: Optional[str] = None
+    kill_grace_sec: float = 3.0
+
+
+@dataclass
+class EngineResult:
+    engine: str
+    text: str = ""
+    engine_session_id: Optional[str] = None
+    cost_usd: Optional[float] = None
+    duration_ms: int = 0
+    duration_api_ms: int = 0
+    num_turns: int = 0
+    tokens: Dict[str, int] = field(default_factory=dict)
+    tool_calls: List[str] = field(default_factory=list)
+    log_path: Optional[str] = None
+    structured_output: Any = None
+    exit_code: Optional[int] = None
+
+    # Engine-specific key the handlers have always returned the CLI id under.
+    _SESSION_KEYS = {
+        "claude_code": "claude_session_id",
+        "codex": "codex_session_id",
+        "antigravity": "antigravity_conversation_id",
+    }
+
+    def to_dict(self, session_id: Optional[str], *, with_schema: bool = False) -> Dict[str, Any]:
+        """The handler result shape (unchanged since before the runner)."""
+        cost: Any = self.cost_usd
+        if self.engine == "claude_code":
+            cost = self.cost_usd or 0
+        out: Dict[str, Any] = {
+            "result": self.text,
+            "session_id": session_id,
+            self._SESSION_KEYS.get(self.engine, "engine_session_id"): self.engine_session_id,
+            "cost_usd": cost,
+            "duration_ms": self.duration_ms,
+            "duration_api_ms": self.duration_api_ms,
+            "num_turns": self.num_turns,
+            "tokens": dict(self.tokens),
+            "tool_calls": list(self.tool_calls),
+            "log_path": self.log_path,
+        }
+        if with_schema:
+            out["structured_output"] = self.structured_output
+        return out

@@ -457,6 +457,12 @@ function buildEventNodes(events, streamKey) {
         ["cache read", e.cache_read_tokens ? fmtTokens(e.cache_read_tokens) : null]])], e));
     } else if (k === "retry") {
       out.push(evRow("warn", "refresh", `API retry ${e.attempt ?? "?"}${e.max_retries != null ? "/" + e.max_retries : ""}${e.error ? " — " + (typeof e.error === "string" ? e.error : JSON.stringify(e.error)) : ""}`, e));
+    } else if (k === "usage") {
+      // running token totals; the "done" line already shows the final numbers
+    } else if (k === "todo") {
+      const todos = Array.isArray(e.todos) ? e.todos : [];
+      out.push(evRow("meta", "check", [h("span", null, `Todos ${todos.filter(t => t.status === "completed").length}/${todos.length}  `),
+        h("span", { class: "faint" }, todos.map(t => (t.status === "completed" ? "✓ " : t.status === "in_progress" ? "▸ " : "· ") + (t.text || "")).join("   "))], e));
     } else if (k === "warning") out.push(evRow("warn", "alert", evText(e), e));
     else if (k === "error") out.push(evRow("err", "alert", evText(e), e));
     else out.push(evRow("meta", "dot", [h("span", { class: "mono" }, k + "  "), evText(e)], e));
@@ -489,6 +495,37 @@ function updateStream(host, events, o = {}) {
   else mount(body, offset ? h("div", { class: "ev meta" }, h("span", { class: "ev-ic" }, icon("more")), h("div", { class: "ev-main" }, `${offset} earlier event${offset === 1 ? "" : "s"} hidden`)) : null, nodes);
   if (atBottom) body.scrollTop = body.scrollHeight;
 }
+
+// ── Live events (SSE) with automatic fallback to polling ───────────────
+// liveEvents(url, { types, onOpen, onEvent(type, data, id), onEnd(data), onDown, onFallback })
+// → { close(), live }. EventSource cannot see HTTP status, so an error before the
+// first open (a 404 from an older server, a proxy without the route) or a CLOSED
+// stream means "not available": it closes and calls onFallback — keep polling.
+// After a successful open the browser reconnects on its own (resuming from the
+// last event id); onDown fires meanwhile so callers can poll until it is back.
+function liveEvents(url, o = {}) {
+  const none = { close() {}, get live() { return false; } };
+  if (typeof EventSource === "undefined") { if (o.onFallback) o.onFallback(); return none; }
+  let opened = false, closed = false;
+  let es;
+  try { es = new EventSource(url); } catch { if (o.onFallback) o.onFallback(); return none; }
+  es.onopen = () => { opened = true; if (o.onOpen) o.onOpen(); };
+  es.onerror = () => {
+    if (closed) return;
+    if (!opened || es.readyState === EventSource.CLOSED) { closed = true; es.close(); if (o.onFallback) o.onFallback(); }
+    else if (o.onDown) o.onDown();
+  };
+  for (const t of (o.types || [])) {
+    es.addEventListener(t, (ev) => {
+      let d = null; try { d = JSON.parse(ev.data); } catch { /* keep null */ }
+      if (t === "end") { closed = true; es.close(); if (o.onEnd) o.onEnd(d); return; }
+      if (o.onEvent) o.onEvent(t, d, ev.lastEventId);
+    });
+  }
+  return { close() { closed = true; es.close(); }, get live() { return opened && !closed; } };
+}
+// Coalesce bursts (one refresh per `ms`, trailing).
+function debounced(fn, ms = 300) { let t = null; return (...a) => { if (t) return; t = setTimeout(() => { t = null; fn(...a); }, ms); }; }
 
 // ── Task result (stats + text) ─────────────────────────────────────────
 function resultText(r) {

@@ -26,6 +26,9 @@ Pytest suite for agents, jobs, runs, and heartbeats.
 | `test_int_staging_p0.py` | integration | B8 backup/restore, crash repair, three-way MEMORY merge |
 | `test_int_paths_api_p0.py` | integration | B9 id/path validation at manager and HTTP level; B3 run body over HTTP |
 | `test_int_task_queue_p0.py` | integration | B10 real process-tree kill, B13 timeout, B12 pools, B6 eviction |
+| `test_unit_engine_adapters_p1.py` | unit | P1 adapters: argv/env/stdin per engine and event normalisation from recorded claude / codex 0.157 / agy logs (`fixtures/engine/`) |
+| `test_int_engine_runner_p1.py` | integration | P1 runner with `fixtures/engine/fake_cli.py`: sinks + raw log, stdin, stderr drain, failure, cancel/timeout tree-kill incl. an orphaned grandchild, graceful CTRL_BREAK, Job membership, .cmd/.bat shims, queue cancel |
+| `test_int_store_sse_p1.py` | integration | P1 store + SSE: restart persistence, reconcile, event cap, REST fallback, task/run/global SSE, run JSON import, lineage, TeleDesign → runner |
 | `test_e2e_http.py` | e2e | Hits the running proxy at `:1235` — workspace/agent CRUD, pipeline normalisation, parallel/custom run topology, heartbeat validate/reconcile/archive. Auto-skipped when server is down. |
 
 ## Run

@@ -12,6 +12,15 @@ from proxy import request_log
 
 logger = logging.getLogger("telecode.proxy.api_tasks")
 
+def _valid_task_id(task_id: str) -> bool:
+    from services.task.safe_paths import validate_id
+    try:
+        validate_id(task_id, "task_id")
+        return True
+    except ValueError:
+        return False
+
+
 def _log_req(request: web.Request):
     return request_log.new_request(request.method, request.path, inbound_protocol="task-api")
 
@@ -26,12 +35,14 @@ async def list_types(request: web.Request) -> web.Response:
     return web.json_response(types)
 
 async def list_all(request: web.Request) -> web.Response:
-    """All tasks grouped by status."""
+    """All tasks grouped by status: the live queue plus the most recent
+    persisted tasks from before a restart / evicted from memory (those carry
+    only their ``start`` event in metadata.events; GET /api/tasks/{id} has all)."""
     rid = _log_req(request)
     queue = get_task_queue()
     grouped: dict = {"pending": [], "running": [], "completed": [], "failed": [], "cancelled": []}
-    for task in queue.list_tasks():
-        grouped.setdefault(task.status.value, []).append(task_to_dict(task))
+    for d in queue.list_task_records():
+        grouped.setdefault(d["status"], []).append(d)
     request_log.set_response_preview(rid, grouped)
     request_log.finish(rid, 200)
     return web.json_response({"success": True, **grouped})
@@ -72,11 +83,11 @@ async def submit_task(request: web.Request) -> web.Response:
 async def get_task_status(request: web.Request) -> web.Response:
     rid = _log_req(request)
     task_id = request.match_info["task_id"]
-    task = get_task_queue().get_task(task_id)
-    if not task:
+    rec = get_task_queue().get_task_record(task_id) if _valid_task_id(task_id) else None
+    if not rec:
         request_log.finish(rid, 404, "Task not found")
         return web.json_response({"success": False, "error": "Task not found"}, status=404)
-    out = {"success": True, **task_to_dict(task)}
+    out = {"success": True, **rec}
     request_log.set_response_preview(rid, out)
     request_log.finish(rid, 200)
     return web.json_response(out)

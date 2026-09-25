@@ -16,38 +16,6 @@ from services.task.task_manager import (
 
 logger = logging.getLogger("telecode.services.task.utils")
 
-class StreamDrain:
-    """Read a subprocess pipe to EOF on a daemon thread.
-
-    The CLI handlers only iterate stdout; a stderr=PIPE that nobody reads
-    fills the OS pipe buffer (~4 KB on Windows) and the child blocks on its
-    next stderr write — forever, since we are blocked reading its stdout.
-    Codex hits this on an expired ChatGPT login (it logs a token-refresh
-    error per request). `text()` joins what was read, after the child exits.
-    """
-
-    def __init__(self, stream: Any, limit: int = 256 * 1024) -> None:
-        import threading
-        self._chunks: list = []
-        self._size = 0
-        self._limit = limit
-        self._thread = threading.Thread(target=self._run, args=(stream,), daemon=True)
-        self._thread.start()
-
-    def _run(self, stream: Any) -> None:
-        try:
-            for line in stream:
-                if self._size < self._limit:
-                    self._chunks.append(line)
-                    self._size += len(line)
-        except Exception:
-            pass
-
-    def text(self, timeout: float = 5.0) -> str:
-        self._thread.join(timeout)
-        return "".join(self._chunks)
-
-
 def current_task_id() -> Optional[str]:
     return getattr(_local, "task_id", None)
 
@@ -99,29 +67,47 @@ def update_progress(progress: float, message: Optional[str] = None) -> bool:
             task.metadata["progress_message"] = message
     if message:
         logger.info(f"Task {task_id}: {progress * 100:.1f}% - {message}")
+    queue.persist(task_id, throttle=True)
     return True
 
 def append_event(event: Dict[str, Any]) -> None:
+    """Append an event to the current task: in memory (``metadata.events``,
+    which TeleDesign's driver reads by index), in ``data/telecode.db`` (capped
+    per task) and on the live bus (SSE), with a 1-based ``seq``."""
     task_id = current_task_id()
     if not task_id: return
     queue = get_task_queue()
     task = queue.get_task(task_id)
     if not task: return
+    evt = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"), **event}
     with queue.lock:
         events = task.metadata.setdefault("events", [])
-        events.append({
-            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
-            **event
-        })
+        events.append(evt)
+        seq = len(events)
+    queue.record_event(task, seq, evt)
+
+
+def publish_live(event: Dict[str, Any]) -> None:
+    """Stream an event of the current task to SSE subscribers without keeping
+    it (Claude's per-token text deltas — the raw log already has them)."""
+    task_id = current_task_id()
+    if not task_id: return
+    task = get_task_queue().get_task(task_id)
+    if not task: return
+    from services import bus
+    evt = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"), **event}
+    bus.publish("task", task_id, "delta", evt)
+    run_id = (task.metadata or {}).get("run_id")
+    if run_id:
+        bus.publish("run", run_id, "delta", {**evt, "task_id": task_id})
 
 
 # ── CLI process tracking (B10) ─────────────────────────────────────────────
 
 def track_process(proc: Any) -> Optional[int]:
-    """Register a spawned CLI with the current task so cancel/timeout can kill
-    its whole tree, and bind it to the process-wide kill-on-close Job so it
-    cannot outlive telecode. With ``shell=True`` ``proc.pid`` is the shell
-    (cmd.exe on Windows); ``process.kill_process_tree`` walks down to the CLI.
+    """For a handler that spawns its own process (the engine CLIs go through
+    services.engine, which registers itself): record it with the current task
+    so cancel/timeout tree-kill it, and bind it to the kill-on-close Job.
     Returns the pid, for :func:`untrack_process`."""
     pid = getattr(proc, "pid", None)
     if not pid:
@@ -135,42 +121,14 @@ def track_process(proc: Any) -> Optional[int]:
     return pid
 
 
-def kill_proc_tree(proc: Any) -> None:
-    """Kill the shell AND the CLI under it — with shell=True a plain
-    terminate()/kill() only reaches cmd.exe and the CLI keeps running."""
-    try:
-        import process as tc_process
-        tc_process.kill_process_tree(proc.pid, force=True)
-    except Exception:
-        pass
-    try:
-        proc.kill()
-    except Exception:
-        pass
-
-
 def untrack_process(pid: Optional[int]) -> None:
     if pid:
         get_task_queue().unregister_pid(current_task_id(), pid)
 
 
-# ── Start-event prompt digest (B6) ─────────────────────────────────────────
+# ── Start-event prompt digest (B6) — lives with the runner ────────────────
 
-PROMPT_HEAD_CHARS = 2048
-
-
-def prompt_digest(prompt: str) -> Dict[str, Any]:
-    """What the `start` event keeps of a prompt: the first 2 KB (under the
-    legacy `prompt` key), its length and sha256. Design prompts run to 56 KB
-    and every event is held in memory for the task's lifetime."""
-    import hashlib
-    text = prompt or ""
-    return {
-        "prompt": text[:PROMPT_HEAD_CHARS],
-        "prompt_len": len(text),
-        "prompt_sha256": hashlib.sha256(text.encode("utf-8", "replace")).hexdigest(),
-        "prompt_truncated": len(text) > PROMPT_HEAD_CHARS,
-    }
+from services.engine.runner import PROMPT_HEAD_CHARS, prompt_digest  # noqa: E402,F401
 
 
 # ── Resume ids scoped per (workspace, agent, engine) (B7) ──────────────────

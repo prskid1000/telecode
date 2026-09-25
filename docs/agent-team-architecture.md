@@ -1,6 +1,6 @@
 # Task Mode + Team Mode — architecture review and target design
 
-Status: **proposal** (2026-09-25). Inputs: a read-only audit of `services/{session,task,agent,job,run,heartbeat,routine,skills}` +
+Status: **P0 and P1 implemented** (2026-09-25; P0 = commit 231d611). P2–P5 remain proposals. Original proposal date 2026-09-25. Inputs: a read-only audit of `services/{session,task,agent,job,run,heartbeat,routine,skills}` +
 `proxy/api_*`, and web research on 2025–2026 agent platforms (Anthropic context engineering / Agent SDK / headless docs,
 OpenAI Agents SDK + Codex app-server, Google ADK, LangGraph, Microsoft Agent Framework, Letta, Mem0, CrewAI, Goose, Cline,
 Copilot agent HQ, OpenClaw). Flags quoted below were checked against the installed CLIs (claude 2.1.282, codex-cli 0.157,
@@ -136,12 +136,18 @@ tasks, shared Team · Tasks · Design navbar.
 
 | Phase | Scope | Risk |
 |---|---|---|
-| **P0 — Fix-first** (S) | B1 (no absolute TTL on workspaces; expiry archives), B2 (full handoff text, capped at 16 KB, + artifact list), B3 (engine/model/local per step & heartbeat), B4, B5, B9 (path validation), B10 (tree-kill via shared helper), B11 (codex usage), B12 (separate pool for heartbeat/routine), B13 (enforce timeout; lock skip-if-running), cancel no longer overwrites finished tasks | low, contained |
-| **P1 — Engine Runner + Store** (M) | `services/engine/` used by all modes incl. TeleDesign; SQLite store for tasks/events/runs/steps/attempts/sessions + startup reconcile; SSE for Task/Team; resume scope (workspace, agent, engine); explicit context via `--append-system-prompt-file`; stop clobbering workspace CLAUDE.md | medium — touches every mode; keep the REST surface backward compatible |
+| **P0 — Fix-first** (S) — **done** | B1 (no absolute TTL on workspaces; expiry archives), B2 (full handoff text, capped at 16 KB, + artifact list), B3 (engine/model/local per step & heartbeat), B4, B5, B9 (path validation), B10 (tree-kill via shared helper), B11 (codex usage), B12 (separate pool for heartbeat/routine), B13 (enforce timeout; lock skip-if-running), cancel no longer overwrites finished tasks | low, contained |
+| **P1 — Engine Runner + Store** (M) — **done** | `services/engine/` used by all modes incl. TeleDesign; SQLite store for tasks/events/runs/steps/attempts/sessions + startup reconcile; SSE for Task/Team; resume scope (workspace, agent, engine); explicit context via `--append-system-prompt-file`; stop clobbering workspace CLAUDE.md | medium — touches every mode; keep the REST surface backward compatible |
 | **P2 — Handoffs, budgets, snapshots** (M) | structured step outputs + artifacts; budgets; retries; shadow-git snapshots + diff/revert; session policy per step (resume/fork/fresh/ephemeral) | medium |
 | **P3 — New step kinds + triggers** (M) | map / loop / gate / reduce; approvals inbox + Telegram; unified Triggers (cron/interval/at/webhook/github/file) with heartbeat cost controls and goals | medium |
 | **P4 — Memory** (S–M) | git-versioned `internal/`, index + topic files, pinned constraints, autoMemoryDirectory, portable skills, reflection job with approval | low |
 | **P5 — Observability + safety** (M) | OTLP receiver + GenAI spans + cost dashboards; verdicts/evals; auto permission mode + approve_tool; session rotation at thresholds; cross-engine continue | medium |
+
+### P1 as built (2026-09-25)
+- `services/engine/`: `run_engine(EngineRequest) -> EngineResult` used by the three task handlers (now thin wrappers) and TeleDesign's `design_turn_handler`. No shell; CLI created suspended, bound to the lifetime Job and a nested per-run Job, then resumed; cancel/timeout = CTRL_BREAK (helper on the CLI's console) → grace → `TerminateJobObject` + tree-kill. Normalised events `start|delta|narrative|tool|todo|usage|warning|retry|done|error`; adapters per engine; `schema` → Claude `--json-schema` / Codex `--output-schema` (agy: not yet). The P0 Job-binding gap is closed.
+- `data/telecode.db` (`services/db/`): tasks + capped task events (write-through via one background writer), runs + run_steps (run_store is SQLite-only; one-time import of `data/runs/*.json`, files kept), `sessions_index` lineage. Startup reconcile of tasks. Logs and raw CLI logs unchanged.
+- SSE: `GET /api/tasks/{id}/events` (replay + live), `GET /api/runs/{id}/events`, `GET /api/events?kinds=task,run`; Task and Team UIs subscribe and fall back to polling.
+- Not in P1 (deferred): Attempt as a separate table (a step still maps to one task), `fork|fresh|ephemeral` session policies and rotation (P2), OTEL env on spawn (P5), a REST route for `sessions_index`, agy structured output.
 
 Backward compatibility rule: existing `/api/*` routes keep their shapes (new fields only); existing agents/jobs/routines/heartbeats
 migrate on first load; the old pages keep working until the redesign lands.

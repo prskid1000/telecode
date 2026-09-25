@@ -444,6 +444,15 @@ def tasks_interactive_workers() -> int: return _int_setting("tasks.pools.interac
 def tasks_background_workers()  -> int: return _int_setting("tasks.pools.background_workers", 3)
 
 
+def tasks_kill_grace_seconds() -> float:
+    """Engine Runner: seconds between the graceful CTRL_BREAK and the tree kill
+    on cancel/timeout (`tasks.kill_grace_sec`, default 3; 0 = kill at once)."""
+    try:
+        return max(0.0, float(get_nested("tasks.kill_grace_sec", 3.0)))
+    except (TypeError, ValueError):
+        return 3.0
+
+
 def tasks_local_max_output_tokens() -> int:
     """CLAUDE_CODE_MAX_OUTPUT_TOKENS for local-mode Claude Code runs. Default
     16384, matching the hand-run `claudel.bat` launcher."""

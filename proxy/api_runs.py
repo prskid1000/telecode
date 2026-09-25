@@ -102,7 +102,14 @@ def _reconcile_on_startup() -> None:
 
     Called once when the proxy app is built. Only records whose task is not
     alive in this process's queue (and runs without a live driver) are
-    touched, so a proxy restart inside a running telecode is safe."""
+    touched, so a proxy restart inside a running telecode is safe. Tasks
+    first: data/telecode.db rows left pending/running become failed
+    ("interrupted: telecode restarted …")."""
+    try:
+        from services.task.task_manager import get_task_queue
+        get_task_queue().reconcile_persisted()
+    except Exception:
+        logger.exception("startup reconcile of tasks failed")
     try:
         from services.run.executor import reconcile_orphaned_runs
         reconcile_orphaned_runs()

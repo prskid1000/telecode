@@ -228,7 +228,9 @@ def test_b11_codex_subprocess_reports_turns_duration_and_unknown_cost(tmp_data_r
         {"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tokens": 60,
                                              "output_tokens": 7}},
     )]
-    monkeypatch.setattr(codex.subprocess, "Popen", lambda *a, **k: _FakeProc(lines))
+    # The Engine Runner spawns; the handler is a thin wrapper over it.
+    from services.engine import spawn as engine_spawn
+    monkeypatch.setattr(engine_spawn.subprocess, "Popen", lambda *a, **k: _FakeProc(lines))
     stored = []
     session_store.create(session_id="ws-cx", data={})
     out = codex._run_codex_subprocess(

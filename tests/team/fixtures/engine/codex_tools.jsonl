@@ -1,0 +1,9 @@
+{"type":"thread.started","thread_id":"01a0d6a4-9409-7aa3-a792-9a31063c0cd0"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `qwen3.6-35b-a3b` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command 'echo hi > hello.txt'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command 'echo hi > hello.txt'","aggregated_output":"","exit_code":0,"status":"completed"}}
+{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command 'cat hello.txt'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command 'cat hello.txt'","aggregated_output":"hi\r\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"DONE"}}
+{"type":"turn.completed","usage":{"input_tokens":21961,"cached_input_tokens":21553,"cache_write_input_tokens":0,"output_tokens":142,"reasoning_output_tokens":0}}

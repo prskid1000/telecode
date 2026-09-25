@@ -3,8 +3,13 @@
 A Run is one execution of a Job's pipeline. It owns N step entries; each step
 has a corresponding queue Task (linked via step.task_id).
 
-Layout:
-  data/runs/<run_id>.json
+Storage: SQLite, ``data/telecode.db`` — table ``runs`` (one row per run; the
+record minus its steps in ``data``) and ``run_steps`` (one row per step, in
+pipeline order). Pre-SQLite ``data/runs/*.json`` files are imported once per
+database (flag ``meta.runs_json_imported``) and then left alone as a manual
+backup; nothing reads them afterwards.
+
+Record shape (unchanged, what every API returns):
     {
       "run_id": ..., "job_id": ..., "mode": "single|sequential|parallel",
       "source": "user|manual_run|heartbeat",
@@ -38,17 +43,14 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import shutil
-import tempfile
 import threading
-import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import config
+from services.db.core import connect, get_meta, set_meta
 from services.task.safe_paths import validate_id
 
 logger = logging.getLogger("telecode.services.run")
@@ -101,6 +103,8 @@ def rollup_usage(steps: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def get_runs_base_dir() -> Path:
+    """Where pre-SQLite runs lived (``data/runs/*.json``). Read once, by the
+    one-time import; the files are left on disk as a manual backup."""
     return Path(config._settings_dir()) / "data" / "runs"
 
 
@@ -109,39 +113,150 @@ def _now_iso() -> str:
 
 
 _lock = threading.RLock()
+_IMPORT_FLAG = "runs_json_imported"
 
 
-def _atomic_write(path: Path, payload: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    encoded = json.dumps(payload, indent=2, default=str).encode("utf-8")
-    fd, tmp = tempfile.mkstemp(prefix=".run.", dir=str(path.parent))
+def _dumps(obj: Any) -> str:
+    return json.dumps(obj, ensure_ascii=False, default=str)
+
+
+def _check_id(run_id: str) -> Optional[str]:
     try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(encoded)
-        # Windows refuses to replace a file another handle has open (a reader
-        # in another process, an AV scanner); retry briefly before failing.
-        for attempt in range(20):
-            try:
-                os.replace(tmp, path)
-                break
-            except PermissionError:
-                if attempt == 19:
-                    raise
-                time.sleep(0.025)
+        return validate_id(run_id, "run_id")
+    except ValueError:
+        return None
+
+
+def _write_run(conn, run: Dict[str, Any]) -> None:
+    """Upsert the run header and every step row (one transaction)."""
+    head = {k: v for k, v in run.items() if k != "steps"}
+    now = _now_iso()
+    conn.execute(
+        "INSERT INTO runs (run_id, job_id, status, mode, source, started_at, completed_at, data, updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET job_id=excluded.job_id, "
+        "status=excluded.status, mode=excluded.mode, source=excluded.source, started_at=excluded.started_at, "
+        "completed_at=excluded.completed_at, data=excluded.data, updated_at=excluded.updated_at",
+        (run["run_id"], run.get("job_id"), run.get("status"), run.get("mode"), run.get("source"),
+         run.get("started_at"), run.get("completed_at"), _dumps(head), now))
+    steps = run.get("steps") or []
+    conn.execute("DELETE FROM run_steps WHERE run_id=? AND step_id NOT IN (%s)"
+                 % ",".join("?" * len(steps)) if steps else "DELETE FROM run_steps WHERE run_id=?",
+                 (run["run_id"], *[s.get("step_id") for s in steps]))
+    for idx, st in enumerate(steps):
+        _write_step(conn, run["run_id"], idx, st)
+
+
+def _write_step(conn, run_id: str, idx: int, step: Dict[str, Any]) -> None:
+    conn.execute(
+        "INSERT INTO run_steps (run_id, idx, step_id, status, task_id, data) VALUES (?,?,?,?,?,?) "
+        "ON CONFLICT(run_id, step_id) DO UPDATE SET idx=excluded.idx, status=excluded.status, "
+        "task_id=excluded.task_id, data=excluded.data",
+        (run_id, idx, step.get("step_id"), step.get("status"), step.get("task_id"), _dumps(step)))
+
+
+def _read_run(conn, run_id: str) -> Optional[Dict[str, Any]]:
+    row = conn.execute("SELECT data FROM runs WHERE run_id=?", (run_id,)).fetchone()
+    if not row:
+        return None
+    try:
+        run = json.loads(row["data"])
+    except ValueError:
+        return None
+    steps = []
+    for r in conn.execute("SELECT data FROM run_steps WHERE run_id=? ORDER BY idx", (run_id,)):
+        try:
+            steps.append(json.loads(r["data"]))
+        except ValueError:
+            continue
+    run["steps"] = steps
+    return run
+
+
+def _publish(run: Optional[Dict[str, Any]]) -> None:
+    if not run:
+        return
+    try:
+        from services import bus
+        bus.publish("run", run["run_id"], "run", run)
+        bus.publish_global("run", "run.update", {
+            "run_id": run["run_id"], "job_id": run.get("job_id"), "status": run.get("status"),
+            "source": run.get("source"), "started_at": run.get("started_at"),
+            "completed_at": run.get("completed_at"),
+            "steps": [{"step_id": s.get("step_id"), "status": s.get("status"), "task_id": s.get("task_id"),
+                       "agent_name": s.get("agent_name"), "name": s.get("name")} for s in run.get("steps") or []],
+        })
     except Exception:
-        try: os.unlink(tmp)
-        except OSError: pass
-        raise
+        logger.exception("run bus publish failed")
 
 
-def _path(run_id: str) -> Path:
-    return get_runs_base_dir() / f"{validate_id(run_id, 'run_id')}.json"
+def import_json_runs(conn=None) -> int:
+    """One-time import of ``data/runs/*.json`` into SQLite (per database).
+    Existing rows win (INSERT only if absent); the JSON files are not touched."""
+    conn = conn or connect()
+    if get_meta(_IMPORT_FLAG):
+        return 0
+    base = get_runs_base_dir()
+    n = 0
+    if base.is_dir():
+        for p in sorted(base.glob("*.json")):
+            try:
+                run = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                logger.warning(f"run import: skipping unreadable {p.name}")
+                continue
+            rid = run.get("run_id") if isinstance(run, dict) else None
+            if not rid or not _check_id(rid):
+                continue
+            if conn.execute("SELECT 1 FROM runs WHERE run_id=?", (rid,)).fetchone():
+                continue
+            conn.execute("BEGIN")
+            try:
+                _write_run(conn, run)
+                conn.execute("COMMIT")
+                n += 1
+            except Exception:
+                conn.execute("ROLLBACK")
+                logger.exception(f"run import failed for {p.name}")
+    set_meta(_IMPORT_FLAG, _now_iso())
+    if n:
+        logger.info(f"Imported {n} run(s) from {base} into telecode.db (JSON files kept as backup)")
+    return n
 
 
 class RunStore:
+    """Runs in ``data/telecode.db`` (tables ``runs`` + ``run_steps``).
+
+    Each mutation is a read-modify-write under one process-wide lock inside a
+    single SQLite transaction, and publishes the new record on the live bus
+    (``run`` frames on the run's topic, ``run.update`` on the global feed).
+    """
+
     def __init__(self):
         self.base_dir = get_runs_base_dir()
-        self.base_dir.mkdir(parents=True, exist_ok=True)
+        with _lock:
+            try:
+                import_json_runs()
+            except Exception:
+                logger.exception("one-time import of data/runs/*.json failed")
+
+    def _mutate(self, run_id: str, fn) -> Optional[Dict[str, Any]]:
+        if not _check_id(run_id):
+            return None
+        with _lock:
+            conn = connect()
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                run = _read_run(conn, run_id)
+                if run is None:
+                    conn.execute("ROLLBACK")
+                    return None
+                out = fn(conn, run)
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        _publish(out)
+        return out
 
     def create_run(
         self,
@@ -188,66 +303,61 @@ class RunStore:
             ],
         }
         with _lock:
-            _atomic_write(_path(run_id), run)
+            conn = connect()
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                _write_run(conn, run)
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        _publish(run)
         return run
 
     def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
-        try:
-            p = _path(run_id)
-        except ValueError:
+        if not _check_id(run_id):
             return None
-        # Reads share the writers' lock: on Windows an open read handle makes
-        # the writer's os.replace fail with "Access is denied".
         with _lock:
-            if not p.exists():
-                return None
-            try:
-                return json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
-                return None
+            return _read_run(connect(), run_id)
 
     def list_runs(self, job_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
-        runs = []
         with _lock:
-            for p in self.base_dir.glob("*.json"):
-                try:
-                    runs.append(json.loads(p.read_text(encoding="utf-8")))
-                except Exception:
-                    continue
-        if job_id:
-            runs = [r for r in runs if r.get("job_id") == job_id]
-        runs.sort(key=lambda r: r.get("started_at", ""), reverse=True)
-        return runs[:limit]
+            conn = connect()
+            if job_id:
+                rows = conn.execute("SELECT run_id FROM runs WHERE job_id=? ORDER BY started_at DESC LIMIT ?",
+                                    (job_id, int(limit))).fetchall()
+            else:
+                rows = conn.execute("SELECT run_id FROM runs ORDER BY started_at DESC LIMIT ?",
+                                    (int(limit),)).fetchall()
+            out = []
+            for r in rows:
+                run = _read_run(conn, r["run_id"])
+                if run:
+                    out.append(run)
+        return out
 
     def update_run(self, run_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        with _lock:
-            run = self.get_run(run_id)
-            if not run:
-                return None
+        def fn(conn, run):
             for k, v in (patch or {}).items():
                 run[k] = v
-            _atomic_write(_path(run_id), run)
+            _write_run(conn, run)
             return run
+        return self._mutate(run_id, fn)
 
     def update_step(self, run_id: str, step_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        with _lock:
-            run = self.get_run(run_id)
-            if not run:
-                return None
-            for s in run.get("steps", []):
+        def fn(conn, run):
+            for idx, s in enumerate(run.get("steps", [])):
                 if s.get("step_id") == step_id:
                     for k, v in (patch or {}).items():
                         s[k] = v
-                    _atomic_write(_path(run_id), run)
+                    _write_step(conn, run_id, idx, s)
                     return run
             return None
+        return self._mutate(run_id, fn)
 
     def finalise(self, run_id: str) -> Optional[Dict[str, Any]]:
         """Compute aggregate run status from step statuses."""
-        with _lock:
-            run = self.get_run(run_id)
-            if not run:
-                return None
+        def fn(conn, run):
             steps = run.get("steps") or []
             if not steps:
                 run["status"] = "completed"
@@ -270,18 +380,24 @@ class RunStore:
             if run["status"] not in ("running", "pending"):
                 run["completed_at"] = run.get("completed_at") or _now_iso()
             run["usage"] = rollup_usage(steps)
-            _atomic_write(_path(run_id), run)
+            _write_run(conn, run)
             return run
+        return self._mutate(run_id, fn)
 
     def delete_run(self, run_id: str) -> bool:
-        try:
-            p = _path(run_id)
-        except ValueError:
+        if not _check_id(run_id):
             return False
-        if p.exists():
-            p.unlink()
-            return True
-        return False
+        with _lock:
+            conn = connect()
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                cur = conn.execute("DELETE FROM runs WHERE run_id=?", (run_id,))
+                conn.execute("DELETE FROM run_steps WHERE run_id=?", (run_id,))
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        return cur.rowcount > 0
 
 
 _store: Optional[RunStore] = None

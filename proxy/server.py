@@ -38,6 +38,7 @@ from proxy import api_agents
 from proxy import api_jobs
 from proxy import api_skills
 from proxy import api_runs
+from proxy import api_events
 from proxy import api_design
 from proxy import api_design_agents
 from proxy import api_design_editor
@@ -2811,6 +2812,7 @@ def create_app() -> web.Application:
     api_jobs.register_routes(app)
     api_skills.register_routes(app)
     api_runs.register_routes(app)
+    api_events.register_routes(app)
     api_routines.register_routes(app)
     api_design.register_routes(app)
     api_design_export.register_routes(app)

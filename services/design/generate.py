@@ -2,8 +2,9 @@
 
     start_turn()           validate, record the user + assistant turns, build the prompt,
                            submit a DESIGN_TURN task, start the driver
-    DESIGN_TURN handler    (task thread) runs the engine's `_run_*_subprocess` with
-                           work_dir = the project folder and the chat session's resume id
+    DESIGN_TURN handler    (task thread) runs the chat's engine through the Engine Runner
+                           (services.engine) with cwd = the project folder and the chat
+                           session's resume id
     _drive()               (proxy loop) polls the task's metadata events every 250 ms and
                            tails the CLI's JSONL log → SSE events (delta / tool / todo / files)
     _finish()              snapshot a version, register assets, parse <question-form>,
@@ -13,10 +14,9 @@
 W4's `render` and W5's `systems` are imported lazily; a missing module or
 function skips its stage with a log line rather than failing the turn.
 
-Stop terminates the CLI: `shell=True` spawns a `cmd.exe` whose child is the
-real CLI, and `proc.terminate()` in the handlers only reaches the shell. The
-handler thread therefore records the shell's PID as it spawns, so Stop can
-kill the whole tree (and bind it to the telecode Job Object on the way).
+Stop is the shared task cancel: the runner spawned the CLI itself (no shell,
+Job-bound before it runs) and registered it with the task queue, so
+`TaskQueue.cancel` stops the whole tree — graceful CTRL_BREAK, then kill.
 """
 
 from __future__ import annotations
@@ -24,11 +24,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import re
 import shutil
 import subprocess
-import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -98,8 +96,6 @@ def _optional(module: str, attr: str):
 _live: Dict[str, Dict[str, Any]] = {}              # turn_id -> running assistant turn
 _chat_running: Dict[Tuple[str, str], str] = {}     # (pid, cid) -> turn_id
 _drivers: Dict[str, asyncio.Task] = {}             # turn_id -> driver task
-_child_pids: Dict[str, int] = {}                   # task_id -> cmd.exe pid
-_spawn_lock = threading.Lock()
 
 
 def running_turn(pid: str, cid: str) -> Optional[Dict[str, Any]]:
@@ -107,96 +103,23 @@ def running_turn(pid: str, cid: str) -> Optional[Dict[str, Any]]:
     return _live.get(tid) if tid else None
 
 
-# ── Child-process tracking (Windows) ─────────────────────────────────────
-
-def _win_children(parent: int) -> List[Tuple[int, str]]:
-    import ctypes
-    from ctypes import wintypes
-
-    class PROCESSENTRY32W(ctypes.Structure):
-        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
-                    ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
-                    ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
-                    ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long),
-                    ("dwFlags", wintypes.DWORD), ("szExeFile", ctypes.c_wchar * 260)]
-
-    k32 = ctypes.windll.kernel32
-    k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
-    snap = k32.CreateToolhelp32Snapshot(0x2, 0)
-    if not snap or snap == wintypes.HANDLE(-1).value:
-        return []
-    out = []
-    try:
-        entry = PROCESSENTRY32W()
-        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
-        ok = k32.Process32FirstW(snap, ctypes.byref(entry))
-        while ok:
-            if entry.th32ParentProcessID == parent:
-                out.append((int(entry.th32ProcessID), entry.szExeFile))
-            ok = k32.Process32NextW(snap, ctypes.byref(entry))
-    finally:
-        k32.CloseHandle(snap)
-    return out
-
-
-def _begin_spawn_watch(task_id: str) -> Optional[threading.Event]:
-    """Hold the spawn lock until this task's shell appears, then record its PID.
-
-    Serialising spawns is what makes "the new cmd.exe child" unambiguous when
-    several design turns start at once. Released after at most 15 s.
-    """
-    if os.name != "nt":
-        return None
-    try:
-        before = {p for p, _ in _win_children(os.getpid())}
-    except Exception as exc:
-        logger.debug("design: child snapshot failed: %s", exc)
-        return None
-    _spawn_lock.acquire()
-    done = threading.Event()
-
-    def watch() -> None:
-        try:
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline and not done.is_set():
-                for pid, exe in _win_children(os.getpid()):
-                    if pid not in before and exe.lower() == "cmd.exe":
-                        _child_pids[task_id] = pid
-                        try:
-                            import process as tc_process
-                            tc_process.bind_to_lifetime_job(pid)
-                            for cpid, _ in _win_children(pid):
-                                tc_process.bind_to_lifetime_job(cpid)
-                        except Exception:
-                            pass
-                        return
-                time.sleep(0.05)
-        finally:
-            _spawn_lock.release()
-
-    threading.Thread(target=watch, name=f"design-spawn-{task_id[:8]}", daemon=True).start()
-    return done
-
-
-def _kill_task_process(task_id: str) -> None:
-    pid = _child_pids.get(task_id)
-    if not pid:
-        return
-    try:
-        import process as tc_process
-        tc_process.kill_process_tree(pid, force=True)
-        logger.info("design: killed CLI process tree %d for task %s", pid, task_id)
-    except Exception as exc:
-        logger.warning("design: could not kill pid %d: %s", pid, exc)
-
-
 # ── DESIGN_TURN handler (runs in a task-queue thread) ────────────────────
 
 def design_turn_handler(pid: str, chat_id: str, turn_id: str, engine: str, prompt: str,
                         is_local: bool = False, model: Optional[str] = None) -> Dict[str, Any]:
+    """Run the chat's CLI in the project folder through the Engine Runner.
+
+    The runner spawns the CLI directly (no shell), bound to the Job Object
+    before it runs, and registers it with the task queue, so Stop
+    (``TaskQueue.cancel``) takes the graceful → tree-kill path. The raw log
+    stays at ``data/task_logs/<task_id>.jsonl``, which ``_drive`` tails.
+    """
+    from services.engine.task_bridge import legacy_resume_writer, run_in_task, task_request
     from services.session import session_store
     from services.task.task_utils import get_session_id, get_session_namespace, get_task_id
 
+    if engine not in BINARIES:
+        raise RuntimeError(f"Unknown engine {engine!r}")
     root = store.project_dir(pid)
     if not root:
         raise RuntimeError("Design project not found")
@@ -206,33 +129,14 @@ def design_turn_handler(pid: str, chat_id: str, turn_id: str, engine: str, promp
     task_id = get_task_id() or uuid.uuid4().hex
     log_dir = Path(config._settings_dir()) / "data" / "task_logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / f"{task_id}.jsonl"
+    slot_key = RESUME_KEYS[resume_slot(engine, is_local)]
     data = (session_store.get(sid, namespace=ns) or {}).get("data") or {}
-    resume_id = data.get(RESUME_KEYS.get(resume_slot(engine, is_local), ""))
-
-    watch = _begin_spawn_watch(task_id)
-    try:
-        if engine == "claude_code":
-            from services.task.handlers.claude_code import _run_claude_subprocess
-            return _run_claude_subprocess(prompt=prompt, work_dir=root, sid=sid, ns=ns,
-                                          resume_id=resume_id, is_local=is_local, log_path=log_path,
-                                          model=model)
-        if engine == "codex":
-            from services.task.handlers.codex import _run_codex_subprocess
-            return _run_codex_subprocess(prompt=prompt, work_dir=root, sid=sid, ns=ns,
-                                         resume_id=resume_id, is_local=is_local, log_path=log_path,
-                                         last_msg_path=log_dir / f"{task_id}.codex_last_message.txt",
-                                         model=model)
-        if engine == "antigravity":
-            from services.task.handlers.antigravity import _run_antigravity_subprocess
-            return _run_antigravity_subprocess(prompt=prompt, work_dir=root, sid=sid, ns=ns,
-                                               resume_id=resume_id, log_path=log_path,
-                                               is_local=is_local, model=model)
-        raise RuntimeError(f"Unknown engine {engine!r}")
-    finally:
-        if watch:
-            watch.set()
-        _child_pids.pop(task_id, None)
+    req = task_request(
+        engine, prompt=prompt, cwd=root, sid=sid, model=model, is_local=is_local,
+        resume_id=data.get(slot_key), on_resume_id=legacy_resume_writer(sid, ns, slot_key),
+        log_path=log_dir / f"{task_id}.jsonl",
+        last_msg_path=(log_dir / f"{task_id}.codex_last_message.txt") if engine == "codex" else None)
+    return run_in_task(req, sid=sid, ns=ns)
 
 
 def register_task_type() -> None:
@@ -466,17 +370,10 @@ def stop_turn(pid: str, cid: str) -> bool:
     turn["_stop"] = True
     task_id = turn.get("task_id")
     if task_id:
-        from services.task.task_manager import TaskStatus, get_task_queue
-        q = get_task_queue()
-        task = q.get_task(task_id)
-        if task:
-            with q.lock:
-                if task.future and not task.future.done():
-                    task.future.cancel()
-                if task.status in (TaskStatus.PENDING, TaskStatus.RUNNING):
-                    task.status = TaskStatus.CANCELLED
-                    task.completed_at = datetime.now()
-        _kill_task_process(task_id)
+        # The shared cancel: flips the status (never over a finished task) and
+        # stops the CLI tree the Engine Runner registered (graceful, then kill).
+        from services.task.task_manager import get_task_queue
+        get_task_queue().cancel(task_id, "stopped by user")
     return True
 
 

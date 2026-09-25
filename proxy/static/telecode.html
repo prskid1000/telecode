@@ -158,6 +158,9 @@
 // previous page; only the rendering changed (DOM-built, no untrusted innerHTML).
 //   5s  GET /api/sessions, /api/agents, /api/jobs  (+ /api/runs on the overview)
 //   1s  GET /api/runs/{id} + /api/tasks/{step.task_id} while a run is live
+// With SSE (GET /api/runs/{id}/events, /api/events?kinds=run) the run poll becomes
+// event-driven with a 10 s safety net and the overview's recent runs refresh on
+// run.update; without SSE the intervals above apply unchanged.
 
 const INTERNAL_FILES = ["SOUL.md", "USER.md", "AGENT.md", "MEMORY.md", "HEARTBEAT.md"];
 const INTERNAL_HINTS = {
@@ -278,7 +281,30 @@ function setHash() {
   const h_ = state.activeType ? `#/${state.activeType}/${encodeURIComponent(state.activeId)}` : "";
   try { history.replaceState(null, "", location.pathname + location.search + h_); } catch { /* ignore */ }
 }
-function stopExecTimer() { if (state.executionTimer) clearInterval(state.executionTimer); state.executionTimer = null; }
+function stopExecTimer() {
+  if (state.executionTimer) clearInterval(state.executionTimer);
+  state.executionTimer = null;
+  if (state.runStream) { state.runStream.close(); state.runStream = null; }
+}
+// Live run: SSE (/api/runs/{id}/events — run writes + the step tasks' events)
+// triggers one debounced pollRun per burst and the poll drops to a 10 s safety
+// net; without SSE (older server, error) the 1 s poll runs as before.
+function startExecTimer(jobId) {
+  stopExecTimer();
+  const runId = state.activeRunId;
+  state.executionTimer = setInterval(() => pollRun(jobId), 1000);
+  const setPoll = (ms) => {
+    if (state.executionTimer == null || state.activeRunId !== runId) return;
+    clearInterval(state.executionTimer);
+    state.executionTimer = setInterval(() => pollRun(jobId), ms);
+  };
+  const soon = debounced(() => { if (state.activeRunId === runId) pollRun(jobId); }, 300);
+  state.runStream = liveEvents(`/api/runs/${encodeURIComponent(runId)}/events`, {
+    types: ["run", "event", "status", "end"],
+    onOpen: () => setPoll(10000), onEvent: soon, onEnd: soon,
+    onDown: () => setPoll(1000), onFallback: () => setPoll(1000),
+  });
+}
 function pageHead({ title, icon: ic, pills = [], sub = [], tools = [] }) {
   return h("div", { class: "page-head" },
     h("div", { class: "ttl" }, h("h1", null, title, pills), h("div", { class: "sub" }, sub)),
@@ -943,8 +969,7 @@ async function refreshJobRuns(id, initial) {
     state.watchedLive = !TERMINAL_RUN.includes(target.status);
     await pollRun(id);
     if (!TERMINAL_RUN.includes(target.status)) {
-      stopExecTimer();
-      state.executionTimer = setInterval(() => pollRun(id), 1000);
+      startExecTimer(id);
     }
   }
 }
@@ -976,7 +1001,7 @@ async function switchRun(runId, jobId) {
   const r = await api(`/api/runs/${encodeURIComponent(runId)}`);
   if (!TERMINAL_RUN.includes(r.run.status)) {
     state.watchedLive = true;
-    state.executionTimer = setInterval(() => pollRun(jobId), 1000);
+    startExecTimer(jobId);
   }
   const runsRes = await api(`/api/jobs/${encodeURIComponent(jobId)}/runs`);
   renderRunHistoryList(runsRes.runs || []);
@@ -1222,9 +1247,8 @@ async function runJob(jobId, choice) {
     showToast(`Run started: ${state.activeRunId.slice(0, 8)}…`);
     state.jobDirty = false;
     await renderJobViewer(jobId);
-    stopExecTimer();
     state.watchedLive = true;
-    state.executionTimer = setInterval(() => pollRun(jobId), 1000);
+    startExecTimer(jobId);
     pollRun(jobId);
   } catch (e) {
     if (execArea) mount(execArea, h("div", { class: "monitor" }, errorBox("Execution error: " + e.message)));
@@ -1381,6 +1405,8 @@ setInterval(() => {
   refreshJobs();
   if (!state.activeType && $("recent-runs")) refreshRecentRuns();
 }, 5000);
+liveEvents("/api/events?kinds=run", { types: ["run.update"],
+  onEvent: debounced(() => { if (!state.activeType && $("recent-runs")) refreshRecentRuns(); }, 500) });
 </script>
 </body>
 </html>

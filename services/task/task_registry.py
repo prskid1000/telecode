@@ -55,6 +55,7 @@ def register_default_tasks():
                     "task_description": {"type": "string"},
                 },
             },
+            "schema": {"type": "object", "description": "Optional JSON Schema for structured output (Claude --json-schema, Codex --output-schema; Antigravity: not supported yet). Parsed reply returned as result.structured_output."},
             "agent_files": {"type": "array", "items": {"type": "object"}, "description": "Optional list of {path: ...}"},
             "job_files": {"type": "array", "items": {"type": "object"}, "description": "Optional list of {path: ...}"},
         },

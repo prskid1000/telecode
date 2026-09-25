@@ -225,7 +225,9 @@
 <script>
 "use strict";
 // ═══ Task Mode ═══════════════════════════════════════════════════════════
-// Endpoints, payloads and polling are unchanged from the previous page:
+// Endpoints and payloads are unchanged from the previous page. Live updates come
+// from SSE when the server has it (GET /api/tasks/{id}/events, /api/events?kinds=task)
+// and then the polls below slow to a safety net; without SSE they run as listed:
 //   1s  GET /api/tasks/{id} while the active task is pending/running
 //   5s  GET /api/tasks; GET /api/routines/{id} while the Routines tab is open;
 //       GET /api/routines (+ /runs of expanded groups) while "By routine" is open
@@ -443,26 +445,40 @@ $("submit").onclick = async () => {
 function focusNewTask() { showLeftTab("session"); $("prompt").focus(); $("prompt").select(); }
 
 // ── Active task ────────────────────────────────────────────────────────
+// With SSE (/api/tasks/{id}/events) each event triggers one debounced refresh and
+// the poll drops to a 10 s safety net; without it (older server, error) the 1 s poll stays.
+let taskStream = null;
 function watchTask(id) {
   activeTaskId = id;
   if (pollTimer) clearInterval(pollTimer);
+  if (taskStream) { taskStream.close(); taskStream = null; }
   markActiveInLists();
+  let finished = false;
   const tick = async () => {
     try {
       const r = await api(`/api/tasks/${encodeURIComponent(id)}`);
       if (activeTaskId !== id) return;
       renderActive(r);
-      if (["completed", "failed", "cancelled"].includes(r.status)) {
+      if (["completed", "failed", "cancelled"].includes(r.status) && !finished) {
+        finished = true;
         clearInterval(pollTimer); pollTimer = null;
+        if (taskStream) { taskStream.close(); taskStream = null; }
         refreshSession(); refreshTasks();
       }
     } catch (e) {
       if (activeTaskId === id && !$("active").querySelector(".act-head")) mount($("active"), errorBox(e.message));
     }
   };
+  const setPoll = (ms) => { if (activeTaskId !== id || finished) return; if (pollTimer) clearInterval(pollTimer); pollTimer = setInterval(tick, ms); };
+  const soon = debounced(() => { if (activeTaskId === id) tick(); }, 250);
   if (!$("active").querySelector(".act-head") || $("active")._taskId !== id) mount($("active"), skeleton(5));
   tick();
   pollTimer = setInterval(tick, 1000);
+  taskStream = liveEvents(`/api/tasks/${encodeURIComponent(id)}/events`, {
+    types: ["event", "status", "end"],
+    onOpen: () => setPoll(10000), onEvent: soon, onEnd: soon,
+    onDown: () => setPoll(1000), onFallback: () => setPoll(1000),
+  });
 }
 function renderActiveEmpty() {
   mount($("active"), emptyState("send", "No task yet", "Submit one on the left, or pick a recent task from the sidebar.",
@@ -969,7 +985,12 @@ renderActiveEmpty();
 renderTaskList();
 refreshSession();
 refreshTasks();
-setInterval(refreshTasks, 5000);
+// Sidebar: the global feed (/api/events?kinds=task) refreshes the list on every
+// task status change; the 5 s poll then only runs every 30 s as a safety net.
+// No feed (older server / error) → the 5 s poll as before.
+const taskFeed = liveEvents("/api/events?kinds=task", { types: ["task.status"], onEvent: debounced(refreshTasks, 500) });
+let taskFeedTicks = 0;
+setInterval(() => { if (!taskFeed.live || ++taskFeedTicks % 6 === 0) refreshTasks(); }, 5000);
 refreshSkills();
 refreshRoutines();
 </script>
