@@ -1,0 +1,1 @@
+function e(){let e=typeof navigator>`u`?void 0:navigator.userAgent;return typeof e==`string`?e:``}function t(t,n=[],r=e()){return r.includes(`Windows`)?{command:`cmd`,args:[`/c`,t,...n]}:{command:t,args:n}}export{t};

@@ -47,15 +47,18 @@ def upstream_url() -> str:
 def protocols() -> list[str]:
     """Which client-facing protocols to expose.
 
-    Values: "anthropic", "openai". Default both. Disabling one just
-    unregisters the corresponding routes; there is no per-request toggle.
+    Values: "anthropic" (/v1/messages), "openai" (/v1/chat/completions and
+    the /v1/responses passthrough), "gemini" (/v1beta/models/*). Default all
+    three. Disabling one just unregisters the corresponding routes; there is
+    no per-request toggle.
     """
-    configured = app_config.get_nested("proxy.protocols", ["anthropic", "openai"])
+    default = ["anthropic", "openai", "gemini"]
+    configured = app_config.get_nested("proxy.protocols", default)
     if not configured:
-        return ["anthropic", "openai"]
+        return default
     # Normalize + filter
-    known = {"anthropic", "openai"}
-    return [p for p in configured if p in known] or ["anthropic", "openai"]
+    known = set(default)
+    return [p for p in configured if p in known] or default
 
 
 def enabled() -> bool:

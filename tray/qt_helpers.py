@@ -110,10 +110,7 @@ def patch_settings(path: str, value: Any) -> None:
     sp = settings_path()
     raw = app_config.raw()
     _set_nested(raw, path, value)
-    tmp = sp.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(raw, indent=2, ensure_ascii=False) + "\n",
-                   encoding="utf-8")
-    os.replace(tmp, sp)
+    app_config.write_settings_file(sp, raw)
     try:
         app_config.reload()
     except Exception as exc:
@@ -134,10 +131,7 @@ def remove_path(path: str) -> None:
         node = node[k]
     if isinstance(node, dict):
         node.pop(keys[-1], None)
-    tmp = sp.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(raw, indent=2, ensure_ascii=False) + "\n",
-                   encoding="utf-8")
-    os.replace(tmp, sp)
+    app_config.write_settings_file(sp, raw)
     _emit_setting_changed(path)
 
 
@@ -204,7 +198,7 @@ def humanize(name: str) -> str:
 
 
 def format_protocol(p: str) -> str:
-    return {"openai": "OpenAI", "anthropic": "Anthropic"}.get(p, p.title())
+    return {"openai": "OpenAI", "anthropic": "Anthropic", "gemini": "Gemini"}.get(p, p.title())
 
 
 # ── Status snapshot (direct reads from in-process globals) ───────────

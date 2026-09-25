@@ -20,6 +20,7 @@ from services.task.task_utils import (
     get_task_id,
     is_cancelled,
     update_progress,
+    StreamDrain,
 )
 
 logger = logging.getLogger("telecode.services.task.handlers.claude_code")
@@ -126,8 +127,11 @@ def _run_claude_subprocess(
     is_local: bool,
     log_path: Path,
 ) -> Dict[str, Any]:
+    # The prompt goes on stdin, not argv: `claude -p` reads it from there, and
+    # a design prompt (charter + design system + comments) overflows the
+    # Windows command line (~8 KB through a .cmd shim) on this shell=True spawn.
     cmd = [
-        "claude", "-p", json.dumps(prompt),
+        "claude", "-p",
         "--dangerously-skip-permissions",
         "--output-format", "stream-json",
         "--verbose",
@@ -155,7 +159,7 @@ def _run_claude_subprocess(
             "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
             "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
             "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1",
-            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "8192",
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(app_config.tasks_local_max_output_tokens()),
             "ENABLE_TOOL_SEARCH": "false",
         }
         logger.info(f"Local mode: using model {model} at {proxy_url}")
@@ -179,14 +183,20 @@ def _run_claude_subprocess(
     proc = subprocess.Popen(
         cmd,
         cwd=str(work_dir),
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=env,
         text=True,
+        encoding="utf-8",
         bufsize=1,
         shell=True,
         creationflags=creation,
     )
+    assert proc.stdin is not None
+    proc.stdin.write(prompt)
+    proc.stdin.close()
+    stderr_drain = StreamDrain(proc.stderr)
 
     tool_calls: List[str] = []
     final: Optional[Dict[str, Any]] = None
@@ -227,7 +237,7 @@ def _run_claude_subprocess(
         if proc.poll() is None:
             proc.kill()
 
-    stderr = (proc.stderr.read() if proc.stderr else "") or ""
+    stderr = stderr_drain.text()
     if proc.returncode != 0 and final is None and not accumulated_text:
         raise RuntimeError(f"claude exited with code {proc.returncode}: {stderr.strip()[:500]}")
 

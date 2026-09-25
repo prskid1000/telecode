@@ -1,0 +1,174 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Prithwiraj Samanta <app@datainsights.ae>
+Date: Fri, 25 Sep 2026 08:17:32 +0530
+Subject: [PATCH 7/7] telecode: build-time dump of the automation tool
+ descriptors
+
+telecode implements the server side of the automation bridge itself, so it
+needs the descriptors the MCP server would register (name, description,
+effect, availability, capabilities, JSON input schema, bridge command).
+scripts/telecode-dump-tools.ts writes them to a JSON file.
+---
+ scripts/telecode-dump-tools.ts | 153 +++++++++++++++++++++++++++++++++
+ 1 file changed, 153 insertions(+)
+ create mode 100644 scripts/telecode-dump-tools.ts
+
+diff --git a/scripts/telecode-dump-tools.ts b/scripts/telecode-dump-tools.ts
+new file mode 100644
+index 00000000..b5107755
+--- /dev/null
++++ b/scripts/telecode-dump-tools.ts
+@@ -0,0 +1,153 @@
++/**
++ * Dump the automation tool surface for telecode (TeleDesign).
++ *
++ *   bun scripts/telecode-dump-tools.ts <out.json>
++ *
++ * telecode speaks the automation bridge protocol itself (no MCP server process),
++ * so it needs, at build time, the same descriptors the MCP server would register:
++ * every core tool exposed to MCP, with its JSON input schema and the bridge
++ * command that runs it, plus the non-core commands the browser handles.
++ */
++import { toJsonSchema } from '@valibot/to-json-schema'
++import * as v from 'valibot'
++
++import {
++  ALL_TOOLS,
++  CODEGEN_PROMPT,
++  isToolExposed,
++  toolChangesDocument
++} from '@open-pencil/core/tools'
++
++import packageJson from '../package.json'
++
++const target = {
++  document_id: v.optional(
++    v.pipe(v.string(), v.description('Optional OpenPencil document/tab ID to target'))
++  ),
++  page_id: v.optional(
++    v.pipe(v.string(), v.description('Optional page ID to target within the document'))
++  )
++}
++
++function schemaOf(input: v.ObjectSchema<v.ObjectEntries, undefined>) {
++  const schema = toJsonSchema(v.object({ ...input.entries, ...target }), { errorMode: 'ignore' })
++  delete (schema as { $schema?: string }).$schema
++  return schema
++}
++
++const core = ALL_TOOLS.filter((def) => isToolExposed(def, 'mcp')).map((def) => ({
++  name: def.name,
++  description: def.description,
++  command: 'tool',
++  effect: toolChangesDocument(def) ? 'write' : 'read',
++  availability: def.availability,
++  capabilities: [...def.capabilities],
++  enabled: true,
++  input_schema: schemaOf(def.input as v.ObjectSchema<v.ObjectEntries, undefined>)
++}))
++
++const extra = [
++  {
++    name: 'list_documents',
++    description:
++      'List open OpenPencil documents/tabs with their IDs, current pages, and pages.',
++    command: 'list_documents',
++    effect: 'read',
++    availability: 'default',
++    capabilities: ['document:read'],
++    enabled: true,
++    input_schema: { type: 'object', properties: {} }
++  },
++  {
++    name: 'save_file',
++    description:
++      'Save the current document back to its TeleDesign project (doc.fig). Autosave normally does this.',
++    command: 'save_file',
++    effect: 'write',
++    availability: 'default',
++    capabilities: ['document:read', 'filesystem:write'],
++    enabled: true,
++    input_schema: schemaOf(v.object({}))
++  },
++  {
++    name: 'telecode_board_mark',
++    description:
++      'Make a frame a TeleDesign HTML board: stamps a stable board key on it (kept in the .fig) and, when src is given, registers {src, width, height} under that key in boards.json so the page at src renders on the frame. Returns {key, node_id}. The key — not the node id, which changes on reload — identifies the board.',
++    command: 'telecode_board_mark',
++    effect: 'write',
++    availability: 'default',
++    capabilities: ['document:write'],
++    enabled: true,
++    input_schema: schemaOf(
++      v.object({
++        node_id: v.pipe(v.string(), v.description('Frame to mark')),
++        src: v.optional(
++          v.pipe(v.string(), v.description('Project-relative .html file to render on the frame'))
++        ),
++        width: v.optional(v.pipe(v.number(), v.description('Page viewport width (CSS px)'))),
++        height: v.optional(v.pipe(v.number(), v.description('Page viewport height (CSS px)'))),
++        key: v.optional(
++          v.pipe(v.string(), v.regex(/^[A-Za-z0-9_-]{1,64}$/), v.description('Board key to use'))
++        )
++      })
++    )
++  },
++  {
++    name: 'telecode_board_unmark',
++    description:
++      'Stop treating a frame as a TeleDesign HTML board: removes its board key and its boards.json entry. The frame itself stays.',
++    command: 'telecode_board_unmark',
++    effect: 'write',
++    availability: 'default',
++    capabilities: ['document:write'],
++    enabled: true,
++    input_schema: schemaOf(v.object({ key: v.pipe(v.string(), v.description('Board key')) }))
++  },
++  {
++    name: 'telecode_board_list',
++    description:
++      'List every frame carrying a TeleDesign board key: [{key, node_id, name, page_id, x, y, width, height}].',
++    command: 'telecode_board_list',
++    effect: 'read',
++    availability: 'default',
++    capabilities: ['document:read'],
++    enabled: true,
++    input_schema: schemaOf(v.object({}))
++  },
++  {
++    name: 'get_codegen_prompt',
++    description:
++      'Get design-to-code generation guidelines. Call before generating frontend code.',
++    command: 'local',
++    effect: 'read',
++    availability: 'default',
++    capabilities: [],
++    enabled: true,
++    input_schema: { type: 'object', properties: {} }
++  }
++]
++
++const out = process.argv[2]
++if (!out) {
++  console.error('usage: bun scripts/telecode-dump-tools.ts <out.json>')
++  process.exit(2)
++}
++
++// The render tool's JSX authoring guide (MIT, OpenPencil), for prompt builders.
++const authoringPath = new URL(
++  '../packages/core/src/design-jsx/reference/authoring.md',
++  import.meta.url
++)
++const jsxAuthoringReference = await Bun.file(authoringPath).text()
++
++const payload = {
++  generated_by: 'scripts/telecode-dump-tools.ts',
++  open_pencil_version: packageJson.version,
++  count: core.length + extra.length,
++  tools: [...core, ...extra],
++  codegen_prompt: CODEGEN_PROMPT,
++  jsx_authoring_reference: jsxAuthoringReference
++}
++
++await Bun.write(out, `${JSON.stringify(payload, null, 2)}\n`)
++console.log(`wrote ${payload.count} tool descriptors to ${out}`)

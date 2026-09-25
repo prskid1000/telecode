@@ -1,7 +1,9 @@
-"""Dual-protocol proxy in front of llama-server.
+"""Multi-protocol proxy in front of llama-server.
 
-Exposes both Anthropic `/v1/messages` and OpenAI `/v1/chat/completions`
-to clients. Internally everything is translated to OpenAI shape (llama.cpp
+Exposes Anthropic `/v1/messages`, OpenAI `/v1/chat/completions` and Gemini
+`/v1beta/models/*` to clients, plus OpenAI `/v1/responses` as a passthrough
+to llama-server's own Responses endpoint (for Codex, which speaks nothing
+else). Internally everything is translated to OpenAI shape (llama.cpp
 native) before hitting the upstream; the response stream is translated
 back to whatever protocol the client used.
 
@@ -36,6 +38,11 @@ from proxy import api_agents
 from proxy import api_jobs
 from proxy import api_skills
 from proxy import api_runs
+from proxy import api_design
+from proxy import api_design_agents
+from proxy import api_design_editor
+from proxy import api_design_export
+from proxy import api_design_systems
 from proxy.tool_registry import (
     proxy_system_instruction,
     strip_all_reminders,
@@ -84,11 +91,14 @@ async def _start_heartbeat(
     """Send wire-level keep-alives every 2s and protocol pings every N seconds.
 
     Anthropic protocol: `event: ping` frames (CC / pivot recognize these).
-    OpenAI protocol: SSE comment lines only (OpenAI SSE has no ping event).
+    OpenAI / Responses protocol: SSE comment lines only (no ping event).
+    Gemini protocol: `data: {}` — the genai SDK's stream reader fails the
+    whole turn on any line that does not start with `data:`, comments included.
     """
     await _ensure_prepared(resp, request)
     ping_every = max(_HEARTBEAT_INTERVAL, proxy_config.ping_interval())
     anthropic_ping = b"event: ping\ndata: {\"type\":\"ping\"}\n\n"
+    keepalive = xlate.GEMINI_KEEPALIVE if protocol == "gemini" else b": keepalive\n\n"
 
     async def _beat() -> None:
         elapsed = 0.0
@@ -103,7 +113,7 @@ async def _start_heartbeat(
                             await resp.write(anthropic_ping)
                             last_ping = elapsed
                         else:
-                            await resp.write(b": keepalive\n\n")
+                            await resp.write(keepalive)
                     except (ConnectionResetError, ConnectionError):
                         return
         except asyncio.CancelledError:
@@ -357,6 +367,54 @@ class OpenAIAdapter(ClientAdapter):
 
     def end_stream(self) -> bytes:
         return b"data: [DONE]\n\n"
+
+
+class GeminiAdapter(ClientAdapter):
+    """Gemini `streamGenerateContent?alt=sse` framing.
+
+    One GeminiStreamState for the whole request (not per round): a round that
+    ends in an intercept never reaches finish_reason in the state, so nothing
+    is held back across it, and the response id stays constant. There is no
+    initial frame — Gemini streams have no opener, and an empty first chunk
+    would only be noise. No `[DONE]` sentinel either: the genai SDK would try
+    to JSON-decode it.
+    """
+
+    protocol = "gemini"
+
+    def __init__(self, client_model: str) -> None:
+        super().__init__(client_model)
+        self.state: xlate.GeminiStreamState | None = None
+        self._response_id = f"resp_{uuid.uuid4().hex[:24]}"
+
+    def initial_frame(self) -> bytes:
+        self.initial_emitted = True
+        return b""
+
+    def reset_state(self, reasoning_cfg: dict[str, Any]) -> None:
+        self.state = xlate.GeminiStreamState(
+            reasoning=xlate.ReasoningState(
+                start_tag=reasoning_cfg.get("start", "<think>"),
+                end_tag=reasoning_cfg.get("end", "</think>"),
+                emit_thinking=reasoning_cfg.get("emit_thinking_blocks", False),
+                enabled=reasoning_cfg.get("enabled", True),
+            ),
+            client_model=self.client_model,
+            response_id=self._response_id,
+        )
+
+    def emit_status(self, text: str) -> bytes:
+        if self.state is None:
+            self.reset_state({})
+        assert self.state is not None
+        return self.state.status(text)
+
+    def translate_openai_chunk(self, chunk: dict[str, Any]) -> bytes:
+        assert self.state is not None
+        return self.state.step(chunk)
+
+    def end_stream(self) -> bytes:
+        return self.state.finish() if self.state is not None else b""
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -735,6 +793,26 @@ async def _inline_media_urls(body: dict[str, Any], inbound_protocol: str) -> Non
     """
     from proxy.media_fetch import MediaFetchError, fetch_media_b64
 
+    if inbound_protocol == "gemini":
+        # Gemini shape: {"fileData": {"mimeType": ..., "fileUri": "https://..."}}
+        # → {"inlineData": {"mimeType": ..., "data": <base64>}}. gs:// and
+        # Files-API URIs are left for the translator to report as unresolvable.
+        for content in body.get("contents") or []:
+            parts = content.get("parts") if isinstance(content, dict) else None
+            for part in parts or []:
+                fd = part.get("fileData") if isinstance(part, dict) else None
+                uri = fd.get("fileUri", "") if isinstance(fd, dict) else ""
+                if not uri.startswith(("http://", "https://")):
+                    continue
+                try:
+                    data = await fetch_media_b64(uri)
+                except MediaFetchError as exc:
+                    raise web.HTTPBadRequest(reason=f"fileData URL rejected: {exc}") from exc
+                part.pop("fileData", None)
+                part["inlineData"] = {"mimeType": fd.get("mimeType") or "application/octet-stream",
+                                      "data": data}
+        return
+
     for msg in body.get("messages") or []:
         if not isinstance(msg, dict):
             continue
@@ -821,6 +899,9 @@ async def _prepare_internal_body(
     # 3. Client body → internal (OpenAI) body
     if inbound_protocol == "anthropic":
         internal = xlate.anthropic_request_to_internal(
+            body, inference_defaults=inference, system_mode=system_mode)
+    elif inbound_protocol == "gemini":
+        internal = xlate.gemini_request_to_internal(
             body, inference_defaults=inference, system_mode=system_mode)
     else:
         internal = xlate.openai_request_to_internal(
@@ -1313,186 +1394,192 @@ async def _run_upstream_round(
     )
 
     # Mark this round as in-flight so the supervisor's idle-unload watcher
-    # never tears down llama-server mid-stream. We end-request just before
-    # each return path below (there are 4: 502 from upstream, [DONE],
-    # captured-tool-call, stream-without-DONE).
+    # never tears down llama-server mid-stream; released in the `finally`.
     supervisor = await get_supervisor()
     await supervisor.begin_request()
+    # One release for every exit: the returns below, and exceptions — a
+    # client that disconnects mid-stream raises out of resp.write(), which
+    # used to skip end_request and pin the inflight count (and with it the
+    # idle-unload watcher) forever.
+    try:
+        async with aiohttp.ClientSession(timeout=_UPSTREAM_TIMEOUT) as session:
+            async with session.post(url, json=internal_body, headers=headers) as upstream_resp:
+                if upstream_resp.status != 200:
+                    errtext = await upstream_resp.text()
+                    log.warning("upstream %d: %s", upstream_resp.status, errtext[:500])
+                    async with write_lock:
+                        await _ensure_prepared(resp, request)
+                        err = {
+                            "type": "error",
+                            "error": {
+                                "type": "upstream_error",
+                                "status": upstream_resp.status,
+                                "body": errtext[:500],
+                            },
+                        }
+                        if adapter.protocol == "anthropic":
+                            await resp.write(b"event: error\n")
+                            await resp.write(f"data: {json.dumps(err)}\n\n".encode())
+                        elif adapter.protocol == "gemini":
+                            # google.rpc.Status shape; no [DONE] (not JSON).
+                            gerr = {"error": {"code": upstream_resp.status,
+                                              "message": errtext[:500],
+                                              "status": "INTERNAL"}}
+                            await resp.write(f"data: {json.dumps(gerr)}\n\n".encode())
+                        else:
+                            await resp.write(f"data: {json.dumps(err)}\n\n".encode())
+                            await resp.write(b"data: [DONE]\n\n")
+                    return None
 
-    async with aiohttp.ClientSession(timeout=_UPSTREAM_TIMEOUT) as session:
-        async with session.post(url, json=internal_body, headers=headers) as upstream_resp:
-            if upstream_resp.status != 200:
-                errtext = await upstream_resp.text()
-                log.warning("upstream %d: %s", upstream_resp.status, errtext[:500])
-                async with write_lock:
-                    await _ensure_prepared(resp, request)
-                    err = {
-                        "type": "error",
-                        "error": {
-                            "type": "upstream_error",
-                            "status": upstream_resp.status,
-                            "body": errtext[:500],
-                        },
-                    }
-                    if adapter.protocol == "anthropic":
-                        await resp.write(b"event: error\n")
-                        await resp.write(f"data: {json.dumps(err)}\n\n".encode())
-                    else:
-                        await resp.write(f"data: {json.dumps(err)}\n\n".encode())
-                        await resp.write(b"data: [DONE]\n\n")
-                await supervisor.end_request()
-                return None
+                async for chunk in upstream_resp.content.iter_any():
+                    text = chunk.decode("utf-8", errors="replace")
+                    buf += text
 
-            async for chunk in upstream_resp.content.iter_any():
-                text = chunk.decode("utf-8", errors="replace")
-                buf += text
+                    while "\n\n" in buf:
+                        event_block, buf = buf.split("\n\n", 1)
+                        data_line = None
+                        for line in event_block.split("\n"):
+                            if line.startswith("data: "):
+                                data_line = line[6:]
+                                break
+                        if data_line is None:
+                            continue
+                        if data_line.strip() == "[DONE]":
+                            # End of stream
+                            if decided == "passthrough":
+                                async with write_lock:
+                                    await resp.write(adapter.end_stream())
+                            return None
 
-                while "\n\n" in buf:
-                    event_block, buf = buf.split("\n\n", 1)
-                    data_line = None
-                    for line in event_block.split("\n"):
-                        if line.startswith("data: "):
-                            data_line = line[6:]
-                            break
-                    if data_line is None:
-                        continue
-                    if data_line.strip() == "[DONE]":
-                        # End of stream
-                        if decided == "passthrough":
-                            async with write_lock:
-                                await resp.write(adapter.end_stream())
-                        await supervisor.end_request()
-                        return None
+                        try:
+                            event = json.loads(data_line)
+                        except json.JSONDecodeError:
+                            continue
 
-                    try:
-                        event = json.loads(data_line)
-                    except json.JSONDecodeError:
-                        continue
+                        # ── Pre-decision: watch first content signal ────────
+                        just_decided = False
+                        if decided is None:
+                            choices = event.get("choices", [])
+                            if choices:
+                                delta = choices[0].get("delta", {}) or {}
+                                tcs = delta.get("tool_calls", []) or []
+                                content = delta.get("content")
 
-                    # ── Pre-decision: watch first content signal ────────
-                    just_decided = False
-                    if decided is None:
-                        choices = event.get("choices", [])
-                        if choices:
-                            delta = choices[0].get("delta", {}) or {}
-                            tcs = delta.get("tool_calls", []) or []
-                            content = delta.get("content")
+                                if tcs:
+                                    # First tool_call — assemble until we know the name,
+                                    # then decide intercept/passthrough.
+                                    for tc in tcs:
+                                        idx = tc.get("index", 0)
+                                        entry = tool_parts.setdefault(idx, {
+                                            "id": tc.get("id", ""),
+                                            "name": "",
+                                            "arguments": "",
+                                        })
+                                        if tc.get("id"):
+                                            entry["id"] = tc["id"]
+                                        fn = tc.get("function", {}) or {}
+                                        if fn.get("name"):
+                                            entry["name"] += fn["name"]
+                                        if "arguments" in fn:
+                                            entry["arguments"] += fn["arguments"] or ""
+                                        if idx not in tool_order:
+                                            tool_order.append(idx)
 
-                            if tcs:
-                                # First tool_call — assemble until we know the name,
-                                # then decide intercept/passthrough.
-                                for tc in tcs:
-                                    idx = tc.get("index", 0)
-                                    entry = tool_parts.setdefault(idx, {
-                                        "id": tc.get("id", ""),
-                                        "name": "",
-                                        "arguments": "",
-                                    })
-                                    if tc.get("id"):
-                                        entry["id"] = tc["id"]
-                                    fn = tc.get("function", {}) or {}
-                                    if fn.get("name"):
-                                        entry["name"] += fn["name"]
-                                    if "arguments" in fn:
-                                        entry["arguments"] += fn["arguments"] or ""
-                                    if idx not in tool_order:
-                                        tool_order.append(idx)
-
-                                first_idx = tool_order[0]
-                                first_name = tool_parts[first_idx]["name"]
-                                if first_name:
-                                    if first_name in intercept_names:
-                                        decided = "intercept"
-                                    elif known_names and first_name not in known_names:
-                                        decided = "intercept"  # hallucinated
-                                    else:
-                                        decided = "passthrough"
-                                    just_decided = True
-                                # else still waiting for full name
-                            elif choices[0].get("finish_reason"):
-                                decided = "passthrough"
-                                just_decided = True
-                            elif content:
-                                # Only NON-BLANK text outside a think block
-                                # settles the round. llama.cpp emits a bare
-                                # "\n\n" between </think> and the first
-                                # tool_call delta; counting that as an answer
-                                # committed the round to passthrough, so every
-                                # tool call after it escaped to the client
-                                # ("No such tool available: ToolSearch").
-                                # Whitespace is not an answer — keep watching.
-                                if any(k == "text" and t.strip()
-                                       for k, t in decide_think.push(content)):
+                                    first_idx = tool_order[0]
+                                    first_name = tool_parts[first_idx]["name"]
+                                    if first_name:
+                                        if first_name in intercept_names:
+                                            decided = "intercept"
+                                        elif known_names and first_name not in known_names:
+                                            decided = "intercept"  # hallucinated
+                                        else:
+                                            decided = "passthrough"
+                                        just_decided = True
+                                    # else still waiting for full name
+                                elif choices[0].get("finish_reason"):
                                     decided = "passthrough"
                                     just_decided = True
+                                elif content:
+                                    # Only NON-BLANK text outside a think block
+                                    # settles the round. llama.cpp emits a bare
+                                    # "\n\n" between </think> and the first
+                                    # tool_call delta; counting that as an answer
+                                    # committed the round to passthrough, so every
+                                    # tool call after it escaped to the client
+                                    # ("No such tool available: ToolSearch").
+                                    # Whitespace is not an answer — keep watching.
+                                    if any(k == "text" and t.strip()
+                                           for k, t in decide_think.push(content)):
+                                        decided = "passthrough"
+                                        just_decided = True
 
-                    # ── Post-decision handling ──────────────────────────
-                    # If decision flipped THIS event, we already consumed the
-                    # tool-call fragment in the pre-decision branch; don't
-                    # re-append name/arguments below.
-                    if decided is None:
-                        # Still undecided ⇒ what we have so far is thinking.
-                        # Write it now rather than buffering: on a long think
-                        # it is the only thing the user has to look at, and it
-                        # belongs to the message whichever way the round goes.
-                        # If this turns out to be an intercept, the block is
-                        # closed below and the next round appends to the same
-                        # message.
-                        #
-                        # Except a tool-call fragment: undecided here means the
-                        # name is still arriving in pieces, and a tool_use block
-                        # opened on half a name cannot be taken back.
-                        _d = (event.get("choices") or [{}])[0].get("delta", {}) or {}
-                        if not _d.get("tool_calls"):
+                        # ── Post-decision handling ──────────────────────────
+                        # If decision flipped THIS event, we already consumed the
+                        # tool-call fragment in the pre-decision branch; don't
+                        # re-append name/arguments below.
+                        if decided is None:
+                            # Still undecided ⇒ what we have so far is thinking.
+                            # Write it now rather than buffering: on a long think
+                            # it is the only thing the user has to look at, and it
+                            # belongs to the message whichever way the round goes.
+                            # If this turns out to be an intercept, the block is
+                            # closed below and the next round appends to the same
+                            # message.
+                            #
+                            # Except a tool-call fragment: undecided here means the
+                            # name is still arriving in pieces, and a tool_use block
+                            # opened on half a name cannot be taken back.
+                            _d = (event.get("choices") or [{}])[0].get("delta", {}) or {}
+                            if not _d.get("tool_calls"):
+                                async with write_lock:
+                                    await _ensure_prepared(resp, request)
+                                    await resp.write(adapter.translate_openai_chunk(event))
+                        elif decided == "passthrough":
                             async with write_lock:
                                 await _ensure_prepared(resp, request)
                                 await resp.write(adapter.translate_openai_chunk(event))
-                    elif decided == "passthrough":
-                        async with write_lock:
-                            await _ensure_prepared(resp, request)
-                            await resp.write(adapter.translate_openai_chunk(event))
-                    elif decided == "intercept":
-                        # Keep assembling the first tool_call's arguments.
-                        # Skip assembly on the decision tick — already done.
-                        choices = event.get("choices", [])
-                        if choices:
-                            delta = choices[0].get("delta", {}) or {}
-                            if not just_decided:
-                                for tc in delta.get("tool_calls", []) or []:
-                                    idx = tc.get("index", 0)
-                                    if idx not in tool_parts:
-                                        continue
-                                    fn = tc.get("function", {}) or {}
-                                    if fn.get("name"):
-                                        tool_parts[idx]["name"] += fn["name"]
-                                    if "arguments" in fn:
-                                        tool_parts[idx]["arguments"] += fn["arguments"] or ""
-                            if choices[0].get("finish_reason"):
-                                # Stream ended — return the captured call
-                                first_idx = tool_order[0]
-                                entry = tool_parts[first_idx]
-                                # This chunk never reaches the stream state, so
-                                # any thinking block opened above would be left
-                                # without its content_block_stop.
-                                tail = adapter.close_open_block()
-                                if tail:
-                                    async with write_lock:
-                                        await _ensure_prepared(resp, request)
-                                        await resp.write(tail)
-                                await supervisor.end_request()
-                                return InterceptedToolCall(
-                                    id=entry["id"] or f"call_{uuid.uuid4().hex[:12]}",
-                                    name=entry["name"],
-                                    arguments=entry["arguments"],
-                                    hallucinated=(entry["name"] not in intercept_names),
-                                )
-                    # else decided is None: still pre-decision, keep reading
+                        elif decided == "intercept":
+                            # Keep assembling the first tool_call's arguments.
+                            # Skip assembly on the decision tick — already done.
+                            choices = event.get("choices", [])
+                            if choices:
+                                delta = choices[0].get("delta", {}) or {}
+                                if not just_decided:
+                                    for tc in delta.get("tool_calls", []) or []:
+                                        idx = tc.get("index", 0)
+                                        if idx not in tool_parts:
+                                            continue
+                                        fn = tc.get("function", {}) or {}
+                                        if fn.get("name"):
+                                            tool_parts[idx]["name"] += fn["name"]
+                                        if "arguments" in fn:
+                                            tool_parts[idx]["arguments"] += fn["arguments"] or ""
+                                if choices[0].get("finish_reason"):
+                                    # Stream ended — return the captured call
+                                    first_idx = tool_order[0]
+                                    entry = tool_parts[first_idx]
+                                    # This chunk never reaches the stream state, so
+                                    # any thinking block opened above would be left
+                                    # without its content_block_stop.
+                                    tail = adapter.close_open_block()
+                                    if tail:
+                                        async with write_lock:
+                                            await _ensure_prepared(resp, request)
+                                            await resp.write(tail)
+                                    return InterceptedToolCall(
+                                        id=entry["id"] or f"call_{uuid.uuid4().hex[:12]}",
+                                        name=entry["name"],
+                                        arguments=entry["arguments"],
+                                        hallucinated=(entry["name"] not in intercept_names),
+                                    )
+                        # else decided is None: still pre-decision, keep reading
+    finally:
+        try:
+            await supervisor.end_request()
+        except Exception:
+            pass
 
     # Stream ended without [DONE] — treat as passthrough complete
-    try:
-        await supervisor.end_request()
-    except Exception:
-        pass
     return None
 
 
@@ -1586,6 +1673,7 @@ async def _run_streaming(
 
         max_roundtrips = proxy_config.max_roundtrips()
         rounds_completed = 0
+        client_gone = False
         for _rt in range(max_roundtrips):
             rounds_completed = _rt + 1
             # Rebuild intercept set each round (tools joined core_visible_names
@@ -1598,12 +1686,22 @@ async def _run_streaming(
 
             known_names = core_visible_names | deferred_names | intercept_names
 
-            tool_call = await _run_upstream_round(
-                body, headers, resp, request, adapter, reasoning_cfg,
-                intercept_names=intercept_names,
-                known_names=known_names,
-                write_lock=write_lock,
-            )
+            try:
+                tool_call = await _run_upstream_round(
+                    body, headers, resp, request, adapter, reasoning_cfg,
+                    intercept_names=intercept_names,
+                    known_names=known_names,
+                    write_lock=write_lock,
+                )
+            except ConnectionResetError:
+                # (aiohttp >= 3.10's ClientConnectionResetError subclasses it.)
+                # The client hung up mid-stream (agy cancels its background
+                # title call when the turn ends, for one). Leaving the `async
+                # with` already cancelled the upstream request, so llama.cpp
+                # frees the slot; nothing is left to write to.
+                log.info("client disconnected mid-stream (%s %s)", request.method, request.path)
+                client_gone = True
+                break
 
             if tool_call is None:
                 break  # passthrough complete
@@ -1793,6 +1891,8 @@ async def _run_streaming(
             "note": "streamed to client — content not re-captured here",
         })
 
+    if client_gone:
+        return resp
     if not resp.prepared:
         _apply_cors_to_stream(resp, request)
         await resp.prepare(request)
@@ -2026,6 +2126,13 @@ async def _run_non_streaming(
         if _rid:
             request_log.set_response_preview(_rid, anth)
         return web.json_response(anth)
+    elif inbound_protocol == "gemini":
+        gem = xlate.openai_response_to_gemini(
+            result, reasoning_cfg=reasoning_cfg, client_model=client_model,
+        )
+        if _rid:
+            request_log.set_response_preview(_rid, gem)
+        return web.json_response(gem)
     else:
         # OpenAI identity — just rewrite `model`
         if client_model:
@@ -2087,6 +2194,262 @@ async def handle_openai_chat_completions(request: web.Request) -> web.StreamResp
     except Exception as exc:
         request_log.finish(rid, 500, error=str(exc))
         raise
+
+
+# ── OpenAI Responses API: passthrough to llama-server ─────────────────────
+#
+# Codex CLI speaks only the Responses API (its Chat Completions wire was
+# removed in openai/codex#10157). llama-server implements /v1/responses
+# natively (ggml-org/llama.cpp#18486), so this is a forward, not a translator:
+# model mapping + ensure_model + inflight gating + keepalive + reverse-mapped
+# model name, with xlate.normalize_responses_request trimming the body to what
+# llama.cpp accepts. The trade-off: no managed-tool injection, no ToolSearch,
+# no intercept loop, no system_instruction / reminder stripping on this path —
+# the client's own tool loop runs against llama.cpp directly.
+
+def _rewrite_responses_model(obj: Any, client_model: str) -> Any:
+    if isinstance(obj, dict):
+        if isinstance(obj.get("model"), str):
+            obj["model"] = client_model
+        inner = obj.get("response")
+        if isinstance(inner, dict) and isinstance(inner.get("model"), str):
+            inner["model"] = client_model
+    return obj
+
+
+def _rewrite_responses_event(event: str, client_model: str) -> str:
+    lines = event.split("\n")
+    for i, line in enumerate(lines):
+        if line.startswith("data:"):
+            payload = line[5:].lstrip()
+            try:
+                obj = json.loads(payload)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            lines[i] = "data: " + json.dumps(_rewrite_responses_model(obj, client_model),
+                                             ensure_ascii=False)
+    return "\n".join(lines)
+
+
+async def handle_openai_responses(request: web.Request) -> web.StreamResponse:
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": {"message": "Invalid JSON", "type": "invalid_request_error"}},
+                                 status=400)
+
+    requested = str(body.get("model", "") or "")
+    rid = request_log.new_request("POST", "/v1/responses", client_model=requested,
+                                  inbound_protocol="responses")
+    request_log.set_request_preview(rid, body)
+    request["_rid"] = rid
+
+    active = llama_cfg.resolve_model(requested)
+    if not active:
+        request_log.finish(rid, 400, error="unknown model")
+        return web.json_response({"error": {"message": f"Unknown model: {requested}",
+                                            "type": "invalid_request_error"}}, status=400)
+    client_model = requested or active
+    fwd, dropped = xlate.normalize_responses_request(
+        body, active_model=active, inference_defaults=llama_cfg.inference_for(active))
+    if dropped:
+        log.warning("responses: dropped non-function tool type(s) %s — llama.cpp "
+                    "supports function tools only", sorted(set(dropped)))
+
+    try:
+        supervisor = await get_supervisor()
+        await supervisor.ensure_model(active)
+    except Exception as exc:
+        log.error("model swap failed: %s", exc, exc_info=True)
+        request_log.finish(rid, 503, error=str(exc))
+        return web.json_response({"error": {"message": f"Failed to load model '{active}': {exc}",
+                                            "type": "model_load_error"}}, status=503)
+
+    headers = {"Content-Type": "application/json"}
+    api_key = llama_cfg.api_key()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    url = f"{llama_cfg.upstream_url()}/v1/responses"
+    stream = bool(fwd.get("stream"))
+
+    await supervisor.begin_request()
+    heartbeat: asyncio.Task | None = None
+    try:
+        async with aiohttp.ClientSession(timeout=_UPSTREAM_TIMEOUT) as session:
+            async with session.post(url, json=fwd, headers=headers) as up:
+                if up.status != 200:
+                    errtext = await up.text()
+                    log.warning("responses upstream %d: %s", up.status, errtext[:500])
+                    request_log.finish(rid, up.status, error=errtext[:500])
+                    return web.Response(text=errtext, status=up.status,
+                                        content_type=up.content_type or "application/json")
+                if not stream:
+                    data = _rewrite_responses_model(await up.json(), client_model)
+                    request_log.set_response_preview(rid, data)
+                    request_log.finish(rid, 200)
+                    return web.json_response(data)
+
+                resp = web.StreamResponse()
+                write_lock = asyncio.Lock()
+                heartbeat = await _start_heartbeat(resp, request, write_lock, protocol="openai")
+                import codecs
+                decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+                buf = ""
+                events = 0
+                async for chunk in up.content.iter_any():
+                    buf += decoder.decode(chunk).replace("\r\n", "\n")
+                    while "\n\n" in buf:
+                        event, buf = buf.split("\n\n", 1)
+                        if not event.strip():
+                            continue
+                        out = _rewrite_responses_event(event, client_model) + "\n\n"
+                        events += 1
+                        async with write_lock:
+                            await resp.write(out.encode("utf-8"))
+                buf += decoder.decode(b"", final=True)
+                if buf.strip():
+                    async with write_lock:
+                        await resp.write((_rewrite_responses_event(buf, client_model) + "\n\n").encode())
+                await _stop_heartbeat(heartbeat)
+                heartbeat = None
+                request_log.set_response_preview(rid, {"mode": "stream", "events": events,
+                                                       "note": "passthrough from llama-server /v1/responses"})
+                request_log.finish(rid, 200)
+                await resp.write_eof()
+                return resp
+    except Exception as exc:
+        request_log.finish(rid, 500, error=str(exc))
+        raise
+    finally:
+        await _stop_heartbeat(heartbeat)
+        await supervisor.end_request()
+
+
+# ── Gemini (generativelanguage v1beta) ────────────────────────────────────
+#
+# The model name rides in the URL. Antigravity's custom-model form
+# `--model gemini-api://<anything>/models/<name>` still posts to
+# GOOGLE_GEMINI_BASE_URL, with the whole `<anything>/models/<name>` as the
+# model path — so the name is whatever follows the LAST "/models/".
+
+def _gemini_model_from_path(model_path: str) -> str:
+    name = model_path
+    if "/models/" in name:
+        name = name.rsplit("/models/", 1)[1]
+    if name.startswith("models/"):
+        name = name[len("models/"):]
+    return name.strip("/")
+
+
+async def _gemini_pick_model(name: str) -> str:
+    """Registered or mapped names resolve normally. Anything else — agy's
+    built-in `gemini-3.1-flash-lite-preview` title call, say — goes to the
+    model that is ALREADY loaded (else the last-active one) rather than
+    `default_model`, so a side request never forces a model swap mid-task."""
+    if name in llama_cfg.models() or name in (proxy_config.model_mapping() or {}):
+        return name
+    try:
+        sup = await get_supervisor()
+        if sup.alive() and sup.active_model():
+            return sup.active_model()
+    except Exception:
+        pass
+    try:
+        import llamacpp.state as llama_state
+        last = llama_state.last_active_model()
+        if last and last in llama_cfg.models():
+            return last
+    except Exception:
+        pass
+    return name
+
+
+def _gemini_error(status: int, message: str, code: str) -> web.Response:
+    return web.json_response({"error": {"code": status, "message": message, "status": code}},
+                             status=status)
+
+
+async def handle_gemini_generate(request: web.Request) -> web.StreamResponse:
+    """POST /v1beta/models/{model}:{generateContent|streamGenerateContent|countTokens}."""
+    tail = request.match_info.get("tail", "")
+    if ":" not in tail:
+        log.warning("gemini: unhandled POST %s", request.path_qs)
+        return _gemini_error(404, f"Unsupported path {request.path}", "NOT_FOUND")
+    model_path, method = tail.rsplit(":", 1)
+    if method not in ("generateContent", "streamGenerateContent", "countTokens"):
+        log.warning("gemini: unhandled method %s (%s)", method, request.path_qs)
+        return _gemini_error(404, f"Method {method} is not supported by telecode", "NOT_FOUND")
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return _gemini_error(400, "Invalid JSON", "INVALID_ARGUMENT")
+    if not isinstance(body, dict):
+        return _gemini_error(400, "Request body must be an object", "INVALID_ARGUMENT")
+
+    client_name = _gemini_model_from_path(model_path)
+    picked = await _gemini_pick_model(client_name)
+
+    if method == "countTokens":
+        gcr = body.get("generateContentRequest")
+        if isinstance(gcr, dict):
+            body = dict(gcr)
+        body["model"] = picked
+        prep = await _prepare_internal_body(body, request, "gemini")
+        try:
+            supervisor = await get_supervisor()
+            await supervisor.ensure_model(prep["active_model"])
+        except Exception as exc:
+            return _gemini_error(503, str(exc), "UNAVAILABLE")
+        count = await toks.count_tokens(prep["body"].get("messages", []))
+        return web.json_response({"totalTokens": count})
+
+    body["model"] = picked
+    body["stream"] = method == "streamGenerateContent"
+    rid = request_log.new_request("POST", request.path, client_model=client_name,
+                                  inbound_protocol="gemini")
+    request_log.set_request_preview(rid, body)
+    request["_rid"] = rid
+    try:
+        prep = await _prepare_internal_body(body, request, "gemini")
+        prep["client_model"] = client_name   # echoed back as modelVersion
+        if body["stream"]:
+            resp = await _run_streaming(prep, request, GeminiAdapter(client_model=client_name))
+        else:
+            resp = await _run_non_streaming(prep, request, "gemini")
+        request_log.finish(rid, resp.status)
+        return resp
+    except Exception as exc:
+        request_log.finish(rid, 500, error=str(exc))
+        raise
+
+
+def _gemini_models_payload() -> dict[str, Any]:
+    return xlate.build_gemini_models(
+        list(llama_cfg.models().keys()), proxy_config.model_mapping() or {},
+        ctx_for=lambda n: (llama_cfg.model_cfg(llama_cfg.resolve_model(n)) or {}).get("ctx_size"))
+
+
+async def handle_gemini_models(request: web.Request) -> web.Response:
+    return web.json_response(_gemini_models_payload())
+
+
+async def handle_gemini_model(request: web.Request) -> web.Response:
+    name = _gemini_model_from_path(request.match_info.get("tail", ""))
+    for m in _gemini_models_payload()["models"]:
+        if m["baseModelId"] == name:
+            return web.json_response(m)
+    picked = await _gemini_pick_model(name)
+    for m in _gemini_models_payload()["models"]:
+        if m["baseModelId"] == picked:
+            return web.json_response({**m, "name": f"models/{name}", "baseModelId": name})
+    return _gemini_error(404, f"models/{name} is not found", "NOT_FOUND")
+
+
+async def handle_gemini_unknown(request: web.Request) -> web.Response:
+    """Anything else under /v1beta — logged, so a client's extra calls show up."""
+    log.warning("gemini: unhandled %s %s", request.method, request.path_qs)
+    return _gemini_error(404, f"{request.method} {request.path} is not implemented by telecode",
+                         "NOT_FOUND")
 
 
 async def handle_count_tokens(request: web.Request) -> web.Response:
@@ -2397,6 +2760,13 @@ def create_app() -> web.Application:
 
     if "openai" in protocols:
         app.router.add_post("/v1/chat/completions", handle_openai_chat_completions)
+        app.router.add_post("/v1/responses", handle_openai_responses)
+
+    if "gemini" in protocols:
+        app.router.add_get("/v1beta/models", handle_gemini_models)
+        app.router.add_get("/v1beta/models/{tail:.+}", handle_gemini_model)
+        app.router.add_post("/v1beta/models/{tail:.+}", handle_gemini_generate)
+        app.router.add_route("*", "/v1beta/{tail:.*}", handle_gemini_unknown)
 
     # /v1/models routes are shared — shape chosen by header sniff
     app.router.add_get("/v1/models", handle_models)
@@ -2419,8 +2789,14 @@ def create_app() -> web.Application:
     api_skills.register_routes(app)
     api_runs.register_routes(app)
     api_routines.register_routes(app)
+    api_design.register_routes(app)
+    api_design_export.register_routes(app)
+    api_design_systems.register_routes(app)
+    api_design_editor.register_routes(app)
+    api_design_agents.register_routes(app)
 
     app.router.add_get("/ui/legacy", handle_legacy_ui)
+    app.on_cleanup.append(_stop_design_services)
 
     return app
 
@@ -2451,4 +2827,30 @@ async def start_proxy_background() -> web.AppRunner | None:
     except Exception:
         log.exception("routine_manager: failed to start")
 
+    # TeleDesign preview origin: a second site on design.preview_port serving
+    # generated pages cross-origin from this API (docs/teledesign-contract.md §5).
+    try:
+        from services.design import preview as design_preview
+        await design_preview.start_background()
+    except Exception:
+        log.exception("design preview: failed to start")
+
     return runner
+
+
+async def _stop_design_services(_app: web.Application) -> None:
+    """Tear down TeleDesign's preview site and shared headless browser."""
+    try:
+        from services.design import preview as design_preview
+        await design_preview.stop()
+    except Exception:
+        log.exception("design preview: failed to stop")
+    try:
+        from services.design import render as design_render
+        shutdown = getattr(design_render, "stop", None) or getattr(design_render, "shutdown", None)
+        if shutdown:
+            res = shutdown()  # render.stop() is sync; tolerate an async variant
+            if asyncio.iscoroutine(res):
+                await res
+    except Exception:
+        log.exception("design render: failed to stop")

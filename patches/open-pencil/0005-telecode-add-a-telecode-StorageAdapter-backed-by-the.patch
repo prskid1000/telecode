@@ -1,0 +1,325 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Prithwiraj Samanta <app@datainsights.ae>
+Date: Fri, 25 Sep 2026 08:14:56 +0530
+Subject: [PATCH 5/7] telecode: add a telecode StorageAdapter backed by the
+ TeleDesign REST API
+
+A TeleDesign project's canvas is one .fig at
+GET/PUT /api/design/projects/{id}/canvas. Register it as the 'telecode'
+storage provider and add openTelecodeProject(), which opens the project
+bound to that provider so Save and autosave write it back (an unsaved
+project opens empty with the same binding). Writes skip the local-first
+IndexedDB mirror: the proxy versions and restores doc.fig itself, and a
+mirror would shadow a restore made on the server.
+---
+ src/app/document/io/write.ts              |  10 ++
+ src/app/integrations/storage/providers.ts |   6 +-
+ src/app/integrations/telecode/storage.ts  | 159 ++++++++++++++++++++++
+ src/app/tabs/index.ts                     |  73 ++++++++++
+ 4 files changed, 247 insertions(+), 1 deletion(-)
+ create mode 100644 src/app/integrations/telecode/storage.ts
+
+diff --git a/src/app/document/io/write.ts b/src/app/document/io/write.ts
+index e1c4708f..721ebe9b 100644
+--- a/src/app/document/io/write.ts
++++ b/src/app/document/io/write.ts
+@@ -2,6 +2,10 @@ import type { EditorState } from '@open-pencil/core/editor'
+ 
+ import { describeDiagnosticError, recordDocumentFailure } from '@/app/diagnostics'
+ import type { StorageDocumentBinding } from '@/app/integrations/storage/types'
++import {
++  putTelecodeCanvas,
++  TELECODE_STORAGE_PROVIDER_ID
++} from '@/app/integrations/telecode/storage'
+ import { persistStorageCanvasLocally } from '@/app/storage/sync/persist'
+ import { isTauri } from '@/app/tauri/env'
+ 
+@@ -43,6 +47,12 @@ export function createDocumentWriter({
+     setLastWriteTime(Date.now())
+     try {
+       const storage = getStorageBinding()
++      if (storage?.providerId === TELECODE_STORAGE_PROVIDER_ID) {
++        // TeleDesign is authoritative for its canvases (it versions and restores
++        // doc.fig server-side), so skip the local-first mirror and write through.
++        await putTelecodeCanvas(storage.documentId, data)
++        return await finishWrite(version)
++      }
+       if (storage) {
+         await persistStorageCanvasLocally({
+           providerId: storage.providerId,
+diff --git a/src/app/integrations/storage/providers.ts b/src/app/integrations/storage/providers.ts
+index 7c256262..71875924 100644
+--- a/src/app/integrations/storage/providers.ts
++++ b/src/app/integrations/storage/providers.ts
+@@ -1,5 +1,6 @@
+ import { defineStorageProvider, StorageProviderRegistry } from './registry'
+ import { createS3StorageAdapter } from './s3/adapter'
++import { TELECODE_STORAGE_PROVIDER } from '@/app/integrations/telecode/storage'
+ 
+ export const S3_STORAGE_PROVIDER = defineStorageProvider({
+   id: 's3-compatible',
+@@ -17,4 +18,7 @@ export const S3_STORAGE_PROVIDER = defineStorageProvider({
+   createAdapter: createS3StorageAdapter
+ })
+ 
+-export const storageProviderRegistry = new StorageProviderRegistry([S3_STORAGE_PROVIDER])
++export const storageProviderRegistry = new StorageProviderRegistry([
++  S3_STORAGE_PROVIDER,
++  TELECODE_STORAGE_PROVIDER
++])
+diff --git a/src/app/integrations/telecode/storage.ts b/src/app/integrations/telecode/storage.ts
+new file mode 100644
+index 00000000..8f9ca882
+--- /dev/null
++++ b/src/app/integrations/telecode/storage.ts
+@@ -0,0 +1,159 @@
++/**
++ * `telecode` storage provider: TeleDesign projects stored by the telecode proxy.
++ *
++ * A project's canvas is one .fig at GET/PUT /api/design/projects/{id}/canvas.
++ * The proxy is authoritative (it versions and restores doc.fig itself), so a
++ * write goes straight to it instead of through the local-first IndexedDB mirror
++ * the S3 provider uses — a mirror would shadow a restore made on the server.
++ */
++import { defineStorageProvider } from '@/app/integrations/storage/registry'
++import type {
++  StorageAdapter,
++  StorageDocument,
++  StorageDocumentMetadata,
++  StorageTransferProgress
++} from '@/app/integrations/storage/types'
++
++export const TELECODE_STORAGE_PROVIDER_ID = 'telecode'
++
++const PROJECT_ID = /^[0-9a-f]{32}$/
++
++type ProjectRecord = { id: string; title?: string; updated_at?: string; archived?: boolean }
++
++type SavedListener = (projectId: string, bytes: number) => void
++const savedListeners = new Set<SavedListener>()
++
++/** Notified after every successful PUT of a project's canvas. */
++export function onTelecodeCanvasSaved(listener: SavedListener): () => void {
++  savedListeners.add(listener)
++  return () => savedListeners.delete(listener)
++}
++
++function apiURL(path: string): string {
++  return `${window.location.origin}/api/design${path}`
++}
++
++function projectPath(id: string, suffix = ''): string {
++  if (!PROJECT_ID.test(id)) throw new Error(`Invalid TeleDesign project id: ${id}`)
++  return `/projects/${id}${suffix}`
++}
++
++async function readJSON<T>(res: Response): Promise<T> {
++  if (!res.ok) throw new Error(`TeleDesign API ${res.status} ${res.statusText}`)
++  return (await res.json()) as T
++}
++
++function toDocument(project: ProjectRecord): StorageDocument {
++  return {
++    id: project.id,
++    name: project.title || 'Untitled design',
++    updatedAt: project.updated_at ?? new Date(0).toISOString(),
++    metadataAuthoritative: true
++  }
++}
++
++/** The project's saved canvas, or null when it has never been saved. */
++export async function fetchTelecodeCanvas(
++  id: string,
++  onProgress?: (progress: StorageTransferProgress) => void,
++  signal?: AbortSignal
++): Promise<Uint8Array | null> {
++  // Ask first whether a canvas exists, so a never-saved project does not log a
++  // failed request (a 404) in the console on every open.
++  const probe = await fetch(apiURL(projectPath(id, '/editor')), { signal, cache: 'no-store' })
++  if (probe.status === 404) throw new Error('TeleDesign project not found')
++  if (probe.ok) {
++    const { editor } = (await probe.json()) as { editor?: { has_canvas?: boolean } }
++    if (editor?.has_canvas === false) return null
++  }
++  const res = await fetch(apiURL(projectPath(id, '/canvas')), { signal, cache: 'no-store' })
++  if (res.status === 404) {
++    // 404 means either "no canvas yet" or "no such project"; tell them apart.
++    const project = await fetch(apiURL(projectPath(id)), { signal, cache: 'no-store' })
++    if (project.status === 404) throw new Error('TeleDesign project not found')
++    return null
++  }
++  if (!res.ok) throw new Error(`Canvas download failed: HTTP ${res.status}`)
++  const bytes = new Uint8Array(await res.arrayBuffer())
++  onProgress?.({ transferredBytes: bytes.byteLength, totalBytes: bytes.byteLength })
++  return bytes
++}
++
++export async function putTelecodeCanvas(
++  id: string,
++  bytes: Uint8Array,
++  onProgress?: (progress: StorageTransferProgress) => void
++): Promise<void> {
++  const body = new Uint8Array(bytes.byteLength)
++  body.set(bytes)
++  // application/octet-stream is not CORS-simple: the proxy relies on that so a
++  // page from the preview origin cannot forge this write.
++  const res = await fetch(apiURL(projectPath(id, '/canvas')), {
++    method: 'PUT',
++    headers: { 'Content-Type': 'application/octet-stream' },
++    body
++  })
++  if (!res.ok) {
++    let detail = `${res.status}`
++    try {
++      detail = ((await res.json()) as { error?: string }).error ?? detail
++    } catch {
++      // keep the status code
++    }
++    throw new Error(`Canvas save failed: ${detail}`)
++  }
++  onProgress?.({ transferredBytes: bytes.byteLength, totalBytes: bytes.byteLength })
++  for (const listener of savedListeners) listener(id, bytes.byteLength)
++}
++
++export function createTelecodeStorageAdapter(): StorageAdapter {
++  return {
++    async testConnection() {
++      try {
++        const res = await fetch(apiURL('/projects'), { cache: 'no-store' })
++        return res.ok
++          ? { ok: true, message: 'Connected to TeleDesign' }
++          : { ok: false, message: `HTTP ${res.status}` }
++      } catch (error) {
++        return { ok: false, message: error instanceof Error ? error.message : String(error) }
++      }
++    },
++    async listDocuments() {
++      const res = await fetch(apiURL('/projects'), { cache: 'no-store' })
++      const { projects } = await readJSON<{ projects: ProjectRecord[] }>(res)
++      return projects.filter((project) => !project.archived).map(toDocument)
++    },
++    async getDocument(id, onProgress, signal) {
++      const bytes = await fetchTelecodeCanvas(id, onProgress, signal)
++      if (!bytes) throw new Error('This project has no saved canvas yet')
++      return bytes
++    },
++    async putDocument(id, bytes, _metadata: StorageDocumentMetadata, onProgress) {
++      await putTelecodeCanvas(id, bytes, onProgress)
++    },
++    async deleteDocument() {
++      throw new Error('Delete TeleDesign projects from the TeleDesign gallery')
++    },
++    async getDocumentMetadata(id) {
++      const res = await fetch(apiURL(projectPath(id)), { cache: 'no-store' })
++      if (res.status === 404) return null
++      const { project } = await readJSON<{ project: ProjectRecord }>(res)
++      const doc = toDocument(project)
++      return { name: doc.name, updatedAt: doc.updatedAt }
++    },
++    async getUsage() {
++      const res = await fetch(apiURL('/projects'), { cache: 'no-store' })
++      const { projects } = await readJSON<{ projects: ProjectRecord[] }>(res)
++      return { bytesUsed: 0, objectCount: projects.length, documentCount: projects.length }
++    }
++  }
++}
++
++export const TELECODE_STORAGE_PROVIDER = defineStorageProvider({
++  id: TELECODE_STORAGE_PROVIDER_ID,
++  label: 'TeleDesign',
++  description: 'Projects stored by the telecode proxy (TeleDesign)',
++  preferenceFields: [],
++  credentialFields: [],
++  createAdapter: () => createTelecodeStorageAdapter()
++})
+diff --git a/src/app/tabs/index.ts b/src/app/tabs/index.ts
+index 594f29dc..1ea26628 100644
+--- a/src/app/tabs/index.ts
++++ b/src/app/tabs/index.ts
+@@ -33,6 +33,10 @@ import {
+ } from '@/app/recent-files'
+ import { toast } from '@/app/shell/ui'
+ import { getLocalCanvasStore } from '@/app/storage/local-store'
++import {
++  fetchTelecodeCanvas,
++  TELECODE_STORAGE_PROVIDER_ID
++} from '@/app/integrations/telecode/storage'
+ import { seedStorageCanvasFromRemote } from '@/app/storage/sync/persist'
+ import { createFileOpenCoordinator } from '@/app/tabs/open/coordinator'
+ import { findTabByFileIdentity } from '@/app/tabs/open/identity'
+@@ -394,6 +398,75 @@ export async function openStorageDocumentInNewTab(document: StorageDocument): Pr
+   }
+ }
+ 
++/**
++ * Open a TeleDesign project's canvas (telecode embedding) bound to the `telecode`
++ * storage provider, so Save and autosave write it back to the proxy. A project
++ * that has never been saved opens as an empty document with the same binding.
++ */
++export async function openTelecodeProject(projectId: string, name: string): Promise<EditorStore> {
++  const binding = { providerId: TELECODE_STORAGE_PROVIDER_ID, documentId: projectId }
++  const existing = findStorageTab(binding.providerId, projectId)
++  if (existing) {
++    switchTab(existing.id)
++    return existing.store
++  }
++
++  const { store } = reusableTabStore()
++  store.state.documentName = name
++  const load = store.preparationController.begin({ kind: 'storage-open', subject: name })
++  let succeeded = false
++  try {
++    load.update({ phase: 'reading', detail: name })
++    const bytes = await fetchTelecodeCanvas(
++      projectId,
++      (progress) =>
++        load.update({
++          phase: 'reading',
++          detail: name,
++          completed: progress.transferredBytes,
++          total: progress.totalBytes,
++          unit: 'bytes'
++        }),
++      load.signal
++    )
++    load.signal.throwIfAborted()
++    if (bytes) {
++      const fileBytes = new Uint8Array(bytes.byteLength)
++      fileBytes.set(bytes)
++      const file = new File([fileBytes.buffer], `${name}.fig`, { type: 'application/octet-stream' })
++      load.update({ phase: 'decoding', detail: name })
++      const imported = await readFigForTab(file, load.signal)
++      await showImportedGraph(
++        store,
++        imported,
++        () => store.setStorageDocumentSource(binding, name),
++        load
++      )
++    } else {
++      store.setStorageDocumentSource(binding, name)
++    }
++    succeeded = true
++    return store
++  } catch (error) {
++    if (!load.signal.aborted) {
++      load.fail({
++        code: 'read-failed',
++        message: error instanceof Error ? error.message : String(error),
++        retryable: true
++      })
++      toast.error(
++        notificationMessages.get().openFileFailed({
++          name,
++          error: error instanceof Error ? error.message : String(error)
++        })
++      )
++    }
++    throw error
++  } finally {
++    if (succeeded) load.complete()
++  }
++}
++
+ export async function openFileInNewTab(
+   file: File,
+   handle?: FileSystemFileHandle,

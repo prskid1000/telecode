@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Prithwiraj Samanta <app@datainsights.ae>
+Date: Fri, 25 Sep 2026 08:10:07 +0530
+Subject: [PATCH 2/7] telecode: drop the PWA plugin and service-worker
+ registration
+
+A service worker registered from /design/editor/ would claim that scope on
+the telecode proxy origin and serve stale cached bundles after a rebuild;
+the editor is always served from localhost, so offline caching buys nothing.
+---
+ src/main.ts    | 8 --------
+ vite.config.ts | 4 +---
+ 2 files changed, 1 insertion(+), 11 deletions(-)
+
+diff --git a/src/main.ts b/src/main.ts
+index 59a11fb3..c468f9bd 100644
+--- a/src/main.ts
++++ b/src/main.ts
+@@ -5,7 +5,6 @@ import { createRetainedScopePlugin } from '@open-pencil/vue'
+ 
+ import './app.css'
+ import { preloadFonts } from '@/app/editor/fonts'
+-import { IS_TAURI } from '@/constants'
+ 
+ import App from './App.vue'
+ import router from './router'
+@@ -13,10 +12,3 @@ import router from './router'
+ preloadFonts()
+ const head = createHead()
+ createApp(App).use(router).use(head).use(createRetainedScopePlugin()).mount('#app')
+-
+-if (!IS_TAURI) {
+-  void import('virtual:pwa-register').then(({ registerSW }) => {
+-    registerSW({ immediate: true })
+-    return undefined
+-  })
+-}
+diff --git a/vite.config.ts b/vite.config.ts
+index 0f0527e6..b42e0090 100644
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -17,7 +17,6 @@ import {
+   openPencilAutomationPlugin
+ } from './vite/automation'
+ import { copyCanvasKitAssetsPlugin } from './vite/canvaskit-assets'
+-import { openPencilPwaPlugin } from './vite/pwa'
+ import { rawMarkdownPlugin } from './vite/raw-markdown'
+ import { createDevServerOptions } from './vite/server'
+ 
+@@ -45,8 +44,7 @@ export default defineConfig(async ({ command }) => {
+       Icons({ compiler: 'vue3' }),
+       Components({ resolvers: [IconsResolver({ prefix: 'icon' })] }),
+       openPencilAutomationPlugin(command, host),
+-      vue(),
+-      openPencilPwaPlugin()
++      vue()
+     ],
+     clearScreen: false,
+     build: {

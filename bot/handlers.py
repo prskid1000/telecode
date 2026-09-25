@@ -182,6 +182,7 @@ BOT_COMMANDS = [
     BotCommand("new", "Start a named session"),
     BotCommand("stop", "Stop a session"),
     BotCommand("key", "Send key (e.g. /key enter, /key ctrl c)"),
+    BotCommand("design", "TeleDesign: /design <prompt>"),
     BotCommand("settings", "Configuration"),
     BotCommand("help", "List commands"),
 ]
@@ -309,6 +310,9 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "/new video [name] - Record 1-min window video\n"
         "/new computer [name] - Control a window via vision LLM\n"
         "Use the inline buttons under the capture message to pause/resume/stop\n\n"
+        "<b>TeleDesign</b>\n"
+        "/design &lt;prompt&gt; - Design in this topic (new project from General)\n"
+        "/design comments | stop | status\n\n"
         "<b>Other</b>\n"
         "/settings - Configuration\n"
         "/help - This message",

@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="/design/editor/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="96x96" href="/design/editor/brand/favicon-96x96.png" />
+    <link rel="icon" type="image/svg+xml" href="/design/editor/brand/favicon.svg" />
+    <link rel="apple-touch-icon" href="/design/editor/apple-touch-icon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#1e1e1e" />
+    <title>OpenPencil</title>
+    <style>
+      :root {
+        --loader-bg: #1e1e1e;
+        --loader-fg: 255, 255, 255;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --loader-bg: #f3f4f6;
+          --loader-fg: 32, 33, 36;
+        }
+      }
+      html[data-theme='dark'] {
+        --loader-bg: #1e1e1e;
+        --loader-fg: 255, 255, 255;
+      }
+      html[data-theme='light'] {
+        --loader-bg: #f3f4f6;
+        --loader-fg: 32, 33, 36;
+      }
+      body { margin: 0; background: var(--loader-bg); }
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+        color: rgb(var(--loader-fg));
+        background: var(--loader-bg);
+      }
+      #boot-splash img { width: 40px; height: 40px; }
+      #boot-splash .bar {
+        position: absolute;
+        bottom: 50%;
+        left: 50%;
+        transform: translate(-50%, 40px);
+        width: 100px;
+        height: 2px;
+        background: rgba(var(--loader-fg), 0.08);
+        border-radius: 1px;
+        overflow: hidden;
+      }
+      #boot-splash .bar::after {
+        content: '';
+        display: block;
+        height: 100%;
+        width: 40%;
+        background: rgba(var(--loader-fg), 0.25);
+        border-radius: 1px;
+        animation: slide 1s ease-in-out infinite;
+      }
+      @keyframes slide {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(350%); }
+      }
+    </style>
+    <script type="module" crossorigin src="/design/editor/assets/index-B0wNjJtL.js"></script>
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/rolldown-runtime-DAXXjFlN.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/runtime-core.esm-bundler-CDDBpkXG.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/runtime-dom.esm-bundler-D3Eufurp.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/constants-BGqTg5bd.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/instances-CwlX4cTq.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/subgraph-D9pWAg9W.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/svgpath-Bz04YI1x.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/svg-ChqbvpJc.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/preload-helper-BIXS6OEN.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/opentype-Cfoi6sCU.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/src-BpK0CGi8.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/raster-BgSzGA8s.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/browser-BRv6VcMz.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/empty-node-module-BqG5TsRn.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/random-gYa_nnkk.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/layout-DGlCdYWs.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/color-ClUIseai.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/svg-DZNm3ivs.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/dist-AOqf_q4e.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/dist-DGcMkRuv.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/files-gwCeDSjk.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/ui-ztzOR_EA.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/http-DBuH-UaL.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/recorder-Dzo8GYhW.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/core-DNaw6KYU.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/app-A9ccHKNh.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/active-store-BsKT5-aD.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/constants-WnIu5XdT.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/cors-O_UQXI8H.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/tabs-B8x_IRAB.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/esm-CVSws-Ah.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/schema-BZGdtqWM.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/system-prompt-B_HYnhYB.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/common-Bjv_QOyj.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/composables-Chr6r7qG-D-CporXc.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/typeof-B5XbjTb1.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/defineProperty-CHyAdSol.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/slicedToArray-BrxvgkWz.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/theme-BJCJuhcx.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/__vite-browser-external-BTYuaygK.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/command-WhwBNEQ6.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/spawn-jb-yS0sg.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/mcp-iRrRPVGi.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/image-DXXwzuA0.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/permission-B-gcdX9H.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/dist-OKTU4zTb.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/router-Bkp8ohvy.js">
+    <link rel="modulepreload" crossorigin href="/design/editor/assets/event-CmZmVl_g.js">
+    <link rel="stylesheet" crossorigin href="/design/editor/assets/index-B3tFGa9T.css">
+  </head>
+
+  <body>
+    <div id="app">
+      <div id="boot-splash">
+        <img src="/design/editor/brand/app-icon.svg" width="40" height="40" alt="OpenPencil" />
+        <div class="bar"></div>
+      </div>
+    </div>
+  </body>
+</html>

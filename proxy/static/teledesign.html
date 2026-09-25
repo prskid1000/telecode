@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TeleDesign</title>
+<meta name="description" content="Design with the CLIs telecode runs: prompt, iterate, comment, tweak, export." />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' rx='6' fill='%237cc4ff'/><path d='M6 17.5V19h1.5l8.3-8.3-1.5-1.5zM17.6 8.9a.7.7 0 0 0 0-1l-1.5-1.5a.7.7 0 0 0-1 0l-.9.9 2.5 2.5z' fill='%23052034'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" />
+<link rel="stylesheet" href="/design/app/app.css" />
+<script>
+  // Apply the saved theme before first paint (the module re-applies it).
+  try {
+    var p = JSON.parse(localStorage.getItem("td:theme") || '"system"');
+    var t = p === "system" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : p;
+    document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<!--
+  TeleDesign — one design tab (docs/teledesign.md). The page is a vanilla-JS
+  shell; every module lives in /design/app/ (proxy/static/design/app/):
+    main.js      boot + routing (?project=&board=&node=&file=&chat=&view=&panel=)
+    gallery.js   projects, templates, archived, new-project dialog
+    systems.js   design systems browser
+    workspace.js project workspace (files rail, stage, side panel, SSE)
+    canvas.js    open-pencil editor host / built-in board canvas
+    preview.js   preview tab bar, viewports, modes, decks, console
+    code.js      Code view (CodeMirror from cdnjs, textarea fallback)
+    chat.js      chats, streaming turns, todos, queue, engines, meter
+    form.js      <question-form> renderer
+    panels.js    comments, versions, review, tweaks, inspect
+    interact.js  host side of the preview bridge (contract §6)
+    exporter.js  export, share, parallel agents, engines & integrations
+-->
+<div id="app"><noscript>TeleDesign needs JavaScript.</noscript></div>
+<script type="module" src="/design/app/main.js"></script>
+</body>
+</html>

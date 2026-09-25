@@ -45,10 +45,23 @@ def _load() -> dict[str, Any]:
         return json.load(f)
 
 
-def _save(data: dict[str, Any]) -> None:
-    with open(_SETTINGS_PATH, "w", encoding="utf-8") as f:
+def write_settings_file(path: Any, data: dict[str, Any]) -> None:
+    """Write settings.json so a crash or power cut leaves the old file or the
+    new one, never a hole: temp file → flush → fsync → os.replace. Rewriting in
+    place (truncate + write) once left a settings.json of 13,973 NUL bytes after
+    a shutdown landed between the size update and the data flush."""
+    target = os.fspath(path)
+    tmp = target + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
         f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, target)
+
+
+def _save(data: dict[str, Any]) -> None:
+    write_settings_file(_SETTINGS_PATH, data)
 
 
 # Standard effort presets. Auto-seeded into reasoning_effort_map on load so
@@ -413,6 +426,16 @@ def heartbeat_min_fire_gap_seconds()     -> int:  return int(get_nested("heartbe
 def proxy_enabled()      -> bool: return bool(get_nested("proxy.enabled", False))
 def proxy_port()         -> int:  return int(get_nested("proxy.port", 1235))
 def proxy_upstream_url() -> str:  return get_nested("proxy.upstream_url", "http://localhost:1234")
+
+
+# ── Task engines: local mode (is_local=True) ──────────────────────────────────
+def tasks_local_max_output_tokens() -> int:
+    """CLAUDE_CODE_MAX_OUTPUT_TOKENS for local-mode Claude Code runs. Default
+    16384, matching the hand-run `claudel.bat` launcher."""
+    try:
+        return int(get_nested("tasks.local.max_output_tokens", 16384) or 16384)
+    except (TypeError, ValueError):
+        return 16384
 
 
 # ── Validation ────────────────────────────────────────────────────────────────

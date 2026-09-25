@@ -20,6 +20,7 @@ from bot.handlers import (
     handle_callback, handle_text, handle_voice_msg, handle_document,
     handle_forum_topic_closed, normalize_mention,
 )
+from bot.design_handlers import cmd_design, start_design_notifier
 from bot.rate import set_session_manager
 from proxy.server import start_proxy_background
 from mcp_server.server import start_mcp_background
@@ -272,6 +273,8 @@ async def _async_main(token: str) -> None:
     app.add_handler(CommandHandler("stop",     cmd_stop))
     app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(CommandHandler("key",      cmd_key))
+    app.add_handler(CommandHandler("design",   cmd_design))
+    start_design_notifier(app)
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.StatusUpdate.FORUM_TOPIC_CLOSED, handle_forum_topic_closed))
     app.add_handler(MessageHandler(filters.Document.ALL,           handle_document))

@@ -1,0 +1,43 @@
+{
+  "name": "Technical",
+  "slug": "technical",
+  "description": "Dense developer-tool system: cool greys, a teal signal colour, IBM Plex Sans with IBM Plex Mono accents, 4px radii and compact 30px controls. For consoles, admin panels, docs, logs and data-heavy tables.",
+  "status": "published",
+  "is_default": false,
+  "version": "1.0.0",
+  "default_theme": "light",
+  "tags": [
+    "developer",
+    "dense",
+    "mono",
+    "admin",
+    "docs",
+    "data"
+  ],
+  "license": "MIT (TeleDesign seed content)",
+  "fonts_license": "SIL Open Font License 1.1",
+  "credits": [
+    {
+      "name": "Lucide",
+      "license": "ISC (Feather-derived icons: MIT)",
+      "url": "https://lucide.dev",
+      "used_for": "Icon library referenced by name; x / search / menu path data inlined in components"
+    },
+    {
+      "name": "IBM Plex Sans",
+      "license": "SIL Open Font License 1.1",
+      "url": "https://fonts.google.com/specimen/IBM+Plex+Sans",
+      "used_for": "font (linked from Google Fonts, not bundled)"
+    },
+    {
+      "name": "IBM Plex Mono",
+      "license": "SIL Open Font License 1.1",
+      "url": "https://fonts.google.com/specimen/IBM+Plex+Mono",
+      "used_for": "font (linked from Google Fonts, not bundled)"
+    }
+  ],
+  "source": {
+    "type": "bundled",
+    "origin": "services/design/seeds"
+  }
+}

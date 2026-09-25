@@ -1,0 +1,49 @@
+TeleDesign prompt set
+=====================
+
+The files in this directory are original work of the telecode project, except for the portions
+listed below, which are adapted from third-party material under the licences stated. Each adapted
+file carries the header comment "Portions adapted from nexu-io/open-design (Apache-2.0)".
+
+-------------------------------------------------------------------------------
+open-design — https://github.com/nexu-io/open-design
+Licensed under the Apache License, Version 2.0
+http://www.apache.org/licenses/LICENSE-2.0
+-------------------------------------------------------------------------------
+
+Adapted portions (modified: rewritten, restructured, renamed identifiers to TeleDesign protocols,
+values re-specified):
+
+  discovery.md               from apps/daemon/src/prompts/discovery.ts, core-slim.ts
+                             (question-form round trip, brand-source branch) and
+                             apps/daemon/src/prompts/directions.ts (five-direction library;
+                             directions renamed, brand references removed, fonts and palette
+                             values changed)
+  charter.md                 from apps/daemon/src/prompts/core-slim.ts
+                             (instruction-priority order, refinement-turn rules)
+  tweaks.md                  from design-templates/tweaks/SKILL.md
+                             (knob catalogue, curated-swatch and knob-count rules)
+  critique.md                from design-templates/critique/SKILL.md and docs/critique-theater.md
+                             (five-dimension review shape, scoring discipline)
+  kinds/mobile_app.md        from apps/daemon/src/prompts/core-slim.ts, discovery.ts
+                             (per-platform delivery contracts)
+  craft/anti_slop.md         from craft/anti-ai-slop.md
+  craft/layout_spacing.md    from apps/daemon/src/prompts/core-slim.ts
+                             (layout-integrity invariants, text-over-image rule)
+  craft/accessibility.md     from apps/daemon/src/prompts/core-slim.ts
+                             (interaction-state contrast rules)
+  craft/imagery_icons.md     from apps/daemon/src/prompts/core-slim.ts
+                             (real-first image sourcing, image-geometry rules)
+
+open-design's craft/anti-ai-slop.md is itself adapted from:
+
+-------------------------------------------------------------------------------
+refero_skill — https://github.com/referodesign/refero_skill
+Licensed under the MIT License
+-------------------------------------------------------------------------------
+
+Protocol compatibility (identifiers only, no text reused): the tweak messages
+__edit_mode_available / __activate_edit_mode / __deactivate_edit_mode / __edit_mode_set_keys /
+__edit_mode_dismissed and the /*EDITMODE-BEGIN*/ … /*EDITMODE-END*/ markers are kept so that
+projects exported from Claude Design can be imported. The .pen document shape (version 2.19) is
+followed so that .pen files interoperate with pen.dev; no pen.dev text, code or assets are included.

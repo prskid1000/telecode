@@ -1,0 +1,2734 @@
+{
+  "version": "2.19",
+  "themes": {
+    "Mode": [
+      "Light",
+      "Dark"
+    ]
+  },
+  "variables": {
+    "--background": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#FBFCFD",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#0D1012",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--foreground": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#13161A",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#E5E8EB",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--card": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#FFFFFF",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#141619",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--card-foreground": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#13161A",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#E5E8EB",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--popover": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#FFFFFF",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#181B1E",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--popover-foreground": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#13161A",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#E5E8EB",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--primary": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#007759",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#43CBA4",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--primary-foreground": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#FBFCFD",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#06120E",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--secondary": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#EEF0F3",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#212428",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--secondary-foreground": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#1D2227",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#E5E8EB",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--muted": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#F2F4F5",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#1D2023",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--muted-foreground": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#5E646A",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#91969B",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--accent": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#DCF5EB",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#122F26",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--accent-foreground": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#003E2D",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#BEE9D9",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--destructive": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#CC2827",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#F45A56",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--destructive-foreground": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#FBFCFD",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#0D1012",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--success": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#218041",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#5AC576",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--success-foreground": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#FBFCFD",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#0D1012",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--warning": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#DC932E",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#F2AF48",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--warning-foreground": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#2D1A0A",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#201308",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--border": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#DBDEE1",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#FFFFFF1A",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--input": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#CED1D5",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#FFFFFF26",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--ring": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#007759",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#43CBA4",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--chart-1": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#008668",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#43CBA4",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--chart-2": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#DE9C31",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#F2AF48",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--chart-3": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#2580C1",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#58A5E4",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--chart-4": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#BF50A0",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#DE73BD",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--chart-5": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#7C8186",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#8B9095",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--overlay": {
+      "type": "color",
+      "value": [
+        {
+          "value": "#0B0B0B73",
+          "theme": {
+            "Mode": "Light"
+          }
+        },
+        {
+          "value": "#000000A6",
+          "theme": {
+            "Mode": "Dark"
+          }
+        }
+      ]
+    },
+    "--radius-sm": {
+      "type": "number",
+      "value": 3
+    },
+    "--radius-md": {
+      "type": "number",
+      "value": 4
+    },
+    "--radius-lg": {
+      "type": "number",
+      "value": 6
+    },
+    "--radius-xl": {
+      "type": "number",
+      "value": 8
+    },
+    "--radius-full": {
+      "type": "number",
+      "value": 9999
+    },
+    "--radius-control": {
+      "type": "number",
+      "value": 4
+    },
+    "--radius-surface": {
+      "type": "number",
+      "value": 6
+    },
+    "--radius-input": {
+      "type": "number",
+      "value": 4
+    },
+    "--radius-badge": {
+      "type": "number",
+      "value": 3
+    },
+    "--space-0": {
+      "type": "number",
+      "value": 0
+    },
+    "--space-px": {
+      "type": "number",
+      "value": 1
+    },
+    "--space-0-5": {
+      "type": "number",
+      "value": 2
+    },
+    "--space-1": {
+      "type": "number",
+      "value": 4
+    },
+    "--space-1-5": {
+      "type": "number",
+      "value": 6
+    },
+    "--space-2": {
+      "type": "number",
+      "value": 8
+    },
+    "--space-3": {
+      "type": "number",
+      "value": 12
+    },
+    "--space-4": {
+      "type": "number",
+      "value": 16
+    },
+    "--space-5": {
+      "type": "number",
+      "value": 20
+    },
+    "--space-6": {
+      "type": "number",
+      "value": 24
+    },
+    "--space-8": {
+      "type": "number",
+      "value": 32
+    },
+    "--space-10": {
+      "type": "number",
+      "value": 40
+    },
+    "--space-12": {
+      "type": "number",
+      "value": 48
+    },
+    "--space-16": {
+      "type": "number",
+      "value": 64
+    },
+    "--space-20": {
+      "type": "number",
+      "value": 80
+    },
+    "--space-24": {
+      "type": "number",
+      "value": 96
+    },
+    "--text-xs": {
+      "type": "number",
+      "value": 11
+    },
+    "--text-sm": {
+      "type": "number",
+      "value": 12
+    },
+    "--text-base": {
+      "type": "number",
+      "value": 13
+    },
+    "--text-lg": {
+      "type": "number",
+      "value": 14
+    },
+    "--text-xl": {
+      "type": "number",
+      "value": 16
+    },
+    "--text-2xl": {
+      "type": "number",
+      "value": 20
+    },
+    "--text-3xl": {
+      "type": "number",
+      "value": 24
+    },
+    "--text-4xl": {
+      "type": "number",
+      "value": 30
+    },
+    "--text-5xl": {
+      "type": "number",
+      "value": 40
+    },
+    "--control-h-sm": {
+      "type": "number",
+      "value": 26
+    },
+    "--control-h-md": {
+      "type": "number",
+      "value": 30
+    },
+    "--control-h-lg": {
+      "type": "number",
+      "value": 36
+    },
+    "--nav-h": {
+      "type": "number",
+      "value": 44
+    },
+    "--font-display": {
+      "type": "string",
+      "value": "IBM Plex Sans"
+    },
+    "--font-body": {
+      "type": "string",
+      "value": "IBM Plex Sans"
+    },
+    "--font-ui": {
+      "type": "string",
+      "value": "IBM Plex Sans"
+    },
+    "--font-mono": {
+      "type": "string",
+      "value": "IBM Plex Mono"
+    },
+    "--button-weight": {
+      "type": "string",
+      "value": "500"
+    }
+  },
+  "children": [
+    {
+      "type": "note",
+      "id": "lib-note",
+      "name": "About this library",
+      "x": 0,
+      "y": -160,
+      "width": 640,
+      "height": 120,
+      "content": "TeleDesign seed library — Technical. Generated from tokens.json; every fill, radius, size and font is bound to a variable. Theme axis Mode (Light default / Dark). Components are reusable frames named Component/Variant[/Size]; instantiate with ref and override text via descendants."
+    },
+    {
+      "type": "frame",
+      "id": "btn-primary-sm",
+      "name": "Button/Primary/Small",
+      "reusable": true,
+      "x": 0,
+      "y": 0,
+      "layout": "horizontal",
+      "gap": "$--space-2",
+      "padding": [
+        0,
+        "$--space-3"
+      ],
+      "height": "$--control-h-sm",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "cornerRadius": "$--radius-control",
+      "children": [
+        {
+          "type": "text",
+          "id": "btn-primary-sm-label",
+          "name": "Label",
+          "content": "Button",
+          "fill": "$--primary-foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-xs",
+          "fontWeight": "$--button-weight"
+        }
+      ],
+      "fill": "$--primary"
+    },
+    {
+      "type": "frame",
+      "id": "btn-primary-md",
+      "name": "Button/Primary/Medium",
+      "reusable": true,
+      "x": 180,
+      "y": 0,
+      "layout": "horizontal",
+      "gap": "$--space-2",
+      "padding": [
+        0,
+        "$--space-4"
+      ],
+      "height": "$--control-h-md",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "cornerRadius": "$--radius-control",
+      "children": [
+        {
+          "type": "text",
+          "id": "btn-primary-md-label",
+          "name": "Label",
+          "content": "Button",
+          "fill": "$--primary-foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-sm",
+          "fontWeight": "$--button-weight"
+        }
+      ],
+      "fill": "$--primary"
+    },
+    {
+      "type": "frame",
+      "id": "btn-primary-lg",
+      "name": "Button/Primary/Large",
+      "reusable": true,
+      "x": 360,
+      "y": 0,
+      "layout": "horizontal",
+      "gap": "$--space-2",
+      "padding": [
+        0,
+        "$--space-6"
+      ],
+      "height": "$--control-h-lg",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "cornerRadius": "$--radius-control",
+      "children": [
+        {
+          "type": "text",
+          "id": "btn-primary-lg-label",
+          "name": "Label",
+          "content": "Button",
+          "fill": "$--primary-foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-base",
+          "fontWeight": "$--button-weight"
+        }
+      ],
+      "fill": "$--primary"
+    },
+    {
+      "type": "frame",
+      "id": "btn-secondary-sm",
+      "name": "Button/Secondary/Small",
+      "reusable": true,
+      "x": 0,
+      "y": 64,
+      "layout": "horizontal",
+      "gap": "$--space-2",
+      "padding": [
+        0,
+        "$--space-3"
+      ],
+      "height": "$--control-h-sm",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "cornerRadius": "$--radius-control",
+      "children": [
+        {
+          "type": "text",
+          "id": "btn-secondary-sm-label",
+          "name": "Label",
+          "content": "Button",
+          "fill": "$--secondary-foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-xs",
+          "fontWeight": "$--button-weight"
+        }
+      ],
+      "fill": "$--secondary"
+    },
+    {
+      "type": "frame",
+      "id": "btn-secondary-md",
+      "name": "Button/Secondary/Medium",
+      "reusable": true,
+      "x": 180,
+      "y": 64,
+      "layout": "horizontal",
+      "gap": "$--space-2",
+      "padding": [
+        0,
+        "$--space-4"
+      ],
+      "height": "$--control-h-md",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "cornerRadius": "$--radius-control",
+      "children": [
+        {
+          "type": "text",
+          "id": "btn-secondary-md-label",
+          "name": "Label",
+          "content": "Button",
+          "fill": "$--secondary-foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-sm",
+          "fontWeight": "$--button-weight"
+        }
+      ],
+      "fill": "$--secondary"
+    },
+    {
+      "type": "frame",
+      "id": "btn-secondary-lg",
+      "name": "Button/Secondary/Large",
+      "reusable": true,
+      "x": 360,
+      "y": 64,
+      "layout": "horizontal",
+      "gap": "$--space-2",
+      "padding": [
+        0,
+        "$--space-6"
+      ],
+      "height": "$--control-h-lg",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "cornerRadius": "$--radius-control",
+      "children": [
+        {
+          "type": "text",
+          "id": "btn-secondary-lg-label",
+          "name": "Label",
+          "content": "Button",
+          "fill": "$--secondary-foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-base",
+          "fontWeight": "$--button-weight"
+        }
+      ],
+      "fill": "$--secondary"
+    },
+    {
+      "type": "frame",
+      "id": "btn-outline-sm",
+      "name": "Button/Outline/Small",
+      "reusable": true,
+      "x": 0,
+      "y": 128,
+      "layout": "horizontal",
+      "gap": "$--space-2",
+      "padding": [
+        0,
+        "$--space-3"
+      ],
+      "height": "$--control-h-sm",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "cornerRadius": "$--radius-control",
+      "children": [
+        {
+          "type": "text",
+          "id": "btn-outline-sm-label",
+          "name": "Label",
+          "content": "Button",
+          "fill": "$--foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-xs",
+          "fontWeight": "$--button-weight"
+        }
+      ],
+      "fill": "$--background",
+      "stroke": "$--border",
+      "strokeWidth": 1,
+      "strokeAlignment": "inner"
+    },
+    {
+      "type": "frame",
+      "id": "btn-outline-md",
+      "name": "Button/Outline/Medium",
+      "reusable": true,
+      "x": 180,
+      "y": 128,
+      "layout": "horizontal",
+      "gap": "$--space-2",
+      "padding": [
+        0,
+        "$--space-4"
+      ],
+      "height": "$--control-h-md",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "cornerRadius": "$--radius-control",
+      "children": [
+        {
+          "type": "text",
+          "id": "btn-outline-md-label",
+          "name": "Label",
+          "content": "Button",
+          "fill": "$--foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-sm",
+          "fontWeight": "$--button-weight"
+        }
+      ],
+      "fill": "$--background",
+      "stroke": "$--border",
+      "strokeWidth": 1,
+      "strokeAlignment": "inner"
+    },
+    {
+      "type": "frame",
+      "id": "btn-outline-lg",
+      "name": "Button/Outline/Large",
+      "reusable": true,
+      "x": 360,
+      "y": 128,
+      "layout": "horizontal",
+      "gap": "$--space-2",
+      "padding": [
+        0,
+        "$--space-6"
+      ],
+      "height": "$--control-h-lg",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "cornerRadius": "$--radius-control",
+      "children": [
+        {
+          "type": "text",
+          "id": "btn-outline-lg-label",
+          "name": "Label",
+          "content": "Button",
+          "fill": "$--foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-base",
+          "fontWeight": "$--button-weight"
+        }
+      ],
+      "fill": "$--background",
+      "stroke": "$--border",
+      "strokeWidth": 1,
+      "strokeAlignment": "inner"
+    },
+    {
+      "type": "frame",
+      "id": "btn-ghost-sm",
+      "name": "Button/Ghost/Small",
+      "reusable": true,
+      "x": 0,
+      "y": 192,
+      "layout": "horizontal",
+      "gap": "$--space-2",
+      "padding": [
+        0,
+        "$--space-3"
+      ],
+      "height": "$--control-h-sm",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "cornerRadius": "$--radius-control",
+      "children": [
+        {
+          "type": "text",
+          "id": "btn-ghost-sm-label",
+          "name": "Label",
+          "content": "Button",
+          "fill": "$--foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-xs",
+          "fontWeight": "$--button-weight"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "btn-ghost-md",
+      "name": "Button/Ghost/Medium",
+      "reusable": true,
+      "x": 180,
+      "y": 192,
+      "layout": "horizontal",
+      "gap": "$--space-2",
+      "padding": [
+        0,
+        "$--space-4"
+      ],
+      "height": "$--control-h-md",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "cornerRadius": "$--radius-control",
+      "children": [
+        {
+          "type": "text",
+          "id": "btn-ghost-md-label",
+          "name": "Label",
+          "content": "Button",
+          "fill": "$--foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-sm",
+          "fontWeight": "$--button-weight"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "btn-ghost-lg",
+      "name": "Button/Ghost/Large",
+      "reusable": true,
+      "x": 360,
+      "y": 192,
+      "layout": "horizontal",
+      "gap": "$--space-2",
+      "padding": [
+        0,
+        "$--space-6"
+      ],
+      "height": "$--control-h-lg",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "cornerRadius": "$--radius-control",
+      "children": [
+        {
+          "type": "text",
+          "id": "btn-ghost-lg-label",
+          "name": "Label",
+          "content": "Button",
+          "fill": "$--foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-base",
+          "fontWeight": "$--button-weight"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "btn-destructive-sm",
+      "name": "Button/Destructive/Small",
+      "reusable": true,
+      "x": 0,
+      "y": 256,
+      "layout": "horizontal",
+      "gap": "$--space-2",
+      "padding": [
+        0,
+        "$--space-3"
+      ],
+      "height": "$--control-h-sm",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "cornerRadius": "$--radius-control",
+      "children": [
+        {
+          "type": "text",
+          "id": "btn-destructive-sm-label",
+          "name": "Label",
+          "content": "Button",
+          "fill": "$--destructive-foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-xs",
+          "fontWeight": "$--button-weight"
+        }
+      ],
+      "fill": "$--destructive"
+    },
+    {
+      "type": "frame",
+      "id": "btn-destructive-md",
+      "name": "Button/Destructive/Medium",
+      "reusable": true,
+      "x": 180,
+      "y": 256,
+      "layout": "horizontal",
+      "gap": "$--space-2",
+      "padding": [
+        0,
+        "$--space-4"
+      ],
+      "height": "$--control-h-md",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "cornerRadius": "$--radius-control",
+      "children": [
+        {
+          "type": "text",
+          "id": "btn-destructive-md-label",
+          "name": "Label",
+          "content": "Button",
+          "fill": "$--destructive-foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-sm",
+          "fontWeight": "$--button-weight"
+        }
+      ],
+      "fill": "$--destructive"
+    },
+    {
+      "type": "frame",
+      "id": "btn-destructive-lg",
+      "name": "Button/Destructive/Large",
+      "reusable": true,
+      "x": 360,
+      "y": 256,
+      "layout": "horizontal",
+      "gap": "$--space-2",
+      "padding": [
+        0,
+        "$--space-6"
+      ],
+      "height": "$--control-h-lg",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "cornerRadius": "$--radius-control",
+      "children": [
+        {
+          "type": "text",
+          "id": "btn-destructive-lg-label",
+          "name": "Label",
+          "content": "Button",
+          "fill": "$--destructive-foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-base",
+          "fontWeight": "$--button-weight"
+        }
+      ],
+      "fill": "$--destructive"
+    },
+    {
+      "type": "frame",
+      "id": "btn-link-md",
+      "name": "Button/Link/Medium",
+      "reusable": true,
+      "x": 540,
+      "y": 0,
+      "layout": "horizontal",
+      "alignItems": "center",
+      "height": "$--control-h-md",
+      "children": [
+        {
+          "type": "text",
+          "id": "btn-link-md-label",
+          "name": "Label",
+          "content": "Learn more",
+          "fill": "$--primary",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-sm",
+          "fontWeight": "$--button-weight",
+          "underline": true
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "input-default",
+      "name": "Input/Default",
+      "reusable": true,
+      "x": 0,
+      "y": 360,
+      "width": 280,
+      "layout": "vertical",
+      "gap": "$--space-1-5",
+      "children": [
+        {
+          "type": "text",
+          "id": "input-default-label",
+          "name": "Label",
+          "content": "Email",
+          "fill": "$--foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-sm",
+          "fontWeight": "500"
+        },
+        {
+          "type": "frame",
+          "id": "input-default-field",
+          "name": "Field",
+          "layout": "horizontal",
+          "alignItems": "center",
+          "width": "fill_container",
+          "height": "$--control-h-md",
+          "padding": [
+            0,
+            "$--space-3"
+          ],
+          "fill": "$--background",
+          "cornerRadius": "$--radius-input",
+          "stroke": "$--input",
+          "strokeWidth": 1,
+          "strokeAlignment": "inner",
+          "children": [
+            {
+              "type": "text",
+              "id": "input-default-value",
+              "name": "Value",
+              "content": "Placeholder",
+              "fill": "$--muted-foreground",
+              "fontFamily": "$--font-ui",
+              "fontSize": "$--text-sm"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "input-default-hint",
+          "name": "Hint",
+          "content": "Helper text",
+          "fill": "$--muted-foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-xs"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "input-focus",
+      "name": "Input/Focus",
+      "reusable": true,
+      "x": 320,
+      "y": 360,
+      "width": 280,
+      "layout": "vertical",
+      "gap": "$--space-1-5",
+      "children": [
+        {
+          "type": "text",
+          "id": "input-focus-label",
+          "name": "Label",
+          "content": "Email",
+          "fill": "$--foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-sm",
+          "fontWeight": "500"
+        },
+        {
+          "type": "frame",
+          "id": "input-focus-field",
+          "name": "Field",
+          "layout": "horizontal",
+          "alignItems": "center",
+          "width": "fill_container",
+          "height": "$--control-h-md",
+          "padding": [
+            0,
+            "$--space-3"
+          ],
+          "fill": "$--background",
+          "cornerRadius": "$--radius-input",
+          "stroke": "$--ring",
+          "strokeWidth": 2,
+          "strokeAlignment": "inner",
+          "children": [
+            {
+              "type": "text",
+              "id": "input-focus-value",
+              "name": "Value",
+              "content": "Typing…",
+              "fill": "$--foreground",
+              "fontFamily": "$--font-ui",
+              "fontSize": "$--text-sm"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "input-focus-hint",
+          "name": "Hint",
+          "content": "Helper text",
+          "fill": "$--muted-foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-xs"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "input-invalid",
+      "name": "Input/Invalid",
+      "reusable": true,
+      "x": 640,
+      "y": 360,
+      "width": 280,
+      "layout": "vertical",
+      "gap": "$--space-1-5",
+      "children": [
+        {
+          "type": "text",
+          "id": "input-invalid-label",
+          "name": "Label",
+          "content": "Email",
+          "fill": "$--foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-sm",
+          "fontWeight": "500"
+        },
+        {
+          "type": "frame",
+          "id": "input-invalid-field",
+          "name": "Field",
+          "layout": "horizontal",
+          "alignItems": "center",
+          "width": "fill_container",
+          "height": "$--control-h-md",
+          "padding": [
+            0,
+            "$--space-3"
+          ],
+          "fill": "$--background",
+          "cornerRadius": "$--radius-input",
+          "stroke": "$--destructive",
+          "strokeWidth": 1,
+          "strokeAlignment": "inner",
+          "children": [
+            {
+              "type": "text",
+              "id": "input-invalid-value",
+              "name": "Value",
+              "content": "bad@",
+              "fill": "$--foreground",
+              "fontFamily": "$--font-ui",
+              "fontSize": "$--text-sm"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "input-invalid-hint",
+          "name": "Hint",
+          "content": "Enter a valid email.",
+          "fill": "$--destructive",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-xs"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "input-disabled",
+      "name": "Input/Disabled",
+      "reusable": true,
+      "x": 960,
+      "y": 360,
+      "width": 280,
+      "layout": "vertical",
+      "gap": "$--space-1-5",
+      "opacity": 0.5,
+      "children": [
+        {
+          "type": "text",
+          "id": "input-disabled-label",
+          "name": "Label",
+          "content": "Email",
+          "fill": "$--foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-sm",
+          "fontWeight": "500"
+        },
+        {
+          "type": "frame",
+          "id": "input-disabled-field",
+          "name": "Field",
+          "layout": "horizontal",
+          "alignItems": "center",
+          "width": "fill_container",
+          "height": "$--control-h-md",
+          "padding": [
+            0,
+            "$--space-3"
+          ],
+          "fill": "$--muted",
+          "cornerRadius": "$--radius-input",
+          "stroke": "$--input",
+          "strokeWidth": 1,
+          "strokeAlignment": "inner",
+          "children": [
+            {
+              "type": "text",
+              "id": "input-disabled-value",
+              "name": "Value",
+              "content": "Read only",
+              "fill": "$--muted-foreground",
+              "fontFamily": "$--font-ui",
+              "fontSize": "$--text-sm"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "input-disabled-hint",
+          "name": "Hint",
+          "content": "Not editable",
+          "fill": "$--muted-foreground",
+          "fontFamily": "$--font-ui",
+          "fontSize": "$--text-xs"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "card-default",
+      "name": "Card/Default",
+      "reusable": true,
+      "x": 0,
+      "y": 520,
+      "width": 340,
+      "layout": "vertical",
+      "gap": "$--space-4",
+      "padding": "$--space-6",
+      "fill": "$--card",
+      "stroke": "$--border",
+      "strokeWidth": 1,
+      "strokeAlignment": "inner",
+      "cornerRadius": "$--radius-surface",
+      "children": [
+        {
+          "type": "frame",
+          "id": "card-default-header",
+          "name": "Header",
+          "layout": "vertical",
+          "gap": "$--space-1-5",
+          "width": "fill_container",
+          "children": [
+            {
+              "type": "text",
+              "id": "card-default-title",
+              "name": "Title",
+              "content": "Card title",
+              "fill": "$--card-foreground",
+              "fontFamily": "$--font-display",
+              "fontSize": "$--text-lg",
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "card-default-description",
+              "name": "Description",
+              "content": "Supporting description text.",
+              "fill": "$--muted-foreground",
+              "fontFamily": "$--font-body",
+              "fontSize": "$--text-sm",
+              "textGrowth": "fixed-width",
+              "width": "fill_container"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "card-default-content",
+          "name": "Content",
+          "layout": "vertical",
+          "width": "fill_container",
+          "height": 64,
+          "slot": [],
+          "placeholder": true
+        },
+        {
+          "type": "frame",
+          "id": "card-default-footer",
+          "name": "Footer",
+          "layout": "horizontal",
+          "gap": "$--space-2",
+          "children": [
+            {
+              "type": "ref",
+              "id": "card-default-action",
+              "ref": "btn-primary-sm",
+              "descendants": {
+                "btn-primary-sm-label": {
+                  "content": "Open"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "card-raised",
+      "name": "Card/Raised",
+      "reusable": true,
+      "x": 380,
+      "y": 520,
+      "width": 340,
+      "layout": "vertical",
+      "gap": "$--space-4",
+      "padding": "$--space-6",
+      "fill": "$--card",
+      "stroke": "$--border",
+      "strokeWidth": 1,
+      "strokeAlignment": "inner",
+      "cornerRadius": "$--radius-surface",
+      "children": [
+        {
+          "type": "frame",
+          "id": "card-raised-header",
+          "name": "Header",
+          "layout": "vertical",
+          "gap": "$--space-1-5",
+          "width": "fill_container",
+          "children": [
+            {
+              "type": "text",
+              "id": "card-raised-title",
+              "name": "Title",
+              "content": "Card title",
+              "fill": "$--card-foreground",
+              "fontFamily": "$--font-display",
+              "fontSize": "$--text-lg",
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "card-raised-description",
+              "name": "Description",
+              "content": "Supporting description text.",
+              "fill": "$--muted-foreground",
+              "fontFamily": "$--font-body",
+              "fontSize": "$--text-sm",
+              "textGrowth": "fixed-width",
+              "width": "fill_container"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "card-raised-content",
+          "name": "Content",
+          "layout": "vertical",
+          "width": "fill_container",
+          "height": 64,
+          "slot": [],
+          "placeholder": true
+        },
+        {
+          "type": "frame",
+          "id": "card-raised-footer",
+          "name": "Footer",
+          "layout": "horizontal",
+          "gap": "$--space-2",
+          "children": [
+            {
+              "type": "ref",
+              "id": "card-raised-action",
+              "ref": "btn-primary-sm",
+              "descendants": {
+                "btn-primary-sm-label": {
+                  "content": "Open"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "effect": {
+        "type": "shadow",
+        "shadowType": "outer",
+        "offset": {
+          "x": 0,
+          "y": 6
+        },
+        "blur": 16,
+        "color": "#0000001F"
+      }
+    },
+    {
+      "type": "frame",
+      "id": "badge-default",
+      "name": "Badge/Default",
+      "reusable": true,
+      "x": 0,
+      "y": 800,
+      "layout": "horizontal",
+      "alignItems": "center",
+      "padding": [
+        "$--space-0-5",
+        "$--space-2"
+      ],
+      "cornerRadius": "$--radius-badge",
+      "children": [
+        {
+          "type": "text",
+          "id": "badge-default-label",
+          "name": "Label",
+          "content": "DEFAULT",
+          "fill": "$--primary-foreground",
+          "fontFamily": "$--font-mono",
+          "fontSize": "$--text-xs",
+          "fontWeight": "500"
+        }
+      ],
+      "fill": "$--primary"
+    },
+    {
+      "type": "frame",
+      "id": "badge-secondary",
+      "name": "Badge/Secondary",
+      "reusable": true,
+      "x": 130,
+      "y": 800,
+      "layout": "horizontal",
+      "alignItems": "center",
+      "padding": [
+        "$--space-0-5",
+        "$--space-2"
+      ],
+      "cornerRadius": "$--radius-badge",
+      "children": [
+        {
+          "type": "text",
+          "id": "badge-secondary-label",
+          "name": "Label",
+          "content": "SECONDARY",
+          "fill": "$--secondary-foreground",
+          "fontFamily": "$--font-mono",
+          "fontSize": "$--text-xs",
+          "fontWeight": "500"
+        }
+      ],
+      "fill": "$--secondary"
+    },
+    {
+      "type": "frame",
+      "id": "badge-outline",
+      "name": "Badge/Outline",
+      "reusable": true,
+      "x": 260,
+      "y": 800,
+      "layout": "horizontal",
+      "alignItems": "center",
+      "padding": [
+        "$--space-0-5",
+        "$--space-2"
+      ],
+      "cornerRadius": "$--radius-badge",
+      "children": [
+        {
+          "type": "text",
+          "id": "badge-outline-label",
+          "name": "Label",
+          "content": "OUTLINE",
+          "fill": "$--foreground",
+          "fontFamily": "$--font-mono",
+          "fontSize": "$--text-xs",
+          "fontWeight": "500"
+        }
+      ],
+      "stroke": "$--border",
+      "strokeWidth": 1,
+      "strokeAlignment": "inner"
+    },
+    {
+      "type": "frame",
+      "id": "badge-success",
+      "name": "Badge/Success",
+      "reusable": true,
+      "x": 390,
+      "y": 800,
+      "layout": "horizontal",
+      "alignItems": "center",
+      "padding": [
+        "$--space-0-5",
+        "$--space-2"
+      ],
+      "cornerRadius": "$--radius-badge",
+      "children": [
+        {
+          "type": "text",
+          "id": "badge-success-label",
+          "name": "Label",
+          "content": "SUCCESS",
+          "fill": "$--success-foreground",
+          "fontFamily": "$--font-mono",
+          "fontSize": "$--text-xs",
+          "fontWeight": "500"
+        }
+      ],
+      "fill": "$--success"
+    },
+    {
+      "type": "frame",
+      "id": "badge-warning",
+      "name": "Badge/Warning",
+      "reusable": true,
+      "x": 520,
+      "y": 800,
+      "layout": "horizontal",
+      "alignItems": "center",
+      "padding": [
+        "$--space-0-5",
+        "$--space-2"
+      ],
+      "cornerRadius": "$--radius-badge",
+      "children": [
+        {
+          "type": "text",
+          "id": "badge-warning-label",
+          "name": "Label",
+          "content": "WARNING",
+          "fill": "$--warning-foreground",
+          "fontFamily": "$--font-mono",
+          "fontSize": "$--text-xs",
+          "fontWeight": "500"
+        }
+      ],
+      "fill": "$--warning"
+    },
+    {
+      "type": "frame",
+      "id": "badge-destructive",
+      "name": "Badge/Destructive",
+      "reusable": true,
+      "x": 650,
+      "y": 800,
+      "layout": "horizontal",
+      "alignItems": "center",
+      "padding": [
+        "$--space-0-5",
+        "$--space-2"
+      ],
+      "cornerRadius": "$--radius-badge",
+      "children": [
+        {
+          "type": "text",
+          "id": "badge-destructive-label",
+          "name": "Label",
+          "content": "DESTRUCTIVE",
+          "fill": "$--destructive-foreground",
+          "fontFamily": "$--font-mono",
+          "fontSize": "$--text-xs",
+          "fontWeight": "500"
+        }
+      ],
+      "fill": "$--destructive"
+    },
+    {
+      "type": "frame",
+      "id": "tabs-pill",
+      "name": "Tabs/Pill",
+      "reusable": true,
+      "x": 0,
+      "y": 880,
+      "layout": "horizontal",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "tabs-pill-tab1",
+          "name": "Tab 1",
+          "layout": "horizontal",
+          "alignItems": "center",
+          "height": 30,
+          "padding": [
+            0,
+            "$--space-3"
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "tabs-pill-tab1-label",
+              "name": "Label",
+              "content": "Overview",
+              "fill": "$--foreground",
+              "fontFamily": "$--font-ui",
+              "fontSize": "$--text-sm",
+              "fontWeight": "500"
+            }
+          ],
+          "cornerRadius": "$--radius-control",
+          "fill": "$--background"
+        },
+        {
+          "type": "frame",
+          "id": "tabs-pill-tab2",
+          "name": "Tab 2",
+          "layout": "horizontal",
+          "alignItems": "center",
+          "height": 30,
+          "padding": [
+            0,
+            "$--space-3"
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "tabs-pill-tab2-label",
+              "name": "Label",
+              "content": "Activity",
+              "fill": "$--muted-foreground",
+              "fontFamily": "$--font-ui",
+              "fontSize": "$--text-sm",
+              "fontWeight": "500"
+            }
+          ],
+          "cornerRadius": "$--radius-control"
+        },
+        {
+          "type": "frame",
+          "id": "tabs-pill-tab3",
+          "name": "Tab 3",
+          "layout": "horizontal",
+          "alignItems": "center",
+          "height": 30,
+          "padding": [
+            0,
+            "$--space-3"
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "tabs-pill-tab3-label",
+              "name": "Label",
+              "content": "Settings",
+              "fill": "$--muted-foreground",
+              "fontFamily": "$--font-ui",
+              "fontSize": "$--text-sm",
+              "fontWeight": "500"
+            }
+          ],
+          "cornerRadius": "$--radius-control"
+        }
+      ],
+      "fill": "$--muted",
+      "padding": "$--space-0-5",
+      "gap": "$--space-1",
+      "cornerRadius": "$--radius-control"
+    },
+    {
+      "type": "frame",
+      "id": "tabs-underline",
+      "name": "Tabs/Underline",
+      "reusable": true,
+      "x": 400,
+      "y": 880,
+      "layout": "horizontal",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "tabs-underline-tab1",
+          "name": "Tab 1",
+          "layout": "horizontal",
+          "alignItems": "center",
+          "height": 30,
+          "padding": 0,
+          "children": [
+            {
+              "type": "text",
+              "id": "tabs-underline-tab1-label",
+              "name": "Label",
+              "content": "Overview",
+              "fill": "$--foreground",
+              "fontFamily": "$--font-ui",
+              "fontSize": "$--text-sm",
+              "fontWeight": "500"
+            }
+          ],
+          "stroke": "$--primary",
+          "strokeWidth": {
+            "bottom": 2
+          },
+          "strokeAlignment": "inner"
+        },
+        {
+          "type": "frame",
+          "id": "tabs-underline-tab2",
+          "name": "Tab 2",
+          "layout": "horizontal",
+          "alignItems": "center",
+          "height": 30,
+          "padding": 0,
+          "children": [
+            {
+              "type": "text",
+              "id": "tabs-underline-tab2-label",
+              "name": "Label",
+              "content": "Activity",
+              "fill": "$--muted-foreground",
+              "fontFamily": "$--font-ui",
+              "fontSize": "$--text-sm",
+              "fontWeight": "500"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "tabs-underline-tab3",
+          "name": "Tab 3",
+          "layout": "horizontal",
+          "alignItems": "center",
+          "height": 30,
+          "padding": 0,
+          "children": [
+            {
+              "type": "text",
+              "id": "tabs-underline-tab3-label",
+              "name": "Label",
+              "content": "Settings",
+              "fill": "$--muted-foreground",
+              "fontFamily": "$--font-ui",
+              "fontSize": "$--text-sm",
+              "fontWeight": "500"
+            }
+          ]
+        }
+      ],
+      "gap": "$--space-4",
+      "width": 360,
+      "stroke": "$--border",
+      "strokeWidth": {
+        "bottom": 1
+      },
+      "strokeAlignment": "inner"
+    },
+    {
+      "type": "frame",
+      "id": "dialog-default",
+      "name": "Dialog/Default",
+      "reusable": true,
+      "x": 0,
+      "y": 980,
+      "width": 440,
+      "layout": "vertical",
+      "gap": "$--space-4",
+      "padding": "$--space-6",
+      "fill": "$--popover",
+      "cornerRadius": "$--radius-surface",
+      "stroke": "$--border",
+      "strokeWidth": 1,
+      "strokeAlignment": "inner",
+      "effect": {
+        "type": "shadow",
+        "shadowType": "outer",
+        "offset": {
+          "x": 0,
+          "y": 16
+        },
+        "blur": 40,
+        "color": "#00000033"
+      },
+      "children": [
+        {
+          "type": "frame",
+          "id": "dialog-default-top",
+          "name": "Top",
+          "layout": "horizontal",
+          "width": "fill_container",
+          "justifyContent": "space_between",
+          "alignItems": "start",
+          "children": [
+            {
+              "type": "frame",
+              "id": "dialog-default-heading",
+              "name": "Heading",
+              "layout": "vertical",
+              "gap": "$--space-1-5",
+              "width": "fill_container",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "dialog-default-title",
+                  "name": "Title",
+                  "content": "Delete project?",
+                  "fill": "$--popover-foreground",
+                  "fontFamily": "$--font-display",
+                  "fontSize": "$--text-xl",
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "dialog-default-description",
+                  "name": "Description",
+                  "content": "This removes all boards and versions. It cannot be undone.",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-body",
+                  "fontSize": "$--text-sm",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container"
+                }
+              ]
+            },
+            {
+              "type": "icon",
+              "id": "dialog-default-close",
+              "name": "Close",
+              "library": "lucide",
+              "icon": "x",
+              "width": 16,
+              "height": 16,
+              "fill": "$--muted-foreground"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "dialog-default-body",
+          "name": "Body",
+          "layout": "vertical",
+          "width": "fill_container",
+          "height": 24,
+          "slot": [],
+          "placeholder": true
+        },
+        {
+          "type": "frame",
+          "id": "dialog-default-footer",
+          "name": "Footer",
+          "layout": "horizontal",
+          "gap": "$--space-2",
+          "width": "fill_container",
+          "justifyContent": "end",
+          "children": [
+            {
+              "type": "ref",
+              "id": "dialog-default-cancel",
+              "ref": "btn-outline-md",
+              "descendants": {
+                "btn-outline-md-label": {
+                  "content": "Cancel"
+                }
+              }
+            },
+            {
+              "type": "ref",
+              "id": "dialog-default-confirm",
+              "ref": "btn-destructive-md",
+              "descendants": {
+                "btn-destructive-md-label": {
+                  "content": "Delete"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "table-default",
+      "name": "Table/Default",
+      "reusable": true,
+      "x": 520,
+      "y": 980,
+      "width": 520,
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "table-default-row0",
+          "name": "Header row",
+          "layout": "horizontal",
+          "width": "fill_container",
+          "height": 28,
+          "stroke": "$--border",
+          "strokeWidth": {
+            "bottom": 1
+          },
+          "strokeAlignment": "inner",
+          "children": [
+            {
+              "type": "frame",
+              "id": "table-default-row0-c0",
+              "name": "Cell 1",
+              "layout": "horizontal",
+              "alignItems": "center",
+              "width": "fill_container",
+              "height": "fill_container",
+              "padding": [
+                0,
+                "$--space-3"
+              ],
+              "justifyContent": "start",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "table-default-row0-c0-text",
+                  "name": "Text",
+                  "content": "RUN",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-mono",
+                  "fontSize": "$--text-xs",
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "table-default-row0-c1",
+              "name": "Cell 2",
+              "layout": "horizontal",
+              "alignItems": "center",
+              "width": "fill_container",
+              "height": "fill_container",
+              "padding": [
+                0,
+                "$--space-3"
+              ],
+              "justifyContent": "start",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "table-default-row0-c1-text",
+                  "name": "Text",
+                  "content": "STATUS",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-mono",
+                  "fontSize": "$--text-xs",
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "table-default-row0-c2",
+              "name": "Cell 3",
+              "layout": "horizontal",
+              "alignItems": "center",
+              "width": "fill_container",
+              "height": "fill_container",
+              "padding": [
+                0,
+                "$--space-3"
+              ],
+              "justifyContent": "end",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "table-default-row0-c2-text",
+                  "name": "Text",
+                  "content": "DURATION",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-mono",
+                  "fontSize": "$--text-xs",
+                  "fontWeight": "500"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "table-default-row1",
+          "name": "Row 1",
+          "layout": "horizontal",
+          "width": "fill_container",
+          "height": 28,
+          "stroke": "$--border",
+          "strokeWidth": {
+            "bottom": 1
+          },
+          "strokeAlignment": "inner",
+          "children": [
+            {
+              "type": "frame",
+              "id": "table-default-row1-c0",
+              "name": "Cell 1",
+              "layout": "horizontal",
+              "alignItems": "center",
+              "width": "fill_container",
+              "height": "fill_container",
+              "padding": [
+                0,
+                "$--space-3"
+              ],
+              "justifyContent": "start",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "table-default-row1-c0-text",
+                  "name": "Text",
+                  "content": "nightly-build",
+                  "fill": "$--foreground",
+                  "fontFamily": "$--font-body",
+                  "fontSize": "$--text-sm",
+                  "fontWeight": "400"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "table-default-row1-c1",
+              "name": "Cell 2",
+              "layout": "horizontal",
+              "alignItems": "center",
+              "width": "fill_container",
+              "height": "fill_container",
+              "padding": [
+                0,
+                "$--space-3"
+              ],
+              "justifyContent": "start",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "table-default-row1-c1-text",
+                  "name": "Text",
+                  "content": "passed",
+                  "fill": "$--foreground",
+                  "fontFamily": "$--font-body",
+                  "fontSize": "$--text-sm",
+                  "fontWeight": "400"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "table-default-row1-c2",
+              "name": "Cell 3",
+              "layout": "horizontal",
+              "alignItems": "center",
+              "width": "fill_container",
+              "height": "fill_container",
+              "padding": [
+                0,
+                "$--space-3"
+              ],
+              "justifyContent": "end",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "table-default-row1-c2-text",
+                  "name": "Text",
+                  "content": "4m 12s",
+                  "fill": "$--foreground",
+                  "fontFamily": "$--font-mono",
+                  "fontSize": "$--text-sm",
+                  "fontWeight": "400"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "table-default-row2",
+          "name": "Row 2",
+          "layout": "horizontal",
+          "width": "fill_container",
+          "height": 28,
+          "stroke": "$--border",
+          "strokeWidth": {
+            "bottom": 1
+          },
+          "strokeAlignment": "inner",
+          "children": [
+            {
+              "type": "frame",
+              "id": "table-default-row2-c0",
+              "name": "Cell 1",
+              "layout": "horizontal",
+              "alignItems": "center",
+              "width": "fill_container",
+              "height": "fill_container",
+              "padding": [
+                0,
+                "$--space-3"
+              ],
+              "justifyContent": "start",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "table-default-row2-c0-text",
+                  "name": "Text",
+                  "content": "deploy-preview",
+                  "fill": "$--foreground",
+                  "fontFamily": "$--font-body",
+                  "fontSize": "$--text-sm",
+                  "fontWeight": "400"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "table-default-row2-c1",
+              "name": "Cell 2",
+              "layout": "horizontal",
+              "alignItems": "center",
+              "width": "fill_container",
+              "height": "fill_container",
+              "padding": [
+                0,
+                "$--space-3"
+              ],
+              "justifyContent": "start",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "table-default-row2-c1-text",
+                  "name": "Text",
+                  "content": "slow",
+                  "fill": "$--foreground",
+                  "fontFamily": "$--font-body",
+                  "fontSize": "$--text-sm",
+                  "fontWeight": "400"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "table-default-row2-c2",
+              "name": "Cell 3",
+              "layout": "horizontal",
+              "alignItems": "center",
+              "width": "fill_container",
+              "height": "fill_container",
+              "padding": [
+                0,
+                "$--space-3"
+              ],
+              "justifyContent": "end",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "table-default-row2-c2-text",
+                  "name": "Text",
+                  "content": "9m 03s",
+                  "fill": "$--foreground",
+                  "fontFamily": "$--font-mono",
+                  "fontSize": "$--text-sm",
+                  "fontWeight": "400"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "table-default-row3",
+          "name": "Row 3",
+          "layout": "horizontal",
+          "width": "fill_container",
+          "height": 28,
+          "stroke": "$--border",
+          "strokeWidth": {
+            "bottom": 1
+          },
+          "strokeAlignment": "inner",
+          "children": [
+            {
+              "type": "frame",
+              "id": "table-default-row3-c0",
+              "name": "Cell 1",
+              "layout": "horizontal",
+              "alignItems": "center",
+              "width": "fill_container",
+              "height": "fill_container",
+              "padding": [
+                0,
+                "$--space-3"
+              ],
+              "justifyContent": "start",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "table-default-row3-c0-text",
+                  "name": "Text",
+                  "content": "migrate-db",
+                  "fill": "$--foreground",
+                  "fontFamily": "$--font-body",
+                  "fontSize": "$--text-sm",
+                  "fontWeight": "400"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "table-default-row3-c1",
+              "name": "Cell 2",
+              "layout": "horizontal",
+              "alignItems": "center",
+              "width": "fill_container",
+              "height": "fill_container",
+              "padding": [
+                0,
+                "$--space-3"
+              ],
+              "justifyContent": "start",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "table-default-row3-c1-text",
+                  "name": "Text",
+                  "content": "failed",
+                  "fill": "$--foreground",
+                  "fontFamily": "$--font-body",
+                  "fontSize": "$--text-sm",
+                  "fontWeight": "400"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "table-default-row3-c2",
+              "name": "Cell 3",
+              "layout": "horizontal",
+              "alignItems": "center",
+              "width": "fill_container",
+              "height": "fill_container",
+              "padding": [
+                0,
+                "$--space-3"
+              ],
+              "justifyContent": "end",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "table-default-row3-c2-text",
+                  "name": "Text",
+                  "content": "0m 41s",
+                  "fill": "$--foreground",
+                  "fontFamily": "$--font-mono",
+                  "fontSize": "$--text-sm",
+                  "fontWeight": "400"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "nav-horizontal",
+      "name": "Nav/Horizontal",
+      "reusable": true,
+      "x": 0,
+      "y": 1300,
+      "width": 1040,
+      "height": "$--nav-h",
+      "layout": "horizontal",
+      "alignItems": "center",
+      "gap": "$--space-6",
+      "padding": [
+        0,
+        "$--space-6"
+      ],
+      "fill": "$--background",
+      "stroke": "$--border",
+      "strokeWidth": {
+        "bottom": 1
+      },
+      "strokeAlignment": "inner",
+      "children": [
+        {
+          "type": "text",
+          "id": "nav-horizontal-brand",
+          "name": "Brand",
+          "content": "Northwind",
+          "fill": "$--foreground",
+          "fontFamily": "$--font-display",
+          "fontSize": "$--text-lg",
+          "fontWeight": "700"
+        },
+        {
+          "type": "frame",
+          "id": "nav-horizontal-items",
+          "name": "Items",
+          "layout": "horizontal",
+          "gap": "$--space-1",
+          "width": "fill_container",
+          "slot": [],
+          "children": [
+            {
+              "type": "frame",
+              "id": "nav-horizontal-item1",
+              "name": "Item 1",
+              "layout": "horizontal",
+              "alignItems": "center",
+              "height": "$--control-h-sm",
+              "padding": [
+                0,
+                "$--space-3"
+              ],
+              "cornerRadius": "$--radius-control",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "nav-horizontal-item1-label",
+                  "name": "Label",
+                  "content": "Overview",
+                  "fill": "$--foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-sm",
+                  "fontWeight": "500"
+                }
+              ],
+              "fill": "$--secondary"
+            },
+            {
+              "type": "frame",
+              "id": "nav-horizontal-item2",
+              "name": "Item 2",
+              "layout": "horizontal",
+              "alignItems": "center",
+              "height": "$--control-h-sm",
+              "padding": [
+                0,
+                "$--space-3"
+              ],
+              "cornerRadius": "$--radius-control",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "nav-horizontal-item2-label",
+                  "name": "Label",
+                  "content": "Projects",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-sm",
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "nav-horizontal-item3",
+              "name": "Item 3",
+              "layout": "horizontal",
+              "alignItems": "center",
+              "height": "$--control-h-sm",
+              "padding": [
+                0,
+                "$--space-3"
+              ],
+              "cornerRadius": "$--radius-control",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "nav-horizontal-item3-label",
+                  "name": "Label",
+                  "content": "Reports",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-sm",
+                  "fontWeight": "500"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "icon",
+          "id": "nav-horizontal-search",
+          "name": "Search",
+          "library": "lucide",
+          "icon": "search",
+          "width": 16,
+          "height": 16,
+          "fill": "$--muted-foreground"
+        },
+        {
+          "type": "ref",
+          "id": "nav-horizontal-action",
+          "ref": "btn-primary-sm",
+          "descendants": {
+            "btn-primary-sm-label": {
+              "content": "New"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "nav-vertical",
+      "name": "Nav/Vertical",
+      "reusable": true,
+      "x": 0,
+      "y": 1410,
+      "width": 240,
+      "height": 360,
+      "layout": "vertical",
+      "gap": "$--space-4",
+      "padding": "$--space-4",
+      "fill": "$--background",
+      "stroke": "$--border",
+      "strokeWidth": {
+        "right": 1
+      },
+      "strokeAlignment": "inner",
+      "children": [
+        {
+          "type": "frame",
+          "id": "nav-vertical-top",
+          "name": "Top",
+          "layout": "horizontal",
+          "alignItems": "center",
+          "gap": "$--space-2",
+          "children": [
+            {
+              "type": "icon",
+              "id": "nav-vertical-menu",
+              "name": "Menu",
+              "library": "lucide",
+              "icon": "menu",
+              "width": 16,
+              "height": 16,
+              "fill": "$--muted-foreground"
+            },
+            {
+              "type": "text",
+              "id": "nav-vertical-brand",
+              "name": "Brand",
+              "content": "Northwind",
+              "fill": "$--foreground",
+              "fontFamily": "$--font-display",
+              "fontSize": "$--text-lg",
+              "fontWeight": "700"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "nav-vertical-items",
+          "name": "Items",
+          "layout": "vertical",
+          "gap": "$--space-1",
+          "width": "fill_container",
+          "slot": [],
+          "children": [
+            {
+              "type": "frame",
+              "id": "nav-vertical-item1",
+              "name": "Item 1",
+              "layout": "horizontal",
+              "alignItems": "center",
+              "height": "$--control-h-sm",
+              "padding": [
+                0,
+                "$--space-3"
+              ],
+              "cornerRadius": "$--radius-control",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "nav-vertical-item1-label",
+                  "name": "Label",
+                  "content": "Overview",
+                  "fill": "$--foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-sm",
+                  "fontWeight": "500"
+                }
+              ],
+              "width": "fill_container",
+              "fill": "$--secondary"
+            },
+            {
+              "type": "frame",
+              "id": "nav-vertical-item2",
+              "name": "Item 2",
+              "layout": "horizontal",
+              "alignItems": "center",
+              "height": "$--control-h-sm",
+              "padding": [
+                0,
+                "$--space-3"
+              ],
+              "cornerRadius": "$--radius-control",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "nav-vertical-item2-label",
+                  "name": "Label",
+                  "content": "Projects",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-sm",
+                  "fontWeight": "500"
+                }
+              ],
+              "width": "fill_container"
+            },
+            {
+              "type": "frame",
+              "id": "nav-vertical-item3",
+              "name": "Item 3",
+              "layout": "horizontal",
+              "alignItems": "center",
+              "height": "$--control-h-sm",
+              "padding": [
+                0,
+                "$--space-3"
+              ],
+              "cornerRadius": "$--radius-control",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "nav-vertical-item3-label",
+                  "name": "Label",
+                  "content": "Reports",
+                  "fill": "$--muted-foreground",
+                  "fontFamily": "$--font-ui",
+                  "fontSize": "$--text-sm",
+                  "fontWeight": "500"
+                }
+              ],
+              "width": "fill_container"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

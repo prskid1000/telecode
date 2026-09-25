@@ -19,6 +19,11 @@ Public functions:
     openai_response_to_anthropic(body, *, reasoning_cfg) -> dict
     openai_response_to_internal(body) -> dict   # identity + normalization
 
+    ## Gemini (third client protocol) and the Responses passthrough
+    gemini_request_to_internal(body, *, inference_defaults) -> dict
+    GeminiStreamState / openai_response_to_gemini(body, ...) -> dict
+    normalize_responses_request(body, *, active_model, ...) -> (dict, dropped)
+
     ## Helpers
     drop_cache_control(obj)            # recursively removes cache_control
     tool_result_to_openai(tool_result) # handles image lifting done right
@@ -1721,3 +1726,784 @@ def build_openai_models(
             "owned_by": "telecode",
         })
     return {"object": "list", "data": data}
+
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Gemini (generativelanguage v1beta) ↔ internal
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Third client protocol, same rule as the other two: the Gemini request is
+# translated to the internal OpenAI shape, runs through the unchanged pipeline
+# (profiles, model mapping, managed tools, intercept loop), and only the
+# outbound framing is Gemini's. Verified against Antigravity's `agy` 1.2.x
+# (google-genai-sdk 1.71, Go), which is the client this exists for:
+#
+#   * tools arrive as `functionDeclarations[].parametersJsonSchema` — plain
+#     JSON Schema. The older `parameters` field uses Gemini's OpenAPI subset
+#     ("STRING"/"OBJECT", `nullable`), converted by _gemini_schema_to_json.
+#   * `functionResponse` parts arrive under role **model**, not user/function —
+#     so a functionResponse part becomes a `role:"tool"` message whatever the
+#     role of the Content carrying it.
+#   * prior-turn thinking is replayed as `{"text":…, "thought": true}` parts
+#     (dropped per `drop_prior_thinking`, like Anthropic thinking blocks).
+#   * the genai SDK's SSE reader rejects any line not starting with `data:`
+#     ("iterateResponseStream: invalid stream chunk: : keepalive"), so the
+#     heartbeat must not send SSE comments — `data: {}` (an empty
+#     GenerateContentResponse) is what it tolerates. See GEMINI_KEEPALIVE.
+
+GEMINI_KEEPALIVE = b"data: {}\n\n"
+
+_GEMINI_TYPE_MAP = {
+    "STRING": "string", "NUMBER": "number", "INTEGER": "integer",
+    "BOOLEAN": "boolean", "ARRAY": "array", "OBJECT": "object", "NULL": "null",
+}
+# OpenAPI-subset keys Gemini accepts that JSON Schema either spells
+# differently or that llama.cpp's schema→grammar converter has no use for.
+_GEMINI_SCHEMA_DROP = {"propertyOrdering", "nullable", "$schema", "example"}
+
+
+def _gemini_schema_to_json(schema: Any) -> Any:
+    """Gemini `Schema` (OpenAPI subset) → JSON Schema, recursively.
+
+    Upper-case type names are lowered (TYPE_UNSPECIFIED dropped), and
+    `nullable: true` becomes a `[type, "null"]` union. Already-JSON-Schema
+    input passes through unchanged apart from `$schema`, which is noise to
+    llama.cpp's grammar builder.
+    """
+    if isinstance(schema, list):
+        return [_gemini_schema_to_json(s) for s in schema]
+    if not isinstance(schema, dict):
+        return schema
+    out: dict[str, Any] = {}
+    for k, v in schema.items():
+        if k in _GEMINI_SCHEMA_DROP:
+            continue
+        if k == "type":
+            if isinstance(v, str):
+                t = _GEMINI_TYPE_MAP.get(v.upper(), v.lower())
+                if t != "type_unspecified":
+                    out["type"] = t
+            else:
+                out["type"] = v
+        elif k == "properties" and isinstance(v, dict):
+            out["properties"] = {pk: _gemini_schema_to_json(pv) for pk, pv in v.items()}
+        elif k in ("$defs", "definitions") and isinstance(v, dict):
+            out[k] = {dk: _gemini_schema_to_json(dv) for dk, dv in v.items()}
+        elif k in ("items", "anyOf", "oneOf", "allOf", "not", "additionalProperties", "prefixItems"):
+            out[k] = _gemini_schema_to_json(v)
+        else:
+            out[k] = v
+    if schema.get("nullable") is True and isinstance(out.get("type"), str):
+        out["type"] = [out["type"], "null"]
+    return out
+
+
+def _gemini_parts(content: Any) -> list[dict[str, Any]]:
+    if isinstance(content, dict):
+        parts = content.get("parts")
+        return [p for p in parts if isinstance(p, dict)] if isinstance(parts, list) else []
+    if isinstance(content, str):
+        return [{"text": content}]
+    return []
+
+
+def _gemini_inline_to_openai(mime: str, data: str) -> dict[str, Any] | None:
+    """inlineData → OpenAI content part (image_url / input_video / input_audio / text)."""
+    mime = (mime or "").lower()
+    if mime.startswith("image/"):
+        return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{data}"}}
+    if mime.startswith("video/"):
+        return _video_part_from_b64(data)
+    if mime.startswith("audio/"):
+        return _audio_part_from_b64(data)
+    if mime.startswith("text/") or mime in ("application/json", "application/xml"):
+        import base64
+        try:
+            return {"type": "text", "text": base64.b64decode(data).decode("utf-8", "replace")}
+        except Exception:
+            return None
+    return {"type": "text",
+            "text": f"[attachment of type {mime or 'unknown'} omitted — not supported by the local model]"}
+
+
+def _gemini_user_parts_to_openai(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for p in parts:
+        if p.get("thought"):
+            continue  # a user turn has no business carrying thoughts
+        if isinstance(p.get("text"), str):
+            out.append({"type": "text", "text": p["text"]})
+        elif isinstance(p.get("inlineData"), dict):
+            d = p["inlineData"]
+            part = _gemini_inline_to_openai(d.get("mimeType", ""), d.get("data", ""))
+            if part:
+                out.append(part)
+        elif isinstance(p.get("fileData"), dict):
+            # Remote http(s) URIs were already inlined by server.py's
+            # _inline_media_urls (SSRF-guarded). Anything left is a gs:// or
+            # Files-API reference we cannot resolve.
+            uri = p["fileData"].get("fileUri", "")
+            out.append({"type": "text", "text": f"[file reference {uri} could not be resolved]"})
+        elif isinstance(p.get("executableCode"), dict):
+            ec = p["executableCode"]
+            out.append({"type": "text",
+                        "text": f"```{(ec.get('language') or '').lower()}\n{ec.get('code', '')}\n```"})
+        elif isinstance(p.get("codeExecutionResult"), dict):
+            out.append({"type": "text", "text": str(p["codeExecutionResult"].get("output", ""))})
+    return out
+
+
+def _collapse_parts(parts: list[dict[str, Any]]) -> Any:
+    if all(p.get("type") == "text" for p in parts):
+        return "".join(p["text"] for p in parts)
+    return parts
+
+
+def _gemini_function_response_text(fr: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+    """functionResponse → (tool message text, lifted media parts)."""
+    resp = fr.get("response")
+    if isinstance(resp, dict) and set(resp) == {"output"} and isinstance(resp["output"], str):
+        text = resp["output"]
+    elif isinstance(resp, dict) and set(resp) == {"error"} and isinstance(resp["error"], str):
+        text = f"ERROR: {resp['error']}"
+    elif resp is None:
+        text = ""
+    else:
+        text = json.dumps(resp, ensure_ascii=False)
+    lifted: list[dict[str, Any]] = []
+    for p in fr.get("parts") or []:
+        if isinstance(p, dict) and isinstance(p.get("inlineData"), dict):
+            d = p["inlineData"]
+            part = _gemini_inline_to_openai(d.get("mimeType", ""), d.get("data", ""))
+            if part and part.get("type") != "text":
+                lifted.append(part)
+    if lifted and not text:
+        text = f"[{len(lifted)} attachment(s) from this tool attached in next message]"
+    return text, lifted
+
+
+def _gemini_contents_to_openai(
+    contents: list[Any],
+    *,
+    drop_prior_thinking: bool,
+    think_start: str,
+    think_end: str,
+) -> list[dict[str, Any]]:
+    """Gemini `contents[]` → OpenAI messages.
+
+    Tool-call ids: Gemini ids are optional. Every functionCall gets one (its
+    own, else generated), and a functionResponse without an id is paired with
+    the oldest still-open call of the same name — the order Gemini itself
+    requires them in.
+    """
+    messages: list[dict[str, Any]] = []
+    open_calls: list[tuple[str, str]] = []   # (id, name) awaiting a response
+
+    for content in contents or []:
+        if not isinstance(content, dict):
+            continue
+        role = content.get("role") or "user"
+        parts = _gemini_parts(content)
+
+        # Function responses first: they close the previous assistant turn,
+        # whatever role they ride under (agy sends them as role "model").
+        lifted_all: list[dict[str, Any]] = []
+        for p in parts:
+            fr = p.get("functionResponse")
+            if not isinstance(fr, dict):
+                continue
+            name = fr.get("name", "")
+            cid = fr.get("id") or ""
+            if cid:
+                open_calls = [c for c in open_calls if c[0] != cid]
+            else:
+                for i, (oid, oname) in enumerate(open_calls):
+                    if oname == name:
+                        cid = oid
+                        del open_calls[i]
+                        break
+                else:
+                    cid = _gen_id("call")
+            text, lifted = _gemini_function_response_text(fr)
+            messages.append({"role": "tool", "tool_call_id": cid, "content": text})
+            lifted_all.extend(lifted)
+        if lifted_all:
+            messages.append({"role": "user", "content": lifted_all})
+
+        rest = [p for p in parts if "functionResponse" not in p]
+        if not rest:
+            continue
+
+        if role == "model":
+            text_parts: list[str] = []
+            thinking: list[str] = []
+            tool_calls: list[dict[str, Any]] = []
+            for p in rest:
+                if isinstance(p.get("functionCall"), dict):
+                    fc = p["functionCall"]
+                    cid = fc.get("id") or _gen_id("call")
+                    open_calls.append((cid, fc.get("name", "")))
+                    tool_calls.append({
+                        "id": cid,
+                        "type": "function",
+                        "function": {"name": fc.get("name", ""),
+                                     "arguments": json.dumps(fc.get("args") or {}, ensure_ascii=False)},
+                    })
+                elif isinstance(p.get("text"), str):
+                    if p.get("thought"):
+                        if not drop_prior_thinking and p["text"]:
+                            thinking.append(f"{think_start}{p['text']}{think_end}")
+                    else:
+                        text_parts.append(p["text"])
+                elif isinstance(p.get("executableCode"), dict):
+                    ec = p["executableCode"]
+                    text_parts.append(f"```{(ec.get('language') or '').lower()}\n{ec.get('code', '')}\n```")
+            text = "".join(thinking) + "".join(text_parts)
+            if text or tool_calls:
+                msg: dict[str, Any] = {"role": "assistant",
+                                       "content": text if text else None}
+                if tool_calls:
+                    msg["tool_calls"] = tool_calls
+                messages.append(msg)
+        else:
+            oparts = _gemini_user_parts_to_openai(rest)
+            if oparts:
+                messages.append({"role": "user", "content": _collapse_parts(oparts)})
+    return messages
+
+
+def _gemini_tools_to_openai(tools: Any) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for t in tools or []:
+        if not isinstance(t, dict):
+            continue
+        decls = t.get("functionDeclarations") or t.get("function_declarations") or []
+        for fd in decls:
+            if not isinstance(fd, dict) or not fd.get("name"):
+                continue
+            if "parametersJsonSchema" in fd:
+                params = _gemini_schema_to_json(fd.get("parametersJsonSchema"))
+            elif "parameters" in fd:
+                params = _gemini_schema_to_json(fd.get("parameters"))
+            else:
+                params = None
+            if not isinstance(params, dict) or not params:
+                params = {"type": "object", "properties": {}}
+            out.append({
+                "type": "function",
+                "function": {"name": fd["name"],
+                             "description": fd.get("description", "") or "",
+                             "parameters": params},
+            })
+        other = [k for k in t if k not in ("functionDeclarations", "function_declarations")]
+        if other:
+            # googleSearch / codeExecution / urlContext are Google-hosted tools
+            # with no local equivalent; the managed web_search covers one.
+            log.info("gemini: ignoring non-function tool(s) %s", other)
+    return out
+
+
+def _gemini_tool_config_to_openai(
+    tool_config: Any, tools: list[dict[str, Any]],
+) -> tuple[str | None, list[dict[str, Any]]]:
+    fcc = tool_config.get("functionCallingConfig") if isinstance(tool_config, dict) else None
+    if not isinstance(fcc, dict):
+        return None, tools
+    mode = str(fcc.get("mode", "")).upper()
+    allowed = [n for n in (fcc.get("allowedFunctionNames") or []) if isinstance(n, str)]
+    if mode == "NONE":
+        return "none", tools
+    if mode == "ANY":
+        if len(allowed) == 1:
+            tc, filtered = _normalize_tool_choice(
+                {"type": "function", "function": {"name": allowed[0]}}, tools)
+            return tc, (filtered or tools)
+        if allowed:
+            filtered = [t for t in tools if t["function"]["name"] in allowed]
+            return "required", (filtered or tools)
+        return "required", tools
+    if mode in ("AUTO", "VALIDATED"):
+        return "auto", tools
+    return None, tools
+
+
+def _gemini_thinking_effort(gen: dict[str, Any]) -> tuple[str | None, int | None, bool]:
+    """generationConfig.thinkingConfig → (effort, explicit budget, include_thoughts)."""
+    tc = gen.get("thinkingConfig") if isinstance(gen.get("thinkingConfig"), dict) else {}
+    include = bool(tc.get("includeThoughts", False))
+    level = tc.get("thinkingLevel")
+    if isinstance(level, str) and level:
+        return level.lower(), None, include
+    budget = tc.get("thinkingBudget")
+    try:
+        budget = int(budget) if budget is not None else None
+    except (TypeError, ValueError):
+        budget = None
+    if budget is None or budget < 0:
+        return None, None, include       # -1 = dynamic: the model decides
+    if budget == 0:
+        return "none", None, include
+    if budget < 1000:
+        eff = "low"
+    elif budget > 20000:
+        eff = "max"
+    elif budget > 10000:
+        eff = "high"
+    else:
+        eff = "medium"
+    return eff, budget, include
+
+
+def gemini_request_to_internal(
+    body: dict[str, Any],
+    *,
+    inference_defaults: dict[str, Any] | None = None,
+    system_mode: str | None = None,
+) -> dict[str, Any]:
+    """Translate a Gemini generateContent body into the internal OpenAI body.
+
+    `body["model"]` and `body["stream"]` are set by the route handler (Gemini
+    carries both in the URL, not the body). Precedence is the same as the
+    other two protocols: request body > per-model > top-level defaults.
+    """
+    body = drop_cache_control(copy.deepcopy(body))
+    body.pop("cachedContent", None)   # Gemini context caching — llama.cpp has its own
+    defaults = inference_defaults or {}
+    gen = body.get("generationConfig") or body.get("generation_config") or {}
+    if not isinstance(gen, dict):
+        gen = {}
+
+    effort, direct_budget, include_thoughts = _gemini_thinking_effort(gen)
+    entry = _resolve_reasoning_effort(effort, defaults)
+
+    reasoning_cfg = defaults.get("reasoning") or {}
+    think_start = str(reasoning_cfg.get("start", "<think>") or "<think>")
+    think_end = str(reasoning_cfg.get("end", "</think>") or "</think>")
+
+    messages: list[dict[str, Any]] = []
+    sys_parts = _gemini_parts(body.get("systemInstruction") or body.get("system_instruction"))
+    sys_text = "\n\n".join(p["text"] for p in sys_parts
+                           if isinstance(p.get("text"), str) and p["text"].strip())
+    if sys_text:
+        messages.append({"role": "system", "content": sys_text})
+    messages.extend(_gemini_contents_to_openai(
+        body.get("contents") or [],
+        drop_prior_thinking=bool(defaults.get("drop_prior_thinking", True)),
+        think_start=think_start, think_end=think_end,
+    ))
+    messages = _normalize_system_messages(messages, system_mode)
+
+    out: dict[str, Any] = {
+        "model": body.get("model", ""),
+        "messages": messages,
+        "stream": bool(body.get("stream", False)),
+    }
+
+    _apply_model_chat_template_kwargs(out, defaults)
+    _apply_thinking_mode(out, defaults)
+    _apply_reasoning_effort_template(out, defaults, effort)
+    nudge = _apply_effort_entry(entry, out, defaults)
+    # An explicit thinkingBudget is honoured only behind the same gate as the
+    # effort map's budget (thinking_budget.enabled, off by default): agy sends
+    # 1024 on some calls, which would otherwise silently cap a local model's
+    # reasoning at a number tuned for Gemini.
+    budget_cfg = defaults.get("thinking_budget")
+    budget_on = bool(budget_cfg.get("enabled")) if isinstance(budget_cfg, dict) else bool(budget_cfg)
+    if direct_budget is not None and budget_on:
+        out["thinking_budget_tokens"] = max(1, direct_budget)
+    if nudge:
+        if out["messages"] and out["messages"][0].get("role") == "system":
+            existing = out["messages"][0].get("content", "")
+            out["messages"][0] = {**out["messages"][0],
+                                  "content": f"{nudge}\n\n{existing}" if existing else nudge}
+        else:
+            out["messages"] = [{"role": "system", "content": nudge}, *out["messages"]]
+
+    def _pick(gkey: str, dkey: str) -> Any:
+        if gen.get(gkey) is not None:
+            return gen[gkey]
+        return defaults.get(dkey)
+
+    for gkey, okey in (("temperature", "temperature"), ("topP", "top_p"), ("topK", "top_k"),
+                       ("presencePenalty", "presence_penalty"),
+                       ("frequencyPenalty", "frequency_penalty")):
+        v = _pick(gkey, okey)
+        if v is not None:
+            out[okey] = v
+    for dkey in ("min_p", "repeat_penalty"):
+        if defaults.get(dkey) is not None:
+            out[dkey] = defaults[dkey]
+    if gen.get("seed") is not None:
+        out["seed"] = gen["seed"]
+
+    max_tokens = _pick("maxOutputTokens", "max_tokens")
+    if max_tokens is not None:
+        cur = out.get("max_tokens")   # an effort entry may already have capped it
+        if isinstance(cur, int) and cur > 0 and isinstance(max_tokens, int) and max_tokens > 0:
+            max_tokens = min(cur, max_tokens)
+        out["max_tokens"] = max_tokens
+
+    stops = gen.get("stopSequences") or defaults.get("stop") or []
+    if stops:
+        out["stop"] = list(stops)
+
+    tools = _gemini_tools_to_openai(body.get("tools"))
+    tc, tools = _gemini_tool_config_to_openai(body.get("toolConfig") or body.get("tool_config"), tools)
+    if tools:
+        out["tools"] = tools
+    if tc is not None:
+        out["tool_choice"] = tc
+
+    mime = str(gen.get("responseMimeType") or "")
+    schema = gen.get("responseJsonSchema") or gen.get("responseSchema")
+    if mime == "application/json" or schema:
+        if isinstance(schema, dict):
+            out["response_format"] = {"type": "json_schema", "json_schema": {
+                "name": "response", "strict": True, "schema": _gemini_schema_to_json(schema)}}
+        else:
+            out["response_format"] = {"type": "json_object"}
+    elif defaults.get("structured_output", {}).get("enabled"):
+        so = defaults["structured_output"]
+        if so.get("schema"):
+            out["response_format"] = {"type": "json_schema", "json_schema": {
+                "name": "response", "strict": True, "schema": so["schema"]}}
+        elif so.get("grammar"):
+            out["grammar"] = so["grammar"]
+
+    if out["stream"]:
+        out["stream_options"] = {"include_usage": True}
+    out["cache_prompt"] = True
+    # Gemini's default is includeThoughts=false: thoughts are not returned
+    # unless asked for, so the adapter drops them rather than surfacing them.
+    out["_telecode_hints"] = {"emit_thinking_blocks": include_thoughts}
+    return out
+
+
+def _finish_reason_to_gemini(reason: str | None) -> str:
+    return {
+        "stop": "STOP", "tool_calls": "STOP", "function_call": "STOP",
+        "length": "MAX_TOKENS", "content_filter": "SAFETY",
+    }.get(reason or "stop", "STOP")
+
+
+def _usage_to_gemini(usage: dict[str, Any] | None) -> dict[str, Any]:
+    usage = usage or {}
+    prompt = int(usage.get("prompt_tokens", 0) or 0)
+    completion = int(usage.get("completion_tokens", 0) or 0)
+    pd = usage.get("prompt_tokens_details") or {}
+    cd = usage.get("completion_tokens_details") or {}
+    out = {
+        "promptTokenCount": prompt,
+        "candidatesTokenCount": completion,
+        "totalTokenCount": prompt + completion,
+    }
+    cached = int(pd.get("cached_tokens", 0) or 0)
+    if cached:
+        out["cachedContentTokenCount"] = cached
+    thoughts = int(cd.get("reasoning_tokens", 0) or 0)
+    if thoughts:
+        out["thoughtsTokenCount"] = thoughts
+    return out
+
+
+def _gemini_function_call_part(name: str, arguments: str, call_id: str) -> dict[str, Any]:
+    try:
+        args = json.loads(arguments) if arguments else {}
+    except json.JSONDecodeError:
+        args = {"_raw_arguments": arguments}
+    if not isinstance(args, dict):
+        args = {"value": args}
+    return {"functionCall": {"id": call_id, "name": name, "args": args}}
+
+
+@dataclass
+class GeminiStreamState:
+    """Assembles Gemini `streamGenerateContent` chunks from OpenAI chunks.
+
+    Text and thought deltas stream as they arrive. Function calls do not: a
+    Gemini functionCall part carries complete `args`, so the OpenAI argument
+    fragments are assembled and emitted whole. The finishing parts are held
+    back until `finish()` so they share one chunk with `finishReason` and
+    `usageMetadata` — llama.cpp sends the usage chunk AFTER the finish chunk.
+    """
+    reasoning: ReasoningState = field(default_factory=ReasoningState)
+    client_model: str = ""
+    response_id: str = ""
+
+    _saw_reasoning_field: bool = False
+    _tool_calls: dict[int, dict[str, Any]] = field(default_factory=dict)
+    _tool_order: list[int] = field(default_factory=list)
+    _finish: str | None = None
+    _usage: dict[str, Any] = field(default_factory=dict)
+    _held: list[dict[str, Any]] = field(default_factory=list)
+
+    def _chunk(self, parts: list[dict[str, Any]], *, final: bool = False) -> bytes:
+        cand: dict[str, Any] = {"content": {"role": "model", "parts": parts}, "index": 0}
+        payload: dict[str, Any] = {"candidates": [cand]}
+        if final:
+            cand["finishReason"] = _finish_reason_to_gemini(self._finish)
+            payload["usageMetadata"] = _usage_to_gemini(self._usage)
+        payload["modelVersion"] = self.client_model or "unknown"
+        payload["responseId"] = self.response_id
+        return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
+
+    def _text_parts(self, pieces: list[tuple[str, str]]) -> list[dict[str, Any]]:
+        parts: list[dict[str, Any]] = []
+        for kind, text in pieces:
+            if not text:
+                continue
+            if kind == "thinking":
+                if self._saw_reasoning_field or not self.reasoning.emit_thinking:
+                    continue
+                parts.append({"text": text, "thought": True})
+            else:
+                parts.append({"text": text})
+        return parts
+
+    def step(self, chunk: dict[str, Any]) -> bytes:
+        if chunk.get("usage"):
+            self._usage = chunk["usage"]
+        choices = chunk.get("choices") or []
+        if not choices:
+            return b""
+        choice = choices[0]
+        delta = choice.get("delta", {}) or {}
+        parts: list[dict[str, Any]] = []
+
+        rc = delta.get("reasoning_content")
+        if isinstance(rc, str) and rc:
+            self._saw_reasoning_field = True
+            if self.reasoning.emit_thinking:
+                parts.append({"text": rc, "thought": True})
+
+        content = delta.get("content")
+        if content:
+            parts.extend(self._text_parts(self.reasoning.push(content)))
+
+        for tc in delta.get("tool_calls") or []:
+            ti = tc.get("index", 0)
+            entry = self._tool_calls.setdefault(
+                ti, {"id": tc.get("id") or _gen_id("call"), "name": "", "arguments": ""})
+            if ti not in self._tool_order:
+                self._tool_order.append(ti)
+            if tc.get("id"):
+                entry["id"] = tc["id"]
+            fn = tc.get("function") or {}
+            if fn.get("name"):
+                entry["name"] += fn["name"]
+            if fn.get("arguments"):
+                entry["arguments"] += fn["arguments"]
+
+        if choice.get("finish_reason"):
+            self._finish = choice["finish_reason"]
+            parts.extend(self._text_parts(self.reasoning.flush()))
+            for ti in self._tool_order:
+                e = self._tool_calls[ti]
+                parts.append(_gemini_function_call_part(e["name"], e["arguments"], e["id"]))
+            self._tool_calls.clear()
+            self._tool_order.clear()
+            self._held.extend(parts)
+            return b""
+        return self._chunk(parts) if parts else b""
+
+    def status(self, text: str) -> bytes:
+        return self._chunk([{"text": text + "\n\n"}])
+
+    def finish(self) -> bytes:
+        """The closing chunk: held parts + finishReason + usageMetadata."""
+        parts = self._held + self._text_parts(self.reasoning.flush())
+        self._held = []
+        return self._chunk(parts, final=True)
+
+
+def openai_response_to_gemini(
+    body: dict[str, Any],
+    *,
+    reasoning_cfg: dict[str, Any] | None = None,
+    client_model: str = "",
+) -> dict[str, Any]:
+    """Complete OpenAI chat.completion → Gemini GenerateContentResponse."""
+    reasoning_cfg = reasoning_cfg or {}
+    rs = ReasoningState(
+        start_tag=reasoning_cfg.get("start", "<think>"),
+        end_tag=reasoning_cfg.get("end", "</think>"),
+        emit_thinking=reasoning_cfg.get("emit_thinking_blocks", False),
+        enabled=reasoning_cfg.get("enabled", True),
+    )
+    choice = (body.get("choices") or [{}])[0]
+    message = choice.get("message", {}) or {}
+    parts: list[dict[str, Any]] = []
+
+    rc = message.get("reasoning_content")
+    saw_rc = isinstance(rc, str) and bool(rc)
+    if saw_rc and rs.emit_thinking:
+        parts.append({"text": rc, "thought": True})
+
+    text = message.get("content") or ""
+    if isinstance(text, list):
+        text = "".join(p.get("text", "") for p in text
+                       if isinstance(p, dict) and p.get("type") == "text")
+    if text:
+        think, plain = "", ""
+        for kind, piece in (*rs.push(text), *rs.flush()):
+            if kind == "thinking":
+                think += piece
+            else:
+                plain += piece
+        if think and not saw_rc:
+            parts.append({"text": think, "thought": True})
+        if plain:
+            parts.append({"text": plain})
+
+    for tc in message.get("tool_calls") or []:
+        fn = tc.get("function", {}) or {}
+        parts.append(_gemini_function_call_part(fn.get("name", ""), fn.get("arguments", ""),
+                                                tc.get("id") or _gen_id("call")))
+    if not parts:
+        parts.append({"text": ""})
+
+    return {
+        "candidates": [{
+            "content": {"role": "model", "parts": parts},
+            "finishReason": _finish_reason_to_gemini(choice.get("finish_reason")),
+            "index": 0,
+        }],
+        "usageMetadata": _usage_to_gemini(body.get("usage")),
+        "modelVersion": client_model or body.get("model", "unknown"),
+        "responseId": body.get("id") or _gen_id("resp"),
+    }
+
+
+def build_gemini_models(registered: Iterable[str], aliases: dict[str, str],
+                        ctx_for: Any = None) -> dict[str, Any]:
+    """GET /v1beta/models — registry + aliases in Gemini's Model shape."""
+    seen: set[str] = set()
+    models: list[dict[str, Any]] = []
+    for name in list(aliases.keys()) + list(registered):
+        if name in seen:
+            continue
+        seen.add(name)
+        ctx = 0
+        if callable(ctx_for):
+            try:
+                ctx = int(ctx_for(name) or 0)
+            except Exception:
+                ctx = 0
+        models.append({
+            "name": f"models/{name}",
+            "baseModelId": name,
+            "version": "local",
+            "displayName": name,
+            "description": "telecode local model",
+            "inputTokenLimit": ctx or 32768,
+            "outputTokenLimit": ctx or 32768,
+            "supportedGenerationMethods": ["generateContent", "streamGenerateContent", "countTokens"],
+            "thinking": True,
+        })
+    return {"models": models}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# OpenAI Responses API (passthrough normalization)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# /v1/responses is forwarded to llama-server's own Responses endpoint
+# (ggml-org/llama.cpp#18486), not translated. What little is done here keeps
+# the request inside what that endpoint accepts; it converts to chat
+# completions internally, so the same chat-template constraints apply.
+
+def normalize_responses_request(
+    body: dict[str, Any],
+    *,
+    active_model: str,
+    inference_defaults: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """Prepare a Responses body for llama-server. Returns (body, dropped_tool_types).
+
+      * `model` → the resolved registry key.
+      * cache_control stripped, as on every other path (Rule 7).
+      * non-`function` tools dropped: llama.cpp's converter supports function
+        tools only, so Codex's `custom` / `local_shell` / `web_search` kinds
+        would fail the whole request.
+      * leading system/developer input items fold into `instructions`; later
+        ones are demoted to `user` (Qwen templates raise on a system message
+        that is not first — same policy as `mid_system_messages: demote`).
+      * inference defaults fill absent sampling keys, and the model's
+        chat_template_kwargs / thinking switch / reasoning_effort template map
+        are merged, exactly as on the chat-completions path.
+    """
+    body = drop_cache_control(copy.deepcopy(body))
+    defaults = inference_defaults or {}
+    body["model"] = active_model
+
+    dropped: list[str] = []
+    tools = body.get("tools")
+    if isinstance(tools, list):
+        kept = []
+        for t in tools:
+            if isinstance(t, dict) and t.get("type", "function") == "function":
+                kept.append(t)
+            else:
+                dropped.append(str((t or {}).get("type")))
+        if kept:
+            body["tools"] = kept
+        else:
+            body.pop("tools", None)
+            body.pop("tool_choice", None)
+    tc = body.get("tool_choice")
+    if isinstance(tc, dict):
+        body["tool_choice"] = "required" if tc.get("type") in ("function", "any", "tool") else "auto"
+
+    inp = body.get("input")
+    if isinstance(inp, list):
+        lead: list[str] = []
+        rest: list[Any] = []
+        started = False
+        for item in inp:
+            is_sys = (isinstance(item, dict) and item.get("role") in ("system", "developer")
+                      and item.get("type", "message") == "message")
+            if is_sys and not started:
+                c = item.get("content")
+                if isinstance(c, str):
+                    lead.append(c)
+                elif isinstance(c, list):
+                    lead.append("\n".join(
+                        p.get("text", "") for p in c
+                        if isinstance(p, dict) and p.get("type") in ("input_text", "text", "output_text")))
+                continue
+            if is_sys:
+                item = {**item, "role": "user"}
+            started = True
+            rest.append(item)
+        if lead:
+            instr = body.get("instructions") or ""
+            body["instructions"] = "\n\n".join(x for x in [instr, *lead] if x)
+        body["input"] = rest
+
+    effort = None
+    reasoning = body.get("reasoning")
+    if isinstance(reasoning, dict):
+        effort = reasoning.get("effort")
+    _apply_model_chat_template_kwargs(body, defaults)
+    _apply_thinking_mode(body, defaults)
+    _apply_reasoning_effort_template(body, defaults, effort)
+
+    for key in ("temperature", "top_p", "top_k", "min_p", "repeat_penalty",
+                "presence_penalty", "frequency_penalty"):
+        if key not in body and defaults.get(key) is not None:
+            body[key] = defaults[key]
+    mt = defaults.get("max_tokens")
+    if "max_output_tokens" not in body and isinstance(mt, int) and mt > 0:
+        body["max_output_tokens"] = mt
+    # Models run with `--reasoning-format none` inline <think>…</think> into
+    # the text, and on this path there is no ReasoningState to split it: the
+    # thinking lands in `output_text` (shown to the user, replayed as the
+    # assistant's words). A per-request `reasoning_format: deepseek` makes
+    # llama.cpp emit proper `reasoning` output items instead — verified on
+    # b10733 — and it turns replayed `reasoning` input items back into the
+    # template's thinking field.
+    if (defaults.get("reasoning") or {}).get("enabled", True):
+        body.setdefault("reasoning_format", "deepseek")
+    body.setdefault("cache_prompt", True)
+    return body, dropped

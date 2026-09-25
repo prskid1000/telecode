@@ -1,0 +1,172 @@
+/* TeleDesign seed system: Technical (technical) — tokens.css
+ * The ONLY file in this system that may contain raw colour values.
+ * Default theme: light. Switch with data-theme="light|dark" on <html> or any subtree.
+ * Fonts are not @import-ed here; link them in the page <head>:
+ *   https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap
+ * Original TeleDesign palette.
+ */
+
+:root, [data-theme="light"] {
+  color-scheme: light;
+  --background: oklch(0.99 0.002 250);
+  --foreground: oklch(0.2 0.01 250);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.2 0.01 250);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.2 0.01 250);
+  --primary: oklch(0.5 0.11 170);
+  --primary-foreground: oklch(0.99 0.002 250);
+  --secondary: oklch(0.955 0.004 250);
+  --secondary-foreground: oklch(0.25 0.012 250);
+  --muted: oklch(0.965 0.003 250);
+  --muted-foreground: oklch(0.5 0.012 250);
+  --accent: oklch(0.95 0.03 170);
+  --accent-foreground: oklch(0.32 0.07 170);
+  --destructive: oklch(0.55 0.2 27);
+  --destructive-foreground: oklch(0.99 0.002 250);
+  --success: oklch(0.53 0.13 150);
+  --success-foreground: oklch(0.99 0.002 250);
+  --warning: oklch(0.72 0.14 70);
+  --warning-foreground: oklch(0.24 0.04 60);
+  --border: oklch(0.9 0.005 250);
+  --input: oklch(0.86 0.007 250);
+  --ring: oklch(0.5 0.11 170);
+  --chart-1: oklch(0.55 0.11 170);
+  --chart-2: oklch(0.74 0.14 75);
+  --chart-3: oklch(0.58 0.13 245);
+  --chart-4: oklch(0.6 0.17 340);
+  --chart-5: oklch(0.6 0.01 250);
+  --overlay: oklch(0.15 0 0 / 45%);
+  --shadow-xs: 0 1px 1px 0 oklch(0.2 0.01 250 / 6%);
+  --shadow-sm: 0 1px 2px 0 oklch(0.2 0.01 250 / 10%);
+  --shadow-md: 0 4px 10px -2px oklch(0.2 0.01 250 / 14%);
+  --shadow-lg: 0 12px 28px -8px oklch(0.2 0.01 250 / 22%);
+}
+
+[data-theme="dark"], .dark {
+  color-scheme: dark;
+  --background: oklch(0.17 0.006 250);
+  --foreground: oklch(0.93 0.005 250);
+  --card: oklch(0.2 0.007 250);
+  --card-foreground: oklch(0.93 0.005 250);
+  --popover: oklch(0.22 0.008 250);
+  --popover-foreground: oklch(0.93 0.005 250);
+  --primary: oklch(0.76 0.13 170);
+  --primary-foreground: oklch(0.17 0.02 170);
+  --secondary: oklch(0.26 0.008 250);
+  --secondary-foreground: oklch(0.93 0.005 250);
+  --muted: oklch(0.24 0.007 250);
+  --muted-foreground: oklch(0.67 0.01 250);
+  --accent: oklch(0.28 0.04 170);
+  --accent-foreground: oklch(0.9 0.05 170);
+  --destructive: oklch(0.67 0.19 25);
+  --destructive-foreground: oklch(0.17 0.006 250);
+  --success: oklch(0.74 0.15 150);
+  --success-foreground: oklch(0.17 0.006 250);
+  --warning: oklch(0.8 0.14 75);
+  --warning-foreground: oklch(0.2 0.03 60);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.76 0.13 170);
+  --chart-1: oklch(0.76 0.13 170);
+  --chart-2: oklch(0.8 0.14 75);
+  --chart-3: oklch(0.7 0.12 245);
+  --chart-4: oklch(0.7 0.16 340);
+  --chart-5: oklch(0.65 0.01 250);
+  --overlay: oklch(0 0 0 / 65%);
+  --shadow-xs: 0 1px 1px 0 oklch(0 0 0 / 40%);
+  --shadow-sm: 0 1px 2px 0 oklch(0 0 0 / 50%);
+  --shadow-md: 0 4px 12px -2px oklch(0 0 0 / 60%);
+  --shadow-lg: 0 12px 28px -8px oklch(0 0 0 / 70%);
+}
+
+:root {
+  --font-display: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-body: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-ui: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, Consolas, monospace;
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-lg: 14px;
+  --text-xl: 16px;
+  --text-2xl: 20px;
+  --text-3xl: 24px;
+  --text-4xl: 30px;
+  --text-5xl: 40px;
+  --leading-tight: 1.2;
+  --leading-snug: 1.3;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.6;
+  --tracking-tight: -0.01em;
+  --tracking-normal: 0em;
+  --tracking-wide: 0.06em;
+  --space-0: 0px;
+  --space-px: 1px;
+  --space-0-5: 2px;
+  --space-1: 4px;
+  --space-1-5: 6px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;
+  --space-24: 96px;
+  --radius-sm: 3px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+  --radius-xl: 8px;
+  --radius-full: 9999px;
+  --radius-control: var(--radius-md);
+  --radius-surface: var(--radius-lg);
+  --radius-input: var(--radius-md);
+  --radius-badge: var(--radius-sm);
+  --control-h-sm: 26px;
+  --control-h-md: 30px;
+  --control-h-lg: 36px;
+  --control-border-width: 1px;
+  --ring-width: 2px;
+  --nav-h: 44px;
+  --row-h-compact: 28px;
+  --row-h-comfortable: 36px;
+  --button-font: var(--font-ui);
+  --button-weight: 500;
+  --button-case: none;
+  --button-tracking: 0em;
+  --button-shadow: none;
+  --button-press: 0px;
+  --card-shadow: none;
+  --badge-font: var(--font-mono);
+  --badge-case: uppercase;
+  --table-head-font: var(--font-mono);
+  --table-head-case: uppercase;
+  --duration-fast: 80ms;
+  --duration-base: 120ms;
+  --duration-slow: 200ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --ease-emphasis: cubic-bezier(0.2, 0, 0, 1);
+}
+
+[data-theme] {
+  background-color: var(--background);
+  color: var(--foreground);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+    --duration-base: 0ms;
+    --duration-slow: 0ms;
+    --button-press: 0px;
+  }
+}

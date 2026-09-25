@@ -1,0 +1,688 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Prithwiraj Samanta <app@datainsights.ae>
+Date: Fri, 25 Sep 2026 08:16:53 +0530
+Subject: [PATCH 6/7] telecode: host postMessage hooks and stable board keys
+ for the TeleDesign shell
+
+When embedded (?project=<id>) the editor opens the project's canvas and
+talks to its parent frame (same origin only): it posts
+td-editor:ready/viewport/frames/selection/saved and handles
+td-editor:open, :focus, :insert-frame (replying td-editor:frame-created),
+:mark-board, :boards and :get-state.
+
+HTML boards are frames registered in the project's boards.json. Node ids
+cannot key that registry: a .fig import mints fresh ids from a
+process-wide counter, so the same frame has a different id after every
+reload. A board key is therefore stamped on the frame as shared plugin
+data (telecode/board), which .fig persists, and resolved to the current
+node at runtime. Three bridge commands (telecode_board_mark / _unmark /
+_list) let the proxy manage those keys over the automation socket.
+---
+ src/app/automation/bridge/handlers.ts     |   3 +-
+ src/app/integrations/telecode/boards.ts   | 138 ++++++++
+ src/app/integrations/telecode/commands.ts |  38 +++
+ src/app/integrations/telecode/host.ts     | 396 ++++++++++++++++++++++
+ src/views/WorkspaceView.vue               |  19 ++
+ 5 files changed, 593 insertions(+), 1 deletion(-)
+ create mode 100644 src/app/integrations/telecode/boards.ts
+ create mode 100644 src/app/integrations/telecode/commands.ts
+ create mode 100644 src/app/integrations/telecode/host.ts
+
+diff --git a/src/app/automation/bridge/handlers.ts b/src/app/automation/bridge/handlers.ts
+index 2c7d954b..e5768e74 100644
+--- a/src/app/automation/bridge/handlers.ts
++++ b/src/app/automation/bridge/handlers.ts
+@@ -19,6 +19,7 @@ import {
+ } from '@/app/automation/bridge/target'
+ import { createAutomationToolHandler } from '@/app/automation/bridge/tool-handlers'
+ import type { EditorStore } from '@/app/editor/active-store'
++import { telecodeAutomationCommands } from '@/app/integrations/telecode/commands'
+ 
+ type FigmaFactory = (store: EditorStore, pageId?: string) => FigmaAPI
+ 
+@@ -60,7 +61,7 @@ export function createAutomationCommandHandlers(makeFigma: FigmaFactory) {
+     const rawArgs = isUnknownRecord(args) ? args : {}
+     const target = resolveAutomationTarget(store, rawArgs)
+     const targetArgs = stripAutomationTargetArgs(rawArgs)
+-    const handler = commandHandlers[command]
++    const handler = commandHandlers[command] ?? telecodeAutomationCommands[command]
+     const result = handler
+       ? await handler(target, targetArgs)
+       : await handleRPCFallback(target, command, targetArgs)
+diff --git a/src/app/integrations/telecode/boards.ts b/src/app/integrations/telecode/boards.ts
+new file mode 100644
+index 00000000..b32989f8
+--- /dev/null
++++ b/src/app/integrations/telecode/boards.ts
+@@ -0,0 +1,138 @@
++/**
++ * HTML-board identity (telecode).
++ *
++ * TeleDesign's boards.json maps a board key to the live page that renders on a
++ * frame. Node ids cannot be that key: they are session-local — a .fig import
++ * mints fresh ids from a process-wide counter, so the same frame comes back
++ * with a different id after every reload. The key is therefore stamped on the
++ * frame itself as shared plugin data (`telecode` / `board`), which .fig
++ * persists, and resolved to the current node id at runtime.
++ */
++import type { SceneNode } from '@open-pencil/scene-graph'
++
++import { makeFigmaFromStore } from '@/app/automation/bridge/figma-factory'
++import type { EditorStore } from '@/app/editor/session'
++
++export const BOARD_NAMESPACE = 'telecode'
++export const BOARD_FIELD = 'board'
++const ENCODED_KEY = `${BOARD_NAMESPACE}/${BOARD_FIELD}`
++const BOARD_KEY = /^[A-Za-z0-9_-]{1,64}$/
++
++const cache = new WeakMap<EditorStore, Map<string, string>>()
++const listeners = new Set<() => void>()
++
++export function onBoardsChanged(listener: () => void): () => void {
++  listeners.add(listener)
++  return () => listeners.delete(listener)
++}
++
++export function emitBoardsChanged(): void {
++  for (const listener of listeners) listener()
++}
++
++export function isBoardKey(value: unknown): value is string {
++  return typeof value === 'string' && BOARD_KEY.test(value)
++}
++
++export function newBoardKey(): string {
++  const bytes = crypto.getRandomValues(new Uint8Array(8))
++  return `b${[...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')}`
++}
++
++export function boardKeyOf(node: SceneNode): string | null {
++  const entry = node.pluginData.find(
++    (e) => e.pluginId === BOARD_NAMESPACE && (e.key === ENCODED_KEY || e.key === BOARD_FIELD)
++  )
++  return entry?.value ? entry.value : null
++}
++
++function rescan(store: EditorStore): Map<string, string> {
++  const index = new Map<string, string>()
++  for (const node of store.graph.getAllNodes()) {
++    const key = boardKeyOf(node)
++    if (key && !index.has(key)) index.set(key, node.id)
++  }
++  cache.set(store, index)
++  return index
++}
++
++/** The node currently carrying board `key`, if any. Accepts a raw node id too. */
++export function findBoardNode(store: EditorStore, keyOrId: string): SceneNode | undefined {
++  const index = cache.get(store) ?? rescan(store)
++  const cachedId = index.get(keyOrId)
++  const cached = cachedId ? store.graph.getNode(cachedId) : undefined
++  if (cached && boardKeyOf(cached) === keyOrId) return cached
++  const fresh = rescan(store).get(keyOrId)
++  if (fresh) return store.graph.getNode(fresh)
++  // A key that is really a (session-local) node id still resolves.
++  return store.graph.getNode(keyOrId)
++}
++
++export async function markBoard(
++  store: EditorStore,
++  nodeId: string,
++  key?: string
++): Promise<{ key: string; node_id: string }> {
++  const node = store.graph.getNode(nodeId)
++  if (!node) throw new Error(`Node not found: ${nodeId}`)
++  if (node.type === 'CANVAS') {
++    throw new Error('A board must be a node on a page, not a page')
++  }
++  const boardKey = key ?? boardKeyOf(node) ?? newBoardKey()
++  if (!isBoardKey(boardKey)) throw new Error(`Invalid board key: ${boardKey}`)
++  const pageId = store.state.currentPageId
++  await store.runMutationWithLayout(() => {
++    const figma = makeFigmaFromStore(store, pageId)
++    figma.getNodeById(nodeId)?.setSharedPluginData(BOARD_NAMESPACE, BOARD_FIELD, boardKey)
++  }, pageId)
++  rescan(store)
++  emitBoardsChanged()
++  return { key: boardKey, node_id: nodeId }
++}
++
++export async function unmarkBoard(store: EditorStore, keyOrId: string): Promise<boolean> {
++  const node = findBoardNode(store, keyOrId)
++  if (!node || !boardKeyOf(node)) return false
++  const pageId = store.state.currentPageId
++  await store.runMutationWithLayout(() => {
++    makeFigmaFromStore(store, pageId)
++      .getNodeById(node.id)
++      ?.setSharedPluginData(BOARD_NAMESPACE, BOARD_FIELD, '')
++  }, pageId)
++  rescan(store)
++  emitBoardsChanged()
++  return true
++}
++
++export function listBoards(store: EditorStore) {
++  const out: Array<{
++    key: string
++    node_id: string
++    name: string
++    page_id: string | null
++    x: number
++    y: number
++    width: number
++    height: number
++  }> = []
++  for (const [key, id] of rescan(store)) {
++    const node = store.graph.getNode(id)
++    if (!node) continue
++    const abs = store.graph.getAbsolutePosition(id)
++    let page: SceneNode | undefined = node
++    while (page && page.type !== 'CANVAS') {
++      page = page.parentId ? store.graph.getNode(page.parentId) : undefined
++    }
++    out.push({
++      key,
++      node_id: id,
++      name: node.name,
++      page_id: page?.id ?? null,
++      x: abs.x,
++      y: abs.y,
++      width: node.width,
++      height: node.height
++    })
++  }
++  return out
++}
+diff --git a/src/app/integrations/telecode/commands.ts b/src/app/integrations/telecode/commands.ts
+new file mode 100644
+index 00000000..2fcc63d2
+--- /dev/null
++++ b/src/app/integrations/telecode/commands.ts
+@@ -0,0 +1,38 @@
++/**
++ * Extra automation-bridge commands for telecode (TeleDesign).
++ *
++ *   telecode_board_mark   {node_id, key?}  stamp a board key on a frame → {key, node_id}
++ *   telecode_board_unmark {key}            remove it                    → {removed}
++ *   telecode_board_list   {}               every stamped node           → {boards:[…]}
++ *
++ * They ride the same request/response protocol as the upstream commands; the
++ * proxy uses them to keep boards.json keyed by something that survives reloads.
++ */
++import type { AutomationTarget } from '@/app/automation/bridge/target'
++
++import { isBoardKey, listBoards, markBoard, unmarkBoard } from './boards'
++
++type Handler = (target: AutomationTarget, args: unknown) => Promise<unknown>
++
++function record(args: unknown): Record<string, unknown> {
++  return args && typeof args === 'object' && !Array.isArray(args)
++    ? (args as Record<string, unknown>)
++    : {}
++}
++
++export const telecodeAutomationCommands: Partial<Record<string, Handler>> = {
++  async telecode_board_mark(target, args) {
++    const { node_id: nodeId, key } = record(args)
++    if (typeof nodeId !== 'string' || !nodeId) throw new Error('Missing "node_id"')
++    if (key !== undefined && !isBoardKey(key)) throw new Error('Invalid "key"')
++    return { ok: true, result: await markBoard(target.store, nodeId, key) }
++  },
++  async telecode_board_unmark(target, args) {
++    const { key } = record(args)
++    if (typeof key !== 'string' || !key) throw new Error('Missing "key"')
++    return { ok: true, result: { removed: await unmarkBoard(target.store, key) } }
++  },
++  async telecode_board_list(target) {
++    return { ok: true, result: { boards: listBoards(target.store) } }
++  }
++}
+diff --git a/src/app/integrations/telecode/host.ts b/src/app/integrations/telecode/host.ts
+new file mode 100644
+index 00000000..7c242b00
+--- /dev/null
++++ b/src/app/integrations/telecode/host.ts
+@@ -0,0 +1,396 @@
++/**
++ * TeleDesign host hooks (telecode embedding).
++ *
++ * The TeleDesign shell iframes this editor at /design/editor/?project=<id> and
++ * overlays live HTML boards on frames registered in the project's boards.json.
++ * This module is the editor half of that contract, over window.postMessage with
++ * the parent (same origin only):
++ *
++ *   editor → host   td-editor:ready       {project_id, version, page_id, page_name}
++ *                   td-editor:viewport    {x, y, zoom, canvas:{left, top, width, height}}
++ *                   td-editor:frames      [{id, node_id, name, x, y, width, height, src}]
++ *                   td-editor:selection   {ids, nodes:[{id, name, type, x, y, width, height, board?}]}
++ *                   td-editor:saved       {project_id, bytes, at}
++ *                   td-editor:frame-created {id, node_id, request_id?}
++ *                   td-editor:board-marked  {id, node_id, request_id?}
++ *                   td-editor:error       {message, request_id?}
++ *   host → editor   td-editor:open        {pid}
++ *                   td-editor:focus       {node_id}            (a node id or a board key)
++ *                   td-editor:insert-frame {name, width, height, x?, y?, key?, request_id?}
++ *                   td-editor:mark-board  {node_id, key?, request_id?}
++ *                   td-editor:boards      {boards?}   (re-read boards.json, or use the one given)
++ *                   td-editor:get-state   {}          (re-post ready/viewport/frames/selection)
++ *
++ * Board ids: a frame's `id` in td-editor:frames / frame-created is its *board key*
++ * (the boards.json key, stamped on the frame as plugin data — see boards.ts),
++ * because node ids change on every reload; `node_id` is the current node id.
++ * Frames are reported in canvas coordinates, current page only.
++ *
++ * Viewport maths: screen = canvas * zoom + (x, y), in CSS pixels relative to
++ * `canvas` (the editor's canvas element rect inside this iframe).
++ */
++import type { SceneNode } from '@open-pencil/scene-graph'
++
++import { makeFigmaFromStore } from '@/app/automation/bridge/figma-factory'
++import { createAutomationCommandHandlers } from '@/app/automation/bridge/handlers'
++import type { EditorStore } from '@/app/editor/session'
++import { activeTab, getActiveStore, openTelecodeProject } from '@/app/tabs'
++
++import {
++  boardKeyOf,
++  findBoardNode,
++  isBoardKey,
++  markBoard,
++  newBoardKey,
++  onBoardsChanged
++} from './boards'
++import type { TelecodeConfig } from './config'
++import { onTelecodeCanvasSaved } from './storage'
++
++type Boards = Record<string, { src?: string; width?: number; height?: number }>
++
++type HostMessage = { type?: unknown; [key: string]: unknown }
++
++const PROJECT_ID = /^[0-9a-f]{32}$/
++const MESSAGE_PREFIX = 'td-editor:'
++
++function embedded(): boolean {
++  return window.parent !== window
++}
++
++function post(type: string, payload: unknown): void {
++  if (!embedded()) return
++  // Same-origin only: the TeleDesign shell is served by the same proxy.
++  window.parent.postMessage({ type: `${MESSAGE_PREFIX}${type}`, payload }, window.location.origin)
++}
++
++function num(value: unknown): number | undefined {
++  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
++}
++
++function pageOf(store: EditorStore, node: SceneNode | undefined): string | null {
++  let current = node
++  while (current) {
++    if (current.type === 'CANVAS') return current.id
++    current = current.parentId ? store.graph.getNode(current.parentId) : undefined
++  }
++  return null
++}
++
++function bounds(store: EditorStore, node: SceneNode) {
++  const abs = store.graph.getAbsolutePosition(node.id)
++  return { x: abs.x, y: abs.y, width: node.width, height: node.height }
++}
++
++function summarize(store: EditorStore, node: SceneNode) {
++  const board = boardKeyOf(node)
++  return {
++    id: node.id,
++    name: node.name,
++    type: node.type,
++    ...bounds(store, node),
++    ...(board ? { board } : {})
++  }
++}
++
++function canvasRect() {
++  let best: HTMLCanvasElement | null = null
++  for (const el of document.querySelectorAll<HTMLCanvasElement>(
++    'canvas[data-test-id="canvas-element"]'
++  )) {
++    const pane = el.closest('[data-active-pane]')
++    if (!best || pane?.getAttribute('data-active-pane') === 'true') best = el
++  }
++  const rect = best?.getBoundingClientRect()
++  return rect
++    ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
++    : { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight }
++}
++
++export async function startTelecodeHost(config: TelecodeConfig): Promise<() => void> {
++  const cleanups: Array<() => void> = []
++  let boards: Boards = {}
++  let store: EditorStore | null = null
++  let unbindStore: (() => void) | null = null
++  // Node ids of the frames last reported, so node events can be filtered cheaply.
++  let boardNodeIds = new Set<string>()
++  let framesQueued = false
++  let viewportQueued = false
++
++  const handlers = createAutomationCommandHandlers(makeFigmaFromStore)
++
++  async function loadBoards(): Promise<void> {
++    try {
++      const res = await fetch(
++        `${config.apiOrigin}/api/design/projects/${config.projectId}/boards`,
++        { cache: 'no-store' }
++      )
++      if (res.ok) boards = ((await res.json()) as { boards?: Boards }).boards ?? {}
++    } catch (error) {
++      console.warn('[TeleDesign] boards.json unavailable:', error)
++    }
++  }
++
++  function postViewport(): void {
++    if (!store) return
++    post('viewport', {
++      x: store.state.panX,
++      y: store.state.panY,
++      zoom: store.state.zoom,
++      canvas: canvasRect()
++    })
++  }
++
++  function postFrames(): void {
++    if (!store) return
++    const s = store
++    const ids = new Set<string>()
++    const frames = Object.entries(boards).flatMap(([key, board]) => {
++      const node = findBoardNode(s, key)
++      if (!node) return []
++      ids.add(node.id)
++      if (pageOf(s, node) !== s.state.currentPageId) return []
++      return [
++        { id: key, node_id: node.id, name: node.name, ...bounds(s, node), src: board.src ?? null }
++      ]
++    })
++    boardNodeIds = ids
++    post('frames', frames)
++  }
++
++  function postSelection(): void {
++    if (!store) return
++    const s = store
++    const ids = [...s.state.selectedIds]
++    const nodes = ids.flatMap((id) => {
++      const node = s.graph.getNode(id)
++      return node ? [summarize(s, node)] : []
++    })
++    post('selection', { ids, nodes })
++  }
++
++  function queueFrames(): void {
++    if (framesQueued) return
++    framesQueued = true
++    requestAnimationFrame(() => {
++      framesQueued = false
++      postFrames()
++    })
++  }
++
++  function queueViewport(): void {
++    if (viewportQueued) return
++    viewportQueued = true
++    requestAnimationFrame(() => {
++      viewportQueued = false
++      postViewport()
++      postFrames()
++    })
++  }
++
++  function bindStore(next: EditorStore): void {
++    if (store === next) return
++    unbindStore?.()
++    store = next
++    const offs = [
++      next.onEditorEvent('viewport:changed', queueViewport),
++      next.onEditorEvent('selection:changed', postSelection),
++      next.onEditorEvent('page:changed', queueFrames),
++      next.onEditorEvent('graph:replaced', queueFrames),
++      next.onEditorEvent('node:updated', (id) => {
++        if (boardNodeIds.has(id)) queueFrames()
++      }),
++      next.onEditorEvent('node:deleted', (id) => {
++        if (boardNodeIds.has(id)) queueFrames()
++      }),
++      next.onEditorEvent('node:reparented', (id) => {
++        if (boardNodeIds.has(id)) queueFrames()
++      })
++    ]
++    unbindStore = () => {
++      for (const off of offs) off()
++    }
++  }
++
++  function postState(): void {
++    if (!store) return
++    const page = store.graph.getNode(store.state.currentPageId)
++    post('ready', {
++      project_id: config.projectId,
++      version: __OPENPENCIL_APP_VERSION__,
++      page_id: store.state.currentPageId,
++      page_name: page?.name ?? ''
++    })
++    postViewport()
++    postFrames()
++    postSelection()
++  }
++
++  function focusNode(keyOrId: string): boolean {
++    if (!store || !keyOrId) return false
++    const node = findBoardNode(store, keyOrId)
++    if (!node) return false
++    const pageId = pageOf(store, node)
++    const s = store
++    const run = () => {
++      s.select([node.id])
++      s.zoomToSelection()
++    }
++    if (pageId && pageId !== s.state.currentPageId) {
++      void s.switchPage(pageId).then(run)
++    } else {
++      run()
++    }
++    return true
++  }
++
++  function freeSpot(): { x: number; y: number } {
++    if (!store) return { x: 0, y: 0 }
++    let right = Number.NEGATIVE_INFINITY
++    let top = 0
++    for (const child of store.graph.getChildren(store.state.currentPageId)) {
++      const edge = child.x + child.width
++      if (edge > right) {
++        right = edge
++        top = child.y
++      }
++    }
++    return Number.isFinite(right) ? { x: Math.round(right + 100), y: Math.round(top) } : { x: 0, y: 0 }
++  }
++
++  async function insertFrame(msg: Record<string, unknown>): Promise<void> {
++    const requestId = msg.request_id
++    try {
++      if (!store) throw new Error('Editor is not ready')
++      const width = Math.max(1, num(msg.width) ?? 1440)
++      const height = Math.max(1, num(msg.height) ?? 900)
++      const spot = freeSpot()
++      const res = (await handlers.handleRequest(store, 'tool', {
++        name: 'create_shape',
++        args: {
++          type: 'FRAME',
++          name: typeof msg.name === 'string' && msg.name ? msg.name.slice(0, 200) : 'Board',
++          width,
++          height,
++          x: num(msg.x) ?? spot.x,
++          y: num(msg.y) ?? spot.y
++        }
++      })) as { ok?: boolean; result?: { id?: string }; error?: string }
++      const nodeId = res.result?.id
++      if (!res.ok || !nodeId) throw new Error(res.error ?? 'Frame was not created')
++      const marked = await markBoard(store, nodeId, isBoardKey(msg.key) ? msg.key : newBoardKey())
++      post('frame-created', { id: marked.key, node_id: nodeId, request_id: requestId })
++    } catch (error) {
++      post('error', {
++        message: error instanceof Error ? error.message : String(error),
++        request_id: requestId
++      })
++    }
++  }
++
++  async function onMessage(event: MessageEvent): Promise<void> {
++    if (event.origin !== window.location.origin || event.source !== window.parent) return
++    const data = event.data as HostMessage
++    if (!data || typeof data.type !== 'string' || !data.type.startsWith(MESSAGE_PREFIX)) return
++    const kind = data.type.slice(MESSAGE_PREFIX.length)
++    const msg = (
++      data.payload && typeof data.payload === 'object' ? data.payload : data
++    ) as Record<string, unknown>
++    switch (kind) {
++      case 'open': {
++        const pid = typeof msg.pid === 'string' ? msg.pid.toLowerCase() : ''
++        if (!PROJECT_ID.test(pid) || pid === config.projectId) {
++          postState()
++          return
++        }
++        // One project per page load: the bridge socket and storage binding are
++        // both keyed by it, so switching is a navigation.
++        const params = new URLSearchParams(window.location.search)
++        params.set('project', pid)
++        window.location.search = params.toString()
++        return
++      }
++      case 'focus': {
++        const id = typeof msg.node_id === 'string' ? msg.node_id : ''
++        if (!focusNode(id)) post('error', { message: `Node not found: ${id}` })
++        return
++      }
++      case 'insert-frame':
++        await insertFrame(msg)
++        return
++      case 'mark-board': {
++        const requestId = msg.request_id
++        try {
++          if (!store) throw new Error('Editor is not ready')
++          const nodeId = typeof msg.node_id === 'string' ? msg.node_id : ''
++          const marked = await markBoard(store, nodeId, isBoardKey(msg.key) ? msg.key : undefined)
++          post('board-marked', { id: marked.key, node_id: marked.node_id, request_id: requestId })
++        } catch (error) {
++          post('error', {
++            message: error instanceof Error ? error.message : String(error),
++            request_id: requestId
++          })
++        }
++        return
++      }
++      case 'boards':
++        if (msg.boards && typeof msg.boards === 'object') boards = msg.boards as Boards
++        else await loadBoards()
++        postFrames()
++        return
++      case 'get-state':
++        postState()
++        return
++      default:
++    }
++  }
++
++  const listener = (event: MessageEvent) => {
++    void onMessage(event)
++  }
++  window.addEventListener('message', listener)
++  cleanups.push(() => window.removeEventListener('message', listener))
++  cleanups.push(
++    onTelecodeCanvasSaved((projectId, bytes) => {
++      if (projectId === config.projectId) {
++        post('saved', { project_id: projectId, bytes, at: new Date().toISOString() })
++      }
++    })
++  )
++  // A board was (un)marked — possibly by the proxy over the bridge, which also
++  // rewrote boards.json — so re-read the registry.
++  cleanups.push(
++    onBoardsChanged(() => {
++      void loadBoards().then(queueFrames)
++    })
++  )
++  const onResize = () => queueViewport()
++  window.addEventListener('resize', onResize)
++  cleanups.push(() => window.removeEventListener('resize', onResize))
++
++  let title = 'Untitled design'
++  try {
++    const res = await fetch(`${config.apiOrigin}/api/design/projects/${config.projectId}`, {
++      cache: 'no-store'
++    })
++    if (res.ok) {
++      title = ((await res.json()) as { project?: { title?: string } }).project?.title || title
++    }
++  } catch (error) {
++    console.warn('[TeleDesign] project record unavailable:', error)
++  }
++
++  await loadBoards()
++  bindStore(await openTelecodeProject(config.projectId, title))
++  // The active tab can change under us (e.g. the user opens a second file).
++  const tabTimer = window.setInterval(() => {
++    if (activeTab.value) bindStore(getActiveStore())
++  }, 1000)
++  cleanups.push(() => window.clearInterval(tabTimer))
++  postState()
++
++  return () => {
++    unbindStore?.()
++    for (const cleanup of cleanups) cleanup()
++  }
++}
+diff --git a/src/views/WorkspaceView.vue b/src/views/WorkspaceView.vue
+index 4c944f2a..5cc6a4bc 100644
+--- a/src/views/WorkspaceView.vue
++++ b/src/views/WorkspaceView.vue
+@@ -14,6 +14,8 @@ import { openPendingFiles } from '@/app/document/io/pending-open'
+ import { openWebLinkFromLocation, withoutWebLinkParams } from '@/app/document/io/web-link'
+ import { focusNodesByName } from '@/app/editor/selection/focus'
+ import { notificationMessages } from '@/app/i18n/notifications'
++import { readTelecodeConfig } from '@/app/integrations/telecode/config'
++import { startTelecodeHost } from '@/app/integrations/telecode/host'
+ import { appRuntimeConfig } from '@/app/runtime/config'
+ import { useKeyboard } from '@/app/shell/keyboard/use'
+ import { useEditorMenu } from '@/app/shell/menu/use'
+@@ -141,9 +143,25 @@ async function bindAssociatedFileOpen(): Promise<void> {
+ }
+ 
+ let stopWebMCP: (() => void) | undefined
++let stopTelecodeHost: (() => void) | undefined
+ 
+ onMounted(async () => {
+   stopWebMCP = startWebMCP(getActiveStore)
++
++  // Embedded by TeleDesign (?project=<id>): open that project's canvas first, so
++  // the automation bridge never targets the placeholder tab, and skip the file /
++  // deep-link handling that only applies to a standalone editor.
++  const telecode = readTelecodeConfig()
++  if (telecode) {
++    try {
++      stopTelecodeHost = await startTelecodeHost(telecode)
++    } catch (error) {
++      console.error('[TeleDesign]', error)
++    }
++    await startMCPRuntime(getActiveStore)
++    return
++  }
++
+   await startMCPRuntime(getActiveStore)
+ 
+   try {
+@@ -168,6 +186,7 @@ onMounted(async () => {
+ 
+ onUnmounted(() => {
+   stopWebMCP?.()
++  stopTelecodeHost?.()
+   void stopMCPRuntime()
+   fileAssociationCleanup.value?.()
+ })

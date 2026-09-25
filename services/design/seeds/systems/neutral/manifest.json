@@ -1,0 +1,450 @@
+{
+  "schema": "teledesign-system/v1",
+  "name": "Neutral",
+  "slug": "neutral",
+  "version": "1.0.0",
+  "files": {
+    "design": "DESIGN.md",
+    "usage": "USAGE.md",
+    "tokensCss": "tokens.css",
+    "tokensJson": "tokens.json",
+    "componentsCss": "components.css",
+    "specimenCss": "specimen.css",
+    "penLibrary": "system.lib.pen",
+    "adherence": "adherence.json"
+  },
+  "runtime": {
+    "react": "18.3.1",
+    "reactDom": "18.3.1",
+    "babelStandalone": "7.29.0",
+    "jsxPresets": "react"
+  },
+  "components": [
+    {
+      "name": "Button",
+      "group": "Buttons",
+      "path": "components/actions/Button.jsx",
+      "card": "components/actions/Button.card.html",
+      "global": "window.Button",
+      "props": {
+        "variant": {
+          "type": "enum",
+          "values": [
+            "primary",
+            "secondary",
+            "outline",
+            "ghost",
+            "destructive",
+            "link"
+          ],
+          "default": "primary"
+        },
+        "size": {
+          "type": "enum",
+          "values": [
+            "sm",
+            "md",
+            "lg",
+            "icon"
+          ],
+          "default": "md"
+        },
+        "disabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "type": {
+          "type": "enum",
+          "values": [
+            "button",
+            "submit",
+            "reset"
+          ],
+          "default": "button"
+        },
+        "children": {
+          "type": "node"
+        }
+      }
+    },
+    {
+      "name": "Input",
+      "group": "Forms",
+      "path": "components/forms/Input.jsx",
+      "card": "components/forms/Input.card.html",
+      "global": "window.Input",
+      "props": {
+        "label": {
+          "type": "string"
+        },
+        "hint": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "size": {
+          "type": "enum",
+          "values": [
+            "sm",
+            "md",
+            "lg"
+          ],
+          "default": "md"
+        },
+        "type": {
+          "type": "enum",
+          "values": [
+            "text",
+            "email",
+            "password",
+            "search",
+            "number",
+            "url",
+            "tel"
+          ],
+          "default": "text"
+        },
+        "invalid": {
+          "type": "boolean",
+          "default": false
+        },
+        "disabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "placeholder": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "Card",
+      "group": "Layout",
+      "path": "components/layout/Card.jsx",
+      "card": "components/layout/Card.card.html",
+      "global": "window.Card",
+      "props": {
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "footer": {
+          "type": "node"
+        },
+        "padding": {
+          "type": "enum",
+          "values": [
+            "sm",
+            "md",
+            "lg"
+          ],
+          "default": "md"
+        },
+        "elevation": {
+          "type": "enum",
+          "values": [
+            "flat",
+            "raised"
+          ],
+          "default": "flat"
+        },
+        "children": {
+          "type": "node"
+        }
+      }
+    },
+    {
+      "name": "Badge",
+      "group": "Data display",
+      "path": "components/data-display/Badge.jsx",
+      "card": "components/data-display/Badge.card.html",
+      "global": "window.Badge",
+      "props": {
+        "variant": {
+          "type": "enum",
+          "values": [
+            "default",
+            "secondary",
+            "outline",
+            "success",
+            "warning",
+            "destructive"
+          ],
+          "default": "default"
+        },
+        "children": {
+          "type": "node"
+        }
+      }
+    },
+    {
+      "name": "Tabs",
+      "group": "Navigation",
+      "path": "components/navigation/Tabs.jsx",
+      "card": "components/navigation/Tabs.card.html",
+      "global": "window.Tabs",
+      "props": {
+        "items": {
+          "type": "array",
+          "of": "{id: string, label: string, content: node}"
+        },
+        "value": {
+          "type": "string"
+        },
+        "defaultValue": {
+          "type": "string"
+        },
+        "onChange": {
+          "type": "function"
+        },
+        "variant": {
+          "type": "enum",
+          "values": [
+            "pill",
+            "underline"
+          ],
+          "default": "pill"
+        }
+      }
+    },
+    {
+      "name": "Dialog",
+      "group": "Overlays",
+      "path": "components/overlays/Dialog.jsx",
+      "card": "components/overlays/Dialog.card.html",
+      "global": "window.Dialog",
+      "props": {
+        "open": {
+          "type": "boolean",
+          "default": false
+        },
+        "onClose": {
+          "type": "function"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "footer": {
+          "type": "node"
+        },
+        "size": {
+          "type": "enum",
+          "values": [
+            "sm",
+            "md",
+            "lg"
+          ],
+          "default": "md"
+        },
+        "inline": {
+          "type": "boolean",
+          "default": false,
+          "note": "render in flow (specimens, static mockups) instead of a fixed overlay"
+        },
+        "children": {
+          "type": "node"
+        }
+      }
+    },
+    {
+      "name": "Table",
+      "group": "Data display",
+      "path": "components/data-display/Table.jsx",
+      "card": "components/data-display/Table.card.html",
+      "global": "window.Table",
+      "props": {
+        "columns": {
+          "type": "array",
+          "of": "{key: string, label: string, numeric?: boolean}"
+        },
+        "rows": {
+          "type": "array",
+          "of": "object keyed by column key"
+        },
+        "density": {
+          "type": "enum",
+          "values": [
+            "compact",
+            "comfortable"
+          ],
+          "default": "comfortable"
+        },
+        "striped": {
+          "type": "boolean",
+          "default": false
+        },
+        "caption": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "Nav",
+      "group": "Navigation",
+      "path": "components/navigation/Nav.jsx",
+      "card": "components/navigation/Nav.card.html",
+      "global": "window.Nav",
+      "props": {
+        "brand": {
+          "type": "node"
+        },
+        "items": {
+          "type": "array",
+          "of": "{label: string, href: string, active?: boolean}"
+        },
+        "actions": {
+          "type": "node"
+        },
+        "orientation": {
+          "type": "enum",
+          "values": [
+            "horizontal",
+            "vertical"
+          ],
+          "default": "horizontal"
+        },
+        "label": {
+          "type": "string",
+          "default": "Main"
+        }
+      }
+    }
+  ],
+  "cards": [
+    {
+      "path": "guidelines/colors.card.html",
+      "group": "Colors",
+      "viewport": "1200x900",
+      "name": "Colour tokens"
+    },
+    {
+      "path": "guidelines/typography.card.html",
+      "group": "Typography",
+      "viewport": "1200x1000",
+      "name": "Type scale"
+    },
+    {
+      "path": "guidelines/spacing.card.html",
+      "group": "Spacing",
+      "viewport": "900x1100",
+      "name": "Spacing, radius and elevation"
+    },
+    {
+      "path": "components/actions/Button.card.html",
+      "group": "Buttons",
+      "viewport": "800x360",
+      "name": "Button"
+    },
+    {
+      "path": "components/forms/Input.card.html",
+      "group": "Forms",
+      "viewport": "800x420",
+      "name": "Input"
+    },
+    {
+      "path": "components/layout/Card.card.html",
+      "group": "Layout",
+      "viewport": "800x420",
+      "name": "Card"
+    },
+    {
+      "path": "components/data-display/Badge.card.html",
+      "group": "Data display",
+      "viewport": "800x240",
+      "name": "Badge"
+    },
+    {
+      "path": "components/navigation/Tabs.card.html",
+      "group": "Navigation",
+      "viewport": "800x320",
+      "name": "Tabs"
+    },
+    {
+      "path": "components/overlays/Dialog.card.html",
+      "group": "Overlays",
+      "viewport": "800x480",
+      "name": "Dialog"
+    },
+    {
+      "path": "components/data-display/Table.card.html",
+      "group": "Data display",
+      "viewport": "800x420",
+      "name": "Table"
+    },
+    {
+      "path": "components/navigation/Nav.card.html",
+      "group": "Navigation",
+      "viewport": "1100x860",
+      "name": "Nav"
+    }
+  ],
+  "fonts": [
+    {
+      "family": "Inter",
+      "weights": [
+        400,
+        500,
+        600,
+        700
+      ],
+      "roles": [
+        "display",
+        "body",
+        "ui"
+      ],
+      "license": "SIL Open Font License 1.1",
+      "source": "Google Fonts",
+      "specimen": "https://fonts.google.com/specimen/Inter",
+      "css": "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+    },
+    {
+      "family": "JetBrains Mono",
+      "weights": [
+        400,
+        500
+      ],
+      "roles": [
+        "mono"
+      ],
+      "license": "SIL Open Font License 1.1",
+      "source": "Google Fonts",
+      "specimen": "https://fonts.google.com/specimen/JetBrains+Mono",
+      "css": "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+    }
+  ],
+  "fontsCss": "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap",
+  "icons": {
+    "library": "lucide",
+    "license": "ISC",
+    "url": "https://lucide.dev"
+  },
+  "themes": [
+    {
+      "id": "light",
+      "label": "Light",
+      "default": true,
+      "selector": ":root, [data-theme=\"light\"]",
+      "penTheme": {
+        "Mode": "Light"
+      }
+    },
+    {
+      "id": "dark",
+      "label": "Dark",
+      "default": false,
+      "selector": "[data-theme=\"dark\"]",
+      "penTheme": {
+        "Mode": "Dark"
+      }
+    }
+  ]
+}

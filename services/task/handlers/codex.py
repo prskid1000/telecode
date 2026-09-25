@@ -35,6 +35,7 @@ from services.task.task_utils import (
     get_task_id,
     is_cancelled,
     update_progress,
+    StreamDrain,
 )
 
 logger = logging.getLogger("telecode.services.task.handlers.codex")
@@ -45,7 +46,10 @@ def _describe_item(item: Dict[str, Any]) -> str:
     if not isinstance(item, dict):
         return "item"
     itype = item.get("type") or item.get("kind") or "item"
-    for key in ("command", "path", "file_path", "url", "tool", "name"):
+    changes = item.get("changes")
+    if isinstance(changes, list) and changes and isinstance(changes[0], dict):
+        return f"{itype}: " + ", ".join(str(c.get("path", "")) for c in changes[:3])
+    for key in ("command", "path", "file_path", "url", "query", "tool", "name"):
         v = item.get(key)
         if isinstance(v, str) and v.strip():
             return f"{itype}: {v}"
@@ -69,11 +73,19 @@ def _handle_event(evt: Dict[str, Any], tool_calls: List[str]) -> Optional[str]:
     elif t == "item.completed":
         item = evt.get("item") or {}
         itype = item.get("type") or ""
-        if itype == "assistant_message":
+        # codex-cli 0.157 names: agent_message / command_execution /
+        # file_change / mcp_tool_call / web_search / todo_list / error. The
+        # older spellings are kept so a pinned older CLI still maps.
+        if itype in ("agent_message", "assistant_message"):
             text = (item.get("text") or item.get("content") or "").strip()
             if text:
                 append_event({"kind": "narrative", "text": text})
-        elif itype in ("command_executed", "file_change", "mcp_tool_call", "tool_use", "patch"):
+        elif itype == "error":
+            msg = (item.get("message") or "").strip()
+            if msg:
+                append_event({"kind": "warning", "text": msg})
+        elif itype in ("command_execution", "command_executed", "file_change", "mcp_tool_call",
+                       "web_search", "tool_use", "patch"):
             tool_calls.append(itype)
             append_event({
                 "kind": "tool",
@@ -153,6 +165,48 @@ def codex_task(
         )
 
 
+# Provider id for local mode. Must not be one of Codex's reserved ids
+# (openai / ollama / lmstudio), which cannot be redefined with -c.
+LOCAL_PROVIDER_ID = "telecode"
+
+# Env vars that would make Codex authenticate against (or be redirected to)
+# OpenAI instead of the -c provider. OPENAI_BASE_URL is ignored by current
+# Codex anyway; an exported OPENAI_API_KEY can make it bypass a custom
+# provider. CODEX_HOME is deliberately NOT touched — the ChatGPT login lives
+# there and non-local runs need it.
+_LOCAL_ENV_STRIP = ("OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_ACCESS_TOKEN", "CODEX_API_KEY")
+
+
+def _local_provider_overrides(proxy_port: int) -> List[str]:
+    """`-c` overrides that point Codex at telecode's /v1/responses.
+
+    Codex dropped the Chat Completions wire (`wire_api="chat"` is a hard error
+    since openai/codex#10157), so `wire_api=responses` is the only choice; the
+    proxy forwards it to llama-server's native /v1/responses. No `env_key` →
+    no Authorization header. Values are deliberately unquoted: `-c` parses the
+    value as TOML and falls back to the literal string when that fails, which
+    keeps these free of quote characters that would have to survive
+    `shell=True` + cmd.exe quoting.
+    """
+    p = f"model_providers.{LOCAL_PROVIDER_ID}"
+    return [
+        "-c", f"model_provider={LOCAL_PROVIDER_ID}",
+        "-c", f"{p}.name={LOCAL_PROVIDER_ID}",
+        "-c", f"{p}.base_url=http://localhost:{proxy_port}/v1",
+        "-c", f"{p}.wire_api=responses",
+        # Long prefills on a local model send nothing for a while; the proxy
+        # sends SSE keepalive comments, but Codex's idle timer counts events.
+        "-c", f"{p}.stream_idle_timeout_ms=600000",
+    ]
+
+
+def _local_env(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    env = dict(os.environ if base is None else base)
+    for k in _LOCAL_ENV_STRIP:
+        env.pop(k, None)
+    return env
+
+
 def _build_codex_argv(
     *,
     prompt: str,
@@ -160,22 +214,28 @@ def _build_codex_argv(
     resume_id: Optional[str],
     last_msg_path: Path,
     model: Optional[str],
+    provider_overrides: Optional[List[str]] = None,
 ) -> List[str]:
+    # Flags `codex exec resume` also accepts go after the subcommand. The two
+    # `exec`-only flags (--sandbox, -C) must precede `resume`, which rejects
+    # them ("unexpected argument '--sandbox'", verified on codex-cli 0.157).
+    exec_only = ["--sandbox", "danger-full-access", "-C", str(work_dir)]
     common = [
         "--json",
         "--dangerously-bypass-approvals-and-sandbox",
-        "--sandbox", "danger-full-access",
         "--skip-git-repo-check",
-        "-C", str(work_dir),
         "--output-last-message", str(last_msg_path),
     ]
     if model:
         common += ["--model", model]
+    overrides = list(provider_overrides or [])
 
+    # "-" = read the prompt from stdin (see _run_codex_subprocess). On argv a
+    # design prompt overflows the Windows command line on this shell=True spawn.
     if resume_id:
-        # codex exec resume <SESSION_ID> [flags...] "<prompt>"
-        return ["codex", "exec", "resume", resume_id, *common, prompt]
-    return ["codex", "exec", *common, prompt]
+        # codex exec [-c ...] --sandbox X -C dir resume <SESSION_ID> [flags...] -
+        return ["codex", "exec", *overrides, *exec_only, "resume", resume_id, *common, "-"]
+    return ["codex", "exec", *overrides, *exec_only, *common, "-"]
 
 
 def _run_codex_subprocess(
@@ -193,17 +253,14 @@ def _run_codex_subprocess(
 
     env = None
     model: Optional[str] = None
+    overrides: List[str] = []
     if is_local:
         import llamacpp.state as llama_state
         model = llama_state.last_active_model() or "local"
-        proxy_url = f"http://localhost:{app_config.proxy_port()}/v1"
-        env = {
-            **os.environ,
-            "OPENAI_BASE_URL": proxy_url,
-            "OPENAI_API_KEY": "local",
-            "CODEX_API_KEY": "local",
-        }
-        logger.info(f"Local mode: codex pointed at {proxy_url} (model={model})")
+        overrides = _local_provider_overrides(app_config.proxy_port())
+        env = _local_env()
+        logger.info(f"Local mode: codex provider '{LOCAL_PROVIDER_ID}' -> "
+                    f"http://localhost:{app_config.proxy_port()}/v1/responses (model={model})")
 
     cmd = _build_codex_argv(
         prompt=prompt,
@@ -211,6 +268,7 @@ def _run_codex_subprocess(
         resume_id=resume_id,
         last_msg_path=last_msg_path,
         model=model,
+        provider_overrides=overrides,
     )
 
     logger.info(f"Codex starting: cwd={work_dir} session={sid} resume={resume_id or 'none'}")
@@ -232,14 +290,20 @@ def _run_codex_subprocess(
     proc = subprocess.Popen(
         cmd,
         cwd=str(work_dir),
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=env,
         text=True,
+        encoding="utf-8",
         bufsize=1,
         shell=True,
         creationflags=creation,
     )
+    assert proc.stdin is not None
+    proc.stdin.write(prompt)
+    proc.stdin.close()
+    stderr_drain = StreamDrain(proc.stderr)
 
     tool_calls: List[str] = []
     final_usage: Dict[str, Any] = {}
@@ -282,7 +346,7 @@ def _run_codex_subprocess(
         if proc.poll() is None:
             proc.kill()
 
-    stderr = (proc.stderr.read() if proc.stderr else "") or ""
+    stderr = stderr_drain.text()
     if proc.returncode != 0 and not saw_turn_completed and not accumulated_text:
         raise RuntimeError(f"codex exited with code {proc.returncode}: {stderr.strip()[:500]}")
 

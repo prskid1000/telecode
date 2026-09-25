@@ -1,0 +1,101 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Prithwiraj Samanta <app@datainsights.ae>
+Date: Fri, 25 Sep 2026 08:10:26 +0530
+Subject: [PATCH 3/7] telecode: resolve bundled assets against the app base
+
+Under a sub-path base (/design/editor/) three things fetched from the origin
+root and 404ed: canvaskit.wasm, the bundled Inter/Noto fonts and the brand
+marks. canvaskit.ts already tried to honour BASE_URL, but guarded it with a
+runtime `'env' in import.meta` check, which is always false in a production
+bundle (Vite rewrites import.meta.env statically and leaves import.meta
+without an env property), so it silently fell back to '/'. Add
+bundledAssetURL(), which passes import.meta.env as a value the way
+kiwi/fig/population/client.ts does, and use it for CanvasKit and the
+bundled fonts; BrandMark uses import.meta.env.BASE_URL directly.
+---
+ packages/core/src/asset-url.ts     | 14 ++++++++++++++
+ packages/core/src/canvaskit.ts     |  5 ++---
+ packages/core/src/text/fonts.ts    |  5 ++++-
+ src/components/brand/BrandMark.vue |  2 +-
+ 4 files changed, 21 insertions(+), 5 deletions(-)
+ create mode 100644 packages/core/src/asset-url.ts
+
+diff --git a/packages/core/src/asset-url.ts b/packages/core/src/asset-url.ts
+new file mode 100644
+index 00000000..c2a7d144
+--- /dev/null
++++ b/packages/core/src/asset-url.ts
+@@ -0,0 +1,14 @@
++/// <reference types="vite/client" />
++
++// Vite replaces `import.meta.env` with an object literal at build time (in workers
++// too), so pass it as a value. A runtime `'env' in import.meta` check is always
++// false in a production bundle and silently resolves every asset against `/`.
++function baseOf(env?: { BASE_URL?: string }): string {
++  return env?.BASE_URL || '/'
++}
++
++/** URL of a file shipped beside index.html, honouring Vite's `base` (e.g. /design/editor/). */
++export function bundledAssetURL(file: string): string {
++  const base = baseOf(import.meta.env).replace(/\/$/, '')
++  return `${base}/${file.replace(/^\//, '')}`
++}
+diff --git a/packages/core/src/canvaskit.ts b/packages/core/src/canvaskit.ts
+index 839934ec..24ebcc0c 100644
+--- a/packages/core/src/canvaskit.ts
++++ b/packages/core/src/canvaskit.ts
+@@ -1,6 +1,7 @@
+ /// <reference types="vite/client" />
+ import CanvasKitInit, { type CanvasKit } from 'canvaskit-wasm'
+ 
++import { bundledAssetURL } from './asset-url'
+ import { IS_BROWSER } from './constants'
+ 
+ let instance: CanvasKit | null = null
+@@ -17,9 +18,7 @@ export async function getCanvasKit(options?: CanvasKitOptions): Promise<CanvasKi
+       const ckPath = import.meta.resolve('canvaskit-wasm')
+       return decodeURIComponent(new URL(file, ckPath).pathname)
+     }
+-    const base = 'env' in import.meta ? import.meta.env.BASE_URL : '/'
+-    const prefix = base === '/' ? '' : base.replace(/\/$/, '')
+-    return `${prefix}/${file}`
++    return bundledAssetURL(file)
+   }
+ 
+   instance = await CanvasKitInit({
+diff --git a/packages/core/src/text/fonts.ts b/packages/core/src/text/fonts.ts
+index 91c30518..84490cb2 100644
+--- a/packages/core/src/text/fonts.ts
++++ b/packages/core/src/text/fonts.ts
+@@ -4,6 +4,7 @@ import type { CanvasKit, TypefaceFontProvider } from 'canvaskit-wasm'
+ 
+ import type { SceneGraph } from '@open-pencil/scene-graph'
+ 
++import { bundledAssetURL } from '#core/asset-url'
+ import { DEFAULT_FONT_FAMILY, IS_BROWSER } from '#core/constants'
+ import {
+   chooseLocalFontMatch,
+@@ -217,7 +218,9 @@ export class FontManager {
+ 
+   async fetchBundledFont(url: string): Promise<ArrayBuffer | null> {
+     if (IS_BROWSER) {
+-      const response = await fetch(url)
++      // Bundled fonts ship beside index.html, so they follow the app base
++      // (e.g. /design/editor/) rather than the origin root.
++      const response = await fetch(bundledAssetURL(url))
+       return response.arrayBuffer()
+     }
+     const { readFile } = await import(/* @vite-ignore */ 'node:fs/promises')
+diff --git a/src/components/brand/BrandMark.vue b/src/components/brand/BrandMark.vue
+index 103ca89b..4a2546de 100644
+--- a/src/components/brand/BrandMark.vue
++++ b/src/components/brand/BrandMark.vue
+@@ -21,7 +21,7 @@ const sources = {
+ const source = computed(() => {
+   // The ivory tile owns its background and always uses the light palette.
+   const suffix = variant !== 'app-icon' && appearance === 'dark' ? '-dark' : ''
+-  return `/brand/${sources[variant]}${suffix}.svg`
++  return `${import.meta.env.BASE_URL}brand/${sources[variant]}${suffix}.svg`
+ })
+ </script>
+ 

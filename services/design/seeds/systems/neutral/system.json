@@ -1,0 +1,54 @@
+{
+  "name": "Neutral",
+  "slug": "neutral",
+  "description": "The default system: shadcn/ui's neutral oklch palette, Inter, 10px base radius. Calm, product-first, works for almost any brief that has no brand of its own.",
+  "status": "published",
+  "is_default": true,
+  "version": "1.0.0",
+  "default_theme": "light",
+  "tags": [
+    "default",
+    "product",
+    "b2b",
+    "dashboard",
+    "shadcn"
+  ],
+  "license": "MIT (TeleDesign seed content); colour values from shadcn/ui (MIT)",
+  "fonts_license": "SIL Open Font License 1.1",
+  "credits": [
+    {
+      "name": "shadcn/ui",
+      "license": "MIT",
+      "url": "https://github.com/shadcn-ui/ui",
+      "used_for": "Neutral theme colour tokens (apps/v4/registry/themes.ts, oklch), token naming and component inventory"
+    },
+    {
+      "name": "open-design (nexu-io/open-design) — design-systems/default",
+      "license": "Apache-2.0",
+      "url": "https://github.com/nexu-io/open-design",
+      "used_for": "Package shape (DESIGN.md + USAGE.md read order) and several agent guidance rules, adapted"
+    },
+    {
+      "name": "Lucide",
+      "license": "ISC (Feather-derived icons: MIT)",
+      "url": "https://lucide.dev",
+      "used_for": "Icon library referenced by name; x / search / menu path data inlined in components"
+    },
+    {
+      "name": "Inter",
+      "license": "SIL Open Font License 1.1",
+      "url": "https://fonts.google.com/specimen/Inter",
+      "used_for": "font (linked from Google Fonts, not bundled)"
+    },
+    {
+      "name": "JetBrains Mono",
+      "license": "SIL Open Font License 1.1",
+      "url": "https://fonts.google.com/specimen/JetBrains+Mono",
+      "used_for": "font (linked from Google Fonts, not bundled)"
+    }
+  ],
+  "source": {
+    "type": "bundled",
+    "origin": "services/design/seeds"
+  }
+}

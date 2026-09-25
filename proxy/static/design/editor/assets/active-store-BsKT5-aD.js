@@ -1,0 +1,1 @@
+import{Dn as e,xn as t}from"./runtime-core.esm-bundler-CDDBpkXG.js";var n=t();function r(){return n}function i(t){n.value=t,e(n)}function a(){if(!n.value)throw Error(`Editor store not provided`);return n.value}function o(){return n.value??null}var s=new Proxy({},{get(e,t){return Reflect.get(a(),t)}});function c(){return s}export{c as a,r as i,o as n,i as r,a as t};

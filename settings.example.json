@@ -373,7 +373,7 @@
     "enabled": false,
     "host": "127.0.0.1",
     "port": 1235,
-    "protocols": ["anthropic", "openai"],
+    "protocols": ["anthropic", "openai", "gemini"],
     "debug": false,
 
     "_doc_defaults": "Every key here is the default for requests that match NO client_profile, and the fallback for profiles that omit it. An empty match rule is skipped by _match_profile, so there is no catch-all profile — these globals are the only way to configure unmatched clients (curl, SDKs, scripts).",
@@ -398,6 +398,16 @@
     },
 
     "client_profiles": [
+      {
+        "name": "antigravity",
+        "_doc": "Antigravity (agy) local mode, via the Gemini endpoint. agy runs its own tool loop, so no ToolSearch split (its status lines would land in agy's reply text) and no managed tools (web_search duplicates agy's search_web).",
+        "match": {"header": "User-Agent", "contains": "google-genai-sdk"},
+        "tool_search": false,
+        "auto_load_tools": false,
+        "inject_managed": [],
+        "inject_date_location": false,
+        "strip_reminders": false
+      },
       {
         "name": "e2e-test",
         "match": {"header": "User-Agent", "contains": "telecode-e2e"},

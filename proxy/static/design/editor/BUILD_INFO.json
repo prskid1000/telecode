@@ -1,0 +1,44 @@
+{
+  "upstream": "https://github.com/open-pencil/open-pencil",
+  "tag": "v0.15.1",
+  "commit": "6cf1748e31a0e43d3794d43abbd003ce9caa3c6f",
+  "base": "/design/editor/",
+  "built_at": "2026-09-25T03:11:52Z",
+  "bun": "1.4.2",
+  "patches": [
+    {
+      "name": "0001-telecode-serve-the-router-under-import.meta.env.BASE.patch",
+      "sha256": "ba68dea245bfc2bd18706671da02c45128647bae70802973a8950564e804d54c"
+    },
+    {
+      "name": "0002-telecode-drop-the-PWA-plugin-and-service-worker-regi.patch",
+      "sha256": "e32299463e79a8a0f762b5e3a0cbeee29caba220dd5678487ee1404ca4059bd9"
+    },
+    {
+      "name": "0003-telecode-resolve-bundled-assets-against-the-app-base.patch",
+      "sha256": "a9093b1b8dae5714fae1fa7f3a858acb7991a4513e6f428466b34bdb76eeef8f"
+    },
+    {
+      "name": "0004-telecode-attach-the-automation-bridge-to-the-embeddi.patch",
+      "sha256": "ecdfc7f9cabda909565fb9d294c4bfe27c976ae32b95f9c26eae5f9f251ea8ac"
+    },
+    {
+      "name": "0005-telecode-add-a-telecode-StorageAdapter-backed-by-the.patch",
+      "sha256": "414ac1f17fa3489df0c403424961148f760352c6f1c2a28e2bd9200b0e3425ab"
+    },
+    {
+      "name": "0006-telecode-host-postMessage-hooks-and-stable-board-key.patch",
+      "sha256": "ae4813f55193cd22de75db19cafb229f5f1982deb08d7d251f91fdabad62fdcb"
+    },
+    {
+      "name": "0007-telecode-build-time-dump-of-the-automation-tool-desc.patch",
+      "sha256": "4bb16150667d2c26c5e86575580e5db670ab1e6ba8fdec1a95d6815f4fbee856"
+    }
+  ],
+  "tools": 116,
+  "open_pencil_version": "0.15.1",
+  "third_party_packages": 195,
+  "files": 579,
+  "bytes": 29053252,
+  "index_sha256": "a29848f42e0469b791017edd0299aef2d568920c1d45393772c21d87f2992ac5"
+}

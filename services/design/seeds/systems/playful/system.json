@@ -1,0 +1,48 @@
+{
+  "name": "Playful",
+  "slug": "playful",
+  "description": "Rounded, saturated consumer system: cream background, coral primary, lavender and lemon supporting colours, Fredoka display with Nunito text, pill buttons and springy motion. For consumer apps, onboarding, education and campaigns.",
+  "status": "published",
+  "is_default": false,
+  "version": "1.0.0",
+  "default_theme": "light",
+  "tags": [
+    "consumer",
+    "rounded",
+    "saturated",
+    "friendly",
+    "onboarding"
+  ],
+  "license": "MIT (TeleDesign seed content)",
+  "fonts_license": "SIL Open Font License 1.1",
+  "credits": [
+    {
+      "name": "Lucide",
+      "license": "ISC (Feather-derived icons: MIT)",
+      "url": "https://lucide.dev",
+      "used_for": "Icon library referenced by name; x / search / menu path data inlined in components"
+    },
+    {
+      "name": "Fredoka",
+      "license": "SIL Open Font License 1.1",
+      "url": "https://fonts.google.com/specimen/Fredoka",
+      "used_for": "font (linked from Google Fonts, not bundled)"
+    },
+    {
+      "name": "Nunito",
+      "license": "SIL Open Font License 1.1",
+      "url": "https://fonts.google.com/specimen/Nunito",
+      "used_for": "font (linked from Google Fonts, not bundled)"
+    },
+    {
+      "name": "DM Mono",
+      "license": "SIL Open Font License 1.1",
+      "url": "https://fonts.google.com/specimen/DM+Mono",
+      "used_for": "font (linked from Google Fonts, not bundled)"
+    }
+  ],
+  "source": {
+    "type": "bundled",
+    "origin": "services/design/seeds"
+  }
+}

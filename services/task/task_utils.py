@@ -16,6 +16,38 @@ from services.task.task_manager import (
 
 logger = logging.getLogger("telecode.services.task.utils")
 
+class StreamDrain:
+    """Read a subprocess pipe to EOF on a daemon thread.
+
+    The CLI handlers only iterate stdout; a stderr=PIPE that nobody reads
+    fills the OS pipe buffer (~4 KB on Windows) and the child blocks on its
+    next stderr write — forever, since we are blocked reading its stdout.
+    Codex hits this on an expired ChatGPT login (it logs a token-refresh
+    error per request). `text()` joins what was read, after the child exits.
+    """
+
+    def __init__(self, stream: Any, limit: int = 256 * 1024) -> None:
+        import threading
+        self._chunks: list = []
+        self._size = 0
+        self._limit = limit
+        self._thread = threading.Thread(target=self._run, args=(stream,), daemon=True)
+        self._thread.start()
+
+    def _run(self, stream: Any) -> None:
+        try:
+            for line in stream:
+                if self._size < self._limit:
+                    self._chunks.append(line)
+                    self._size += len(line)
+        except Exception:
+            pass
+
+    def text(self, timeout: float = 5.0) -> str:
+        self._thread.join(timeout)
+        return "".join(self._chunks)
+
+
 def current_task_id() -> Optional[str]:
     return getattr(_local, "task_id", None)
 

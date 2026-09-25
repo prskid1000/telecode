@@ -1,0 +1,221 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Prithwiraj Samanta <app@datainsights.ae>
+Date: Fri, 25 Sep 2026 08:11:27 +0530
+Subject: [PATCH 4/7] telecode: attach the automation bridge to the embedding
+ proxy
+
+Upstream connects the MCP/automation bridge only in dev builds or the
+desktop app, where it can spawn openpencil-mcp-http. When the editor is
+embedded by telecode (?project=<id>) the server side of the same
+register/request/response protocol is the proxy's
+/api/design/editor-bridge WebSocket, so production web builds attach to
+it too. The bridge URL is always same-origin (a ?bridge= override is only
+honoured for this host) and the token comes from ?bridge_token= or the
+td-bridge-token meta tag the proxy injects into index.html.
+---
+ src/app/automation/mcp/runtime.ts           | 28 +++++---
+ src/app/automation/mcp/spawn.ts             |  2 +-
+ src/app/integrations/telecode/automation.ts | 56 ++++++++++++++++
+ src/app/integrations/telecode/config.ts     | 71 +++++++++++++++++++++
+ 4 files changed, 147 insertions(+), 10 deletions(-)
+ create mode 100644 src/app/integrations/telecode/automation.ts
+ create mode 100644 src/app/integrations/telecode/config.ts
+
+diff --git a/src/app/automation/mcp/runtime.ts b/src/app/automation/mcp/runtime.ts
+index e98a9e63..75b9e550 100644
+--- a/src/app/automation/mcp/runtime.ts
++++ b/src/app/automation/mcp/runtime.ts
+@@ -2,6 +2,8 @@ import { reactive } from 'vue'
+ 
+ import { connectAutomation } from '@/app/automation/bridge/server'
+ import type { EditorStore } from '@/app/editor/active-store'
++import { createTelecodeMCPDependencies } from '@/app/integrations/telecode/automation'
++import { readTelecodeConfig } from '@/app/integrations/telecode/config'
+ import { isTauri } from '@/app/tauri/env'
+ 
+ import { mcpFailure, type MCPFailure } from './failure'
+@@ -206,15 +208,23 @@ export function createMCPRuntimeService(dependencies: MCPRuntimeDependencies) {
+   }
+ }
+ 
+-const appMCPRuntime = createMCPRuntimeService({
+-  connect: (getStore, authToken) => connectAutomation(getStore, authToken).disconnect,
+-  canConnect: () => import.meta.env.DEV || isTauri(),
+-  readHealth: readAutomationHealth,
+-  setToolDescriptors: setMCPToolDescriptors,
+-  spawn: spawnMCPIfNeeded,
+-  getStartupFailure: getAutomationStartupFailure,
+-  getHealthFailure: getAutomationHealthFailure
+-})
++// Embedded in telecode (?project=…): the bridge server is the proxy itself, so it is
++// attached in production web builds too, with URL and token from the embedding.
++const telecodeConfig = readTelecodeConfig()
++
++const appMCPRuntime = createMCPRuntimeService(
++  telecodeConfig
++    ? createTelecodeMCPDependencies(telecodeConfig)
++    : {
++        connect: (getStore, authToken) => connectAutomation(getStore, authToken).disconnect,
++        canConnect: () => import.meta.env.DEV || isTauri(),
++        readHealth: readAutomationHealth,
++        setToolDescriptors: setMCPToolDescriptors,
++        spawn: spawnMCPIfNeeded,
++        getStartupFailure: getAutomationStartupFailure,
++        getHealthFailure: getAutomationHealthFailure
++      }
++)
+ 
+ export const mcpRuntime = appMCPRuntime.state
+ export const refreshMCPRuntime = appMCPRuntime.refresh
+diff --git a/src/app/automation/mcp/spawn.ts b/src/app/automation/mcp/spawn.ts
+index 363f4f5e..7142cae7 100644
+--- a/src/app/automation/mcp/spawn.ts
++++ b/src/app/automation/mcp/spawn.ts
+@@ -252,7 +252,7 @@ function parseToolDescriptors(value: unknown): ToolDescriptor[] | null | undefin
+   return descriptors
+ }
+ 
+-function parseAutomationHealth(value: unknown): AutomationHealth | null {
++export function parseAutomationHealth(value: unknown): AutomationHealth | null {
+   if (!isAutomationHealthRecord(value)) return null
+   if (value.status !== 'ok' && value.status !== 'no_app') return null
+   const version = optionalString(value.version)
+diff --git a/src/app/integrations/telecode/automation.ts b/src/app/integrations/telecode/automation.ts
+new file mode 100644
+index 00000000..1ef3cfed
+--- /dev/null
++++ b/src/app/integrations/telecode/automation.ts
+@@ -0,0 +1,56 @@
++/**
++ * Attach the automation bridge to telecode instead of a spawned MCP server.
++ *
++ * Upstream only connects the bridge in dev builds or the desktop app, where it
++ * can spawn `openpencil-mcp-http`. Under telecode the server side of the same
++ * register/request/response protocol lives in the proxy (WebSocket at
++ * /api/design/editor-bridge), so there is nothing to spawn: the handle is
++ * external and the connection is always allowed.
++ */
++import { connectAutomation } from '@/app/automation/bridge/server'
++import type { MCPRuntimeDependencies } from '@/app/automation/mcp/runtime'
++import { setMCPToolDescriptors } from '@/app/automation/mcp/preferences'
++import { mcpFailure, type MCPFailure } from '@/app/automation/mcp/failure'
++import { parseAutomationHealth } from '@/app/automation/mcp/spawn'
++
++import type { TelecodeConfig } from './config'
++
++export function createTelecodeMCPDependencies(config: TelecodeConfig): MCPRuntimeDependencies {
++  let healthFailure: MCPFailure | null = null
++  return {
++    connect: (getStore, authToken) =>
++      connectAutomation(getStore, authToken ?? config.bridgeToken, config.bridgeURL).disconnect,
++    canConnect: () => true,
++    async readHealth() {
++      try {
++        const headers: Record<string, string> = config.bridgeToken
++          ? { Authorization: `Bearer ${config.bridgeToken}` }
++          : {}
++        const res = await fetch(config.bridgeHealthURL, {
++          headers,
++          signal: AbortSignal.timeout(3000)
++        })
++        if (!res.ok) {
++          healthFailure = mcpFailure(
++            res.status === 401 || res.status === 403 ? 'rejected' : 'malformed',
++            `HTTP ${res.status}`
++          )
++          return null
++        }
++        const health = parseAutomationHealth(await res.json())
++        healthFailure = health ? null : mcpFailure('malformed', config.bridgeHealthURL)
++        return health
++      } catch (error) {
++        healthFailure = mcpFailure(
++          'unreachable',
++          error instanceof Error ? error.message : String(error)
++        )
++        return null
++      }
++    },
++    setToolDescriptors: setMCPToolDescriptors,
++    spawn: async () => ({ disconnect: () => undefined, authToken: config.bridgeToken, managed: false }),
++    getStartupFailure: () => null,
++    getHealthFailure: () => healthFailure
++  }
++}
+diff --git a/src/app/integrations/telecode/config.ts b/src/app/integrations/telecode/config.ts
+new file mode 100644
+index 00000000..397716b3
+--- /dev/null
++++ b/src/app/integrations/telecode/config.ts
+@@ -0,0 +1,71 @@
++/**
++ * TeleDesign embedding (telecode).
++ *
++ * The editor runs inside the telecode proxy at /design/editor/ and is told which
++ * project to open with `?project=<32-hex id>`. Everything telecode-specific keys
++ * off this config: when it is null the editor behaves exactly like upstream.
++ */
++import { IS_BROWSER, IS_TAURI } from '@open-pencil/core/constants'
++
++export interface TelecodeConfig {
++  /** TeleDesign project id (32 lowercase hex characters). */
++  projectId: string
++  /** Origin that serves the REST API — always the page's own origin. */
++  apiOrigin: string
++  /** WebSocket URL of the automation bridge (register/request/response). */
++  bridgeURL: string
++  /** HTTP URL of the bridge health endpoint. */
++  bridgeHealthURL: string
++  /** Token sent in the bridge `register` message. */
++  bridgeToken: string | null
++}
++
++const PROJECT_ID = /^[0-9a-f]{32}$/
++const BRIDGE_PATH = '/api/design/editor-bridge'
++
++let cached: TelecodeConfig | null | undefined
++
++function sameOriginWebSocketURL(raw: string | null, fallback: string): string {
++  if (!raw) return fallback
++  try {
++    const parsed = new window.URL(raw, window.location.href)
++    // The bridge can drive the whole document (including eval), so it is only
++    // ever the server that served this page — never a URL a link supplies.
++    const expectedHost = window.location.host
++    if (parsed.host !== expectedHost) return fallback
++    if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') return fallback
++    return parsed.toString()
++  } catch {
++    return fallback
++  }
++}
++
++function readMetaToken(): string | null {
++  const meta = document.querySelector('meta[name="td-bridge-token"]')
++  const value = meta?.getAttribute('content')?.trim()
++  return value ? value : null
++}
++
++export function readTelecodeConfig(search?: string): TelecodeConfig | null {
++  if (search === undefined && cached !== undefined) return cached
++  if (!IS_BROWSER || IS_TAURI) return (cached = null)
++  const params = new URLSearchParams(search ?? window.location.search)
++  const projectId = params.get('project')?.trim().toLowerCase() ?? ''
++  if (!PROJECT_ID.test(projectId)) return (cached = null)
++  const apiOrigin = window.location.origin
++  const wsOrigin = apiOrigin.replace(/^http/, 'ws')
++  const defaultBridge = `${wsOrigin}${BRIDGE_PATH}?project=${projectId}`
++  const config: TelecodeConfig = {
++    projectId,
++    apiOrigin,
++    bridgeURL: sameOriginWebSocketURL(params.get('bridge'), defaultBridge),
++    bridgeHealthURL: `${apiOrigin}${BRIDGE_PATH}/health?project=${projectId}`,
++    bridgeToken: params.get('bridge_token')?.trim() || readMetaToken()
++  }
++  if (search === undefined) cached = config
++  return config
++}
++
++export function isTelecodeEmbed(): boolean {
++  return readTelecodeConfig() !== null
++}

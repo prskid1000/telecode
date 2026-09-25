@@ -1,0 +1,140 @@
+TeleDesign bundled seeds (services/design/seeds/)
+=================================================
+
+The seed design systems and style archetypes in this directory are original
+TeleDesign work, released under the same terms as the rest of this repository,
+EXCEPT for the third-party material listed below.
+
+Nothing in this directory is copied from pen.dev (its bundled .lib.pen
+libraries or its style archetypes) or from Claude Design's shipped systems.
+The .pen files follow pen.dev's publicly documented file schema (version
+"2.19") only; no pen.dev code, assets or content are included. None of the
+systems or styles is named after, or imitates, a real brand.
+
+
+1. shadcn/ui — MIT License
+--------------------------
+Used in: systems/neutral (tokens.css, tokens.json, system.lib.pen, DESIGN.md)
+What:    the "neutral" theme colour values (oklch) from
+         https://github.com/shadcn-ui/ui/blob/main/apps/v4/registry/themes.ts,
+         the semantic token names (background/foreground, card, popover,
+         primary, secondary, muted, accent, destructive, border, input, ring,
+         chart-1..5), the --radius: 0.625rem base, and the component inventory.
+         Token names are reused by all five systems.
+Changes: added success, warning, destructive-foreground and overlay tokens;
+         omitted sidebar-* tokens; hex conversions for .pen.
+
+MIT License
+
+Copyright (c) 2023 shadcn
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+2. open-design — Apache License 2.0
+-----------------------------------
+Source:  https://github.com/nexu-io/open-design, design-systems/default
+         (DESIGN.md, USAGE.md, manifest.json)
+Used in: systems/neutral/DESIGN.md and systems/*/USAGE.md
+What:    adapted, not copied verbatim — the idea of a USAGE.md "read order"
+         preceding DESIGN.md / tokens / component manifest, and three agent
+         guidance rules in systems/neutral ("let whitespace separate groups",
+         "no drop shadows on inputs / no more than three type sizes per
+         screen", "do not invent colour values — surface a warning and use the
+         closest token"). Section structure of DESIGN.md is TeleDesign's own
+         (docs/teledesign.md §3).
+Changes: rewritten for TeleDesign's token names, file layout and adherence
+         lint; colour values replaced by shadcn/ui's.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use these files except in compliance with the License. You may obtain a copy
+of the License at http://www.apache.org/licenses/LICENSE-2.0
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+License for the specific language governing permissions and limitations under
+the License.
+
+
+3. Lucide — ISC License (Feather-derived icons: MIT)
+----------------------------------------------------
+Used in: systems/*/components/**/*.jsx and *.card.html (inline SVG path data
+         for "x", "search" and "menu"); systems/*/system.lib.pen (icon nodes
+         referencing lucide icons "x", "search", "menu" by name).
+The three inlined icons are listed by Lucide as derived from Feather.
+
+ISC License
+
+Copyright (c) 2026 Lucide Icons and Contributors
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+The MIT License (MIT) (for the Feather-derived icons)
+
+Copyright (c) 2013-present Cole Bemis
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+4. Fonts — SIL Open Font License 1.1
+------------------------------------
+No font files are bundled. Pages link these families from Google Fonts
+(fonts.googleapis.com), each published there under the SIL Open Font License
+1.1 (verified: each lives under google/fonts/ofl/ in the Google Fonts repo):
+
+  Inter · JetBrains Mono · Fraunces · Source Serif 4 · Instrument Sans ·
+  IBM Plex Sans · IBM Plex Mono · Manrope · Fredoka · Nunito · DM Mono ·
+  Space Grotesk (styles.json only)
+
+If a future export inlines font files (e.g. the standalone-HTML exporter),
+the OFL requires shipping each font's OFL.txt / copyright notice with it and
+not selling the fonts by themselves. License text:
+https://openfontlicense.org/open-font-license-official-text/
+
+
+5. Runtime libraries (loaded from unpkg, not bundled)
+-----------------------------------------------------
+React 18.3.1 and ReactDOM 18.3.1 (MIT, Meta Platforms, Inc. and affiliates);
+@babel/standalone 7.29.0 (MIT). Pinned with SRI hashes in every *.card.html.

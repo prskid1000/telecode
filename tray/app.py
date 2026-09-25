@@ -208,17 +208,21 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
     menu.addAction(open_settings_action)
     menu.setDefaultAction(open_settings_action)
 
-    def _open_ui():
+    def _open_proxy_page(path: str):
         import webbrowser
         settings = read_settings()
         host = get_path(settings, "proxy.host", "127.0.0.1")
         if host == "0.0.0.0": host = "127.0.0.1"
         port = get_path(settings, "proxy.port", 1235)
-        webbrowser.open(f"http://{host}:{port}/ui")
+        webbrowser.open(f"http://{host}:{port}{path}")
 
     open_ui_action = QAction("Open Agent Manager", menu)
-    open_ui_action.triggered.connect(_open_ui)
+    open_ui_action.triggered.connect(lambda: _open_proxy_page("/ui"))
     menu.addAction(open_ui_action)
+
+    open_design_action = QAction("Open TeleDesign", menu)
+    open_design_action.triggered.connect(lambda: _open_proxy_page("/design"))
+    menu.addAction(open_design_action)
 
     def _open_docgraph_ui():
         import webbrowser

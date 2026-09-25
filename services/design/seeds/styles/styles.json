@@ -1,0 +1,602 @@
+{
+  "schema": "teledesign-styles/v1",
+  "description": "Original TeleDesign style archetypes, offered as the direction picker when a project has no design system attached. Picking one binds its palette and fonts into the project's :root; `system` names the bundled seed system that implements it fully, when one exists.",
+  "license": "MIT (TeleDesign seed content). All fonts are SIL OFL 1.1 via Google Fonts.",
+  "fonts": {
+    "Inter": "SIL Open Font License 1.1",
+    "JetBrains Mono": "SIL Open Font License 1.1",
+    "Fraunces": "SIL Open Font License 1.1",
+    "Source Serif 4": "SIL Open Font License 1.1",
+    "Instrument Sans": "SIL Open Font License 1.1",
+    "IBM Plex Sans": "SIL Open Font License 1.1",
+    "IBM Plex Mono": "SIL Open Font License 1.1",
+    "Manrope": "SIL Open Font License 1.1",
+    "Fredoka": "SIL Open Font License 1.1",
+    "Nunito": "SIL Open Font License 1.1",
+    "DM Mono": "SIL Open Font License 1.1",
+    "Space Grotesk": "SIL Open Font License 1.1"
+  },
+  "styles": [
+    {
+      "id": "quiet-ledger",
+      "name": "Quiet Ledger",
+      "description": "Greyscale, precise, product-first. Near-black actions on white, hairline borders, generous whitespace. The safe default when nothing else is specified.",
+      "palette": {
+        "background": "oklch(0.99 0 0)",
+        "surface": "oklch(1 0 0)",
+        "foreground": "oklch(0.17 0 0)",
+        "muted": "oklch(0.55 0 0)",
+        "border": "oklch(0.92 0 0)",
+        "accent": "oklch(0.2 0 0)",
+        "accent-foreground": "oklch(0.985 0 0)"
+      },
+      "fonts": {
+        "display": "Inter",
+        "body": "Inter",
+        "mono": "JetBrains Mono",
+        "license": "SIL Open Font License 1.1",
+        "source": "Google Fonts"
+      },
+      "radius": {
+        "base": "8px",
+        "surface": "12px"
+      },
+      "density": "comfortable",
+      "imagery": "Product screenshots, plain photography; no illustration.",
+      "motion": "150ms functional fades",
+      "use_for": [
+        "SaaS dashboards",
+        "admin tools",
+        "settings pages",
+        "B2B landing pages"
+      ],
+      "system": "neutral"
+    },
+    {
+      "id": "morning-broadsheet",
+      "name": "Morning Broadsheet",
+      "description": "Newsprint warmth: off-white paper, black ink, one deep red accent, serif headlines over a serif text face, rules instead of boxes.",
+      "palette": {
+        "background": "oklch(0.975 0.01 85)",
+        "surface": "oklch(0.99 0.006 85)",
+        "foreground": "oklch(0.2 0.02 50)",
+        "muted": "oklch(0.5 0.03 60)",
+        "border": "oklch(0.86 0.02 75)",
+        "accent": "oklch(0.45 0.15 27)",
+        "accent-foreground": "oklch(0.98 0.01 85)"
+      },
+      "fonts": {
+        "display": "Fraunces",
+        "body": "Source Serif 4",
+        "mono": "IBM Plex Mono",
+        "license": "SIL Open Font License 1.1",
+        "source": "Google Fonts"
+      },
+      "radius": {
+        "base": "2px",
+        "surface": "3px"
+      },
+      "density": "airy",
+      "imagery": "Documentary photography with captions; duotone archival images.",
+      "motion": "Slow fades, 240-420ms, no bounce",
+      "use_for": [
+        "long-form articles",
+        "annual reports",
+        "newsletters",
+        "essays"
+      ],
+      "system": "editorial"
+    },
+    {
+      "id": "night-shift-console",
+      "name": "Night Shift Console",
+      "description": "Blue-black surfaces stepping up in lightness, an indigo action colour, cyan for data. Built for dark rooms and long sessions.",
+      "palette": {
+        "background": "oklch(0.16 0.02 270)",
+        "surface": "oklch(0.2 0.025 270)",
+        "foreground": "oklch(0.96 0.01 270)",
+        "muted": "oklch(0.7 0.03 270)",
+        "border": "oklch(1 0 0 / 9%)",
+        "accent": "oklch(0.56 0.2 275)",
+        "accent-foreground": "oklch(0.99 0.005 270)",
+        "support": [
+          "oklch(0.78 0.13 200)"
+        ]
+      },
+      "fonts": {
+        "display": "Manrope",
+        "body": "Manrope",
+        "mono": "JetBrains Mono",
+        "license": "SIL Open Font License 1.1",
+        "source": "Google Fonts"
+      },
+      "radius": {
+        "base": "8px",
+        "surface": "12px"
+      },
+      "density": "compact",
+      "imagery": "UI screenshots on dark cards; a single soft glow behind the hero.",
+      "motion": "180ms standard, springy toggles",
+      "use_for": [
+        "developer marketing",
+        "analytics apps",
+        "AI products",
+        "status pages"
+      ],
+      "system": "midnight"
+    },
+    {
+      "id": "citrus-pop",
+      "name": "Citrus Pop",
+      "description": "Cream page, coral actions, lemon and lavender blocks, pill buttons with stacked shadows. Loud, tactile and friendly.",
+      "palette": {
+        "background": "oklch(0.985 0.012 95)",
+        "surface": "oklch(1 0 0)",
+        "foreground": "oklch(0.25 0.04 290)",
+        "muted": "oklch(0.5 0.04 290)",
+        "border": "oklch(0.9 0.025 290)",
+        "accent": "oklch(0.57 0.2 28)",
+        "accent-foreground": "oklch(0.99 0.005 95)",
+        "support": [
+          "oklch(0.93 0.12 100)",
+          "oklch(0.92 0.06 300)"
+        ]
+      },
+      "fonts": {
+        "display": "Fredoka",
+        "body": "Nunito",
+        "mono": "DM Mono",
+        "license": "SIL Open Font License 1.1",
+        "source": "Google Fonts"
+      },
+      "radius": {
+        "base": "9999px",
+        "surface": "28px"
+      },
+      "density": "roomy",
+      "imagery": "Flat colourful illustration, cut-out photography on tinted blocks.",
+      "motion": "Spring overshoot on entrances and success",
+      "use_for": [
+        "consumer apps",
+        "onboarding",
+        "kids and education",
+        "campaign pages"
+      ],
+      "system": "playful"
+    },
+    {
+      "id": "switchboard",
+      "name": "Switchboard",
+      "description": "Dense developer tooling: cool greys, teal signal, mono for anything machine-made, 4px radii, 30px controls.",
+      "palette": {
+        "background": "oklch(0.99 0.002 250)",
+        "surface": "oklch(1 0 0)",
+        "foreground": "oklch(0.2 0.01 250)",
+        "muted": "oklch(0.5 0.012 250)",
+        "border": "oklch(0.9 0.005 250)",
+        "accent": "oklch(0.5 0.11 170)",
+        "accent-foreground": "oklch(0.99 0.002 250)"
+      },
+      "fonts": {
+        "display": "IBM Plex Sans",
+        "body": "IBM Plex Sans",
+        "mono": "IBM Plex Mono",
+        "license": "SIL Open Font License 1.1",
+        "source": "Google Fonts"
+      },
+      "radius": {
+        "base": "4px",
+        "surface": "6px"
+      },
+      "density": "dense",
+      "imagery": "No imagery; 1px line diagrams with mono labels.",
+      "motion": "Near-instant, 80-200ms, no overshoot",
+      "use_for": [
+        "consoles",
+        "internal tools",
+        "API docs",
+        "log and table views"
+      ],
+      "system": "technical"
+    },
+    {
+      "id": "gallery-white",
+      "name": "Gallery White",
+      "description": "Museum-wall minimalism: bright white, graphite type, oversized margins, a single thin sans at large sizes; the work is the only colour.",
+      "palette": {
+        "background": "oklch(1 0 0)",
+        "surface": "oklch(0.985 0 0)",
+        "foreground": "oklch(0.25 0 0)",
+        "muted": "oklch(0.6 0 0)",
+        "border": "oklch(0.94 0 0)",
+        "accent": "oklch(0.25 0 0)",
+        "accent-foreground": "oklch(1 0 0)"
+      },
+      "fonts": {
+        "display": "Instrument Sans",
+        "body": "Instrument Sans",
+        "mono": "DM Mono",
+        "license": "SIL Open Font License 1.1",
+        "source": "Google Fonts"
+      },
+      "radius": {
+        "base": "0px",
+        "surface": "0px"
+      },
+      "density": "airy",
+      "imagery": "Large, uncropped artwork or product photography on white; captions in small caps.",
+      "motion": "Slow cross-fades, 400-600ms",
+      "use_for": [
+        "portfolios",
+        "galleries",
+        "architecture studios",
+        "product launches"
+      ],
+      "system": null
+    },
+    {
+      "id": "terracotta-studio",
+      "name": "Terracotta Studio",
+      "description": "Earthy and handmade: clay, sand and olive, a rounded humanist serif for headlines, soft 12px corners, grain textures.",
+      "palette": {
+        "background": "oklch(0.96 0.02 70)",
+        "surface": "oklch(0.98 0.012 75)",
+        "foreground": "oklch(0.28 0.04 45)",
+        "muted": "oklch(0.52 0.05 50)",
+        "border": "oklch(0.86 0.03 60)",
+        "accent": "oklch(0.58 0.13 42)",
+        "accent-foreground": "oklch(0.98 0.01 70)",
+        "support": [
+          "oklch(0.6 0.07 125)"
+        ]
+      },
+      "fonts": {
+        "display": "Fraunces",
+        "body": "Nunito",
+        "mono": "DM Mono",
+        "license": "SIL Open Font License 1.1",
+        "source": "Google Fonts"
+      },
+      "radius": {
+        "base": "10px",
+        "surface": "16px"
+      },
+      "density": "comfortable",
+      "imagery": "Warm natural-light photography, craft details, subtle paper grain.",
+      "motion": "Gentle 250ms eases",
+      "use_for": [
+        "ceramics and craft brands",
+        "restaurants",
+        "wellness",
+        "independent shops"
+      ],
+      "system": null
+    },
+    {
+      "id": "field-guide",
+      "name": "Field Guide",
+      "description": "Naturalist notebook: moss green and parchment, a sturdy serif with a mono for specimen labels, numbered figures and marginal notes.",
+      "palette": {
+        "background": "oklch(0.965 0.02 100)",
+        "surface": "oklch(0.985 0.012 100)",
+        "foreground": "oklch(0.26 0.03 140)",
+        "muted": "oklch(0.5 0.04 130)",
+        "border": "oklch(0.86 0.03 110)",
+        "accent": "oklch(0.45 0.09 150)",
+        "accent-foreground": "oklch(0.98 0.01 100)"
+      },
+      "fonts": {
+        "display": "Source Serif 4",
+        "body": "Source Serif 4",
+        "mono": "IBM Plex Mono",
+        "license": "SIL Open Font License 1.1",
+        "source": "Google Fonts"
+      },
+      "radius": {
+        "base": "4px",
+        "surface": "6px"
+      },
+      "density": "comfortable",
+      "imagery": "Botanical line drawings, specimen photography on plain backgrounds, labelled figures.",
+      "motion": "Minimal; 200ms fades",
+      "use_for": [
+        "outdoor and environmental orgs",
+        "science explainers",
+        "field reports",
+        "museums"
+      ],
+      "system": null
+    },
+    {
+      "id": "arcade-chrome",
+      "name": "Arcade Chrome",
+      "description": "After-hours arcade: near-black, electric magenta and lime, a geometric grotesk in heavy weights, sharp 2px corners and glowing focus states.",
+      "palette": {
+        "background": "oklch(0.14 0.02 300)",
+        "surface": "oklch(0.19 0.03 300)",
+        "foreground": "oklch(0.97 0.01 300)",
+        "muted": "oklch(0.7 0.04 300)",
+        "border": "oklch(1 0 0 / 12%)",
+        "accent": "oklch(0.65 0.27 340)",
+        "accent-foreground": "oklch(0.99 0 0)",
+        "support": [
+          "oklch(0.88 0.22 130)"
+        ]
+      },
+      "fonts": {
+        "display": "Space Grotesk",
+        "body": "Space Grotesk",
+        "mono": "DM Mono",
+        "license": "SIL Open Font License 1.1",
+        "source": "Google Fonts"
+      },
+      "radius": {
+        "base": "2px",
+        "surface": "4px"
+      },
+      "density": "compact",
+      "imagery": "High-contrast 3D renders, pixel accents, neon on black.",
+      "motion": "Snappy 120ms with glow pulses",
+      "use_for": [
+        "games",
+        "events and festivals",
+        "music releases",
+        "hackathons"
+      ],
+      "system": null
+    },
+    {
+      "id": "harbor-fog",
+      "name": "Harbor Fog",
+      "description": "Coastal calm: misty blue-greys, navy text, a sea-glass accent, soft 10px radii and lots of breathing room.",
+      "palette": {
+        "background": "oklch(0.97 0.008 230)",
+        "surface": "oklch(0.99 0.004 230)",
+        "foreground": "oklch(0.27 0.04 250)",
+        "muted": "oklch(0.55 0.03 240)",
+        "border": "oklch(0.9 0.012 230)",
+        "accent": "oklch(0.55 0.08 200)",
+        "accent-foreground": "oklch(0.99 0.004 230)"
+      },
+      "fonts": {
+        "display": "Manrope",
+        "body": "Manrope",
+        "mono": "JetBrains Mono",
+        "license": "SIL Open Font License 1.1",
+        "source": "Google Fonts"
+      },
+      "radius": {
+        "base": "10px",
+        "surface": "16px"
+      },
+      "density": "airy",
+      "imagery": "Soft-focus landscape photography, muted tones, lots of sky.",
+      "motion": "Slow 300ms eases, gentle parallax at most",
+      "use_for": [
+        "healthcare",
+        "insurance and finance",
+        "travel",
+        "calm consumer apps"
+      ],
+      "system": null
+    },
+    {
+      "id": "ink-and-vermilion",
+      "name": "Ink & Vermilion",
+      "description": "Two-colour print: black ink on warm white with a vermilion stamp accent, strong grid, bold sans headlines against a text serif.",
+      "palette": {
+        "background": "oklch(0.98 0.008 80)",
+        "surface": "oklch(1 0 0)",
+        "foreground": "oklch(0.16 0.01 60)",
+        "muted": "oklch(0.48 0.02 60)",
+        "border": "oklch(0.85 0.01 70)",
+        "accent": "oklch(0.6 0.21 33)",
+        "accent-foreground": "oklch(0.99 0 0)"
+      },
+      "fonts": {
+        "display": "Instrument Sans",
+        "body": "Source Serif 4",
+        "mono": "IBM Plex Mono",
+        "license": "SIL Open Font License 1.1",
+        "source": "Google Fonts"
+      },
+      "radius": {
+        "base": "0px",
+        "surface": "0px"
+      },
+      "density": "comfortable",
+      "imagery": "Black-and-white photography, halftone treatments, vermilion overprints.",
+      "motion": "Hard cuts; 120ms",
+      "use_for": [
+        "posters",
+        "cultural institutions",
+        "book and publishing sites",
+        "manifestos"
+      ],
+      "system": null
+    },
+    {
+      "id": "sunday-market",
+      "name": "Sunday Market",
+      "description": "Farmers-market cheer: tomato, basil and butter yellow on kraft-paper beige, chunky rounded type, hand-drawn dividers.",
+      "palette": {
+        "background": "oklch(0.95 0.03 85)",
+        "surface": "oklch(0.98 0.015 90)",
+        "foreground": "oklch(0.3 0.05 50)",
+        "muted": "oklch(0.52 0.05 60)",
+        "border": "oklch(0.85 0.04 80)",
+        "accent": "oklch(0.6 0.19 32)",
+        "accent-foreground": "oklch(0.99 0.01 90)",
+        "support": [
+          "oklch(0.6 0.13 140)",
+          "oklch(0.88 0.13 95)"
+        ]
+      },
+      "fonts": {
+        "display": "Fredoka",
+        "body": "Nunito",
+        "mono": "DM Mono",
+        "license": "SIL Open Font License 1.1",
+        "source": "Google Fonts"
+      },
+      "radius": {
+        "base": "14px",
+        "surface": "20px"
+      },
+      "density": "roomy",
+      "imagery": "Bright produce photography, stickers, hand-lettered labels.",
+      "motion": "Bouncy 220ms",
+      "use_for": [
+        "food and grocery",
+        "local events",
+        "recipe sites",
+        "community orgs"
+      ],
+      "system": null
+    },
+    {
+      "id": "deep-orbit",
+      "name": "Deep Orbit",
+      "description": "Space-program seriousness: ink-navy, a signal orange, thin technical grotesk, coordinate-style mono labels and fine grid lines.",
+      "palette": {
+        "background": "oklch(0.18 0.03 255)",
+        "surface": "oklch(0.22 0.035 255)",
+        "foreground": "oklch(0.95 0.01 250)",
+        "muted": "oklch(0.68 0.03 250)",
+        "border": "oklch(1 0 0 / 10%)",
+        "accent": "oklch(0.72 0.17 50)",
+        "accent-foreground": "oklch(0.18 0.03 255)"
+      },
+      "fonts": {
+        "display": "Space Grotesk",
+        "body": "Inter",
+        "mono": "IBM Plex Mono",
+        "license": "SIL Open Font License 1.1",
+        "source": "Google Fonts"
+      },
+      "radius": {
+        "base": "4px",
+        "surface": "8px"
+      },
+      "density": "comfortable",
+      "imagery": "Satellite and telescope imagery, orbital diagrams, fine grid overlays.",
+      "motion": "Measured 250ms, linear progress",
+      "use_for": [
+        "aerospace and deep tech",
+        "research labs",
+        "climate data",
+        "hardware launches"
+      ],
+      "system": null
+    },
+    {
+      "id": "paper-cut",
+      "name": "Paper Cut",
+      "description": "Layered construction paper: flat pastel planes with offset hard shadows, rounded sans, playful but orderly.",
+      "palette": {
+        "background": "oklch(0.97 0.02 20)",
+        "surface": "oklch(0.99 0.01 20)",
+        "foreground": "oklch(0.3 0.04 280)",
+        "muted": "oklch(0.55 0.04 280)",
+        "border": "oklch(0.88 0.03 20)",
+        "accent": "oklch(0.55 0.15 265)",
+        "accent-foreground": "oklch(0.99 0 0)",
+        "support": [
+          "oklch(0.85 0.08 20)",
+          "oklch(0.86 0.08 170)"
+        ]
+      },
+      "fonts": {
+        "display": "Nunito",
+        "body": "Nunito",
+        "mono": "DM Mono",
+        "license": "SIL Open Font License 1.1",
+        "source": "Google Fonts"
+      },
+      "radius": {
+        "base": "12px",
+        "surface": "18px"
+      },
+      "density": "comfortable",
+      "imagery": "Paper-craft illustrations and collage, flat shapes with hard offset shadows.",
+      "motion": "Slide-and-settle 240ms",
+      "use_for": [
+        "education",
+        "kids' products",
+        "nonprofits",
+        "explainers"
+      ],
+      "system": null
+    },
+    {
+      "id": "civic-plain",
+      "name": "Civic Plain",
+      "description": "Public-service clarity: high-contrast black on white, one strong blue for links and actions, large type, visible focus, zero decoration.",
+      "palette": {
+        "background": "oklch(1 0 0)",
+        "surface": "oklch(0.97 0 0)",
+        "foreground": "oklch(0.15 0 0)",
+        "muted": "oklch(0.45 0 0)",
+        "border": "oklch(0.8 0 0)",
+        "accent": "oklch(0.45 0.18 260)",
+        "accent-foreground": "oklch(1 0 0)"
+      },
+      "fonts": {
+        "display": "IBM Plex Sans",
+        "body": "IBM Plex Sans",
+        "mono": "IBM Plex Mono",
+        "license": "SIL Open Font License 1.1",
+        "source": "Google Fonts"
+      },
+      "radius": {
+        "base": "4px",
+        "surface": "4px"
+      },
+      "density": "comfortable",
+      "imagery": "Minimal; functional photography only when it helps a task.",
+      "motion": "None beyond focus and state changes",
+      "use_for": [
+        "government and civic services",
+        "forms-heavy flows",
+        "accessibility-first products",
+        "utilities"
+      ],
+      "system": null
+    },
+    {
+      "id": "velvet-hour",
+      "name": "Velvet Hour",
+      "description": "Evening luxury: aubergine and bronze, a high-contrast display serif, restrained letter-spaced sans labels, soft vignette gradients.",
+      "palette": {
+        "background": "oklch(0.18 0.03 330)",
+        "surface": "oklch(0.22 0.035 330)",
+        "foreground": "oklch(0.94 0.02 70)",
+        "muted": "oklch(0.7 0.03 50)",
+        "border": "oklch(0.94 0.02 70 / 12%)",
+        "accent": "oklch(0.72 0.1 65)",
+        "accent-foreground": "oklch(0.18 0.03 330)"
+      },
+      "fonts": {
+        "display": "Fraunces",
+        "body": "Instrument Sans",
+        "mono": "DM Mono",
+        "license": "SIL Open Font License 1.1",
+        "source": "Google Fonts"
+      },
+      "radius": {
+        "base": "2px",
+        "surface": "4px"
+      },
+      "density": "airy",
+      "imagery": "Low-key moody photography, rich shadows, close-up textures.",
+      "motion": "Slow 400-600ms fades",
+      "use_for": [
+        "hospitality and hotels",
+        "fashion and beauty",
+        "fine dining",
+        "premium events"
+      ],
+      "system": null
+    }
+  ]
+}

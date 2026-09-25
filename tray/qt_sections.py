@@ -2813,7 +2813,7 @@ def _proxy(window) -> QWidget:
     prl = QHBoxLayout(proto_row)
     prl.setContentsMargins(0, 0, 0, 0)
     prl.setSpacing(16)
-    for proto in ["anthropic", "openai"]:
+    for proto in ["anthropic", "openai", "gemini"]:
         t = Toggle()
         current = set(get_path(read_settings(), "proxy.protocols", []) or [])
         t.setChecked(proto in current)
@@ -2841,7 +2841,8 @@ def _proxy(window) -> QWidget:
     prl.addStretch(1)
     body.addWidget(_row(row_label("Protocols",
                                   "Which client APIs to serve. Anthropic is /v1/messages, "
-                                  "OpenAI is /v1/chat/completions.", "proxy.protocols"),
+                                  "OpenAI is /v1/chat/completions + /v1/responses, "
+                                  "Gemini is /v1beta/models/*.", "proxy.protocols"),
                         proto_row))
     body.addWidget(_list_row("proxy.cors_origins", "CORS Origins",
                               "Allowed origins for the proxy HTTP server (one per line).",

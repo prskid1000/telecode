@@ -1,0 +1,65 @@
+[
+  {
+    "kind": "deck",
+    "file": "deck_stage.js",
+    "load": "script",
+    "aliases": ["deck-stage.js"],
+    "project_kinds": ["slides"],
+    "exports": ["<deck-stage>", "window.tdDeck"],
+    "description": "Slide-deck shell implementing prompts/deck.md: 1920x1080 scale-to-fit, keyboard + click navigation, 1-indexed counter and #slide=N, td:slide / td:slide-changed, speaker notes, print one page per slide. Wrap <section data-td-slide data-td-screen=\"01 Title\"> elements in <deck-stage>."
+  },
+  {
+    "kind": "design_canvas",
+    "file": "design_canvas.jsx",
+    "load": "text/babel",
+    "aliases": ["design-canvas.jsx"],
+    "project_kinds": ["prototype", "wireframe", "web_app", "mobile_app", "landing_page", "other"],
+    "exports": ["DesignCanvas", "DesignOption"],
+    "description": "Two or more static options side by side inside one board, with labels, notes, a Recommended badge and Fit / 100% zoom."
+  },
+  {
+    "kind": "ios_frame",
+    "file": "ios_frame.jsx",
+    "load": "text/babel",
+    "aliases": ["ios-frame.jsx"],
+    "project_kinds": ["mobile_app", "prototype"],
+    "exports": ["IOSFrame", "IOSStatusBar", "IOSHomeIndicator", "IOS_SAFE"],
+    "description": "iPhone-style device frame (390x844 screen): bezel, island, status bar, home indicator, safe areas, light/dark, fit-to-board scaling."
+  },
+  {
+    "kind": "android_frame",
+    "file": "android_frame.jsx",
+    "load": "text/babel",
+    "aliases": ["android-frame.jsx"],
+    "project_kinds": ["mobile_app", "prototype"],
+    "exports": ["AndroidFrame", "AndroidStatusBar", "AndroidNavBar", "ANDROID_SAFE"],
+    "description": "Android-style device frame (412x915 screen): punch-hole camera, status bar, gesture pill or 3-button nav, safe areas, light/dark, fit-to-board scaling."
+  },
+  {
+    "kind": "macos_window",
+    "file": "macos_window.jsx",
+    "load": "text/babel",
+    "aliases": ["macos-window.jsx"],
+    "project_kinds": ["web_app", "prototype", "dashboard_table"],
+    "exports": ["MacWindow", "MacTrafficLights", "MacSidebar", "MacToolbarButton"],
+    "description": "Desktop-app window chrome: traffic lights, unified title bar + toolbar, optional translucent sidebar, light/dark, fit-to-board scaling."
+  },
+  {
+    "kind": "browser_window",
+    "file": "browser_window.jsx",
+    "load": "text/babel",
+    "aliases": ["browser-window.jsx"],
+    "project_kinds": ["landing_page", "web_app", "prototype", "dashboard_table"],
+    "exports": ["BrowserWindow", "BrowserTabs", "BrowserToolbar", "BROWSER_CHROME"],
+    "description": "Brand-neutral browser chrome around a website: tab strip, toolbar, address bar with padlock, scrolling page viewport, light/dark, fit-to-board scaling."
+  },
+  {
+    "kind": "animation",
+    "file": "animations.jsx",
+    "load": "text/babel",
+    "aliases": ["animation-stage.jsx", "animation_stage.jsx"],
+    "project_kinds": ["animation"],
+    "exports": ["Stage", "Sprite", "Scrubber", "Reveal", "useTime", "useSprite", "useTimeline", "Easing", "interpolate", "entryExit", "window.tdTimeline"],
+    "description": "Timeline animation stage per prompts/kinds/animation.md: fixed-size scaled stage, Sprite start/end, easing set, interpolate (numbers/colours), entry/exit helpers, scrubber with play/pause/markers, #t= persistence, window.tdTimeline {duration, fps, seek, play, pause} for MP4 export."
+  }
+]

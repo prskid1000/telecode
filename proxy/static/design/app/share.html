@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="referrer" content="no-referrer" />
+<title>Shared design — TeleDesign</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' rx='6' fill='%237cc4ff'/><path d='M6 17.5V19h1.5l8.3-8.3-1.5-1.5zM17.6 8.9a.7.7 0 0 0 0-1l-1.5-1.5a.7.7 0 0 0-1 0l-.9.9 2.5 2.5z' fill='%23052034'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" />
+<!-- Served at /design/s/{token}: every URL here is absolute. -->
+<link rel="stylesheet" href="/design/app/app.css" />
+<script>
+  try {
+    var p = JSON.parse(localStorage.getItem("td:theme") || '"system"');
+    document.documentElement.dataset.theme = p === "system" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : p;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<div id="app"><noscript>This shared design needs JavaScript.</noscript></div>
+<script type="module" src="/design/app/share.js"></script>
+</body>
+</html>

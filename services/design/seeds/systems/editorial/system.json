@@ -1,0 +1,54 @@
+{
+  "name": "Editorial",
+  "slug": "editorial",
+  "description": "Warm paper, ink and an oxblood accent. Serif display (Fraunces) over a serif text face (Source Serif 4), tight radii and generous measure — for long reads, reports, portfolios and magazine-style landing pages.",
+  "status": "published",
+  "is_default": false,
+  "version": "1.0.0",
+  "default_theme": "light",
+  "tags": [
+    "serif",
+    "warm",
+    "magazine",
+    "longform",
+    "report"
+  ],
+  "license": "MIT (TeleDesign seed content)",
+  "fonts_license": "SIL Open Font License 1.1",
+  "credits": [
+    {
+      "name": "Lucide",
+      "license": "ISC (Feather-derived icons: MIT)",
+      "url": "https://lucide.dev",
+      "used_for": "Icon library referenced by name; x / search / menu path data inlined in components"
+    },
+    {
+      "name": "Fraunces",
+      "license": "SIL Open Font License 1.1",
+      "url": "https://fonts.google.com/specimen/Fraunces",
+      "used_for": "font (linked from Google Fonts, not bundled)"
+    },
+    {
+      "name": "Source Serif 4",
+      "license": "SIL Open Font License 1.1",
+      "url": "https://fonts.google.com/specimen/Source+Serif+4",
+      "used_for": "font (linked from Google Fonts, not bundled)"
+    },
+    {
+      "name": "Instrument Sans",
+      "license": "SIL Open Font License 1.1",
+      "url": "https://fonts.google.com/specimen/Instrument+Sans",
+      "used_for": "font (linked from Google Fonts, not bundled)"
+    },
+    {
+      "name": "IBM Plex Mono",
+      "license": "SIL Open Font License 1.1",
+      "url": "https://fonts.google.com/specimen/IBM+Plex+Mono",
+      "used_for": "font (linked from Google Fonts, not bundled)"
+    }
+  ],
+  "source": {
+    "type": "bundled",
+    "origin": "services/design/seeds"
+  }
+}

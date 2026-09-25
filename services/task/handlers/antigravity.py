@@ -1,27 +1,40 @@
-"""Antigravity task handler: runs `agy -p` in a session folder.
+"""Antigravity task handler: runs `agy` in a session folder.
 
 Mirrors services.task.handlers.claude_code so the executor / heartbeat /
 routine call sites stay engine-agnostic.
 
-V1 LIMITATIONS (May 2026 — revisit when `agy` gains a stable JSON mode):
-  * No structured streaming. `agy -p` emits plain text on stdout; we surface
-    it as `narrative` events. Tool calls are not visible to telecode.
-  * No conversation ID in non-interactive output. We cannot reliably resume a
-    specific session, so resume is fresh-by-default. (The `-c` "most recent
-    conversation" flag is process-global and unsafe for concurrent routines.)
-  * No documented `--base-url` or `--model` flag. `is_local=True` is a no-op
-    with a warning — runs hit the cloud anyway.
-  * No documented usage / cost fields. Token counts in the return value are
-    zeros.
+Transport (verified against agy, Sept 2026): the prompt goes on **stdin** as one
+`--input-format stream-json` message, `{"event":"user","message":{"content":...}}`,
+with `--output-format stream-json`. Passing it as `-p <prompt>` on a
+`shell=True` command line hits the Windows command-length limit (~8 KB through a
+.cmd shim) once a design prompt is stacked in. The stream gives:
 
-When Antigravity ships `--output-format json` + conversation IDs in `-p`
-mode + a base-url flag, the body of `_run_antigravity_subprocess` is the
-only thing that needs to change — the public surface already mirrors
-claude_code_task and codex_task.
+  * `init`        -> `conversation_id` (stored as last_antigravity_conversation_id,
+                     replayed with --conversation, so resume works now)
+  * `step_update` -> step_type `tool` (tool_name/tool_info) and `agent_response`
+                     (`text_delta`), with per-step usage
+  * `result`      -> status, response, num_turns, usage
+
+Local mode (`is_local=True`, agy >= 1.1.13): agy's Gemini-API route is enabled
+by `"modelProvider": "gemini"` in `~/.gemini/antigravity-cli/settings.json` plus
+`GEMINI_API_KEY`, with `GOOGLE_GEMINI_BASE_URL` pointing at telecode's proxy,
+which serves the Gemini protocol (`/v1beta/models/*`). The user's real
+`~/.gemini` holds their OAuth login and settings and is never touched: the
+child gets its own home (`<settings_dir>/data/agy-local-home`, via USERPROFILE
+and HOME — agy is Go, and on Windows `os.UserHomeDir()` reads USERPROFILE).
+The model is selected with agy's custom-model form
+`--model gemini-api://local/models/<llama model>`; agy still posts to
+GOOGLE_GEMINI_BASE_URL, and the proxy takes the name after the last
+`/models/`. Local conversations live in the isolated home, so their id is
+stored under a separate key (last_antigravity_local_conversation_id) — a cloud
+conversation id cannot be resumed locally or vice versa.
+
+Still missing: no cost field.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
@@ -39,9 +52,69 @@ from services.task.task_utils import (
     get_task_id,
     is_cancelled,
     update_progress,
+    StreamDrain,
 )
 
 logger = logging.getLogger("telecode.services.task.handlers.antigravity")
+
+_RESUME_KEY = "last_antigravity_conversation_id"
+_RESUME_KEY_LOCAL = "last_antigravity_local_conversation_id"
+
+# Credentials/backends the genai SDK would prefer over GEMINI_API_KEY
+# (GOOGLE_API_KEY wins when both are set) or that switch it to Vertex.
+_LOCAL_ENV_STRIP = ("GOOGLE_API_KEY", "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_CLOUD_PROJECT",
+                    "GOOGLE_CLOUD_LOCATION", "GOOGLE_APPLICATION_CREDENTIALS")
+
+
+def local_home() -> Path:
+    import config as app_config
+    return Path(app_config._settings_dir()) / "data" / "agy-local-home"
+
+
+def ensure_local_home(home: Optional[Path] = None) -> Path:
+    """Create the isolated agy home with `modelProvider: gemini` set.
+
+    Existing keys in that settings.json are preserved (agy writes its own
+    there, e.g. trusted workspaces); only modelProvider is forced.
+    """
+    home = home or local_home()
+    cfg_dir = home / ".gemini" / "antigravity-cli"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    path = cfg_dir / "settings.json"
+    data: Dict[str, Any] = {}
+    try:
+        if path.exists():
+            loaded = json.loads(path.read_text(encoding="utf-8") or "{}")
+            if isinstance(loaded, dict):
+                data = loaded
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    if data.get("modelProvider") != "gemini":
+        data["modelProvider"] = "gemini"
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    return home
+
+
+def local_env(proxy_port: int, home: Path, base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    env = dict(os.environ if base is None else base)
+    for k in _LOCAL_ENV_STRIP:
+        env.pop(k, None)
+    env.update({
+        "USERPROFILE": str(home),
+        "HOME": str(home),
+        "GEMINI_API_KEY": "local",
+        # No /v1 — the genai SDK appends /v1beta/models/... itself.
+        "GOOGLE_GEMINI_BASE_URL": f"http://localhost:{proxy_port}",
+    })
+    return env
+
+
+def local_model_arg(model: str) -> str:
+    """agy's custom-model URL form. The host part is ignored for routing (agy
+    posts to GOOGLE_GEMINI_BASE_URL); the proxy reads the name after /models/."""
+    return f"gemini-api://local/models/{model}"
 
 
 def antigravity_task(
@@ -78,16 +151,9 @@ def antigravity_task(
     if not sid or not work_dir:
         raise RuntimeError("No session bound to this task")
 
-    # NOTE: when agy exposes IDs in -p mode, read it here and pass to the
-    # subprocess via --conversation <ID>. For now: always fresh.
     meta = session_store.get(sid, namespace=ns) or {}
-    resume_id = (meta.get("data") or {}).get("last_antigravity_conversation_id")
-
-    if is_local:
-        logger.warning(
-            "antigravity_task: is_local=True ignored — agy has no documented "
-            "--base-url / --model flag for headless mode in this release."
-        )
+    resume_key = _RESUME_KEY_LOCAL if is_local else _RESUME_KEY
+    resume_id = (meta.get("data") or {}).get(resume_key)
 
     with stage_for_run(agent_id, sid, work_dir, engine="antigravity"):
         return _run_antigravity_subprocess(
@@ -97,24 +163,35 @@ def antigravity_task(
             ns=ns,
             resume_id=resume_id,
             log_path=log_path,
+            is_local=is_local,
         )
 
 
 def _build_antigravity_argv(
     *,
-    prompt: str,
     work_dir: Path,
     resume_id: Optional[str],
+    model: Optional[str] = None,
 ) -> List[str]:
+    # `-p=` with an empty value: the prompt arrives on stdin. A bare `-p` would
+    # swallow the next flag as its prompt.
     cmd: List[str] = [
         "agy",
-        "-p", prompt,
+        "--input-format", "stream-json",
+        "--output-format", "stream-json",
         "--dangerously-skip-permissions",
         "--add-dir", str(work_dir),
     ]
+    if model:
+        cmd += ["--model", model]
     if resume_id:
         cmd += ["--conversation", resume_id]
+    cmd.append("-p=")
     return cmd
+
+
+def _stdin_message(prompt: str) -> str:
+    return json.dumps({"event": "user", "message": {"content": prompt}}, ensure_ascii=False) + "\n"
 
 
 def _run_antigravity_subprocess(
@@ -125,8 +202,22 @@ def _run_antigravity_subprocess(
     ns: Optional[str],
     resume_id: Optional[str],
     log_path: Path,
+    is_local: bool = False,
 ) -> Dict[str, Any]:
-    cmd = _build_antigravity_argv(prompt=prompt, work_dir=work_dir, resume_id=resume_id)
+    env: Optional[Dict[str, str]] = None
+    model_arg: Optional[str] = None
+    resume_key = _RESUME_KEY_LOCAL if is_local else _RESUME_KEY
+    if is_local:
+        import config as app_config
+        import llamacpp.state as llama_state
+        model = llama_state.last_active_model() or "local"
+        home = ensure_local_home()
+        env = local_env(app_config.proxy_port(), home)
+        model_arg = local_model_arg(model)
+        logger.info(f"Local mode: agy home={home} base_url={env['GOOGLE_GEMINI_BASE_URL']} "
+                    f"model={model_arg}")
+
+    cmd = _build_antigravity_argv(work_dir=work_dir, resume_id=resume_id, model=model_arg)
 
     logger.info(f"Antigravity starting: cwd={work_dir} session={sid} resume={resume_id or 'none'}")
     update_progress(0.05, "launching agy")
@@ -137,7 +228,7 @@ def _run_antigravity_subprocess(
         "prompt": prompt,
         "resumed": bool(resume_id),
         "resumed_antigravity_conversation_id": resume_id,
-        "is_local": False,  # always false in v1; see is_local warning above
+        "is_local": is_local,
     })
 
     creation = 0
@@ -147,18 +238,26 @@ def _run_antigravity_subprocess(
     proc = subprocess.Popen(
         cmd,
         cwd=str(work_dir),
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env=None,
+        env=env,
         text=True,
+        encoding="utf-8",
         bufsize=1,
         shell=True,
         creationflags=creation,
     )
+    assert proc.stdin is not None
+    proc.stdin.write(_stdin_message(prompt))
+    proc.stdin.close()
+    stderr_drain = StreamDrain(proc.stderr)
 
-    accumulated_text: List[str] = []
-    # agy streams plain text; treat each non-empty line as a narrative chunk
-    # to keep the UX similar to Claude's streaming narrative.
+    tool_calls: List[str] = []
+    text_parts: List[str] = []
+    raw_lines: List[str] = []
+    final: Optional[Dict[str, Any]] = None
+    conversation_id: Optional[str] = None
     try:
         with log_path.open("w", encoding="utf-8") as log_fh:
             assert proc.stdout is not None
@@ -171,50 +270,77 @@ def _run_antigravity_subprocess(
                     proc.terminate()
                     raise RuntimeError("Task cancelled")
 
-                stripped = line.rstrip("\r\n")
-                if stripped.strip():
-                    accumulated_text.append(stripped)
-                    append_event({"kind": "narrative", "text": stripped})
+                try:
+                    evt = json.loads(line)
+                except json.JSONDecodeError:
+                    if line.strip():
+                        raw_lines.append(line.strip())
+                    continue
 
-        # `agy -p` has a default 5m timeout; we add slack on top.
+                kind = evt.get("event")
+                if kind == "init":
+                    conversation_id = evt.get("conversation_id") or conversation_id
+                elif kind == "step_update":
+                    step = evt.get("step_update") or {}
+                    conversation_id = step.get("conversation_id") or conversation_id
+                    if step.get("step_type") == "tool" and step.get("state") == "ACTIVE":
+                        info = step.get("tool_info") or {}
+                        name = step.get("tool_name") or info.get("name") or "tool"
+                        tool_calls.append(name)
+                        append_event({"kind": "tool", "name": name, "input": info.get("parameters")})
+                    elif step.get("step_type") == "agent_response" and step.get("text_delta"):
+                        text_parts.append(step["text_delta"])
+                        append_event({"kind": "narrative_delta", "text": step["text_delta"]})
+                elif kind == "result":
+                    final = evt.get("result") or {}
+                    conversation_id = final.get("conversation_id") or conversation_id
+
+                if conversation_id and conversation_id != resume_id:
+                    session_store.patch_data(sid, {resume_key: conversation_id}, namespace=ns)
+                    resume_id = conversation_id
+
         proc.wait(timeout=60)
     finally:
         if proc.poll() is None:
             proc.kill()
 
-    stderr = (proc.stderr.read() if proc.stderr else "") or ""
-    if proc.returncode != 0 and not accumulated_text:
+    stderr = stderr_drain.text()
+    fin = final or {}
+    if fin.get("status") not in (None, "SUCCESS") and not fin.get("response"):
+        raise RuntimeError(f"agy failed: {fin.get('error') or stderr.strip()[:500]}")
+    if proc.returncode != 0 and final is None and not text_parts:
         raise RuntimeError(f"agy exited with code {proc.returncode}: {stderr.strip()[:500]}")
 
-    final_text = "\n".join(accumulated_text).strip()
+    final_text = (fin.get("response") or "".join(text_parts) or "\n".join(raw_lines)).strip()
+    usage = fin.get("usage") or {}
 
     update_progress(1.0, "done")
     append_event({
         "kind": "done",
-        "tool_count": 0,            # not visible without structured output
+        "tool_count": len(tool_calls),
         "cost_usd": None,
-        "num_turns": 1,
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "cache_read_tokens": 0,
+        "num_turns": fin.get("num_turns") or 1,
+        "input_tokens": usage.get("input_tokens") or 0,
+        "output_tokens": usage.get("output_tokens") or 0,
+        "cache_read_tokens": usage.get("cache_read_tokens") or 0,
         "cache_write_tokens": 0,
     })
 
     return {
         "result": final_text,
         "session_id": sid,
-        "antigravity_conversation_id": None,  # see TODO at top of file
+        "antigravity_conversation_id": conversation_id,
         "cost_usd": 0,
-        "duration_ms": 0,
+        "duration_ms": int((fin.get("duration_seconds") or 0) * 1000),
         "duration_api_ms": 0,
-        "num_turns": 1,
+        "num_turns": fin.get("num_turns") or 1,
         "tokens": {
-            "input": 0,
-            "output": 0,
-            "cache_read": 0,
+            "input": usage.get("input_tokens") or 0,
+            "output": usage.get("output_tokens") or 0,
+            "cache_read": usage.get("cache_read_tokens") or 0,
             "cache_write": 0,
-            "total_input_incl_cache": 0,
+            "total_input_incl_cache": usage.get("input_tokens") or 0,
         },
-        "tool_calls": [],
+        "tool_calls": tool_calls,
         "log_path": str(log_path),
     }

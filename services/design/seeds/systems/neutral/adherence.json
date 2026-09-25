@@ -1,0 +1,352 @@
+{
+  "schema": "teledesign-adherence/v1",
+  "system": "neutral",
+  "rules": {
+    "no-raw-color": {
+      "severity": "error",
+      "allowIn": [
+        "tokens.css"
+      ],
+      "pattern": "#[0-9a-fA-F]{3,8}\\b|\\b(?:rgb|rgba|hsl|hsla|oklch|oklab|lab|lch|color)\\(",
+      "allowValues": [
+        "transparent",
+        "currentColor",
+        "inherit"
+      ],
+      "message": "Use a colour token: var(--primary), var(--muted-foreground), …"
+    },
+    "color-tokens": {
+      "severity": "error",
+      "allowed": [
+        "--background",
+        "--foreground",
+        "--card",
+        "--card-foreground",
+        "--popover",
+        "--popover-foreground",
+        "--primary",
+        "--primary-foreground",
+        "--secondary",
+        "--secondary-foreground",
+        "--muted",
+        "--muted-foreground",
+        "--accent",
+        "--accent-foreground",
+        "--destructive",
+        "--destructive-foreground",
+        "--success",
+        "--success-foreground",
+        "--warning",
+        "--warning-foreground",
+        "--border",
+        "--input",
+        "--ring",
+        "--chart-1",
+        "--chart-2",
+        "--chart-3",
+        "--chart-4",
+        "--chart-5",
+        "--overlay"
+      ],
+      "allowColorMixOf": [
+        "--background",
+        "--foreground",
+        "--card",
+        "--card-foreground",
+        "--popover",
+        "--popover-foreground",
+        "--primary",
+        "--primary-foreground",
+        "--secondary",
+        "--secondary-foreground",
+        "--muted",
+        "--muted-foreground",
+        "--accent",
+        "--accent-foreground",
+        "--destructive",
+        "--destructive-foreground",
+        "--success",
+        "--success-foreground",
+        "--warning",
+        "--warning-foreground",
+        "--border",
+        "--input",
+        "--ring",
+        "--chart-1",
+        "--chart-2",
+        "--chart-3",
+        "--chart-4",
+        "--chart-5",
+        "--overlay"
+      ]
+    },
+    "spacing": {
+      "severity": "warn",
+      "properties": [
+        "margin",
+        "padding",
+        "gap",
+        "row-gap",
+        "column-gap",
+        "inset",
+        "top",
+        "right",
+        "bottom",
+        "left"
+      ],
+      "tokens": [
+        "--space-0",
+        "--space-px",
+        "--space-0-5",
+        "--space-1",
+        "--space-1-5",
+        "--space-2",
+        "--space-3",
+        "--space-4",
+        "--space-5",
+        "--space-6",
+        "--space-8",
+        "--space-10",
+        "--space-12",
+        "--space-16",
+        "--space-20",
+        "--space-24"
+      ],
+      "scalePx": [
+        0,
+        1,
+        2,
+        4,
+        6,
+        8,
+        12,
+        16,
+        20,
+        24,
+        32,
+        40,
+        48,
+        64,
+        80,
+        96
+      ],
+      "allowRawPx": [
+        0,
+        1
+      ],
+      "message": "Use var(--space-N); off-scale values break the 4px grid."
+    },
+    "radius": {
+      "severity": "warn",
+      "tokens": [
+        "--radius-sm",
+        "--radius-md",
+        "--radius-lg",
+        "--radius-xl",
+        "--radius-full",
+        "--radius-control",
+        "--radius-surface",
+        "--radius-input",
+        "--radius-badge"
+      ],
+      "scalePx": [
+        0,
+        6,
+        8,
+        10,
+        14,
+        9999
+      ]
+    },
+    "font-family": {
+      "severity": "error",
+      "allowedFamilies": [
+        "Inter",
+        "JetBrains Mono"
+      ],
+      "tokens": [
+        "--font-display",
+        "--font-body",
+        "--font-ui",
+        "--font-mono"
+      ],
+      "genericFallbacks": [
+        "serif",
+        "sans-serif",
+        "monospace",
+        "system-ui",
+        "ui-sans-serif",
+        "ui-serif",
+        "ui-monospace",
+        "ui-rounded"
+      ]
+    },
+    "font-size": {
+      "severity": "warn",
+      "tokens": [
+        "--text-xs",
+        "--text-sm",
+        "--text-base",
+        "--text-lg",
+        "--text-xl",
+        "--text-2xl",
+        "--text-3xl",
+        "--text-4xl",
+        "--text-5xl"
+      ],
+      "scalePx": [
+        12,
+        14,
+        16,
+        18,
+        20,
+        24,
+        30,
+        36,
+        48
+      ]
+    },
+    "font-weight": {
+      "severity": "warn",
+      "allowed": [
+        400,
+        500,
+        600,
+        700
+      ]
+    },
+    "shadow": {
+      "severity": "warn",
+      "tokens": [
+        "--shadow-xs",
+        "--shadow-sm",
+        "--shadow-md",
+        "--shadow-lg",
+        "--card-shadow",
+        "--button-shadow"
+      ]
+    },
+    "motion": {
+      "severity": "info",
+      "durationTokens": [
+        "--duration-fast",
+        "--duration-base",
+        "--duration-slow"
+      ],
+      "easingTokens": [
+        "--ease-standard",
+        "--ease-out",
+        "--ease-emphasis"
+      ]
+    },
+    "components": {
+      "severity": "error",
+      "props": {
+        "Button": {
+          "variant": [
+            "primary",
+            "secondary",
+            "outline",
+            "ghost",
+            "destructive",
+            "link"
+          ],
+          "size": [
+            "sm",
+            "md",
+            "lg",
+            "icon"
+          ],
+          "type": [
+            "button",
+            "submit",
+            "reset"
+          ]
+        },
+        "Input": {
+          "size": [
+            "sm",
+            "md",
+            "lg"
+          ],
+          "type": [
+            "text",
+            "email",
+            "password",
+            "search",
+            "number",
+            "url",
+            "tel"
+          ]
+        },
+        "Card": {
+          "padding": [
+            "sm",
+            "md",
+            "lg"
+          ],
+          "elevation": [
+            "flat",
+            "raised"
+          ]
+        },
+        "Badge": {
+          "variant": [
+            "default",
+            "secondary",
+            "outline",
+            "success",
+            "warning",
+            "destructive"
+          ]
+        },
+        "Tabs": {
+          "variant": [
+            "pill",
+            "underline"
+          ]
+        },
+        "Dialog": {
+          "size": [
+            "sm",
+            "md",
+            "lg"
+          ]
+        },
+        "Table": {
+          "density": [
+            "compact",
+            "comfortable"
+          ]
+        },
+        "Nav": {
+          "orientation": [
+            "horizontal",
+            "vertical"
+          ]
+        }
+      },
+      "message": "Unknown prop value; see manifest.json."
+    },
+    "icons": {
+      "severity": "warn",
+      "allowedLibraries": [
+        "lucide"
+      ]
+    },
+    "system-specific": [
+      {
+        "severity": "warn",
+        "text": "No gradients on surfaces."
+      },
+      {
+        "severity": "warn",
+        "text": "No drop shadows on inputs."
+      },
+      {
+        "severity": "warn",
+        "text": "No more than three type sizes per screen."
+      }
+    ]
+  }
+}
