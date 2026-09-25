@@ -1,6 +1,6 @@
 # Task Mode + Team Mode — architecture review and target design
 
-Status: **P0, P1 and P2 implemented** (2026-09-25; P0 = commit 231d611, P1 = 303dc51). P3–P5 remain proposals. Original proposal date 2026-09-25. Inputs: a read-only audit of `services/{session,task,agent,job,run,heartbeat,routine,skills}` +
+Status: **P0–P3 implemented** (2026-09-25; P0 = commit 231d611, P1 = 303dc51, P2 = 0f447fa). P4–P5 remain proposals. Original proposal date 2026-09-25. Inputs: a read-only audit of `services/{session,task,agent,job,run,heartbeat,routine,skills}` +
 `proxy/api_*`, and web research on 2025–2026 agent platforms (Anthropic context engineering / Agent SDK / headless docs,
 OpenAI Agents SDK + Codex app-server, Google ADK, LangGraph, Microsoft Agent Framework, Letta, Mem0, CrewAI, Goose, Cline,
 Copilot agent HQ, OpenClaw). Flags quoted below were checked against the installed CLIs (claude 2.1.282, codex-cli 0.157,
@@ -139,7 +139,7 @@ tasks, shared Team · Tasks · Design navbar.
 | **P0 — Fix-first** (S) — **done** | B1 (no absolute TTL on workspaces; expiry archives), B2 (full handoff text, capped at 16 KB, + artifact list), B3 (engine/model/local per step & heartbeat), B4, B5, B9 (path validation), B10 (tree-kill via shared helper), B11 (codex usage), B12 (separate pool for heartbeat/routine), B13 (enforce timeout; lock skip-if-running), cancel no longer overwrites finished tasks | low, contained |
 | **P1 — Engine Runner + Store** (M) — **done** | `services/engine/` used by all modes incl. TeleDesign; SQLite store for tasks/events/runs/steps/attempts/sessions + startup reconcile; SSE for Task/Team; resume scope (workspace, agent, engine); explicit context via `--append-system-prompt-file`; stop clobbering workspace CLAUDE.md | medium — touches every mode; keep the REST surface backward compatible |
 | **P2 — Handoffs, budgets, snapshots** (M) — **done** | structured step outputs + artifacts; budgets; retries; shadow-git snapshots + diff/revert; session policy per step (resume/fork/fresh/ephemeral) | medium |
-| **P3 — New step kinds + triggers** (M) | map / loop / gate / reduce; approvals inbox + Telegram; unified Triggers (cron/interval/at/webhook/github/file) with heartbeat cost controls and goals | medium |
+| **P3 — New step kinds + triggers** (M) — **done** | map / loop / gate / reduce; approvals inbox + Telegram; unified Triggers (cron/interval/at/webhook/github/file) with heartbeat cost controls and goals | medium |
 | **P4 — Memory** (S–M) | git-versioned `internal/`, index + topic files, pinned constraints, autoMemoryDirectory, portable skills, reflection job with approval | low |
 | **P5 — Observability + safety** (M) | OTLP receiver + GenAI spans + cost dashboards; verdicts/evals; auto permission mode + approve_tool; session rotation at thresholds; cross-engine continue | medium |
 
@@ -196,8 +196,61 @@ tasks, shared Team · Tasks · Design navbar.
   the "fork from here" snapshot+fork action; dollar caps for Codex/agy (no cost reported); agy's token cap (it reports
   usage only at the end, so only its wall clock is enforced mid-run).
 
-Backward compatibility rule: existing `/api/*` routes keep their shapes (new fields only); existing agents/jobs/routines/heartbeats
-migrate on first load; the old pages keep working until the redesign lands.
+### P3 as built (2026-09-25)
+- **Step kinds** (`job_manager._normalize_kind` / `executor`): `kind: agent | map | loop | gate | reduce`; the last four must be
+  alone in their phase (map / reduce also need a previous phase). **map** — width = the previous phase's handoff field
+  (`items_from`: `next_steps | items | open_questions | decisions | artifacts`; `items` is a new, always-present handoff field and
+  the planner gets `<fanout_instructions>` when the next step reads it), `max_items`, `max_parallel`; each worker is an
+  ephemeral copy of the workspace with the previous handoff + `<map_item>`, or (`worker_session: fork`) a fork of the planner's
+  conversation in the planner's workspace (serialised by the staging lock). The step budget is split per worker (seconds per
+  wave). Workers live in `step.workers[]` (own snapshots → `…/diff?worker=n`, artifacts under `artifacts/<step>/w<n>/`); the
+  step's handoff merges them and the next phase gets one `<handoff>` per worker; `retry` re-runs only unfinished workers.
+  **loop** — the body is an agent attempt (`attempts[].mode = iteration`), then a check: `command` (shell in the workspace,
+  exit 0 = pass, output in `data/runs/<run>/checks/`), `grader` (an agent — optional own agent / engine / model — in a FRESH
+  ephemeral copy with the rubric, answering `{verdict, summary, findings}` via `--json-schema`; agy: a `VERDICT:` line) or
+  `schema` (the body's handoff, or a workspace JSON file, against a JSON Schema — `services/run/jsonschema_lite.py`). Findings
+  go back to the body, which resumes its conversation; `max_iterations` (1–10); a step budget covers all iterations; the grader's
+  usage counts toward the step. `step.iterations[]` records each check. **gate** — an `approvals` row, step + run
+  `awaiting_input`, the driver exits (no thread held); startup reconcile leaves it waiting; approve (optionally with edited text,
+  which becomes the gate's handoff; what the gate was shown is passed through too) launches a new driver from the next phase;
+  reject → step + run `rejected`; cancel cancels the approval; a rejected gate can be asked again (`retry`). **reduce** — an agent
+  that gets every previous handoff + `<reduce_instructions>`, fresh conversation by default.
+- **Run store**: statuses `awaiting_input`, `rejected` (runs and steps); an awaiting run has no `completed_at`; runs carry
+  `trigger_id` / `trigger_fire_id`; `overrides.permission_mode` / `session_policy`; `job_snapshot.context` / `pinned`.
+- **Approvals** (`services/approvals.py`, migration 3): `approvals` table; atomic decide + per-kind handler; REST
+  `/api/approvals[/{id}/approve|reject]`; `approval.created|decided` on the global SSE feed. Telegram
+  (`bot/approval_handlers.py`): posts pending approvals to General with Approve / Reject (`apv:a|r:<id>`), edits on any decision,
+  sweeps for ones created while the bot was down, posts trigger notices; only `allowed_user_ids` decide (empty = nobody).
+- **Triggers** (`services/triggers/`, migration 3: `triggers` + `trigger_fires`): one record type (target task | agent_prompt |
+  job; schedule cron + IANA tz | every | at; events webhook / GitHub / file; session shared | fresh; active hours; skip-if-empty;
+  OK-reply suppression; model override; goal (check command / features.json / max fires / max cost) → auto-pause + notice;
+  auto-pause after K failures; skip-if-running under a per-trigger lock; catch-up skip | once; pinned constraints at the tail;
+  untrusted payload wrapping). One daemon thread in the proxy (15 s tick, 2 s file poll, 60 s HEARTBEAT.md compile).
+  HEARTBEAT.md compiles to `agent_prompt` triggers (`source_key hb:<agent>:<name>`), gated by `heartbeat.enabled` for
+  unattended fires. `services/routine/`, `services/heartbeat/`, `proxy/api_routines.py` and `kind: heartbeat` jobs are gone;
+  `migrate.py` moved their data once (routines → task triggers with counters and last fire; heartbeat state → last fire times).
+  Deleting a job / agent deletes its triggers. Windows needs the `tzdata` package (now in requirements.txt).
+- **Safety**: trigger-fired Claude runs (task, agent and every step of a trigger-fired job run) use `--permission-mode <mode>
+  --permission-prompts none` (per-trigger `permission_mode`, default `auto`; `skip` keeps `--dangerously-skip-permissions`).
+  Verified with claude 2.1.282: `--permission-mode acceptEdits` and (with sonnet) `auto` are reflected in the CLI's init event;
+  with haiku, `auto` degrades to `default` — with prompts off, edits and commands are then denied (the editor says so).
+  Webhook / GitHub / file payloads are always wrapped as `<trigger-payload untrusted="true">`; webhook tokens compare in constant
+  time, GitHub deliveries must carry a valid HMAC; list responses mask tokens and secrets; bodies over 256 KB → 413.
+- **UI**: pipeline editor step-kind picker + kind fields (map source / parallel / items / worker session; loop check type /
+  command / rubric / grader engine / schema / max iterations; gate title / instructions; reduce hint); run monitor map lanes
+  (worker cards with events modal + diff), loop iterations with verdicts / findings, gate card with Approve / Edit & approve /
+  Reject; approvals inbox (badge in `<tc-appnav>`, modal with waiting / history); `shared/triggers.js` list / detail (stats,
+  schedule, conditions, webhook URL + token + curl, GitHub URL + secret, history filterable by ok / suppressed / skipped / failed)
+  / editor. Task Mode: Triggers tab + By-trigger history; Team Mode: rail Triggers section, trigger page, Triggers cards on jobs
+  and agents. All global live updates share one EventSource (`globalFeed`).
+- **Deferred**: `tool` and `memory` approval producers (P4/P5: `--permission-prompt-tool` → `approve_tool`, reflection-job memory
+  diffs); gate timeouts / reminders; edit-then-approve from Telegram; per-trigger connector / MCP scoping; a permission-mode
+  equivalent for Codex / agy (they keep their bypass flags); map over a nested structured field other than the handoff lists;
+  a parallel fork mode for map workers (forks share the planner's cwd, so they serialise); trigger-level budgets beyond
+  `max_cost_usd`; an `attempts` table (still records in the step).
+
+Compatibility: P3 replaced `/api/routines` with `/api/triggers` and the heartbeat job kind with triggers (single user — the UI moved
+with it and the data migrated once); every other `/api/*` route keeps its shape (new fields only).
 
 ## 4. Sources (primary)
 Anthropic: effective context engineering · building effective agents · effective harnesses for long-running agents · multi-agent

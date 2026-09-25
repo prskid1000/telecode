@@ -21,6 +21,7 @@ from bot.handlers import (
     handle_forum_topic_closed, normalize_mention,
 )
 from bot.design_handlers import cmd_design, start_design_notifier
+from bot.approval_handlers import CALLBACK_PATTERN as APPROVAL_CB, handle_approval_callback, start_approval_notifier
 from bot.rate import set_session_manager
 from proxy.server import start_proxy_background
 from mcp_server.server import start_mcp_background
@@ -275,6 +276,9 @@ async def _async_main(token: str) -> None:
     app.add_handler(CommandHandler("key",      cmd_key))
     app.add_handler(CommandHandler("design",   cmd_design))
     start_design_notifier(app)
+    # Approvals inbox buttons (apv:a|r:<id>) — before the catch-all callback handler.
+    app.add_handler(CallbackQueryHandler(handle_approval_callback, pattern=APPROVAL_CB))
+    start_approval_notifier(app)
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.StatusUpdate.FORUM_TOPIC_CLOSED, handle_forum_topic_closed))
     app.add_handler(MessageHandler(filters.Document.ALL,           handle_document))
@@ -339,13 +343,6 @@ async def _async_main(token: str) -> None:
         log.error("Tailscale funnel startup failed: %s", exc, exc_info=True)
 
     try:
-        if config.heartbeat_enabled():
-            from services.heartbeat.scheduler import start_scheduler
-            await start_scheduler()
-    except Exception as exc:
-        log.error("Heartbeat scheduler startup failed: %s", exc, exc_info=True)
-
-    try:
         from docgraph.process import autostart_all as docgraph_autostart
         await docgraph_autostart()
     except Exception as exc:
@@ -372,12 +369,6 @@ async def _async_main(token: str) -> None:
     try:
         from docgraph.process import shutdown_all as docgraph_shutdown
         await docgraph_shutdown()
-    except Exception:
-        pass
-
-    try:
-        from services.heartbeat.scheduler import stop_scheduler
-        await stop_scheduler()
     except Exception:
         pass
 

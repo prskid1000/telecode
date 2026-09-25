@@ -8,8 +8,10 @@
   GET /api/runs/{run_id}/events     ``run`` (the record now, then after every
                                     write) + the step tasks' ``event``/``status``/
                                     ``delta`` frames; ``end`` once the run is final.
-  GET /api/events?kinds=task,run    global feed: ``task.status`` and ``run.update``
-                                    summaries only (sidebars, boards).
+  GET /api/events?kinds=task,run,approval,trigger
+                                    global feed: ``task.status``, ``run.update``,
+                                    ``approval.created|decided`` and ``trigger.update|
+                                    fire|notice|deleted`` summaries (sidebars, badges).
 
 ``: ping`` comments every 15 s keep proxies from timing the stream out. Ids are
 validated (the REST surface has no auth). Built on :mod:`services.bus`, the
@@ -30,7 +32,8 @@ from services.task.safe_paths import validate_id
 logger = logging.getLogger("telecode.proxy.api_events")
 
 TERMINAL_TASK = ("completed", "failed", "cancelled")
-ACTIVE_RUN = ("pending", "running")
+ACTIVE_RUN = ("pending", "running", "awaiting_input")
+GLOBAL_KINDS = {"task", "run", "approval", "trigger"}
 _CLOSED = (ConnectionResetError, asyncio.CancelledError, RuntimeError)
 
 
@@ -162,8 +165,8 @@ async def run_events(request: web.Request) -> web.StreamResponse:
 
 async def global_events(request: web.Request) -> web.StreamResponse:
     kinds = {k.strip() for k in (request.query.get("kinds") or "task,run").split(",") if k.strip()}
-    if not kinds or not kinds <= {"task", "run"}:
-        return _bad("kinds must be a comma list of: task, run")
+    if not kinds or not kinds <= GLOBAL_KINDS:
+        return _bad("kinds must be a comma list of: " + ", ".join(sorted(GLOBAL_KINDS)))
     resp = await _open(request)
     sub = bus.Subscription(kinds=kinds)
     try:

@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Team Mode · Telecode</title>
-<meta name="description" content="Telecode Team Mode: workspaces, agents and their internal files, jobs, pipelines, runs and heartbeat." />
+<meta name="description" content="Telecode Team Mode: workspaces, agents and their internal files, jobs, pipelines (map / loop / gate / reduce), runs, triggers and approvals." />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' rx='6' fill='%237cc4ff'/><path d='M13 4L6 13.5h5L10 20l7-9.5h-5z' fill='%23052034'/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -20,7 +20,7 @@
 </script>
 <style>
   /* Team Mode — page-specific pieces (kit: /shared/manager.css) */
-  .overview { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .overview { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
   .ov-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 14px; display: flex; flex-direction: column; gap: 10px; }
   .ov-card .top { display: flex; align-items: center; gap: 10px; }
   .ov-card .badge { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
@@ -104,7 +104,7 @@
 
   @media (max-width: 1100px) { :root { --rail-w: 240px; } }
   @media (max-width: 1180px) {
-    .overview { grid-template-columns: 1fr 1fr 1fr; }
+    .overview { grid-template-columns: 1fr 1fr; }
     .mode-pick { grid-template-columns: 1fr 1fr; }
     .page { padding: 18px 20px 56px; }
   }
@@ -133,13 +133,11 @@
         </section>
         <section data-group="job">
           <div class="rail-group"><span class="t" data-toggle="job"><span class="gi"></span>Jobs <span class="count" id="count-job">0</span></span><span id="sidebar-add-job-host"></span></div>
-          <div class="rail-sub">
-            <div class="seg full sm" id="job-tabs" role="tablist" aria-label="Job kind" style="margin: 2px 2px 6px">
-              <button type="button" role="tab" id="job-tab-user" class="on">User <span class="count" id="count-job-user">0</span></button>
-              <button type="button" role="tab" id="job-tab-heartbeat">Heartbeat <span class="count" id="count-job-hb">0</span></button>
-            </div>
-            <div id="job-list"></div>
-          </div>
+          <div class="rail-sub" id="job-list"></div>
+        </section>
+        <section data-group="trigger">
+          <div class="rail-group"><span class="t" data-toggle="trigger"><span class="gi"></span>Triggers <span class="count" id="count-trigger">0</span></span><span id="sidebar-add-trigger-host"></span></div>
+          <div class="rail-sub" id="trigger-list"></div>
         </section>
       </div>
     </aside>
@@ -151,12 +149,13 @@
 
 <script src="/shared/appnav.js"></script>
 <script src="/shared/manager.js"></script>
+<script src="/shared/triggers.js"></script>
 <script>
 "use strict";
 // ═══ Team Mode ═══════════════════════════════════════════════════════════
 // Every endpoint, payload and polling interval below is unchanged from the
 // previous page; only the rendering changed (DOM-built, no untrusted innerHTML).
-//   5s  GET /api/sessions, /api/agents, /api/jobs  (+ /api/runs on the overview)
+//   5s  GET /api/sessions, /api/agents, /api/jobs, /api/triggers  (+ /api/runs on the overview)
 //   1s  GET /api/runs/{id} + /api/tasks/{step.task_id} while a run is live
 // With SSE (GET /api/runs/{id}/events, /api/events?kinds=run) the run poll becomes
 // event-driven with a 10 s safety net and the overview's recent runs refresh on
@@ -168,16 +167,15 @@ const INTERNAL_HINTS = {
   "USER.md": "Who the agent works for — preferences, context, constraints.",
   "AGENT.md": "Operating instructions. Staged as CLAUDE.md / AGENTS.md for the engine.",
   "MEMORY.md": "Long-term memory. Written back after each run.",
-  "HEARTBEAT.md": "Schedules as YAML inside ```yaml fences — each entry becomes a heartbeat job. Not staged into runs.",
+  "HEARTBEAT.md": "Schedules as YAML inside ```yaml fences — each entry compiles to a trigger on save. Not staged into runs.",
 };
 
 let state = {
-  workspaces: [], agents: [], jobs: [],
-  loaded: { ws: false, agent: false, job: false }, loadError: null,
+  workspaces: [], agents: [], jobs: [], triggers: [], heartbeatEnabled: true,
+  loaded: { ws: false, agent: false, job: false, trigger: false }, loadError: null,
   activeType: null, activeId: null,
   executionTaskId: null, executionTimer: null,
   internalContent: {}, internalDirty: {}, activeInternalFile: INTERNAL_FILES[0],
-  activeJobTab: "user",
   pipelineDraft: { mode: "single", steps: [] },
   activeRunId: null, heartbeatValid: null,
   jobDirty: false, wsDirty: false, filter: "",
@@ -190,6 +188,7 @@ document.querySelector("#sidebar .search .ic").replaceWith(icon("search"));
 $("sidebar-add-ws-host").replaceWith(btn(null, { icon: "plus", kind: "quiet", size: "sm", id: "sidebar-add-ws", title: "New workspace  (W)", onClick: () => createWorkspacePrompt() }));
 $("sidebar-add-agent-host").replaceWith(btn(null, { icon: "plus", kind: "quiet", size: "sm", id: "sidebar-add-agent", title: "New agent  (A)", onClick: () => createAgentPrompt() }));
 $("sidebar-add-job-host").replaceWith(btn(null, { icon: "plus", kind: "quiet", size: "sm", id: "sidebar-add-job", title: "New job  (J)", onClick: () => createJobPrompt() }));
+$("sidebar-add-trigger-host").replaceWith(btn(null, { icon: "plus", kind: "quiet", size: "sm", id: "sidebar-add-trigger", title: "New trigger  (T)", onClick: () => createTriggerPrompt() }));
 document.querySelectorAll(".rail-group .gi").forEach(g => g.replaceWith(icon("chevronDown")));
 const collapsedGroups = new Set(prefs.get("mgr:railCollapsed", []));
 document.querySelectorAll("[data-toggle]").forEach(t => {
@@ -198,19 +197,10 @@ document.querySelectorAll("[data-toggle]").forEach(t => {
   t.addEventListener("click", () => { collapsedGroups.has(key) ? collapsedGroups.delete(key) : collapsedGroups.add(key); prefs.set("mgr:railCollapsed", [...collapsedGroups]); apply(); });
   apply();
 });
-$("job-tab-user").onclick = () => selectJobTab("user");
-$("job-tab-heartbeat").onclick = () => selectJobTab("heartbeat");
 $("rail-search").addEventListener("input", (e) => { state.filter = e.target.value.trim().toLowerCase(); renderSidebar(true); });
 $("rail-search").addEventListener("keydown", (e) => { if (e.key === "Escape") { e.target.value = ""; state.filter = ""; renderSidebar(true); e.target.blur(); } });
 
-function selectJobTab(tab) {
-  state.activeJobTab = tab;
-  $("job-tab-user").classList.toggle("on", tab === "user");
-  $("job-tab-heartbeat").classList.toggle("on", tab === "heartbeat");
-  $("job-tab-user").setAttribute("aria-selected", String(tab === "user"));
-  $("job-tab-heartbeat").setAttribute("aria-selected", String(tab === "heartbeat"));
-  renderSidebar(true);
-}
+const triggerNames = () => ({ jobs: state.jobs, agents: state.agents, workspaces: state.workspaces });
 
 // ── Engines (Team Mode speaks engine ids; the executor maps them to task types) ─
 const TEAM_ENGINES = [["claude_code", "Claude Code"], ["codex", "Codex"], ["antigravity", "Antigravity"]];
@@ -332,14 +322,15 @@ function renderOverview() {
   const tile = (ic, n, label, text, act) => h("div", { class: "ov-card" },
     h("div", { class: "top" }, h("span", { class: "badge" }, icon(ic)), h("div", { class: "grow" }, h("div", { class: "n" }, n), h("div", { class: "muted" }, label))),
     h("p", null, text), act);
-  const userJobs = state.jobs.filter(j => (j.kind || "user") === "user").length;
+  const activeTr = state.triggers.filter(t => t.status === "active").length;
   mount(v,
     pageHead({ title: "Team Mode", sub: [h("span", null, "Agents with persistent identity and memory, running jobs as pipelines inside workspaces.")],
       tools: [btn("New job", { icon: "plus", kind: "primary", onClick: () => createJobPrompt(), title: "New job  (J)" })] }),
     h("div", { class: "overview" },
       tile("folder", state.workspaces.length, "Workspaces", "Folders a job runs in. Files you add here are visible to every step.", btn("New workspace", { icon: "plus", kind: "ghost", size: "sm", onClick: () => createWorkspacePrompt() })),
       tile("agents", state.agents.length, "Agents", "Each agent owns SOUL, USER, AGENT, MEMORY and HEARTBEAT files.", btn("New agent", { icon: "plus", kind: "ghost", size: "sm", onClick: () => createAgentPrompt() })),
-      tile("workflow", state.jobs.length, "Jobs", `${userJobs} user · ${state.jobs.length - userJobs} heartbeat. A job is a pipeline of agent steps.`, btn("New job", { icon: "plus", kind: "ghost", size: "sm", onClick: () => createJobPrompt() }))),
+      tile("workflow", state.jobs.length, "Jobs", "A pipeline of steps: agents, map fan-outs, loops with checks, approval gates, reduces.", btn("New job", { icon: "plus", kind: "ghost", size: "sm", onClick: () => createJobPrompt() })),
+      tile("clock", state.triggers.length, "Triggers", `${activeTr} active. Run a job or prompt on a schedule, a webhook, GitHub or a file change.`, btn("New trigger", { icon: "plus", kind: "ghost", size: "sm", onClick: () => createTriggerPrompt() }))),
     h("section", { class: "card" }, h("div", { class: "card-head" }, h("h3", null, icon("sparkle"), "How it fits together")),
       h("div", { class: "steps-how" },
         h("div", null, h("b", null, "1"), h("div", null, h("strong", null, "Create a workspace"), "The folder a job's steps read and write.")),
@@ -389,6 +380,10 @@ async function refreshJobs() {
   try { const res = await api("/api/jobs"); state.jobs = res.jobs || []; state.loaded.job = true; setConn(true); renderSidebar(); }
   catch (e) { setConn(false); state.loadError = e.message; renderSidebar(); }
 }
+async function refreshTriggers() {
+  try { const res = await api("/api/triggers"); state.triggers = res.triggers || []; state.heartbeatEnabled = res.heartbeat_enabled !== false; state.loaded.trigger = true; renderSidebar(); }
+  catch (e) { state.loadError = state.loadError || e.message; renderSidebar(); }
+}
 const matches = (...xs) => !state.filter || xs.some(x => String(x || "").toLowerCase().includes(state.filter));
 function railItem({ ic, name, meta, sub, on, onClick, onDelete, delTitle, title }) {
   const del = onDelete ? btn(null, { icon: "trash", kind: "quiet", title: delTitle, onClick: (e) => { e.stopPropagation(); onDelete(); } }) : null;
@@ -400,8 +395,9 @@ function railItem({ ic, name, meta, sub, on, onClick, onDelete, delTitle, title 
 let lastSidebarSig = "";
 function renderSidebar(force) {
   const sig = JSON.stringify([state.workspaces.map(w => [w.session_id, wsName(w)]), state.agents.map(a => [a.id, a.name]),
-    state.jobs.map(j => [j.id, j.title, j.kind, (j.heartbeat_entry || {}).cron, (j.pipeline || {}).mode, (j.pipeline || {}).steps && j.pipeline.steps.length, j.agent_id]),
-    state.activeType, state.activeId, state.activeJobTab, state.filter, state.loaded, state.loadError]);
+    state.jobs.map(j => [j.id, j.title, (j.pipeline || {}).mode, (j.pipeline || {}).steps && j.pipeline.steps.length, j.agent_id]),
+    state.triggers.map(t => [t.id, t.name, t.status, (t.state || {}).next_fire_at, (t.state || {}).last_status]),
+    state.activeType, state.activeId, state.filter, state.loaded, state.loadError]);
   if (!force && sig === lastSidebarSig) return;
   lastSidebarSig = sig;
   const loading = (k) => !state.loaded[k] && !state.loadError;
@@ -429,26 +425,36 @@ function renderSidebar(force) {
     : h("div", { class: "empty sm" }, h("p", null, state.filter ? "No matching agents" : "No agents yet"),
         state.filter ? null : btn("New agent", { icon: "plus", kind: "ghost", size: "sm", onClick: () => createAgentPrompt() })));
 
-  const kindOf = (j) => j.kind || "user";
-  const userN = state.jobs.filter(j => kindOf(j) === "user").length, hbN = state.jobs.length - userN;
-  $("count-job-user").textContent = userN; $("count-job-hb").textContent = hbN;
-  const filteredJobs = state.jobs.filter(j => kindOf(j) === state.activeJobTab && matches(j.title, j.id, agentName(j.agent_id)));
-  $("count-job").textContent = state.filter ? `${state.jobs.filter(j => matches(j.title, j.id, agentName(j.agent_id))).length}/${state.jobs.length}` : state.jobs.length;
+  const filteredJobs = state.jobs.filter(j => matches(j.title, j.id, agentName(j.agent_id)));
+  $("count-job").textContent = state.filter ? `${filteredJobs.length}/${state.jobs.length}` : state.jobs.length;
+  const kindsOf = (j) => [...new Set(((j.pipeline || {}).steps || []).map(s => s.kind || "agent").filter(k => k !== "agent"))];
   mount($("job-list"), loading("job") ? skeleton(3, "sk-row") : !state.loaded.job ? errorLine()
     : filteredJobs.length ? filteredJobs.map(j => {
-        const hb = j.kind === "heartbeat", he = j.heartbeat_entry || {};
-        const steps = ((j.pipeline || {}).steps || []).length;
-        return railItem({ ic: hb ? "heart" : "workflow", name: j.title, title: j.id,
-          sub: hb ? `${he.cron || ""}${he.enabled === false ? " · disabled" : ""}` : `${(j.pipeline || {}).mode || "single"} · ${steps} step${steps === 1 ? "" : "s"}`,
-          meta: hb ? h("span", { class: "dot " + (he.enabled === false ? "" : "ok"), title: he.enabled === false ? "disabled" : "enabled" }) : null,
+        const steps = ((j.pipeline || {}).steps || []).length, ks = kindsOf(j);
+        const trs = state.triggers.filter(t => (t.target || {}).kind === "job" && t.target.id === j.id).length;
+        return railItem({ ic: "workflow", name: j.title, title: j.id,
+          sub: `${(j.pipeline || {}).mode || "single"} · ${steps} step${steps === 1 ? "" : "s"}${ks.length ? " · " + ks.join(", ") : ""}`,
+          meta: trs ? h("span", { class: "meta", title: `${trs} trigger${trs === 1 ? "" : "s"}` }, "⏱" + trs) : null,
           on: state.activeType === "job" && state.activeId === j.id,
           onClick: () => selectJob(j.id), onDelete: () => deleteJobPrompt(j.id), delTitle: "Delete job" });
       })
-    : h("div", { class: "empty sm" }, h("p", null, state.filter ? "No matching jobs" : state.activeJobTab === "user" ? "No user jobs yet" : "No heartbeat jobs — add ```yaml schedules to an agent's HEARTBEAT.md"),
-        state.filter || state.activeJobTab !== "user" ? null : btn("New job", { icon: "plus", kind: "ghost", size: "sm", onClick: () => createJobPrompt() })));
+    : h("div", { class: "empty sm" }, h("p", null, state.filter ? "No matching jobs" : "No jobs yet"),
+        state.filter ? null : btn("New job", { icon: "plus", kind: "ghost", size: "sm", onClick: () => createJobPrompt() })));
+  const trs = state.triggers.filter(t => matches(t.name, t.id, triggerWhenAll(t), triggerTarget(t, triggerNames())));
+  $("count-trigger").textContent = state.filter ? `${trs.length}/${state.triggers.length}` : state.triggers.length;
+  mount($("trigger-list"), loading("trigger") ? skeleton(2, "sk-row") : !state.loaded.trigger ? errorLine()
+    : trs.length ? trs.map(t => {
+        const st = t.state || {};
+        return railItem({ ic: triggerIcon(t), name: t.name, title: t.id,
+          sub: `${triggerWhenAll(t)}${t.status !== "active" ? " · " + t.status : st.next_fire_at ? " · next " + relTime(st.next_fire_at) : ""}`,
+          meta: h("span", { class: "dot " + (t.status === "active" ? "ok" : t.status === "paused" ? "warn" : ""), title: t.status + (t.source === "heartbeat" ? " · HEARTBEAT.md" : "") }),
+          on: state.activeType === "trigger" && state.activeId === t.id, onClick: () => selectTrigger(t.id) });
+      })
+    : h("div", { class: "empty sm" }, h("p", null, state.filter ? "No matching triggers" : "No triggers — schedule a job, or add ```yaml entries to an agent's HEARTBEAT.md"),
+        state.filter ? null : btn("New trigger", { icon: "plus", kind: "ghost", size: "sm", onClick: () => createTriggerPrompt() })));
   if (!state.activeType && $("viewer").querySelector(".overview")) {
     const ns = $("viewer").querySelectorAll(".ov-card .n");
-    if (ns.length === 3) { ns[0].textContent = state.workspaces.length; ns[1].textContent = state.agents.length; ns[2].textContent = state.jobs.length; }
+    if (ns.length === 4) { ns[0].textContent = state.workspaces.length; ns[1].textContent = state.agents.length; ns[2].textContent = state.jobs.length; ns[3].textContent = state.triggers.length; }
   }
 }
 
@@ -475,6 +481,28 @@ async function goToAgentHeartbeat(agentId) {
   if (!agentId) return;
   state.activeInternalFile = "HEARTBEAT.md";
   await selectAgent(agentId, "HEARTBEAT.md");
+}
+async function selectTrigger(id) {
+  if (!(state.activeType === "trigger" && state.activeId === id) && !(await guardLeave())) return;
+  state.activeType = "trigger"; state.activeId = id;
+  stopExecTimer(); setHash(); renderSidebar(true);
+  renderTriggerViewer(id);
+}
+function renderTriggerViewer(id) {
+  const t = state.triggers.find(x => x.id === id);
+  const host = h("div");
+  mount($("viewer"),
+    pageHead({ title: "Trigger", sub: [h("span", null, t ? triggerWhenAll(t) : ""), t && t.source === "heartbeat" && t.target && t.target.agent_id
+      ? h("a", { href: "#", onclick: (e) => { e.preventDefault(); goToAgentHeartbeat(t.target.agent_id); } }, icon("heart"), " edit in ", agentName(t.target.agent_id) || "the agent", "'s HEARTBEAT.md") : null,
+      t && (t.target || {}).kind === "job" ? h("a", { href: "#", onclick: (e) => { e.preventDefault(); selectJob(t.target.id); } }, icon("workflow"), " ", (state.jobs.find(j => j.id === t.target.id) || {}).title || "job") : null] }),
+    h("section", { class: "card" }, h("div", { class: "card-body" }, host)));
+  renderTriggerDetail(host, id, { names: triggerNames(), onChanged: () => refreshTriggers(),
+    onDeleted: () => { refreshTriggers(); showDefaultView(); },
+    openRun: (runId, jobId) => openRun(jobId, runId), openTask: (taskId) => openTaskModal(taskId) });
+}
+async function createTriggerPrompt(defaults) {
+  openTriggerEditor({ defaults: defaults || { target: { kind: "job", id: state.activeType === "job" ? state.activeId : "" } }, names: triggerNames(),
+    onSaved: async (t) => { await refreshTriggers(); selectTrigger(t.id); } });
 }
 function loadingView(label) {
   mount($("viewer"), h("div", { class: "page-head" }, h("div", { class: "ttl" }, h("div", { class: "sk", style: { height: "24px", width: "240px" } }),
@@ -535,7 +563,7 @@ async function renderWorkspaceViewer(id) {
               field("Max lifetime", h("div", { class: "suffix" }, abs, h("span", null, "sec")), "Deleted this long after creation.")))),
         card("Used by", "workflow", { hint: `${jobs.length} job${jobs.length === 1 ? "" : "s"}`, flush: true },
           jobs.length ? h("div", { class: "files" }, jobs.map(j => h("div", { class: "frow", style: { cursor: "pointer" }, onclick: () => selectJob(j.id) },
-            icon(j.kind === "heartbeat" ? "heart" : "workflow"), h("span", { class: "nm", style: { fontFamily: "var(--sans)" } }, j.title), h("span", { class: "pill" }, (j.pipeline || {}).mode || "single"), icon("chevronRight"))))
+            icon("workflow"), h("span", { class: "nm", style: { fontFamily: "var(--sans)" } }, j.title), h("span", { class: "pill" }, (j.pipeline || {}).mode || "single"), icon("chevronRight"))))
             : emptyState("workflow", "No jobs use this workspace", null, btn("New job", { icon: "plus", size: "sm", kind: "ghost", onClick: () => createJobPrompt(id) }), true))),
       card(`Files`, "folder", { hint: `${files.length}`, flush: true,
           actions: btn("Download all", { icon: "download", kind: "ghost", size: "sm", onClick: () => downloadAllFiles("ws", id) }) },
@@ -581,15 +609,20 @@ async function renderAgentViewer(id, openFile) {
         h("div", { style: { padding: "8px 0 0" } }, ta),
         h("div", { id: "agent-internal-footer", class: "foot", style: { display: "none" } },
           h("div", { class: "row" }, btn("Validate", { icon: "checkCircle", kind: "ghost", size: "sm", id: "hb-validate", onClick: () => validateHeartbeat() }),
-            h("span", { class: "field-hint" }, "YAML schedule entries inside ", h("code", null, "```yaml"), " fences. Free text outside fences is ignored. Saving validates first.")),
+            h("span", { class: "field-hint" }, "Entries inside ", h("code", null, "```yaml"), " fences compile to triggers on save (cron / every / at, tz, active_hours, skip_if_empty, goal…). Saving validates first.")),
           h("div", { id: "hb-validate-status", class: "hb-result" }))),
       card("Agent context files", "folder", { hint: `${files.length}`, flush: true,
           actions: h("div", { class: "row" },
             btn("Upload", { icon: "upload", kind: "ghost", size: "sm", onClick: () => upload.click() }),
             btn("Download all", { icon: "download", kind: "ghost", size: "sm", onClick: () => downloadAllFiles("agent", id) })) },
         upload, fileRows("agent", id, files, { canDelete: true, emptyText: "No files uploaded" }), drop),
+      card("Triggers", "clock", { hint: "HEARTBEAT.md entries + agent-prompt triggers", flush: true,
+          actions: btn("New trigger", { icon: "plus", kind: "ghost", size: "sm", onClick: () => createTriggerPrompt({ target: { kind: "agent_prompt", agent_id: id } }) }) },
+        h("div", { id: "agent-triggers", style: { padding: "6px" } })),
       jobs.length ? card("Jobs using this agent", "workflow", { flush: true }, h("div", { class: "files" }, jobs.map(j => h("div", { class: "frow", style: { cursor: "pointer" }, onclick: () => selectJob(j.id) },
-        icon(j.kind === "heartbeat" ? "heart" : "workflow"), h("span", { class: "nm", style: { fontFamily: "var(--sans)" } }, j.title), j.kind === "heartbeat" ? h("span", { class: "pill violet" }, "heartbeat") : h("span", { class: "pill" }, (j.pipeline || {}).mode || "single"), icon("chevronRight"))))) : null);
+        icon("workflow"), h("span", { class: "nm", style: { fontFamily: "var(--sans)" } }, j.title), h("span", { class: "pill" }, (j.pipeline || {}).mode || "single"), icon("chevronRight"))))) : null);
+    renderTriggerList($("agent-triggers"), { filter: { agent_id: id }, names: triggerNames(), onOpen: (t) => selectTrigger(t.id),
+      emptyText: "Add ```yaml entries to HEARTBEAT.md (they compile to triggers on save), or create an agent-prompt trigger." });
     renderInternalTabs();
     ta.value = state.internalContent[state.activeInternalFile] || "";
     if (openFile === "HEARTBEAT.md") ta.focus();
@@ -609,7 +642,7 @@ function renderInternalTabs() {
   if (note) { const n = Object.entries(state.internalDirty).filter(([, v]) => v).length; note.textContent = n ? `${n} unsaved change${n === 1 ? "" : "s"}` : ""; }
   const ta = $("agent-internal-content");
   if (ta) ta.placeholder = state.activeInternalFile === "HEARTBEAT.md"
-    ? "# Heartbeat\n\n```yaml\n- name: nightly-digest\n  cron: \"0 3 * * *\"\n  prompt: Summarise yesterday's outputs.\n  enabled: true\n```"
+    ? "# Heartbeat\n\n## Tasks\n- (things to look at — skip_if_empty reads this)\n\n```yaml\n- name: nightly-digest\n  cron: \"0 3 * * *\"\n  tz: Europe/London\n  prompt: Summarise yesterday's outputs.\n- name: inbox-sweep\n  every: 30m\n  active_hours: \"09:00-18:00\"\n  skip_if_empty: {section: Tasks}\n  prompt: Work through the Tasks section. Reply HEARTBEAT_OK if there is nothing to do.\n```"
     : `${state.activeInternalFile} is empty.`;
   renderHeartbeatFooter();
 }
@@ -650,7 +683,8 @@ function renderHeartbeatValidationResult(data) {
     mount(status, h("div", null, h("span", { class: "pill ok" }, icon("check"), `${ent} entr${ent === 1 ? "y" : "ies"}`)),
       (data.entries || []).map(e => {
         const next = (e.next_fires || []).slice(0, 2).map(s => new Date(s).toLocaleString()).join(", ") || "—";
-        return h("div", { class: "line good" }, icon("check"), h("b", null, e.name), h("span", { class: "faint" }, e.cron), h("span", { class: "muted" }, "→ next: " + next));
+        return h("div", { class: "line good" }, icon("check"), h("b", null, e.name), h("span", { class: "faint" }, triggerWhen({ schedule: e.schedule }) || "—"),
+          e.enabled === false ? h("span", { class: "pill" }, "disabled") : null, h("span", { class: "muted" }, "→ next: " + next));
       }));
     state.heartbeatValid = true;
   }
@@ -694,7 +728,7 @@ async function saveAgent(id) {
     state.internalDirty = {};
     renderInternalTabs();
     await refreshAgents();
-    await refreshJobs();  // HB Job sidebar reflects reconciliation
+    await refreshTriggers();  // HEARTBEAT.md compiled to triggers
     const h1 = $("viewer").querySelector(".page-head h1"); if (h1) h1.textContent = name;
     showToast("Agent saved");
   } catch (e) { showToast(e.message, true); }
@@ -719,19 +753,19 @@ function groupStepsByPhase() {
   return Array.from(map.entries()).sort((a, b) => a[0] - b[0]).map(([phase, items]) => ({ phase, items }));
 }
 function markJobDirty() { state.jobDirty = true; const n = $("job-dirty-note"); if (n) n.textContent = "Unsaved changes"; }
-function renderModePicker(isHb) {
+function renderModePicker(ro) {
   const host = $("pipeline-mode");
   if (!host) return;
   host.value = state.pipelineDraft.mode;
-  mount(host, MODES.map(m => h("button", { type: "button", class: "mode-opt" + (state.pipelineDraft.mode === m.id ? " on" : ""), disabled: isHb || null,
+  mount(host, MODES.map(m => h("button", { type: "button", class: "mode-opt" + (state.pipelineDraft.mode === m.id ? " on" : ""), disabled: ro || null,
     "aria-pressed": String(state.pipelineDraft.mode === m.id), "data-mode": m.id, onclick: () => onPipelineModeChange(m.id) },
     h("b", null, icon(m.ic), m.label), h("span", null, m.desc))));
 }
-function renderPipelineSteps(isHb) {
+function renderPipelineSteps(ro) {
   const host = $("pipeline-steps");
   if (!host) return;
-  isHb = !!isHb;
-  renderModePicker(isHb);
+  ro = !!ro;
+  renderModePicker(ro);
   const steps = state.pipelineDraft.steps;
   const mode = state.pipelineDraft.mode;
   const addBtn = $("pipeline-add");
@@ -739,7 +773,7 @@ function renderPipelineSteps(isHb) {
     mount(addBtn, icon("plus"), h("span", null, mode === "single" ? (steps.length ? "Add step (switches to sequential)" : "Add step") : mode === "parallel" ? "Add parallel step" : mode === "custom" ? "Add phase" : "Add step"));
   }
   if (steps.length === 0) {
-    mount(host, emptyState("workflow", "No steps", isHb ? "This heartbeat job has no steps." : "Add a step to choose which agent runs this job.", null, true));
+    mount(host, emptyState("workflow", "No steps", "Add a step to choose which agent runs this job.", null, true));
     return;
   }
   const groups = groupStepsByPhase();
@@ -747,26 +781,31 @@ function renderPipelineSteps(isHb) {
   const nodes = [];
   groups.forEach((g, gi) => {
     if (gi > 0) {
-      const feeds = g.items.some(({ step }) => step.depends_on_text);
-      nodes.push(h("div", { class: "connector" }, h("span", { class: feeds ? "feeds" : "" }, icon("arrowDown"),
-        feeds ? `previous handoff${groups[gi - 1].items.length > 1 ? "s" : ""} → <handoff>` : "then")));
+      const one = g.items.length === 1 ? g.items[0].step : null;
+      const k = one ? (one.kind || "agent") : "agent";
+      const feeds = g.items.some(({ step }) => step.depends_on_text) || ["map", "reduce", "gate"].includes(k);
+      const label = k === "map" ? `fans out over the handoff's ${((one.map || {}).items_from || "next_steps").replace("_", " ")}`
+        : k === "reduce" ? `every handoff → reduce` : k === "gate" ? "waits for approval"
+        : feeds ? `previous handoff${groups[gi - 1].items.length > 1 ? "s" : ""} → <handoff>` : "then";
+      nodes.push(h("div", { class: "connector" }, h("span", { class: feeds ? "feeds" : "" }, icon(k === "map" ? "fanout" : k === "reduce" ? "merge" : k === "gate" ? "gate" : "arrowDown"), label)));
     }
     const parallel = g.items.length > 1 || mode === "parallel";
     const laneTools = [];
-    if (mode === "custom" && !isHb) {
+    if (mode === "custom" && !ro) {
       if (gi > 0) laneTools.push(btn(null, { icon: "chevronUp", kind: "quiet", size: "sm", title: "Move phase up", onClick: () => movePhase(gi, -1) }));
       if (gi < total - 1) laneTools.push(btn(null, { icon: "chevronDown", kind: "quiet", size: "sm", title: "Move phase down", onClick: () => movePhase(gi, 1) }));
-      laneTools.push(btn("Parallel step", { icon: "plus", kind: "ghost", size: "sm", onClick: () => addParallelStepInPhase(gi), title: "Add a step that runs alongside this phase" }));
+      if (g.items.every(({ step }) => (step.kind || "agent") === "agent"))
+        laneTools.push(btn("Parallel step", { icon: "plus", kind: "ghost", size: "sm", onClick: () => addParallelStepInPhase(gi), title: "Add a step that runs alongside this phase" }));
     }
     const cards = g.items.map(({ step, idx }) => {
       const showFeed = mode === "custom" ? gi > 0 : (mode === "sequential" && idx > 0);
       const ctl = [];
-      if (!isHb) {
+      if (!ro) {
         if (mode === "sequential" && idx > 0) ctl.push(btn(null, { icon: "chevronUp", kind: "quiet", size: "sm", title: "Move up", onClick: () => movePipelineStep(idx, -1) }));
         if (mode === "sequential" && idx < steps.length - 1) ctl.push(btn(null, { icon: "chevronDown", kind: "quiet", size: "sm", title: "Move down", onClick: () => movePipelineStep(idx, 1) }));
         if (mode === "custom" || mode !== "single" || steps.length > 1) ctl.push(btn(null, { icon: "trash", kind: "quiet", size: "sm", title: "Remove step", onClick: () => removePipelineStep(idx) }));
       }
-      return renderStepCard(step, idx, { isHb, showFeed, controls: ctl, label: `step ${idx + 1}`, parallel });
+      return renderStepCard(step, idx, { ro, showFeed, controls: ctl, label: `step ${idx + 1}`, parallel, first: gi === 0 });
     });
     nodes.push(h("div", { class: "lane" + (parallel ? " parallel" : "") },
       h("div", { class: "lane-head" }, h("span", { class: "lbl" }, h("span", { class: "num" }, gi + 1), `Phase ${gi + 1}`),
@@ -776,19 +815,105 @@ function renderPipelineSteps(isHb) {
   });
   mount(host, h("div", { class: "lanes" }, nodes));
 }
+const STEP_KINDS = [
+  ["agent", "agent", "Agent", "One agent run"],
+  ["map", "fanout", "Map", "Fan out: one worker per item of the previous phase's handoff"],
+  ["loop", "loop", "Loop", "Run, check (command / grader / schema), feed the findings back, repeat"],
+  ["gate", "gate", "Gate", "Pause the run until a person approves (web inbox or Telegram)"],
+  ["reduce", "merge", "Reduce", "Merge every handoff of the previous phase into one"],
+];
+const MAP_SOURCES = [["next_steps", "next steps"], ["items", "items (the planner is asked to list them)"], ["open_questions", "open questions"],
+  ["decisions", "decisions"], ["artifacts", "artifacts"]];
+function setStepKind(idx, kind) {
+  const s = state.pipelineDraft.steps[idx]; if (!s) return;
+  s.kind = kind;
+  if (kind === "gate") s.gate = s.gate || { title: s.name || "Approve?", instructions: "" };
+  if (kind === "map") s.map = s.map || { items_from: "next_steps", max_parallel: 3, max_items: 20, worker_session: "ephemeral" };
+  if (kind === "loop") s.loop = s.loop || { max_iterations: 3, check: { type: "command", command: "", timeout_seconds: 300 } };
+  if (kind !== "gate" && !s.agent_id) s.agent_id = (state.agents[0] || {}).id || "";
+  markJobDirty(); renderPipelineSteps(false);
+}
+function numIn(value, min, max, onVal, attrs = {}) {
+  return h("input", { class: "input", type: "number", min: String(min), max: String(max), value: value ?? "", ...attrs,
+    oninput: (e) => { const n = Math.max(min, Math.min(max, parseInt(e.target.value, 10) || min)); onVal(n); markJobDirty(); } });
+}
+function kindFields(s, idx, o) {
+  const k = s.kind || "agent";
+  const dirty = () => markJobDirty();
+  if (k === "map") {
+    const m = s.map = s.map || { items_from: "next_steps", max_parallel: 3, max_items: 20, worker_session: "ephemeral" };
+    const src = h("select", { class: "select", disabled: o.ro || null, onchange: (e) => { m.items_from = e.target.value; dirty(); renderPipelineSteps(false); } },
+      MAP_SOURCES.map(([v, l]) => h("option", { value: v, selected: m.items_from === v || null }, l)));
+    const ws = h("select", { class: "select", disabled: o.ro || null, onchange: (e) => { m.worker_session = e.target.value; dirty(); } },
+      [["ephemeral", "Ephemeral copy each"], ["fork", "Fork the planner's conversation"]].map(([v, l]) => h("option", { value: v, selected: m.worker_session === v || null }, l)));
+    return h("div", { class: "kind-box" },
+      h("div", { class: "field-row" }, field("Items from", src, "a list field of the previous step's handoff"), field("Workers", ws, m.worker_session === "fork" ? "forks share the planner's workspace — they run one at a time" : "each in a throwaway copy of the workspace")),
+      h("div", { class: "field-row" }, field("Max parallel", numIn(m.max_parallel, 1, 16, v => { m.max_parallel = v; })), field("Max items", numIn(m.max_items, 1, 100, v => { m.max_items = v; }))),
+      h("div", { class: "field-hint", style: { marginBottom: "8px" } }, "Each worker gets the previous handoff plus its one item; the step budget is split evenly per worker."));
+  }
+  if (k === "loop") {
+    const lp = s.loop = s.loop || { max_iterations: 3, check: { type: "command", command: "" } };
+    const chk = lp.check = lp.check || { type: "command" };
+    const seg = h("div", { class: "seg sm" }, [["command", "Command"], ["grader", "Grader agent"], ["schema", "JSON Schema"]].map(([v, l]) =>
+      h("button", { type: "button", class: chk.type === v ? "on" : "", disabled: o.ro || null, onclick: () => { chk.type = v; dirty(); renderPipelineSteps(false); } }, l)));
+    let body;
+    if (chk.type === "grader") {
+      const rubric = h("textarea", { class: "input", rows: "3", placeholder: "What passing looks like — the grader returns pass / fail + findings", readonly: o.ro || null,
+        oninput: (e) => { chk.rubric = e.target.value; dirty(); } }, chk.rubric || "");
+      const ge = h("select", { class: "select", disabled: o.ro || null, onchange: (e) => { chk.grader_engine = e.target.value; dirty(); } },
+        h("option", { value: "" }, "same engine"), TEAM_ENGINES.map(([v, l]) => h("option", { value: v, selected: chk.grader_engine === v || null }, l)));
+      const gm = h("input", { class: "input", value: chk.grader_model || "", placeholder: "model (blank = default)", oninput: (e) => { chk.grader_model = e.target.value.trim(); dirty(); } });
+      body = h("div", null, field("Rubric", rubric, "The grader runs in a FRESH session on a copy of the workspace."), h("div", { class: "field-row" }, field("Grader engine", ge), field("Grader model", gm)));
+    } else if (chk.type === "schema") {
+      const sc = h("textarea", { class: "input code", rows: "4", placeholder: '{"type": "object", "required": ["score"]}', readonly: o.ro || null,
+        oninput: (e) => { try { chk.schema = JSON.parse(e.target.value); fieldError(e.target, ""); } catch { chk.schema = e.target.value; } dirty(); } },
+        chk.schema ? (typeof chk.schema === "string" ? chk.schema : JSON.stringify(chk.schema, null, 2)) : "");
+      const path = h("input", { class: "input mono", value: chk.path || "", placeholder: "blank = the step's handoff; or e.g. out/report.json", oninput: (e) => { chk.path = e.target.value.trim(); dirty(); } });
+      body = h("div", null, field("JSON Schema", sc), field("Validate", path));
+    } else {
+      const cmd = h("input", { class: "input mono", value: chk.command || "", placeholder: "e.g. npm test   (run in the workspace; exit 0 = pass)", readonly: o.ro || null,
+        oninput: (e) => { chk.command = e.target.value; dirty(); } });
+      body = h("div", { class: "field-row" }, field("Command", cmd), field("Timeout (s)", numIn(chk.timeout_seconds || 300, 5, 3600, v => { chk.timeout_seconds = v; })));
+    }
+    return h("div", { class: "kind-box" },
+      h("div", { class: "row", style: { marginBottom: "8px" } }, h("span", { class: "field-label" }, "Check"), seg, h("span", { class: "grow" }),
+        h("span", { class: "field-label" }, "Max iterations"), h("span", { style: { width: "70px" } }, numIn(lp.max_iterations || 3, 1, 10, v => { lp.max_iterations = v; }))),
+      body, h("div", { class: "field-hint", style: { marginBottom: "8px" } }, "A failing check's findings go back to the step, which resumes its conversation and tries again."));
+  }
+  if (k === "reduce") return h("div", { class: "kind-box" }, h("div", { class: "field-hint", style: { marginBottom: "8px" } },
+    "Gets every handoff of the previous phase (all map workers, all parallel steps) and merges them into one. Runs in a fresh conversation unless you pick a policy."));
+  return null;
+}
 function renderStepCard(s, idx, o) {
-  const agentSel = h("select", { class: "select", disabled: o.isHb || null, onchange: (e) => { updatePipelineStep(idx, "agent_id", e.target.value); markJobDirty(); } },
+  const kind = s.kind || "agent";
+  const picker = h("div", { class: "kind-pick", role: "group", "aria-label": "Step kind" }, STEP_KINDS.map(([v, ic, l, tip]) => {
+    const blocked = !o.ro && v !== "agent" && o.parallel ? "must be alone in its phase (use the custom mode)" : (v === "map" || v === "reduce") && o.first ? "needs a previous phase to read from" : "";
+    return h("button", { type: "button", class: kind === v ? "on" : "", disabled: (o.ro || (blocked && kind !== v)) || null, title: blocked ? `${l}: ${blocked}` : tip,
+      onclick: () => { if (kind !== v) setStepKind(idx, v); } }, icon(ic), l);
+  }));
+  const kinds = { agent: "agent", map: "fanout", loop: "loop", gate: "gate", reduce: "merge" };
+  const headT = h("span", { class: "t" }, o.label + (s.name ? " — " + s.name : ""));
+  const nameIn = h("input", { class: "input", value: s.name || "", placeholder: kind === "gate" ? "e.g. Review before shipping" : "e.g. Reviewer", readonly: o.ro || null,
+    oninput: (e) => { updatePipelineStep(idx, "name", e.target.value); markJobDirty(); headT.textContent = o.label + (e.target.value ? " — " + e.target.value : ""); } });
+  if (kind === "gate") {
+    const g = s.gate = s.gate || { title: "Approve?", instructions: "" };
+    const title = h("input", { class: "input", value: g.title || "", placeholder: "What is being approved", oninput: (e) => { g.title = e.target.value; markJobDirty(); } });
+    const instr = h("textarea", { class: "input", rows: "3", placeholder: "What the reviewer should check. The previous handoff is shown with it.", oninput: (e) => { g.instructions = e.target.value; markJobDirty(); } }, g.instructions || "");
+    return h("div", { class: "step k-gate" },
+      h("div", { class: "step-head" }, icon("gate"), headT, h("span", { class: "pill violet" }, "approval"), o.controls), picker,
+      h("div", { class: "field-row" }, field("Approval title", title), field("Step name", nameIn, null, { extra: h("span", { class: "faint" }, "optional") })),
+      field("Instructions", instr, "The run pauses here (status awaiting input) until someone approves in the inbox — top right — or on Telegram. Text edited on approval becomes the handoff to the next step; reject ends the run."));
+  }
+  const agentSel = h("select", { class: "select", disabled: o.ro || null, onchange: (e) => { updatePipelineStep(idx, "agent_id", e.target.value); markJobDirty(); } },
     state.agents.map(a => h("option", { value: a.id, selected: a.id === s.agent_id || null }, a.name)),
     state.agents.length === 0 ? h("option", { value: "" }, "(no agents)") : null,
     s.agent_id && !state.agents.some(a => a.id === s.agent_id) ? h("option", { value: s.agent_id, selected: true }, "(missing agent)") : null);
-  const nameIn = h("input", { class: "input", value: s.name || "", placeholder: "e.g. Reviewer", readonly: o.isHb || null,
-    oninput: (e) => { updatePipelineStep(idx, "name", e.target.value); markJobDirty(); const t = e.target.closest(".step").querySelector(".step-head .t"); if (t) t.textContent = o.label + (e.target.value ? " — " + e.target.value : ""); } });
-  const promptIn = h("textarea", { class: "input", rows: "3", placeholder: "Blank = use the job prompt below", readonly: o.isHb || null,
+  const promptIn = h("textarea", { class: "input", rows: "3", placeholder: "Blank = use the job prompt below", readonly: o.ro || null,
     oninput: (e) => { updatePipelineStep(idx, "prompt_override", e.target.value); markJobDirty(); } }, s.prompt_override || "");
-  const feed = o.showFeed ? h("label", { class: "check" }, h("input", { type: "checkbox", checked: !!s.depends_on_text, disabled: o.isHb || null,
-    onchange: (e) => { updatePipelineStep(idx, "depends_on_text", e.target.checked); markJobDirty(); renderPipelineSteps(o.isHb); } }),
+  const feed = o.showFeed && kind !== "reduce" && kind !== "map" ? h("label", { class: "check" }, h("input", { type: "checkbox", checked: !!s.depends_on_text, disabled: o.ro || null,
+    onchange: (e) => { updatePipelineStep(idx, "depends_on_text", e.target.checked); markJobDirty(); renderPipelineSteps(o.ro); } }),
     h("span", null, "Give it the previous phase's ", h("code", null, "<handoff>"))) : null;
-  const eng = teamEngine({ engine: s.engine || "", model: s.model || "", local: !!s.is_local, inherit: true, disabled: o.isHb,
+  const eng = teamEngine({ engine: s.engine || "", model: s.model || "", local: !!s.is_local, inherit: true, disabled: o.ro,
     onChange: (v) => {
       const st = state.pipelineDraft.steps[idx]; if (!st) return;
       // Blank = inherit the run default: omit the keys entirely.
@@ -797,27 +922,28 @@ function renderStepCard(s, idx, o) {
       markJobDirty();
       const tag = eng.el.closest(".step") && eng.el.closest(".step").querySelector(".eng-tag"); if (tag) tag.textContent = engTagText(st);
     } });
-  const pol = policySelect(s.session_policy || "", { disabled: o.isHb || o.parallel });
+  const pol = policySelect(s.session_policy || "", { disabled: o.ro || o.parallel });
   const polHint = h("span", { class: "field-hint" }, o.parallel ? "Parallel phase — every step runs in its own ephemeral copy of the workspace." : POLICY_HINTS[s.session_policy || ""]);
   pol.addEventListener("change", () => { updatePipelineStep(idx, "session_policy", pol.value); polHint.textContent = POLICY_HINTS[pol.value]; markJobDirty(); });
-  const bud = budgetFields(s.budget, { placeholder: "share", disabled: o.isHb, onChange: (v) => { updatePipelineStep(idx, "budget", v); markJobDirty(); } });
-  const retries = h("input", { class: "input", type: "number", min: "0", max: "5", value: s.auto_retry || 0, disabled: o.isHb || null,
+  const bud = budgetFields(s.budget, { placeholder: "share", disabled: o.ro, onChange: (v) => { updatePipelineStep(idx, "budget", v); markJobDirty(); } });
+  const retries = h("input", { class: "input", type: "number", min: "0", max: "5", value: s.auto_retry || 0, disabled: o.ro || null,
     oninput: (e) => { const n = Math.max(0, Math.min(5, parseInt(e.target.value, 10) || 0)); updatePipelineStep(idx, "auto_retry", n); markJobDirty(); } });
   const advN = [s.session_policy, Object.keys(s.budget || {}).length, s.auto_retry].filter(Boolean).length;
   const adv = h("details", { class: "adv" },
-    h("summary", null, icon("chevronRight"), "Session, budget, retries", advN ? h("span", { class: "count accent" }, advN) : null),
+    h("summary", null, icon("chevronRight"), kind === "map" ? "Budget" : "Session, budget, retries", advN ? h("span", { class: "count accent" }, advN) : null),
     h("div", { style: { paddingTop: "10px" } },
-      h("div", { class: "field-row" },
+      kind === "map" ? null : h("div", { class: "field-row" },
         h("label", { class: "field" }, h("span", { class: "field-label" }, "Session policy"), pol, polHint),
         h("label", { class: "field", style: { maxWidth: "150px" } }, h("span", { class: "field-label" }, "Auto-retry"), retries,
           h("span", { class: "field-hint" }, "transient failures, 0–5"))),
-      h("div", { class: "field" }, h("span", { class: "field-label" }, "Step budget", h("span", { class: "faint" }, "blank = an even share of the run budget")), bud.el)));
-  return h("div", { class: "step" },
-    h("div", { class: "step-head" }, icon("agent"), h("span", { class: "t" }, o.label + (s.name ? " — " + s.name : "")), h("span", { class: "eng-tag faint" }, engTagText(s)), o.controls),
-    h("div", { class: "field-row" }, field("Agent", agentSel), field("Step name", nameIn, null, { extra: h("span", { class: "faint" }, "optional") })),
+      h("div", { class: "field" }, h("span", { class: "field-label" }, kind === "map" ? "Step budget" : "Step budget", h("span", { class: "faint" }, kind === "map" ? "split evenly across the workers; blank = an even share of the run budget" : kind === "loop" ? "covers all iterations; blank = an even share of the run budget" : "blank = an even share of the run budget")), bud.el)));
+  return h("div", { class: "step k-" + kind },
+    h("div", { class: "step-head" }, icon(kinds[kind] || "agent"), headT, h("span", { class: "eng-tag faint" }, engTagText(s)), o.controls),
+    picker,
+    h("div", { class: "field-row" }, field(kind === "map" ? "Worker agent" : kind === "reduce" ? "Reducing agent" : "Agent", agentSel), field("Step name", nameIn, null, { extra: h("span", { class: "faint" }, "optional") })),
     h("div", { class: "field" }, h("span", { class: "field-label" }, "Engine", h("span", { class: "faint" }, "override — “Run default” inherits")), eng.el),
-    field("Prompt override", promptIn, null, { extra: h("span", { class: "faint" }, "optional") }),
-    feed, adv);
+    field(kind === "map" ? "Worker prompt" : "Prompt override", promptIn, null, { extra: h("span", { class: "faint" }, "optional") }),
+    kindFields(s, idx, o), feed, adv);
 }
 function engTagText(st) { return st && st.engine ? `${engineLabel(st.engine)}${st.model ? " · " + st.model : ""}${st.is_local ? " · local" : ""}` : ""; }
 function updatePipelineStep(idx, fieldName, value) {
@@ -826,7 +952,7 @@ function updatePipelineStep(idx, fieldName, value) {
   s[fieldName] = value;
 }
 function _newStep(phase) {
-  return { step_id: genStepId(), agent_id: (state.agents[0] || {}).id || "", name: "", prompt_override: "", depends_on_text: false, phase };
+  return { step_id: genStepId(), kind: "agent", agent_id: (state.agents[0] || {}).id || "", name: "", prompt_override: "", depends_on_text: false, phase };
 }
 // "+ Add step": single → promote to sequential when adding a 2nd; sequential → own phase;
 // parallel → phase 0; custom → a NEW phase (use "Parallel step" inside a phase to add to it).
@@ -916,13 +1042,11 @@ async function renderJobViewer(id) {
     const pipeline = job.pipeline || { mode: "single", steps: [] };
     state.pipelineDraft = { mode: pipeline.mode || "single", steps: (pipeline.steps || []).map(s => ({ ...s })) };
     state.jobDirty = false;
-    const isHb = job.kind === "heartbeat";
-    const he = job.heartbeat_entry || {};
 
-    const titleIn = h("input", { class: "input", id: "job-title", value: job.title || "", readonly: isHb || null, oninput: () => markJobDirty() });
-    const jobBudget = budgetFields(job.budget, { disabled: isHb, onChange: () => markJobDirty() });
+    const titleIn = h("input", { class: "input", id: "job-title", value: job.title || "", oninput: () => markJobDirty() });
+    const jobBudget = budgetFields(job.budget, { onChange: () => markJobDirty() });
     state.jobBudget = jobBudget;
-    const promptIn = h("textarea", { class: "input code", id: "job-prompt", rows: "8", readonly: isHb || null, oninput: () => markJobDirty(),
+    const promptIn = h("textarea", { class: "input code", id: "job-prompt", rows: "8", oninput: () => markJobDirty(),
       placeholder: "What should the agents do? Each step gets this unless it has a prompt override." }, job.task_description || "");
     const upload = h("input", { type: "file", id: "job-file-upload", multiple: true, style: { display: "none" }, onchange: () => uploadJobFiles(id) });
     const drop = h("div", { class: "dropzone", style: { margin: "12px" }, onclick: () => upload.click() }, icon("upload"), h("span", null, "Drop files here or click to attach resources"));
@@ -930,9 +1054,8 @@ async function renderJobViewer(id) {
 
     mount($("viewer"),
       pageHead({ title: job.title,
-        pills: [isHb ? h("span", { class: "pill violet" }, icon("heart"), "heartbeat") : null],
         sub: [h("span", null, "Job"), idChip(job.id, 13),
-          ws ? h("a", { href: "#", onclick: (e) => { e.preventDefault(); selectWorkspace(ws.session_id); } }, icon("folder"), " ", wsName(ws)) : (isHb ? h("span", null, "workspace: " + (he.workspace || "ephemeral")) : h("span", { class: "pill warn" }, "missing workspace")),
+          ws ? h("a", { href: "#", onclick: (e) => { e.preventDefault(); selectWorkspace(ws.session_id); } }, icon("folder"), " ", wsName(ws)) : h("span", { class: "pill warn" }, "missing workspace"),
           h("span", { class: "faint", id: "job-dirty-note" })],
         tools: [btn("Run", { icon: "play", kind: "primary", kbd: "Ctrl ⏎", title: "Run this job (saves first)", onClick: () => openRunModal(id) }),
           btn("Save", { icon: "save", kbd: "Ctrl S", id: "job-save", onClick: () => updateJob(id) }),
@@ -942,35 +1065,34 @@ async function renderJobViewer(id) {
           btn(null, { icon: "refresh", kind: "quiet", size: "sm", title: "Refresh runs", onClick: () => refreshJobRuns(id) })),
         h("div", { id: "task-history-area", style: { display: "none" } }, h("div", { id: "task-history-list", class: "run-chips" })),
         h("div", { id: "execution-area", style: { display: "none" } }),
-        h("div", { id: "runs-empty" }, emptyState("play", "No runs yet", isHb ? "Heartbeat runs appear here when the schedule fires — or run it now." : "Run this job to watch each step live: events, tool calls, tokens and cost.",
+        h("div", { id: "runs-empty" }, emptyState("play", "No runs yet", "Run this job to watch each step live: events, tool calls, tokens and cost — or give it a trigger.",
           btn("Run now", { icon: "play", kind: "primary", size: "sm", onClick: () => openRunModal(id) }), true))),
-      isHb ? card("Heartbeat schedule", "heart", { actions: btn("Edit in HEARTBEAT.md", { icon: "edit", kind: "ghost", size: "sm", onClick: () => goToAgentHeartbeat(job.agent_id || "") }) },
-        h("div", { class: "row wrap", style: { gap: "10px" } },
-          h("span", { class: "pill accent mono" }, icon("clock"), he.cron || "—"),
-          h("span", { class: "pill" }, icon("folder"), "workspace: " + (he.workspace || "ephemeral")),
-          he.engine ? h("span", { class: "pill" }, icon("cpu"), "engine: " + he.engine) : null,
-          he.enabled === false ? h("span", { class: "pill warn" }, "disabled") : h("span", { class: "pill ok" }, icon("check"), "enabled"),
-          h("span", { class: "field-hint" }, "Read-only here — this job is generated from the agent's HEARTBEAT.md."))) : null,
-      card("Configuration", "edit", { hint: isHb ? "read-only" : null },
+      card("Configuration", "edit", {},
         h("div", { "data-submit": "job-save" },
           h("div", { class: "field-row" },
-            field("Job title", titleIn, null, { req: !isHb }),
-            field("Linked workspace", h("input", { class: "input", readonly: true, value: ws ? wsName(ws) : (isHb ? (he.workspace || "ephemeral") : "Missing Workspace") }), isHb ? null : "Set when the job was created.")),
-          field(isHb ? "Heartbeat prompt" : "Job prompt", promptIn, isHb ? "Read-only — edit via HEARTBEAT.md." : "The execution plan. Ctrl+Enter saves."),
+            field("Job title", titleIn, null, { req: true }),
+            field("Linked workspace", h("input", { class: "input", readonly: true, value: ws ? wsName(ws) : "Missing Workspace" }), "Set when the job was created.")),
+          field("Job prompt", promptIn, "The execution plan. Ctrl+Enter saves."),
           h("div", { class: "field", id: "job-budget-field" }, h("span", { class: "field-label" }, "Run budget",
             h("span", { class: "faint" }, "split evenly across the steps; blank = no cap")), jobBudget.el))),
-      card("Pipeline", "workflow", { hint: isHb ? "read-only — edit via HEARTBEAT.md" : "how agents are chained" },
+      card("Pipeline", "workflow", { hint: "agents, map fan-outs, loops, approval gates, reduces" },
         h("div", { id: "pipeline-mode", class: "mode-pick", role: "group", "aria-label": "Pipeline mode" }),
         h("div", { style: { height: "14px" } }),
         h("div", { id: "pipeline-steps" }),
-        isHb ? null : h("button", { type: "button", class: "btn ghost add-step", id: "pipeline-add", onclick: () => addPipelineStep() })),
-      isHb ? null : card("Resources & files", "link", { hint: `${files.length}`, flush: true,
+        h("button", { type: "button", class: "btn ghost add-step", id: "pipeline-add", onclick: () => addPipelineStep() })),
+      card("Triggers", "clock", { hint: "run this job on a schedule, a webhook, GitHub or a file change", flush: true,
+          actions: btn("Add trigger", { icon: "plus", kind: "ghost", size: "sm", onClick: () => createTriggerPrompt({ target: { kind: "job", id } }) }) },
+        h("div", { id: "job-triggers", style: { padding: "6px" } })),
+      card("Resources & files", "link", { hint: `${files.length}`, flush: true,
           actions: h("div", { class: "row" },
             btn("Upload", { icon: "upload", kind: "ghost", size: "sm", onClick: () => upload.click() }),
             btn("Add via URL", { icon: "link", kind: "ghost", size: "sm", onClick: () => addJobFilePrompt(id) })) },
         upload, fileRows("job", id, files, { canDelete: true, canDownload: false, emptyText: "No resources linked" }), drop));
 
-    renderPipelineSteps(isHb);
+    renderPipelineSteps(false);
+    renderTriggerList($("job-triggers"), { filter: { target_kind: "job", target_id: id }, names: triggerNames(), onOpen: (t) => selectTrigger(t.id),
+      emptyText: "Nothing runs this job automatically yet.",
+      emptyAction: btn("Add trigger", { icon: "plus", kind: "ghost", size: "sm", onClick: () => createTriggerPrompt({ target: { kind: "job", id } }) }) });
     await refreshJobRuns(id, true);
   } catch (e) { errorView(e.message, () => renderJobViewer(id)); }
 }
@@ -1118,7 +1240,6 @@ async function createJobPrompt(preselectWs) {
         const res = await api("/api/jobs", jsonOpts("POST", { title: title.value, workspace_id: wsSel.value, agent_id: agSel.value }));
         close();
         await refreshJobs();
-        selectJobTab("user");
         selectJob(res.job.id);
         showToast("Job created");
       } catch (e) { showToast(e.message, true); return false; }
@@ -1128,15 +1249,14 @@ async function updateJob(id, opts = {}) {
   const titleIn = $("job-title");
   const title = titleIn.value;
   const task_description = $("job-prompt").value;
-  const job = state.jobs.find(j => j.id === id);
-  if (!(job && job.kind === "heartbeat")) {
-    if (!fieldError(titleIn, title.trim() ? "" : "Title is required")) return false;
-    const orphan = state.pipelineDraft.steps.findIndex(s => !s.agent_id);
-    if (orphan >= 0) { showToast(`Step ${orphan + 1} has no agent — create an agent first`, true); return false; }
-  }
+  if (!fieldError(titleIn, title.trim() ? "" : "Title is required")) return false;
+  const orphan = state.pipelineDraft.steps.findIndex(s => (s.kind || "agent") !== "gate" && !s.agent_id);
+  if (orphan >= 0) { showToast(`Step ${orphan + 1} has no agent — create an agent first`, true); return false; }
+  const badLoop = state.pipelineDraft.steps.findIndex(s => s.kind === "loop" && s.loop && s.loop.check && s.loop.check.type === "schema" && typeof s.loop.check.schema === "string");
+  if (badLoop >= 0) { showToast(`Step ${badLoop + 1}: the JSON Schema is not valid JSON`, true); return false; }
   const payload = { title, task_description };
   if (state.pipelineDraft) payload.pipeline = state.pipelineDraft;
-  if (state.jobBudget && !(job && job.kind === "heartbeat")) payload.budget = state.jobBudget.get();
+  if (state.jobBudget) payload.budget = state.jobBudget.get();
   try {
     await api(`/api/jobs/${id}`, jsonOpts("PUT", payload));
     state.jobDirty = false;
@@ -1198,24 +1318,24 @@ async function deleteWorkspacePrompt(id) {
 }
 async function deleteAgentPrompt(id) {
   const a = state.agents.find(x => x.id === id);
-  if (!(await confirmDialog("Delete agent?", h("p", { class: "muted" }, "Delete ", h("b", null, a ? a.name : id), " and its internal files? Heartbeat jobs generated from it go too."), { confirm: "Delete agent", danger: true }))) return;
+  if (!(await confirmDialog("Delete agent?", h("p", { class: "muted" }, "Delete ", h("b", null, a ? a.name : id), " and its internal files? The triggers compiled from its HEARTBEAT.md go too."), { confirm: "Delete agent", danger: true }))) return;
   try {
     await api(`/api/agents/${id}`, { method: "DELETE" });
     state.agents = state.agents.filter(x => x.id !== id);
     if (state.activeType === "agent" && state.activeId === id) { state.internalDirty = {}; showDefaultView(); } else renderSidebar(true);
     showToast("Agent deleted");
-    refreshAgents(); refreshJobs();
+    refreshAgents(); refreshJobs(); refreshTriggers();
   } catch (e) { showToast(e.message, true); }
 }
 async function deleteJobPrompt(id) {
   const j = state.jobs.find(x => x.id === id);
-  if (!(await confirmDialog("Delete job?", h("p", { class: "muted" }, "Delete ", h("b", null, j ? j.title : id), "? Its run history stays on disk."), { confirm: "Delete job", danger: true }))) return;
+  if (!(await confirmDialog("Delete job?", h("p", { class: "muted" }, "Delete ", h("b", null, j ? j.title : id), "? Its run history stays; triggers that run it are deleted."), { confirm: "Delete job", danger: true }))) return;
   try {
     await api(`/api/jobs/${id}`, { method: "DELETE" });
     state.jobs = state.jobs.filter(x => x.id !== id);
     if (state.activeType === "job" && state.activeId === id) { state.jobDirty = false; showDefaultView(); } else renderSidebar(true);
     showToast("Job deleted");
-    refreshJobs();
+    refreshJobs(); refreshTriggers();
   } catch (e) { showToast(e.message, true); }
 }
 async function addJobFilePrompt(id) {
@@ -1311,10 +1431,12 @@ function renderRunMonitor(run, stepTasks) {
     area._runId = run.run_id; area._steps = {};
     mount(area, h("div", { class: "monitor" }, h("div", { class: "mon-head", id: "mon-head" }), h("div", { class: "bar", id: "mon-bar" }, h("i")), h("div", { id: "mon-budget" }), h("div", { class: "col", id: "mon-steps", style: { gap: "10px" } })));
   }
-  const done = run.steps.filter(s => ["completed", "failed", "cancelled", "skipped"].includes(s.status)).length;
+  const done = run.steps.filter(s => ["completed", "failed", "cancelled", "skipped", "rejected", "budget_exceeded", "interrupted"].includes(s.status)).length;
   const dur = durationBetween(run.started_at, run.completed_at);
   mount($("mon-head"), statusPill(run.status), h("b", null, "Run"), idChip(run.run_id, 13), h("span", { class: "pill" }, run.mode),
     run.source ? h("span", { class: "pill" }, "source: " + run.source) : null,
+    run.trigger_id ? h("a", { href: "#", title: "The trigger that started this run", onclick: (e) => { e.preventDefault(); selectTrigger(run.trigger_id); } }, icon("clock"), " trigger") : null,
+    run.status === "awaiting_input" ? h("span", { class: "pill violet" }, icon("gate"), "waiting for approval") : null,
     h("span", { class: "faint", style: { fontSize: "12px" } }, `${done}/${run.steps.length} steps · started ${relTime(run.started_at)}${dur != null ? " · " + fmtMs(dur) : ""}`),
     h("span", { class: "grow" }),
     isActive ? btn("Cancel run", { icon: "stop", kind: "danger", size: "sm", onClick: () => cancelActiveRun() }) : null);
@@ -1329,54 +1451,134 @@ function renderRunMonitor(run, stepTasks) {
       blk = { root: h("div", { class: "stepblock" }) };
       blk.head = h("button", { type: "button", class: "sb-head", onclick: () => { const on = !blk.root.classList.contains("open"); openSteps.set(s.step_id, on); blk.root.classList.toggle("open", on); } });
       blk.prog = h("div", { class: "sb-prog" });
+      blk.kind = h("div");
       blk.stream = h("div");
       blk.result = h("div");
-      blk.root.append(blk.head, h("div", { class: "sb-body" }, blk.prog, blk.stream, blk.result));
+      blk.root.append(blk.head, h("div", { class: "sb-body" }, blk.prog, blk.kind, blk.stream, blk.result));
       area._steps[s.step_id] = blk; host.appendChild(blk.root);
     }
     renderStepBlock(blk, s, stepTasks[i], i, run.steps.length, run, isActive);
   });
 }
+const KIND_ICON = { agent: "agent", map: "fanout", loop: "loop", gate: "gate", reduce: "merge" };
 function renderStepBlock(blk, step, task, i, n, run, runActive) {
   const t = task || {};
+  const kind = step.kind || (step.spec || {}).kind || "agent";
   // The task queue is in-memory: after a proxy restart a finished step's task is
   // gone, so fall back to what the run record kept (status + result_preview).
-  const gone = !task && step.task_id && !["pending", "running"].includes(step.status);
-  const pct = gone ? (step.status === "completed" ? 100 : 0) : Math.round((t.progress || 0) * 100);
+  const gone = !task && !["pending", "running", "awaiting_input"].includes(step.status);
+  const workers = step.workers || [];
+  const wDone = workers.filter(w => !["pending", "running"].includes(w.status)).length;
+  const pct = kind === "map" && workers.length ? Math.round(100 * wDone / workers.length)
+    : kind === "gate" ? (step.status === "completed" ? 100 : 0)
+    : gone ? (step.status === "completed" ? 100 : 0) : Math.round((t.progress || 0) * 100);
   const evList = (t.metadata && t.metadata.events) || [];
-  const progressMsg = (t.metadata && t.metadata.progress_message) || (gone ? "Task details expired (proxy restarted) — showing the saved preview" : step.status === "pending" ? "Pending…" : "Processing...");
-  const open = openSteps.has(step.step_id) ? openSteps.get(step.step_id) : (n <= 2 || step.status === "running" || step.status === "failed");
+  const progressMsg = kind === "map" ? (workers.length ? `${wDone}/${workers.length} workers done` : step.status === "pending" ? "Pending…" : "no items")
+    : kind === "gate" ? (step.status === "awaiting_input" ? "Waiting for a decision" : step.status === "pending" ? "Pending…" : step.status)
+    : (t.metadata && t.metadata.progress_message) || (gone ? "Task details expired (proxy restarted) — showing the saved preview" : step.status === "pending" ? "Pending…" : "Processing...");
+  const open = openSteps.has(step.step_id) ? openSteps.get(step.step_id) : (n <= 2 || ["running", "failed", "awaiting_input"].includes(step.status));
   blk.root.classList.toggle("open", open);
   const r = t.result || {};
   const dur = durationBetween(step.started_at, step.completed_at);
-  mount(blk.head, icon("chevronRight", "chev"), h("span", { class: "faint mono" }, `#${i + 1}`), statusPill(step.status), h("b", { class: "ellipsis" }, step.name || step.agent_name || step.agent_id || `Step ${i + 1}`),
+  const u = step.usage || {};
+  mount(blk.head, icon("chevronRight", "chev"), h("span", { class: "faint mono" }, `#${i + 1}`), statusPill(step.status),
+    kind !== "agent" ? h("span", { class: "pill " + (kind === "gate" ? "violet" : "accent"), title: (STEP_KINDS.find(k => k[0] === kind) || [])[3] || "" }, icon(KIND_ICON[kind]), kind) : null,
+    h("b", { class: "ellipsis" }, step.name || step.agent_name || step.agent_id || (kind === "gate" ? "Approval" : `Step ${i + 1}`)),
     step.name && step.agent_name ? h("span", { class: "faint" }, step.agent_name) : null, h("span", { class: "grow" }),
-    t.result && r.cost_usd != null ? h("span", { class: "faint mono" }, fmtCost(r.cost_usd)) : null,
+    kind === "map" && u.cost_usd != null ? h("span", { class: "faint mono" }, fmtCost(u.cost_usd)) : null,
+    kind === "loop" && (step.iterations || []).length ? h("span", { class: "pill" }, `${step.iterations.length} iteration${step.iterations.length === 1 ? "" : "s"}`) : null,
+    t.result && r.cost_usd != null && kind !== "map" ? h("span", { class: "faint mono" }, fmtCost(r.cost_usd)) : null,
     t.result && r.tokens ? h("span", { class: "faint mono" }, `${fmtTokens(r.tokens.input)} in · ${fmtTokens(r.tokens.output)} out`) : null,
     dur != null && step.started_at ? h("span", { class: "faint mono" }, fmtMs(dur)) : null,
-    step.session_policy ? h("span", { class: "pill", title: POLICY_HINTS[step.session_policy] || "" }, step.session_policy.replace("_", " + ")) : null,
-    (step.attempts || []).length > 1 ? h("span", { class: "pill warn", title: (step.attempts || []).map(a => `#${a.n} ${a.mode}: ${a.status}`).join("\n") }, `${step.attempts.length} attempts`) : null,
+    step.session_policy && kind !== "gate" && kind !== "map" ? h("span", { class: "pill", title: POLICY_HINTS[step.session_policy] || "" }, step.session_policy.replace("_", " + ")) : null,
+    (step.attempts || []).filter(a => a.mode !== "iteration").length > 1 ? h("span", { class: "pill warn", title: (step.attempts || []).map(a => `#${a.n} ${a.mode}: ${a.status}`).join("\n") }, `${step.attempts.length} attempts`) : null,
     step.task_id ? idChip(step.task_id, 6, "Task " + step.task_id) : null);
-  mount(blk.prog, h("div", { class: "bar" + (step.status === "completed" ? " ok" : step.status === "failed" ? " err" : "") }, h("i", { style: { width: pct + "%" } })),
+  mount(blk.prog, h("div", { class: "bar" + (step.status === "completed" ? " ok" : ["failed", "rejected"].includes(step.status) ? " err" : "") }, h("i", { style: { width: pct + "%" } })),
     h("span", null, `${progressMsg} · ${pct}%`));
-  blk.stream.style.display = gone ? "none" : "";
-  if (!gone) updateStream(blk.stream, evList, { key: step.step_id, limit: 100, status: step.status, emptyText: step.status === "pending" ? "Waiting for the previous phase…" : "Waiting for events..." });
+  renderKindArea(blk, step, run, kind);
+  const noStream = gone || kind === "gate" || kind === "map";
+  blk.stream.style.display = noStream ? "none" : "";
+  if (!noStream) updateStream(blk.stream, evList, { key: step.step_id, limit: 100, status: step.status, emptyText: step.status === "pending" ? "Waiting for the previous phase…" : "Waiting for events..." });
   const rsig = JSON.stringify([t.result || null, step.error || null, step.status, step.handoff || null, step.attempts || [], runActive, step.reverted || null]);
   if (blk.result._sig !== rsig) {
     blk.result._sig = rsig;
     const parts = [];
     const acts = stepActions(run, step, runActive);
     if (acts) parts.push(acts);
-    if (step.handoff) parts.push(renderHandoffCard(step.handoff, { artifactUrl: (p) => `/api/runs/${encodeURIComponent(run.run_id)}/steps/${encodeURIComponent(step.step_id)}/artifacts/${p.split("/").map(encodeURIComponent).join("/")}` }));
-    if (t.result) parts.push(renderResultBlock(t.result, { title: "Agent reply", fallback: step.status === "completed" ? "Step finished without a final text response." : "" }));
-    else if (gone && step.result_preview) parts.push(renderResultBlock(step.result_preview, { title: "Agent reply (preview)" }));
-    if (step.error) parts.push(renderErrorBlock(step.error, "Step error"));
+    if (step.handoff && kind !== "gate") parts.push(renderHandoffCard(step.handoff, { artifactUrl: (p) => `/api/runs/${encodeURIComponent(run.run_id)}/steps/${encodeURIComponent(step.step_id)}/artifacts/${p.split("/").map(encodeURIComponent).join("/")}` }));
+    if (t.result && kind !== "map") parts.push(renderResultBlock(t.result, { title: kind === "loop" ? "Last iteration's reply" : "Agent reply", fallback: step.status === "completed" ? "Step finished without a final text response." : "" }));
+    else if (gone && step.result_preview && kind !== "gate") parts.push(renderResultBlock(step.result_preview, { title: "Agent reply (preview)" }));
+    if (step.error) parts.push(renderErrorBlock(step.error, kind === "gate" ? "Gate" : "Step error"));
     mount(blk.result, parts);
   }
+}
+// The kind-specific part of a step block: map worker lanes, loop iterations, gate card.
+function renderKindArea(blk, step, run, kind) {
+  if (kind === "map") {
+    const sig = JSON.stringify(step.workers || []);
+    if (blk.kind._sig === sig) return; blk.kind._sig = sig;
+    const ws = step.workers || [];
+    if (!ws.length) { mount(blk.kind, step.status === "pending" ? h("div", { class: "field-hint" }, "Workers start when the previous phase hands over its items.") : null); return; }
+    const base = `/api/runs/${encodeURIComponent(run.run_id)}/steps/${encodeURIComponent(step.step_id)}`;
+    mount(blk.kind, h("div", { class: "lanes-map" }, ws.map(w => h("div", { class: "wk st-" + (w.status || "pending") },
+      h("div", { class: "l1" }, h("b", { class: "mono" }, "#" + w.n), statusPill(w.status || "pending"), w.fork ? h("span", { class: "pill", title: "forked from the planner's conversation" }, "fork") : null,
+        h("span", { class: "grow" }), w.usage && w.usage.cost_usd != null ? h("span", { class: "faint mono" }, fmtCost(w.usage.cost_usd)) : null,
+        w.task_id ? btn(null, { icon: "pulse", kind: "quiet", size: "sm", title: "Events and reply", onClick: () => openTaskModal(w.task_id, `Worker #${w.n}`) }) : null,
+        w.snapshot_before && w.snapshot_after ? btn(null, { icon: "code", kind: "quiet", size: "sm", title: "What this worker changed", onClick: () => openDiffModal({ title: `Worker #${w.n} diff`, subtitle: w.item,
+          load: (path) => api(`${base}/diff?worker=${w.n}` + (path ? "&path=" + encodeURIComponent(path) : "")) }) }) : null),
+      h("div", { class: "it", title: w.item }, w.item),
+      w.handoff && w.handoff.summary ? h("div", { class: "sm", title: w.handoff.summary }, w.handoff.summary) : w.error ? h("div", { class: "sm", style: { color: "var(--err)" } }, w.error) : null))));
+    return;
+  }
+  if (kind === "loop") {
+    const its = step.iterations || [];
+    const sig = JSON.stringify(its);
+    if (blk.kind._sig === sig) return; blk.kind._sig = sig;
+    const chk = ((step.spec || {}).loop || {}).check || {};
+    if (!its.length) { mount(blk.kind, h("div", { class: "field-hint" }, `Check: ${chk.type || "?"} — up to ${((step.spec || {}).loop || {}).max_iterations || 3} iterations.`)); return; }
+    mount(blk.kind, h("div", { class: "iters" }, its.map(it => {
+      const c = it.check || {};
+      return h("div", { class: "iter" }, h("span", { class: "n" }, "#" + it.n),
+        h("div", { class: "grow" },
+          h("div", { class: "row wrap" }, statusPill(it.status), h("span", { class: "pill" }, icon("loop"), c.type || chk.type || "check"),
+            c.passed != null ? h("span", { class: "pill " + (c.passed ? "ok" : "err") }, c.passed ? "pass" : "fail") : null,
+            c.exit_code != null ? h("span", { class: "faint mono" }, "exit " + c.exit_code) : null,
+            c.grader_task_id ? h("a", { href: "#", onclick: (e) => { e.preventDefault(); openTaskModal(c.grader_task_id, `Grader #${it.n}`); } }, "grader") : null,
+            it.summary ? h("span", { class: "faint ellipsis grow", title: it.summary }, it.summary) : null),
+          c.findings && !c.passed ? h("pre", null, c.findings) : null));
+    })));
+    return;
+  }
+  if (kind === "gate") {
+    const sig = JSON.stringify([step.status, step.approval_id, step.gate_decision || null]);
+    if (blk.kind._sig === sig) return; blk.kind._sig = sig;
+    if (step.status === "awaiting_input" && step.approval_id) {
+      mount(blk.kind, skeleton(2));
+      api(`/api/approvals/${encodeURIComponent(step.approval_id)}`).then(r => {
+        if (blk.kind._sig !== sig) return;
+        mount(blk.kind, approvalCard(r.approval, { compact: true, onDone: () => { blk.kind._sig = null; pollRun(state.activeId); } }));
+      }).catch(e => mount(blk.kind, errorBox(e.message)));
+      return;
+    }
+    const d = step.gate_decision;
+    const g = (step.spec || {}).gate || {};
+    mount(blk.kind, d ? h("div", { class: "apv compact" }, h("div", { class: "apv-head" }, icon("gate"), h("b", { class: "grow" }, g.title || "Approval"), statusPill(d.status)),
+      h("div", { class: "apv-decided" }, h("span", null, `${d.status} by `, h("b", null, d.by || "?"), " · ", relTime(d.at)), d.note ? h("div", null, "Note: " + d.note) : null,
+        step.handoff && d.edited ? h("div", null, h("span", { class: "faint" }, "Handed to the next step: "), h("pre", { class: "apv-body" }, step.handoff.summary)) : null))
+      : h("div", { class: "field-hint" }, g.instructions ? "Instructions: " + g.instructions : "Waits for approval when the run gets here."));
+    return;
+  }
+  if (blk.kind.childNodes.length) mount(blk.kind);
 }
 // Retry / Retry clean / Diff / Revert for a finished step.
 function stepActions(run, step, runActive) {
   const st = step.status;
+  const kind = step.kind || (step.spec || {}).kind || "agent";
+  if (kind === "gate") {
+    return !runActive && ["rejected", "cancelled", "interrupted", "failed"].includes(st)
+      ? h("div", { class: "step-acts" }, btn("Ask again", { icon: "refresh", kind: "primary", size: "sm", title: "Open a new approval for this gate and continue the run from here", onClick: () => retryStep(run, step, "retry") }))
+      : null;
+  }
   const last = (step.attempts || []).slice(-1)[0] || {};
   const failedish = ["failed", "cancelled", "interrupted", "budget_exceeded"].includes(st);
   const out = [];
@@ -1393,9 +1595,13 @@ function stepActions(run, step, runActive) {
 }
 async function retryStep(run, step, mode) {
   const clean = mode === "retry_clean";
-  if (!(await confirmDialog(clean ? "Retry clean?" : "Retry step?", clean
-    ? "The workspace goes back to its snapshot from before this step, the step runs in a fresh conversation, and every later phase runs again."
-    : "The step resumes its CLI conversation (“continue from where you stopped”); later phases run again after it succeeds.", { confirm: clean ? "Retry clean" : "Retry" }))) return;
+  const kind = step.kind || (step.spec || {}).kind || "agent";
+  const msg = kind === "gate" ? "A new approval is opened for this gate; the run waits for it again."
+    : kind === "map" ? (clean ? "Every worker runs again from scratch, then every later phase." : "Only the workers that did not complete run again; later phases run after they succeed.")
+    : kind === "loop" ? (clean ? "The workspace goes back to its snapshot from before the loop and the iterations start over in a fresh conversation." : "Another round of iterations, resuming the body's conversation with the last check's findings.")
+    : clean ? "The workspace goes back to its snapshot from before this step, the step runs in a fresh conversation, and every later phase runs again."
+    : "The step resumes its CLI conversation (“continue from where you stopped”); later phases run again after it succeeds.";
+  if (!(await confirmDialog(kind === "gate" ? "Ask again?" : clean ? "Retry clean?" : "Retry step?", msg, { confirm: kind === "gate" ? "Ask again" : clean ? "Retry clean" : "Retry" }))) return;
   try {
     await api(`/api/runs/${encodeURIComponent(run.run_id)}/steps/${encodeURIComponent(step.step_id)}/retry`, jsonOpts("POST", { mode }));
     toast(clean ? "Retrying clean…" : "Retrying…");
@@ -1448,39 +1654,42 @@ addShortcut({ group: "Team Mode", desc: "Run the open job", keys: ["Ctrl", "Ente
 addShortcut({ group: "Team Mode", desc: "New workspace", keys: ["W"], match: e => e.key.toLowerCase() === "w" && !e.ctrlKey && !e.altKey && !e.metaKey, run: () => createWorkspacePrompt() });
 addShortcut({ group: "Team Mode", desc: "New agent", keys: ["A"], match: e => e.key.toLowerCase() === "a" && !e.ctrlKey && !e.altKey && !e.metaKey, run: () => createAgentPrompt() });
 addShortcut({ group: "Team Mode", desc: "New job", keys: ["J"], match: e => e.key.toLowerCase() === "j" && !e.ctrlKey && !e.altKey && !e.metaKey, run: () => createJobPrompt() });
+addShortcut({ group: "Team Mode", desc: "New trigger", keys: ["T"], match: e => e.key.toLowerCase() === "t" && !e.ctrlKey && !e.altKey && !e.metaKey, run: () => createTriggerPrompt() });
+addShortcut({ group: "Team Mode", desc: "Approvals inbox", keys: ["I"], match: e => e.key.toLowerCase() === "i" && !e.ctrlKey && !e.altKey && !e.metaKey, run: () => openApprovalsInbox() });
 addShortcut({ group: "Team Mode", desc: "Back to overview", keys: ["O"], match: e => e.key.toLowerCase() === "o" && !e.ctrlKey && !e.altKey && !e.metaKey, run: async () => { if (await guardLeave()) showDefaultView(); } });
 
 // ── Boot + #/<type>/<id> routing (reload / back-forward / pasted links) ──
 function routeFromHash() {
-  const m = /^#\/(ws|agent|job)\/(.+)$/.exec(location.hash);
+  const m = /^#\/(ws|agent|job|trigger)\/(.+)$/.exec(location.hash);
   if (!m) return false;
   const id = decodeURIComponent(m[2]);
   if (state.activeType === m[1] && state.activeId === id) return true;
   if (m[1] === "ws" && state.workspaces.some(w => w.session_id === id)) selectWorkspace(id);
   else if (m[1] === "agent" && state.agents.some(a => a.id === id)) selectAgent(id);
-  else if (m[1] === "job" && state.jobs.some(j => j.id === id)) {
-    const j = state.jobs.find(x => x.id === id); if ((j.kind || "user") !== state.activeJobTab) selectJobTab(j.kind || "user");
-    selectJob(id);
-  } else return false;
+  else if (m[1] === "job" && state.jobs.some(j => j.id === id)) selectJob(id);
+  else if (m[1] === "trigger" && state.triggers.some(t => t.id === id)) selectTrigger(id);
+  else return false;
   return true;
 }
 addEventListener("hashchange", () => { if (!routeFromHash() && !location.hash) showDefaultView(); });
+addEventListener("tc:approval", () => { if (state.activeType === "job" && state.activeRunId) pollRun(state.activeId); });
 (async () => {
   renderSidebar(true);
   loadEngineInfo();
-  const m = /^#\/(ws|agent|job)\/(.+)$/.exec(location.hash);
+  const m = /^#\/(ws|agent|job|trigger)\/(.+)$/.exec(location.hash);
   if (!m) renderOverview(); else loadingView("Loading…");
-  await Promise.all([refreshWorkspaces(), refreshAgents(), refreshJobs()]);
+  await Promise.all([refreshWorkspaces(), refreshAgents(), refreshJobs(), refreshTriggers()]);
   if (m) { if (!routeFromHash()) showDefaultView(); } else renderOverview();
 })();
 setInterval(() => {
   refreshWorkspaces();
   refreshAgents();
   refreshJobs();
+  refreshTriggers();
   if (!state.activeType && $("recent-runs")) refreshRecentRuns();
 }, 5000);
-liveEvents("/api/events?kinds=run", { types: ["run.update"],
-  onEvent: debounced(() => { if (!state.activeType && $("recent-runs")) refreshRecentRuns(); }, 500) });
+globalFeed(["trigger.update", "trigger.deleted"], debounced(() => refreshTriggers(), 700));
+globalFeed(["run.update"], debounced(() => { if (!state.activeType && $("recent-runs")) refreshRecentRuns(); }, 500));
 </script>
 </body>
 </html>

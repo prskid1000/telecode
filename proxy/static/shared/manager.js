@@ -93,6 +93,13 @@ const ICON_PATHS = {
   arrowIn: '<path d="M12 4v11M7 10.5l5 5 5-5"/><path d="M5 20h14"/>',
   arrowOut: '<path d="M12 16V5M7 9.5l5-5 5 5"/><path d="M5 20h14"/>',
   swap: '<path d="M7 7h12l-3.5-3.5M17 17H5l3.5 3.5"/>',
+  inbox: '<path d="M3.5 13.5l2.6-7.2A1.5 1.5 0 0 1 7.5 5.3h9a1.5 1.5 0 0 1 1.4 1L20.5 13.5V18a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 18z"/><path d="M3.5 13.5h4.5l1.5 2.5h5l1.5-2.5h4.5"/>',
+  gate: '<path d="M5 20V6.5L12 4l7 2.5V20"/><path d="M9 20v-6h6v6M5 11h14"/>',
+  fanout: '<circle cx="5" cy="12" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="19" cy="12" r="2"/><circle cx="19" cy="19" r="2"/><path d="M7 12h10M7 11l10-5.5M7 13l10 5.5"/>',
+  loop: '<path d="M17 7.5A7 7 0 1 0 19 12"/><path d="M19 5v4h-4"/>',
+  merge: '<circle cx="19" cy="12" r="2"/><circle cx="5" cy="5" r="2"/><circle cx="5" cy="12" r="2"/><circle cx="5" cy="19" r="2"/><path d="M7 12h10M7 5.5L17 11M7 18.5L17 13"/>',
+  webhook: '<path d="M9 7.5a3.5 3.5 0 1 1 5.2 3l2.3 4.5"/><path d="M6.5 17.5a3.5 3.5 0 1 1 1-6.8l2.5-4.4"/><path d="M11 17.5h6a3.5 3.5 0 1 0-1.5-6.6"/>',
+  target: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1"/>',
 };
 function icon(name, cls = "") {
   const span = document.createElement("span");
@@ -144,16 +151,17 @@ function shortId(id, n = 8) { id = String(id || ""); return id.length > n ? id.s
 const STATUS_TONE = {
   pending: "warn", queued: "warn", running: "accent", active: "accent", completed: "ok", done: "ok", success: "ok",
   failed: "err", error: "err", cancelled: "err", canceled: "err", partial: "warn", paused: "warn", skipped: "", resumed: "accent",
-  budget_exceeded: "warn", interrupted: "warn",
+  budget_exceeded: "warn", interrupted: "warn", awaiting_input: "violet", rejected: "err", approved: "ok", ok: "ok",
+  disabled: "",
 };
 const LIVE_STATUSES = ["pending", "running"];
-const TERMINAL_RUN = ["completed", "failed", "partial", "cancelled", "interrupted", "budget_exceeded"];
+const TERMINAL_RUN = ["completed", "failed", "partial", "cancelled", "interrupted", "budget_exceeded", "rejected"];
 function statusPill(status, opts = {}) {
   const s = String(status || "unknown");
   const tone = opts.tone != null ? opts.tone : (STATUS_TONE[s.toLowerCase()] ?? "");
-  const live = s === "running" || s === "active" && opts.pulse;
+  const live = s === "running" || s === "awaiting_input" || s === "active" && opts.pulse;
   return h("span", { class: "pill " + tone, title: opts.title || null },
-    h("span", { class: "dot" + (live ? " pulse" : "") }), opts.label || s);
+    h("span", { class: "dot" + (live ? " pulse" : "") }), opts.label || s.replace(/_/g, " "));
 }
 
 // ── API (same contract as the original pages: throw body.error || statusText) ─
@@ -301,10 +309,12 @@ function renderTopbar(host, mode) {
   const nav = h("tc-appnav", { active: mode },
     h("span", { class: "conn", id: "connState", title: "Connection to telecode's proxy" }, h("span", { class: "dot ok" }), "Connected"),
     h("span", { class: "divider-v" }),
+    approvalsButton(),
     btn(null, { icon: "keyboard", kind: "quiet", title: "Keyboard shortcuts  (?)", onClick: () => showShortcuts() }),
     h("button", { type: "button", class: "btn btn-icon quiet", id: "themeToggle", onclick: toggleTheme }));
   host.replaceWith(nav);
   applyTheme();
+  startApprovalsBadge();
   return nav;
 }
 let connOk = true;
@@ -524,6 +534,22 @@ function liveEvents(url, o = {}) {
     });
   }
   return { close() { closed = true; es.close(); }, get live() { return opened && !closed; } };
+}
+// One EventSource for every global-feed listener on the page (task, run,
+// approval and trigger summaries). Browsers allow ~6 connections per host, so
+// each listener opening its own stream would starve plain fetches.
+// globalFeed(types, onEvent(type, data)) → {live}
+const FEED_TYPES = ["task.status", "run.update", "approval.created", "approval.decided",
+  "trigger.update", "trigger.fire", "trigger.notice", "trigger.deleted"];
+const feedSubs = [];
+let feedStream = null;
+function globalFeed(types, onEvent) {
+  feedSubs.push({ types: new Set(types), onEvent });
+  if (!feedStream) {
+    feedStream = liveEvents("/api/events?kinds=task,run,approval,trigger", { types: FEED_TYPES,
+      onEvent: (t, d) => { for (const s of feedSubs) if (s.types.has(t)) { try { s.onEvent(t, d); } catch (e) { console.warn(e); } } } });
+  }
+  return { get live() { return !!(feedStream && feedStream.live); } };
 }
 // Coalesce bursts (one refresh per `ms`, trailing).
 function debounced(fn, ms = 300) { let t = null; return (...a) => { if (t) return; t = setTimeout(() => { t = null; fn(...a); }, ms); }; }
@@ -752,4 +778,140 @@ async function renderSnapshotTimeline(host, o) {
         try { await api(`${base}/${s.sha}/restore${q}`, jsonOpts("POST", {})); toast("Workspace restored", { kind: "success" }); reload(); if (o.onRestored) o.onRestored(); }
         catch (e) { toast(e.message, { kind: "error" }); }
       } }))))));
+}
+
+// ── P3: approvals inbox (badge in <tc-appnav>, inbox panel, gate cards) ──
+// GET /api/approvals?status=pending|all, POST /api/approvals/{id}/approve|reject
+// {note?, edited_text?}; live via /api/events?kinds=approval. After any decision
+// made here a "tc:approval" window event fires so the page can refresh.
+const APPROVAL_KIND = { gate: "Pipeline gate", tool: "Tool permission", memory: "Memory change" };
+let approvalsCount = 0;
+const approvalListeners = new Set();
+function onApprovalsChange(fn) { approvalListeners.add(fn); return () => approvalListeners.delete(fn); }
+function approvalsButton() {
+  const count = h("span", { class: "count accent hidden", id: "approvalsCount" }, "0");
+  return h("button", { type: "button", class: "btn quiet approvals-btn", id: "approvalsBtn", title: "Approvals inbox — gates waiting for a decision",
+    "aria-label": "Approvals inbox", onclick: () => openApprovalsInbox() }, icon("inbox"), count);
+}
+function setApprovalsCount(n) {
+  approvalsCount = n;
+  const c = $("approvalsCount"); if (!c) return;
+  c.textContent = n > 99 ? "99+" : String(n); c.classList.toggle("hidden", !n);
+  const b = $("approvalsBtn"); if (b) { b.classList.toggle("on", n > 0); b.title = n ? `${n} approval${n === 1 ? "" : "s"} waiting — open the inbox` : "Approvals inbox — nothing waiting"; }
+}
+let approvalsStarted = false;
+async function refreshApprovalsCount() {
+  try { const r = await api("/api/approvals?status=pending"); setApprovalsCount(r.pending_count || 0); approvalListeners.forEach(fn => { try { fn(r); } catch { /* ignore */ } }); }
+  catch { /* proxy down: keep the last count */ }
+}
+function startApprovalsBadge() {
+  if (approvalsStarted) return; approvalsStarted = true;
+  refreshApprovalsCount();
+  const soon = debounced(refreshApprovalsCount, 400);
+  const feed = globalFeed(["approval.created", "approval.decided"], soon);
+  let ticks = 0;
+  setInterval(() => { if (!feed.live || ++ticks % 4 === 0) refreshApprovalsCount(); }, 15000);
+}
+async function decideApproval(ap, decision, { note, edited } = {}) {
+  const body = {};
+  if (note) body.note = note;
+  if (edited) body.edited_text = edited;
+  const r = await api(`/api/approvals/${encodeURIComponent(ap.id)}/${decision}`, jsonOpts("POST", body));
+  toast(decision === "approve" ? "Approved" : "Rejected", { kind: "success" });
+  window.dispatchEvent(new CustomEvent("tc:approval", { detail: r.approval }));
+  refreshApprovalsCount();
+  return r.approval;
+}
+// approvalCard(ap, {onDone(ap), compact}) — the decision UI shared by the inbox and the run monitor's gate card.
+function approvalCard(ap, o = {}) {
+  const pending = ap.status === "pending";
+  const payload = ap.payload || {};
+  const jobLink = payload.job_id ? h("a", { href: `/team#/job/${encodeURIComponent(payload.job_id)}`, title: "Open the job and its run" }, icon("workflow"), " ", payload.job_title || "job") : null;
+  const head = h("div", { class: "apv-head" }, icon(ap.kind === "gate" ? "gate" : "inbox"),
+    h("b", { class: "ellipsis grow" }, ap.title || "Approval"),
+    h("span", { class: "pill violet" }, APPROVAL_KIND[ap.kind] || ap.kind),
+    statusPill(ap.status),
+    h("span", { class: "faint", title: fmtDateTime(ap.created_at), style: { fontSize: "11.5px" } }, relTime(ap.created_at)));
+  const body = ap.body ? h("pre", { class: "apv-body" }, ap.body) : null;
+  const meta = h("div", { class: "row wrap faint", style: { fontSize: "11.5px", gap: "10px" } }, jobLink,
+    ap.run_id ? h("span", { class: "mono" }, "run " + shortId(ap.run_id, 8)) : null,
+    ap.telegram ? h("span", { title: "Also posted to Telegram with Approve / Reject buttons" }, icon("send"), " on Telegram") : null);
+  const box = h("div", { class: "apv" + (o.compact ? " compact" : "") }, head, meta, body);
+  if (!pending) {
+    box.append(h("div", { class: "apv-decided" }, h("span", null, `${ap.status} by `, h("b", null, ap.decided_by || "?"), " · ", relTime(ap.decided_at)),
+      ap.decision_note ? h("div", null, "Note: ", ap.decision_note) : null,
+      ap.edited_text ? h("div", null, h("span", { class: "faint" }, "Edited text handed on: "), h("pre", { class: "apv-body" }, ap.edited_text)) : null));
+    return box;
+  }
+  const note = h("input", { class: "input", placeholder: "Note (optional) — recorded with the decision", maxlength: "2000" });
+  const edit = h("textarea", { class: "input hidden", rows: "4", placeholder: ap.kind === "gate"
+    ? "What the next step should be told — replaces the default “Approved by …” note and becomes the gate's handoff"
+    : "The edited version to approve" });
+  const busy = (on) => [...box.querySelectorAll(".apv-acts button")].forEach(b => { b.disabled = on; });
+  const go = async (decision, withEdit) => {
+    if (withEdit && !edit.value.trim()) { fieldError(edit, "Write the edited text, or use plain Approve"); return; }
+    busy(true);
+    try { const done = await decideApproval(ap, decision, { note: note.value.trim(), edited: withEdit ? edit.value.trim() : "" }); if (o.onDone) o.onDone(done); }
+    catch (e) { toast(e.message, { kind: "error" }); busy(false); }
+  };
+  const editBtn = btn("Edit & approve", { icon: "edit", kind: "ghost", size: "sm", title: "Approve with your own text for the next step", onClick: () => {
+    if (edit.classList.contains("hidden")) { edit.classList.remove("hidden"); edit.focus(); editBtn.querySelector("span").textContent = "Approve edited"; }
+    else go("approve", true);
+  } });
+  box.append(h("div", { class: "field", style: { margin: 0 } }, edit), note,
+    h("div", { class: "row apv-acts" },
+      btn("Approve", { icon: "check", kind: "primary", size: "sm", onClick: () => go("approve", false) }), editBtn,
+      h("span", { class: "grow" }),
+      btn("Reject", { icon: "x", kind: "danger", size: "sm", onClick: () => go("reject", false) })));
+  return box;
+}
+async function openApprovalsInbox() {
+  let tab = "pending";
+  const list = h("div", { class: "col", style: { gap: "10px" } }, skeleton(3, "sk-block"));
+  const seg = h("div", { class: "seg sm" });
+  const load = async () => {
+    mount(seg, [["pending", "Waiting"], ["all", "History"]].map(([k, l]) => h("button", { type: "button", class: tab === k ? "on" : "", onclick: () => { tab = k; load(); } },
+      l, k === "pending" && approvalsCount ? h("span", { class: "faint" }, " " + approvalsCount) : null)));
+    try {
+      const r = await api(`/api/approvals?status=${tab}`);
+      setApprovalsCount(r.pending_count || 0);
+      const rows = (r.approvals || []).filter(a => tab === "all" || a.status === "pending");
+      if (!rows.length) { mount(list, emptyState("inbox", tab === "pending" ? "Nothing waiting" : "No approvals yet", tab === "pending" ? "Pipeline gates show up here (and on Telegram when the bot runs) until someone decides." : "Decided approvals are kept here.", null, true)); return; }
+      mount(list, rows.map(ap => approvalCard(ap, { onDone: () => load() })));
+    } catch (e) { mount(list, errorBox(e.message, load)); }
+  };
+  const m = modal({ title: "Approvals", subtitle: "Human decisions the pipelines are waiting on", cls: "wide", width: "760px",
+    body: h("div", { class: "col", style: { gap: "12px" } }, h("div", { class: "row" }, seg, h("span", { class: "grow" }), btn(null, { icon: "refresh", kind: "quiet", size: "sm", title: "Refresh", onClick: () => load() })), list),
+    footLeft: h("span", { class: "faint", style: { fontSize: "11.5px" } }, "Decisions made here or on Telegram apply at once; the run continues from the gate."),
+    actions: [{ label: "Close", kind: "ghost" }] });
+  const off = onApprovalsChange(() => { if (m.el.open && tab === "pending") load(); });
+  m.el.addEventListener("close", off);
+  load();
+  return m;
+}
+
+// openTaskModal(taskId, title) — one task's events + reply in a dialog (map workers,
+// loop graders, trigger fires). Refreshes every 2 s while the task is live.
+function openTaskModal(taskId, title) {
+  const head = h("div", { class: "row wrap" });
+  const stream = h("div");
+  const res = h("div");
+  const m = modal({ title: title || "Task", subtitle: taskId, cls: "wide", width: "900px",
+    body: h("div", { class: "col", style: { gap: "12px" } }, head, stream, res), actions: [{ label: "Close", kind: "ghost" }] });
+  let timer = null;
+  const load = async () => {
+    let tk;
+    try { tk = await api(`/api/tasks/${encodeURIComponent(taskId)}`); } catch (e) { mount(res, errorBox(e.message)); return; }
+    const md = tk.metadata || {};
+    mount(head, statusPill(tk.status), h("b", null, ENGINE_LABELS[tk.task_type] || tk.task_type), idChip(tk.task_id, 13),
+      md.trigger_name ? h("span", { class: "pill" }, icon("clock"), md.trigger_name) : null,
+      md.worker ? h("span", { class: "pill accent" }, "worker #" + md.worker) : null, md.role ? h("span", { class: "pill" }, md.role) : null,
+      h("span", { class: "faint", style: { fontSize: "12px" } }, fmtDateTime(tk.created_at)));
+    updateStream(stream, md.events || [], { key: "modal:" + taskId, limit: 300, status: tk.status, tall: true, emptyText: "No events" });
+    mount(res, h("div", { class: "col", style: { gap: "10px" } }, tk.result ? renderResultBlock(tk.result) : null, tk.error ? renderErrorBlock(tk.error) : null));
+    if (!["pending", "running"].includes(tk.status) && timer) { clearInterval(timer); timer = null; }
+  };
+  load();
+  timer = setInterval(() => { if (!m.el.isConnected) { clearInterval(timer); return; } load(); }, 2000);
+  return m;
 }

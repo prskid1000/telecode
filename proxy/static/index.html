@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Task Mode · Telecode</title>
-<meta name="description" content="Telecode Task Mode: sessions, uploads, one-off tasks on Claude Code / Codex / Antigravity, skills and routines." />
+<meta name="description" content="Telecode Task Mode: sessions, uploads, one-off tasks on Claude Code / Codex / Antigravity, skills and triggers." />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' rx='6' fill='%237cc4ff'/><path d='M13 4L6 13.5h5L10 20l7-9.5h-5z' fill='%23052034'/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -82,12 +82,12 @@
 
     <main class="main">
       <div class="work">
-        <!-- Left pane: Session / Skills / Routines -->
+        <!-- Left pane: Session / Skills / Triggers -->
         <section class="pane" aria-label="Task setup">
           <div class="tabs" role="tablist">
             <button class="tab on" data-tab="session" role="tab"><span class="ti" data-ic="terminal"></span>Session</button>
             <button class="tab" data-tab="skills" role="tab"><span class="ti" data-ic="sparkle"></span>Skills <span class="count" id="count-skills">·</span></button>
-            <button class="tab" data-tab="routines" role="tab"><span class="ti" data-ic="clock"></span>Routines <span class="count" id="count-routines">·</span></button>
+            <button class="tab" data-tab="triggers" role="tab"><span class="ti" data-ic="clock"></span>Triggers <span class="count" id="count-triggers">·</span></button>
           </div>
 
           <div id="tabSession" class="pane-scroll">
@@ -162,62 +162,28 @@
             </div>
           </div><!-- /tabSkills -->
 
-          <div id="tabRoutines" class="pane-scroll" style="display:none">
-            <div class="sect">
-              <div class="sect-h"><h3><span class="ti" data-ic="clock"></span>Routines</h3><span id="routineStatus" class="pill" style="display:none"></span><span id="routineRefreshHost"></span><span id="routineNewHost"></span></div>
-              <select class="select" id="routinePicker" aria-label="Routine"><option value="">— select a routine —</option></select>
-              <div class="info-box"><span class="ti" data-ic="info"></span><span>Routines fire a task on a fixed interval against one permanent session. The manager checks every 60 s, so fire times can drift by up to a minute.</span></div>
+          <div id="tabTriggers" class="pane-scroll" style="display:none">
+            <div class="sect" id="trigListSect">
+              <div class="sect-h"><h3><span class="ti" data-ic="clock"></span>Triggers <span class="hint">schedules, webhooks, GitHub, file watch — one scheduler</span></h3><span id="trigRefreshHost"></span><span id="trigNewHost"></span></div>
+              <div class="info-box"><span class="ti" data-ic="info"></span><span>A trigger fires a prompt (a task in its own permanent session, or a fresh one each time), an agent or a Team job. Autonomous Claude runs use <code>--permission-mode auto</code>; event payloads reach the agent wrapped as untrusted data.</span></div>
+              <div id="trigList" class="filelist"></div>
             </div>
-            <div class="sect" data-submit="routineSave">
-              <div class="field-row">
-                <label class="field"><span class="field-label">Name <span class="req">*</span></span><input class="input" type="text" id="routineName" placeholder="Daily digest" /></label>
-                <label class="field"><span class="field-label">Description</span><input class="input" type="text" id="routineDesc" placeholder="(optional)" /></label>
-              </div>
-              <label class="field"><span class="field-label">Prompt <span class="req">*</span></span>
-                <textarea class="input" id="routinePrompt" rows="6" placeholder="Read outputs/ for last run, then write outputs/<date>_digest.md ..."></textarea>
-                <span class="field-hint">A heartbeat preface (tick number, cadence, time since last fire) is prepended on every fire.</span></label>
-              <div class="field-row">
-                <label class="field"><span class="field-label">Every</span><span class="suffix"><input class="input" type="number" id="routineEverySec" min="60" value="3600" /><span>sec</span></span><span class="field-hint" id="routineEveryHint">seconds between fires (min 60)</span></label>
-                <label class="field"><span class="field-label">Task timeout</span><span class="suffix"><input class="input" type="number" id="routineTaskTimeout" min="1" value="1800" /><span>sec</span></span><span class="field-hint">per fire</span></label>
-              </div>
-              <div class="field"><span class="field-label">Engine</span><div id="routineEngineHost"></div></div>
-              <div class="field-row">
-                <label class="field"><span class="field-label">Namespace</span><input class="input mono" type="text" id="routineNamespace" placeholder="(optional)" /><span class="field-hint">Fixed once the routine is created.</span></label>
-                <div class="field"><span class="field-label">Output</span>
-                  <label class="switch-field" for="routineOutputsOnly" title="Pass outputs_only to the engine"><span class="switch"><input type="checkbox" id="routineOutputsOnly" role="switch" /><span></span></span><span>outputs_only</span></label></div>
-              </div>
-              <div class="field"><span class="field-label">Session</span><span id="routineSessionId" class="mono faint">— (created on save)</span></div>
-              <div class="row wrap">
-                <span id="routineSaveHost"></span><span id="routinePauseHost"></span><span id="routineResumeHost"></span><span id="routineRunNowHost"></span>
-                <span class="grow"></span><span id="routineDeleteHost"></span>
-              </div>
-              <span id="routineMsg" class="msg"></span>
-            </div>
-            <div class="sect">
-              <div class="sect-h"><h3><span class="ti" data-ic="pulse"></span>Counters</h3></div>
-              <div class="stats">
-                <div class="stat"><div class="k">Next fire</div><div class="v" id="routineNextFire">—</div></div>
-                <div class="stat"><div class="k">Last fire</div><div class="v" id="routineLastFire">—</div></div>
-                <div class="stat"><div class="k">Last completed</div><div class="v" id="routineLastCompleted">—</div></div>
-                <div class="stat"><div class="k">Total</div><div class="v" id="routineTotalRuns">0</div></div>
-                <div class="stat"><div class="k">Skipped</div><div class="v" id="routineSkipped">0</div></div>
-              </div>
-            </div>
-          </div><!-- /tabRoutines -->
+            <div class="sect" id="trigDetailSect" style="display:none"><div id="trigDetail"></div></div>
+          </div><!-- /tabTriggers -->
         </section>
 
-        <!-- Right pane: Active task / By routine -->
+        <!-- Right pane: Active task / By trigger -->
         <section class="pane" aria-label="Task output">
           <div class="tabs" role="tablist">
             <button class="tab on" data-rtab="active" role="tab"><span class="ti" data-ic="pulse"></span>Active task</button>
-            <button class="tab" data-rtab="byroutine" role="tab"><span class="ti" data-ic="history"></span>By routine</button>
+            <button class="tab" data-rtab="bytrigger" role="tab"><span class="ti" data-ic="history"></span>By trigger</button>
           </div>
           <div id="rtabActive" class="pane-scroll">
             <div id="active"></div>
           </div>
-          <div id="rtabByRoutine" class="pane-scroll" style="display:none">
-            <div class="row"><span class="muted grow" style="font-size:12px">Click a routine to see its task history.</span><span id="byRoutineRefreshHost"></span></div>
-            <div id="byRoutineList"></div>
+          <div id="rtabByTrigger" class="pane-scroll" style="display:none">
+            <div class="row"><span class="muted grow" style="font-size:12px">Click a trigger to see its fires; click a fire to open its task.</span><span id="byTriggerRefreshHost"></span></div>
+            <div id="byTriggerList"></div>
           </div>
         </section>
       </div>
@@ -227,6 +193,7 @@
 
 <script src="/shared/appnav.js"></script>
 <script src="/shared/manager.js"></script>
+<script src="/shared/triggers.js"></script>
 <script>
 "use strict";
 // ═══ Task Mode ═══════════════════════════════════════════════════════════
@@ -234,8 +201,8 @@
 // from SSE when the server has it (GET /api/tasks/{id}/events, /api/events?kinds=task)
 // and then the polls below slow to a safety net; without SSE they run as listed:
 //   1s  GET /api/tasks/{id} while the active task is pending/running
-//   5s  GET /api/tasks; GET /api/routines/{id} while the Routines tab is open;
-//       GET /api/routines (+ /runs of expanded groups) while "By routine" is open
+//   5s  GET /api/tasks; GET /api/triggers while the Triggers tab is open;
+//       GET /api/triggers (+ /fires of expanded groups) while "By trigger" is open
 const base = () => location.origin;
 
 let staged = [];   // [{file, rel}]
@@ -260,20 +227,11 @@ host("skillNewHost", btn("New", { icon: "plus", kind: "ghost", size: "sm", id: "
 host("skillDeleteHost", btn(null, { icon: "trash", kind: "danger", id: "skillDelete", title: "Delete skill", disabled: true }));
 host("skillSaveHost", btn("Save SKILL.md", { icon: "save", kind: "primary", id: "skillSave", kbd: "Ctrl S", disabled: true }));
 host("skillFileUploadHost", btn("Upload", { icon: "upload", id: "skillFileUpload", disabled: true }));
-host("routineRefreshHost", btn(null, { icon: "refresh", kind: "quiet", size: "sm", id: "routineRefresh", title: "Refresh routines" }));
-host("routineNewHost", btn("New", { icon: "plus", kind: "ghost", size: "sm", id: "routineNew" }));
-host("routineSaveHost", btn("Save", { icon: "save", kind: "primary", id: "routineSave", kbd: "Ctrl S" }));
-host("routinePauseHost", btn("Pause", { icon: "pause", kind: "ghost", id: "routinePause", disabled: true }));
-host("routineResumeHost", btn("Resume", { icon: "play", kind: "ghost", id: "routineResume", disabled: true }));
-host("routineRunNowHost", btn("Run now", { icon: "bolt", kind: "ghost", id: "routineRunNow", disabled: true }));
-host("routineDeleteHost", btn("Delete", { icon: "trash", kind: "danger", id: "routineDelete", disabled: true }));
-host("byRoutineRefreshHost", btn(null, { icon: "refresh", kind: "quiet", size: "sm", id: "byRoutineRefresh", title: "Refresh" }));
+host("trigRefreshHost", btn(null, { icon: "refresh", kind: "quiet", size: "sm", id: "trigRefresh", title: "Refresh triggers", onClick: () => refreshTriggerTab() }));
+host("trigNewHost", btn("New", { icon: "plus", kind: "ghost", size: "sm", id: "trigNew", onClick: () => newTrigger() }));
+host("byTriggerRefreshHost", btn(null, { icon: "refresh", kind: "quiet", size: "sm", id: "byTriggerRefresh", title: "Refresh", onClick: () => refreshByTrigger(true) }));
 const taskEngine = engineControl({ selectId: "taskType", localId: "isLocal", value: "CLAUDE_CODE" });
 $("engineHost").replaceWith(taskEngine.el);
-const routineEngine = engineControl({ selectId: "routineTaskType", localId: "routineIsLocal", value: "CLAUDE_CODE" });
-$("routineEngineHost").replaceWith(routineEngine.el);
-const outSw = $("routineOutputsOnly");
-outSw.addEventListener("change", () => outSw.closest(".switch-field").classList.toggle("on", outSw.checked));
 function setEngine(ctl, value, local) {
   if (value && ![...ctl.select.options].some(o => o.value === value)) ctl.select.appendChild(engineOption(value));
   ctl.select.value = value || "CLAUDE_CODE";
@@ -509,7 +467,7 @@ function renderActive(t) {
   const md = t.metadata || {};
   mount($("act-head"), badge(t.status, t.status), h("b", null, ENGINE_LABELS[t.task_type] || t.task_type), idChip(t.task_id, 13, "Task " + t.task_id),
     t.session_id ? h("a", { href: "#", title: "Use this session: " + t.session_id, onclick: (e) => { e.preventDefault(); $("sid").value = t.session_id; if (t.session_namespace != null) $("ns").value = t.session_namespace || ""; showLeftTab("session"); refreshSession(); } }, icon("folder"), " ", shortId(t.session_id)) : null,
-    md.routine_name ? h("span", { class: "pill" }, icon("clock"), md.routine_name) : null,
+    md.trigger_name ? h("span", { class: "pill", title: "Fired by a trigger (" + (md.fire_source || "?") + ")" }, icon("clock"), md.trigger_name) : null,
     h("span", { class: "faint", style: { fontSize: "12px" } }, fmtTime(t.created_at), dur != null ? " · " + fmtMs(dur) : ""),
     h("span", { class: "grow" }),
     h("button", { type: "button", class: "btn danger sm", disabled: live ? null : true, onclick: () => cancelActive() }, icon("stop"), h("span", null, "Cancel")));
@@ -549,7 +507,7 @@ function renderTaskList() {
   if (!g) { mount(list, skeleton(6, "sk-row")); return; }
   $("count-tasks").textContent = g.all.length;
   let pool = taskFilter === "all" ? g.all : taskFilter === "live" ? [...g.running, ...g.pending] : taskFilter === "completed" ? g.completed : [...g.failed, ...g.cancelled];
-  if (taskQuery) pool = pool.filter(t => [t.task_id, t.task_type, ENGINE_LABELS[t.task_type], t.session_id, (t.metadata || {}).routine_name, taskPrompt(t)].some(x => String(x || "").toLowerCase().includes(taskQuery)));
+  if (taskQuery) pool = pool.filter(t => [t.task_id, t.task_type, ENGINE_LABELS[t.task_type], t.session_id, (t.metadata || {}).trigger_name, taskPrompt(t)].some(x => String(x || "").toLowerCase().includes(taskQuery)));
   const all = pool.slice(0, 40);
   if (!all.length) {
     mount(list, emptyState("history", taskQuery || taskFilter !== "all" ? "No matching tasks" : "No tasks yet", taskQuery || taskFilter !== "all" ? "Try a different filter." : "Tasks you submit show up here.", null, true));
@@ -557,7 +515,7 @@ function renderTaskList() {
   }
   mount(list, all.map(t => {
     const tone = STATUS_TONE[t.status] || "";
-    const pr = taskPrompt(t), rn = (t.metadata || {}).routine_name;
+    const pr = taskPrompt(t), rn = (t.metadata || {}).trigger_name;
     return h("div", { class: "item tk task" + (t.task_id === activeTaskId ? " on active" : ""), tabindex: "0", role: "button", "data-tid": t.task_id,
       title: `${t.status} · ${t.task_type}\n${t.task_id}\nsession ${t.session_id || "—"}`,
       onclick: () => { showRightTab("active"); watchTask(t.task_id); }, onkeydown: (e) => { if (e.key === "Enter") { showRightTab("active"); watchTask(t.task_id); } } },
@@ -588,15 +546,15 @@ function showLeftTab(t) {
   document.querySelectorAll(".tab[data-tab]").forEach(b => { b.classList.toggle("on", b.dataset.tab === t); b.setAttribute("aria-selected", String(b.dataset.tab === t)); });
   $("tabSession").style.display = t === "session" ? "" : "none";
   $("tabSkills").style.display = t === "skills" ? "" : "none";
-  $("tabRoutines").style.display = t === "routines" ? "" : "none";
+  $("tabTriggers").style.display = t === "triggers" ? "" : "none";
   if (t === "skills") refreshSkills();
-  if (t === "routines") refreshRoutines();
+  if (t === "triggers") refreshTriggerTab();
 }
 function showRightTab(t) {
   document.querySelectorAll(".tab[data-rtab]").forEach(b => { b.classList.toggle("on", b.dataset.rtab === t); b.setAttribute("aria-selected", String(b.dataset.rtab === t)); });
   $("rtabActive").style.display = t === "active" ? "" : "none";
-  $("rtabByRoutine").style.display = t === "byroutine" ? "" : "none";
-  if (t === "byroutine") refreshByRoutine();
+  $("rtabByTrigger").style.display = t === "bytrigger" ? "" : "none";
+  if (t === "bytrigger") refreshByTrigger();
 }
 document.querySelectorAll(".tab[data-tab]").forEach(b => b.onclick = () => showLeftTab(b.dataset.tab));
 document.querySelectorAll(".tab[data-rtab]").forEach(b => b.onclick = () => showRightTab(b.dataset.rtab));
@@ -725,270 +683,116 @@ async function deleteSkillFile(rel) {
   } catch (e) { setSkillMsg("Delete file failed: " + e.message, true); }
 }
 
-// ── Routines ───────────────────────────────────────────────────────────
-let routineCache = [];
-let activeRoutine = null;
-function setRoutineMsg(text, isErr = false, ok = false) { setMsg("routineMsg", text, isErr ? "err" : ok ? "ok" : ""); }
-const routineTone = (s) => s === "active" ? "running" : s === "paused" ? "pending" : "cancelled";
-function fmtEvery(sec) {
-  sec = +sec || 0;
-  if (!sec) return "";
-  if (sec % 86400 === 0) return `every ${sec / 86400} day${sec === 86400 ? "" : "s"}`;
-  if (sec % 3600 === 0) return `every ${sec / 3600} hour${sec === 3600 ? "" : "s"}`;
-  if (sec % 60 === 0) return `every ${sec / 60} min`;
-  return `every ${sec} s`;
+// ── Triggers ───────────────────────────────────────────────────────────
+// The shared kit (/shared/triggers.js) renders the list, the detail and the editor.
+let trigNames = { jobs: [], agents: [], workspaces: [] };
+let trigOpen = null;   // trigger id shown in the detail
+async function loadTrigNames() {
+  const [j, a, s] = await Promise.all([api("/api/jobs").catch(() => ({})), api("/api/agents").catch(() => ({})), api("/api/sessions").catch(() => ({}))]);
+  trigNames = { jobs: j.jobs || [], agents: a.agents || [], workspaces: s.sessions || [] };
 }
-$("routineEverySec").addEventListener("input", () => { const v = +$("routineEverySec").value; $("routineEveryHint").textContent = v >= 60 ? fmtEvery(v) + " (min 60 s)" : "seconds between fires (min 60)"; });
-function timeCell(iso) { return iso ? h("span", { title: iso }, relTime(iso)) : "—"; }
-function renderRoutineForm() {
-  const r = activeRoutine;
-  const have = !!r;
-  $("routineName").value = have ? (r.name || "") : "";
-  $("routineDesc").value = have ? (r.description || "") : "";
-  $("routinePrompt").value = have ? (r.prompt || "") : "";
-  const sched = (have ? r.schedule : null) || { every_seconds: 3600 };
-  $("routineEverySec").value = sched.every_seconds || 3600;
-  $("routineEverySec").dispatchEvent(new Event("input"));
-  $("routineTaskTimeout").value = have ? (r.task_timeout_seconds || 1800) : 1800;
-  $("routineNamespace").value = have ? (r.session_namespace || "") : "";
-  setEngine(routineEngine, have ? (r.task_type || "CLAUDE_CODE") : "CLAUDE_CODE", have ? !!r.is_local : false);
-  $("routineOutputsOnly").checked = have ? !!r.outputs_only : false;
-  $("routineOutputsOnly").dispatchEvent(new Event("change"));
-  $("routineSessionId").textContent = have ? r.session_id : "— (created on save)";
-  $("routineNamespace").disabled = have;
-  ["routineName", "routinePrompt", "routineEverySec", "routineTaskTimeout"].forEach(id => fieldError($(id), ""));
+async function refreshTriggerTab() {
+  if (trigOpen) { renderTriggerDetail($("trigDetail"), trigOpen, trigDetailOpts()); return; }
+  const list = await renderTriggerList($("trigList"), { names: trigNames, onOpen: (t) => openTriggerDetail(t.id),
+    emptyText: "Fire a prompt on a schedule, from a webhook, GitHub or a file change.",
+    emptyAction: btn("New trigger", { icon: "plus", kind: "ghost", size: "sm", onClick: () => newTrigger() }) });
+  $("count-triggers").textContent = list.length;
+}
+function trigDetailOpts() {
+  return { names: trigNames, onBack: () => closeTriggerDetail(), onChanged: () => { refreshByTrigger(); },
+    onDeleted: () => closeTriggerDetail(),
+    openTask: (tid) => { showRightTab("active"); watchTask(tid); },
+    openRun: (runId, jobId) => { location.href = "/team" + (jobId ? "#/job/" + encodeURIComponent(jobId) : ""); } };
+}
+function openTriggerDetail(id) {
+  trigOpen = id;
+  $("trigListSect").style.display = "none"; $("trigDetailSect").style.display = "";
+  renderTriggerDetail($("trigDetail"), id, trigDetailOpts());
+}
+function closeTriggerDetail() {
+  trigOpen = null;
+  $("trigDetailSect").style.display = "none"; $("trigListSect").style.display = "";
+  mount($("trigDetail"));
+  refreshTriggerTab();
+}
+async function newTrigger() {
+  showLeftTab("triggers");
+  await loadTrigNames();
+  openTriggerEditor({ defaults: { target: { kind: "task", engine: "claude_code" }, session: "shared" }, names: trigNames,
+    onSaved: (t) => { openTriggerDetail(t.id); refreshByTrigger(); } });
+}
+globalFeed(["trigger.update", "trigger.deleted"], debounced(() => { if ($("tabTriggers").style.display !== "none" && !trigOpen) refreshTriggerTab(); }, 700));
 
-  mount($("routineNextFire"), have ? timeCell(r.next_fire_at) : "—");
-  mount($("routineLastFire"), have ? timeCell(r.last_fire_at) : "—");
-  const lcStatus = have ? (r.last_completion_status || "") : "";
-  mount($("routineLastCompleted"), have && r.last_completed_at ? timeCell(r.last_completed_at) : "—", lcStatus ? [" ", badge(lcStatus, lcStatus)] : null);
-  $("routineTotalRuns").textContent = have ? (r.total_runs || 0) : 0;
-  $("routineSkipped").textContent = have ? (r.skipped_runs || 0) : 0;
-
-  const status = $("routineStatus");
-  if (have) {
-    status.style.display = "";
-    status.replaceWith(Object.assign(badge(r.status, routineTone(r.status)), { id: "routineStatus" }));
-  } else status.style.display = "none";
-  $("routinePause").disabled = !have || r.status !== "active";
-  $("routineResume").disabled = !have || r.status === "active" || r.status === "cancelled";
-  $("routineRunNow").disabled = !have || r.status !== "active";
-  $("routineDelete").disabled = !have;
-}
-async function refreshRoutines() {
-  try {
-    const body = await api("/api/routines");
-    routineCache = body.routines || [];
-    $("count-routines").textContent = routineCache.length;
-    const sel = $("routinePicker");
-    const keep = sel.value;
-    mount(sel, h("option", { value: "" }, routineCache.length ? "— select a routine —" : "— no routines yet —"),
-      routineCache.map(r => h("option", { value: r.routine_id }, `${r.name} (${r.status})`)));
-    if (keep && routineCache.find(r => r.routine_id === keep)) {
-      sel.value = keep;
-      activeRoutine = routineCache.find(r => r.routine_id === keep);
-    } else activeRoutine = null;
-    renderRoutineForm();
-  } catch (e) { setRoutineMsg(e.message, true); }
-}
-$("routineRefresh").onclick = refreshRoutines;
-$("routinePicker").onchange = async (e) => {
-  const id = e.target.value;
-  if (!id) { activeRoutine = null; renderRoutineForm(); return; }
-  try {
-    const body = await api("/api/routines/" + encodeURIComponent(id));
-    activeRoutine = body.routine;
-    renderRoutineForm();
-    setRoutineMsg("");
-  } catch (err) { setRoutineMsg(err.message, true); }
-};
-$("routineNew").onclick = () => {
-  activeRoutine = null;
-  $("routinePicker").value = "";
-  renderRoutineForm();
-  $("routineName").focus();
-  setRoutineMsg("New routine — fill in and click Save");
-};
-function readRoutineForm() {
-  return {
-    name: $("routineName").value.trim(),
-    description: $("routineDesc").value.trim(),
-    prompt: $("routinePrompt").value,
-    schedule: { every_seconds: parseInt($("routineEverySec").value, 10) || 0 },
-    task_timeout_seconds: parseInt($("routineTaskTimeout").value, 10) || 1800,
-    task_type: $("routineTaskType").value,
-    is_local: $("routineIsLocal").checked,
-    outputs_only: $("routineOutputsOnly").checked,
-    session_namespace: $("routineNamespace").value.trim() || null,
-  };
-}
-function validateRoutine(p) {
-  return fieldError($("routineName"), p.name ? "" : "Name is required")
-    && fieldError($("routinePrompt"), p.prompt.trim() ? "" : "Prompt is required")
-    && fieldError($("routineEverySec"), p.schedule.every_seconds >= 60 ? "" : "At least 60 seconds")
-    && fieldError($("routineTaskTimeout"), posInt($("routineTaskTimeout").value) ? "" : "Whole seconds, > 0");
-}
-$("routineSave").onclick = async () => {
-  const payload = readRoutineForm();
-  if (!validateRoutine(payload)) return;
-  setRoutineMsg("Saving…");
-  try {
-    let saved;
-    if (activeRoutine && activeRoutine.routine_id) {
-      const body = await api("/api/routines/" + encodeURIComponent(activeRoutine.routine_id), jsonOpts("PATCH", {
-        name: payload.name, description: payload.description, prompt: payload.prompt, schedule: payload.schedule,
-        task_timeout_seconds: payload.task_timeout_seconds, task_type: payload.task_type, is_local: payload.is_local, outputs_only: payload.outputs_only,
-      }));
-      saved = body.routine;
-    } else {
-      const body = await api("/api/routines", jsonOpts("POST", payload));
-      saved = body.routine;
-    }
-    await refreshRoutines();
-    if (saved && saved.routine_id) {
-      $("routinePicker").value = saved.routine_id;
-      activeRoutine = routineCache.find(r => r.routine_id === saved.routine_id) || saved;
-    } else activeRoutine = null;
-    renderRoutineForm();
-    setRoutineMsg("Saved", false, true);
-    toast("Routine saved", { kind: "success" });
-  } catch (e) { setRoutineMsg(e.message, true); }
-};
-$("routinePause").onclick = async () => {
-  if (!activeRoutine) return;
-  try {
-    const body = await api("/api/routines/" + encodeURIComponent(activeRoutine.routine_id) + "/pause", { method: "POST" });
-    activeRoutine = body.routine;
-    await refreshRoutines();
-    renderRoutineForm();
-    setRoutineMsg("Paused", false, true);
-  } catch (e) { setRoutineMsg(e.message, true); }
-};
-$("routineResume").onclick = async () => {
-  if (!activeRoutine) return;
-  try {
-    const body = await api("/api/routines/" + encodeURIComponent(activeRoutine.routine_id) + "/resume", { method: "POST" });
-    activeRoutine = body.routine;
-    await refreshRoutines();
-    renderRoutineForm();
-    setRoutineMsg("Resumed", false, true);
-  } catch (e) { setRoutineMsg(e.message, true); }
-};
-$("routineRunNow").onclick = async () => {
-  if (!activeRoutine) return;
-  try {
-    const body = await api("/api/routines/" + encodeURIComponent(activeRoutine.routine_id) + "/run-now", { method: "POST" });
-    if (body.skipped) {
-      setRoutineMsg("Skipped (" + (body.error || "previous task still running") + ")");
-    } else {
-      setRoutineMsg("Fired → task " + (body.task_id || ""), false, true);
-      toast("Routine fired", { kind: "success" });
-      refreshTasks();
-    }
-  } catch (e) { setRoutineMsg(e.message, true); }
-};
-$("routineDelete").onclick = async () => {
-  if (!activeRoutine) return;
-  const choice = await confirmDialog("Delete routine?",
-    h("div", { class: "col" }, h("p", { class: "muted", style: { margin: 0 } }, "Delete ", h("b", null, activeRoutine.name), "?"),
-      h("p", { class: "field-hint", style: { margin: 0 } }, "Its session folder holds the task history. Keep it for forensics, or delete it too.")),
-    { confirm: "Delete + session folder", danger: true, extra: { label: "Delete, keep session", value: "keep", kind: "danger" } });
-  if (!choice) return;
-  const dropSession = choice === true;
-  try {
-    await api("/api/routines/" + encodeURIComponent(activeRoutine.routine_id) + (dropSession ? "?delete_session=true" : ""), { method: "DELETE" });
-    activeRoutine = null;
-    await refreshRoutines();
-    renderRoutineForm();
-    setRoutineMsg("Deleted", false, true);
-  } catch (e) { setRoutineMsg(e.message, true); }
-};
-// Poll the active routine every 5s while the Routines tab is visible so counters stay live.
-setInterval(async () => {
-  if ($("tabRoutines").style.display === "none") return;
-  if (!activeRoutine || !activeRoutine.routine_id) return;
-  if (document.activeElement && document.activeElement.closest && document.activeElement.closest("#tabRoutines [data-submit]")) {
-    // Don't clobber a half-edited form: refresh counters only.
-    try { const body = await api("/api/routines/" + encodeURIComponent(activeRoutine.routine_id)); const r = body.routine;
-      mount($("routineNextFire"), timeCell(r.next_fire_at)); mount($("routineLastFire"), timeCell(r.last_fire_at));
-      $("routineTotalRuns").textContent = r.total_runs || 0; $("routineSkipped").textContent = r.skipped_runs || 0; } catch { /* transient */ }
-    return;
-  }
-  try {
-    const body = await api("/api/routines/" + encodeURIComponent(activeRoutine.routine_id));
-    activeRoutine = body.routine;
-    renderRoutineForm();
-  } catch (e) { /* silent — survives transient errors */ }
-}, 5000);
-
-// ── By-routine task browser ────────────────────────────────────────────
-const expandedRoutines = new Set();
-$("byRoutineRefresh").onclick = () => refreshByRoutine(true);
-async function refreshByRoutine(force = false) {
-  const box = $("byRoutineList");
+// ── By-trigger history browser ─────────────────────────────────────────
+const expandedTriggers = new Set();
+async function refreshByTrigger(force = false) {
+  const box = $("byTriggerList");
   if (!box.childNodes.length) mount(box, skeleton(3, "sk-block"));
   try {
-    const body = await api("/api/routines");
-    const list = body.routines || [];
-    $("count-routines").textContent = list.length;
+    const body = await api("/api/triggers");
+    const list = body.triggers || [];
+    $("count-triggers").textContent = list.length;
     if (!list.length) {
-      mount(box, emptyState("clock", "No routines yet", "Create one in the Routines tab on the left.", btn("New routine", { icon: "plus", kind: "ghost", size: "sm", onClick: () => { showLeftTab("routines"); $("routineNew").click(); } })));
+      mount(box, emptyState("clock", "No triggers yet", "Create one in the Triggers tab on the left.", btn("New trigger", { icon: "plus", kind: "ghost", size: "sm", onClick: () => newTrigger() })));
       return;
     }
-    mount(box, list.map(r => {
-      const open = expandedRoutines.has(r.routine_id);
-      return h("div", { class: "rgroup" + (open ? " open" : ""), "data-rid": r.routine_id },
-        h("button", { type: "button", class: "rgroup-head", "aria-expanded": String(open), onclick: () => toggleRoutineGroup(r.routine_id) },
-          icon("chevronRight", "chev"), badge(r.status, routineTone(r.status)), h("b", { class: "ellipsis" }, r.name || r.routine_id.slice(0, 8)),
-          h("span", { class: "faint", style: { fontSize: "12px" } }, `${ENGINE_LABELS[r.task_type] || r.task_type || ""} · ${fmtEvery((r.schedule || {}).every_seconds)}`),
+    mount(box, list.map(tr => {
+      const open = expandedTriggers.has(tr.id), st = tr.state || {};
+      return h("div", { class: "rgroup" + (open ? " open" : ""), "data-rid": tr.id },
+        h("button", { type: "button", class: "rgroup-head", "aria-expanded": String(open), onclick: () => toggleTriggerGroup(tr.id) },
+          icon("chevronRight", "chev"), statusPill(tr.status, { tone: tr.status === "active" ? "ok" : tr.status === "paused" ? "warn" : "" }),
+          h("b", { class: "ellipsis" }, tr.name), h("span", { class: "faint", style: { fontSize: "12px" } }, triggerWhenAll(tr)),
           h("span", { class: "grow" }),
-          h("span", { class: "faint", style: { fontSize: "11.5px" } }, `runs ${r.total_runs || 0} · skipped ${r.skipped_runs || 0} · next `, r.next_fire_at ? timeCell(r.next_fire_at) : "—")),
-        h("div", { class: "rgroup-runs", id: "runs-" + r.routine_id, style: { display: open ? "" : "none" } }));
+          h("span", { class: "faint", style: { fontSize: "11.5px" } }, `fires ${st.total_fires || 0} · ok ${st.ok_fires || 0} · failed ${st.failed_fires || 0} · skipped ${st.skipped_fires || 0} · next `,
+            tr.status === "active" && st.next_fire_at ? h("span", { title: st.next_fire_at }, relTime(st.next_fire_at)) : "—")),
+        h("div", { class: "rgroup-runs", id: "fires-" + tr.id, style: { display: open ? "" : "none" } }));
     }));
-    expandedRoutines.forEach(rid => loadRoutineRuns(rid));
-  } catch (e) { mount(box, errorBox(e.message, () => refreshByRoutine(true))); }
+    expandedTriggers.forEach(id => loadTriggerFires(id));
+  } catch (e) { mount(box, errorBox(e.message, () => refreshByTrigger(true))); }
 }
-function toggleRoutineGroup(rid) {
-  const grp = document.querySelector(`.rgroup[data-rid="${CSS.escape(rid)}"]`);
-  const box = $("runs-" + rid);
+function toggleTriggerGroup(id) {
+  const grp = document.querySelector(`.rgroup[data-rid="${CSS.escape(id)}"]`);
+  const box = $("fires-" + id);
   if (!box || !grp) return;
-  if (expandedRoutines.has(rid)) {
-    expandedRoutines.delete(rid); box.style.display = "none"; grp.classList.remove("open");
-  } else {
-    expandedRoutines.add(rid); box.style.display = ""; grp.classList.add("open");
-    loadRoutineRuns(rid);
-  }
-  grp.querySelector(".rgroup-head").setAttribute("aria-expanded", String(expandedRoutines.has(rid)));
+  if (expandedTriggers.has(id)) { expandedTriggers.delete(id); box.style.display = "none"; grp.classList.remove("open"); }
+  else { expandedTriggers.add(id); box.style.display = ""; grp.classList.add("open"); loadTriggerFires(id); }
+  grp.querySelector(".rgroup-head").setAttribute("aria-expanded", String(expandedTriggers.has(id)));
 }
-async function loadRoutineRuns(rid) {
-  const box = $("runs-" + rid);
+async function loadTriggerFires(id) {
+  const box = $("fires-" + id);
   if (!box) return;
   if (!box.childNodes.length) mount(box, h("div", { style: { padding: "8px 12px" } }, skeleton(2)));
   try {
-    const body = await api("/api/routines/" + encodeURIComponent(rid) + "/runs?limit=50");
-    const runs = body.runs || [];
-    if (!runs.length) { mount(box, h("div", { class: "field-hint", style: { padding: "8px 12px 8px 34px" } }, "No runs yet.")); return; }
-    mount(box, runs.map(t => h("div", { class: "rrun" + (t.task_id === activeTaskId ? " on" : ""), "data-tid": t.task_id, tabindex: "0", role: "button",
-      onclick: () => openRunFromGroup(t.task_id), onkeydown: (e) => { if (e.key === "Enter") openRunFromGroup(t.task_id); } },
-      badge(t.status, t.status), h("span", { class: "mono" }, t.task_id.slice(0, 8) + "…"), h("span", { class: "faint" }, fmtTime(t.created_at)),
-      t.metadata && t.metadata.fire_source ? h("span", { class: "pill" }, t.metadata.fire_source) : null)));
+    const body = await api("/api/triggers/" + encodeURIComponent(id) + "/fires?limit=50");
+    const fires = body.fires || [];
+    if (!fires.length) { mount(box, h("div", { class: "field-hint", style: { padding: "8px 12px 8px 34px" } }, "No fires yet.")); return; }
+    mount(box, fires.map(f => h("div", { class: "rrun" + (f.task_id && f.task_id === activeTaskId ? " on" : ""), "data-tid": f.task_id || "", tabindex: "0", role: "button",
+      title: (f.data || {}).excerpt || f.reason || "",
+      onclick: () => { if (f.task_id) { showRightTab("active"); watchTask(f.task_id); } else if (f.run_id) location.href = "/team"; },
+      onkeydown: (e) => { if (e.key === "Enter" && f.task_id) { showRightTab("active"); watchTask(f.task_id); } } },
+      statusPill(f.status, { tone: FIRE_TONE[f.status] ?? "" }), (f.data || {}).suppressed ? h("span", { class: "pill" }, "suppressed") : null,
+      h("span", { class: "pill" }, f.source), h("span", { class: "mono" }, f.task_id ? f.task_id.slice(0, 8) + "…" : f.run_id ? "run " + f.run_id.slice(0, 8) : "—"),
+      h("span", { class: "faint ellipsis grow" }, f.reason || ((f.data || {}).excerpt || "").replace(/\s+/g, " ").slice(0, 90)),
+      (f.data || {}).count > 1 ? h("span", { class: "pill warn" }, "×" + f.data.count) : null,
+      h("span", { class: "faint" }, fmtTime(f.fired_at)))));
   } catch (e) { mount(box, h("div", { style: { padding: "8px 12px" } }, errorBox(e.message))); }
 }
-function openRunFromGroup(tid) { showRightTab("active"); watchTask(tid); }
 setInterval(() => {
-  if ($("rtabByRoutine").style.display === "none") return;
-  refreshByRoutine();
+  if ($("rtabByTrigger").style.display !== "none") refreshByTrigger();
+  if ($("tabTriggers").style.display !== "none" && !trigOpen) refreshTriggerTab();
 }, 5000);
 
 // ── Shortcuts ──────────────────────────────────────────────────────────
 stdShortcuts();
 addShortcut({ group: "Task Mode", desc: "Filter tasks", keys: ["/"], match: e => e.key === "/" && !e.ctrlKey, run: () => { $("task-search").focus(); $("task-search").select(); } });
 addShortcut({ group: "Task Mode", desc: "New task (focus prompt)", keys: ["N"], match: e => e.key.toLowerCase() === "n" && !e.ctrlKey && !e.altKey && !e.metaKey, run: focusNewTask });
-addShortcut({ group: "Task Mode", desc: "Submit task / save routine / save skill", keys: ["Ctrl", "Enter"], match: () => false, run() {} });
-addShortcut({ group: "Task Mode", desc: "Save skill or routine", keys: ["Ctrl", "S"], whileTyping: true, match: e => (e.ctrlKey || e.metaKey) && e.code === "KeyS",
-  run: () => { if ($("tabSkills").style.display !== "none" && !$("skillSave").disabled) $("skillSave").click(); else if ($("tabRoutines").style.display !== "none") $("routineSave").click(); } });
-addShortcut({ group: "Task Mode", desc: "Session / Skills / Routines tab", keys: ["1", "2", "3"], match: e => ["1", "2", "3"].includes(e.key) && !e.ctrlKey && !e.altKey && !e.metaKey,
-  run: (e) => showLeftTab(["session", "skills", "routines"][+e.key - 1]) });
+addShortcut({ group: "Task Mode", desc: "Submit task / save skill / save trigger", keys: ["Ctrl", "Enter"], match: () => false, run() {} });
+addShortcut({ group: "Task Mode", desc: "Save skill", keys: ["Ctrl", "S"], whileTyping: true, match: e => (e.ctrlKey || e.metaKey) && e.code === "KeyS",
+  run: () => { if ($("tabSkills").style.display !== "none" && !$("skillSave").disabled) $("skillSave").click(); } });
+addShortcut({ group: "Task Mode", desc: "Session / Skills / Triggers tab", keys: ["1", "2", "3"], match: e => ["1", "2", "3"].includes(e.key) && !e.ctrlKey && !e.altKey && !e.metaKey,
+  run: (e) => showLeftTab(["session", "skills", "triggers"][+e.key - 1]) });
+addShortcut({ group: "Task Mode", desc: "New trigger", keys: ["T"], match: e => e.key.toLowerCase() === "t" && !e.ctrlKey && !e.altKey && !e.metaKey, run: () => newTrigger() });
+addShortcut({ group: "Task Mode", desc: "Approvals inbox", keys: ["I"], match: e => e.key.toLowerCase() === "i" && !e.ctrlKey && !e.altKey && !e.metaKey, run: () => openApprovalsInbox() });
 
 // ── Boot ───────────────────────────────────────────────────────────────
 loadTaskTypes();
@@ -999,11 +803,12 @@ refreshTasks();
 // Sidebar: the global feed (/api/events?kinds=task) refreshes the list on every
 // task status change; the 5 s poll then only runs every 30 s as a safety net.
 // No feed (older server / error) → the 5 s poll as before.
-const taskFeed = liveEvents("/api/events?kinds=task", { types: ["task.status"], onEvent: debounced(refreshTasks, 500) });
+const taskFeed = globalFeed(["task.status"], debounced(refreshTasks, 500));
 let taskFeedTicks = 0;
 setInterval(() => { if (!taskFeed.live || ++taskFeedTicks % 6 === 0) refreshTasks(); }, 5000);
 refreshSkills();
-refreshRoutines();
+loadTrigNames().then(() => { if ($("tabTriggers").style.display !== "none") refreshTriggerTab(); });
+api("/api/triggers").then(r => { $("count-triggers").textContent = (r.triggers || []).length; }).catch(() => {});
 </script>
 </body>
 </html>

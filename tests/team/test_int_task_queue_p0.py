@@ -160,7 +160,7 @@ def test_b12_background_saturation_does_not_block_interactive(tmp_data_root):
     q.register_handler("P0_BLOCK", lambda **kw: (release.wait(10), {"x": 1})[1])
     q.register_handler("P0_FAST", lambda **kw: {"fast": True})
     try:
-        bg = [q.submit_task("P0_BLOCK", {}, metadata={"routine_id": "r"}, session_id=f"bg{i}")
+        bg = [q.submit_task("P0_BLOCK", {}, metadata={"trigger_id": "r"}, session_id=f"bg{i}")
               for i in range(3)]
         assert all(q.get_task(t).pool == "background" for t in bg)
         fast = q.submit_task("P0_FAST", {}, session_id="ui")
@@ -173,7 +173,7 @@ def test_b12_background_saturation_does_not_block_interactive(tmp_data_root):
 
 def test_b12_pool_classification_and_sizes(tmp_data_root, monkeypatch):
     import config
-    assert tm._classify_pool({"source": "heartbeat"}) == "background"
+    assert tm._classify_pool({"trigger_id": "t"}) == "background"
     assert tm._classify_pool({"run_id": "x"}) == "background"
     assert tm._classify_pool({"source": "design"}) == "interactive"
     monkeypatch.setattr(config, "get_nested", lambda path, default=None:

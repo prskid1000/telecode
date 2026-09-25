@@ -128,6 +128,63 @@ MIGRATIONS = [
     CREATE INDEX idx_sessions_engine_sid ON sessions_index(engine_session_id);
     ALTER TABLE run_steps ADD COLUMN handoff TEXT;
     """,
+    # 3 — P3: approvals inbox, triggers (the one scheduler) and their fire history
+    """
+    CREATE TABLE approvals (
+        id            TEXT PRIMARY KEY,
+        kind          TEXT NOT NULL,
+        run_id        TEXT,
+        step_id       TEXT,
+        trigger_id    TEXT,
+        title         TEXT,
+        body          TEXT,
+        payload       TEXT,
+        status        TEXT NOT NULL DEFAULT 'pending',
+        created_at    TEXT,
+        decided_at    TEXT,
+        decided_by    TEXT,
+        decision_note TEXT,
+        edited_text   TEXT,
+        telegram      TEXT
+    );
+    CREATE INDEX idx_approvals_status ON approvals(status, created_at);
+    CREATE INDEX idx_approvals_run ON approvals(run_id, step_id);
+
+    CREATE TABLE triggers (
+        id           TEXT PRIMARY KEY,
+        name         TEXT,
+        source       TEXT,
+        source_key   TEXT,
+        status       TEXT NOT NULL,
+        target_kind  TEXT,
+        target_id    TEXT,
+        agent_id     TEXT,
+        next_fire_at TEXT,
+        data         TEXT NOT NULL,
+        created_at   TEXT,
+        updated_at   TEXT
+    );
+    CREATE UNIQUE INDEX idx_triggers_source_key ON triggers(source_key) WHERE source_key IS NOT NULL;
+    CREATE INDEX idx_triggers_target ON triggers(target_kind, target_id);
+
+    CREATE TABLE trigger_fires (
+        id           TEXT PRIMARY KEY,
+        trigger_id   TEXT NOT NULL,
+        seq          INTEGER NOT NULL,
+        source       TEXT,
+        status       TEXT NOT NULL,
+        reason       TEXT,
+        task_id      TEXT,
+        run_id       TEXT,
+        fired_at     TEXT,
+        completed_at TEXT,
+        cost_usd     REAL,
+        data         TEXT
+    );
+    CREATE INDEX idx_trigger_fires_trigger ON trigger_fires(trigger_id, seq);
+    CREATE INDEX idx_trigger_fires_task ON trigger_fires(task_id);
+    CREATE INDEX idx_trigger_fires_run ON trigger_fires(run_id);
+    """,
 ]
 
 

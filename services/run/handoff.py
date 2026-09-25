@@ -51,7 +51,7 @@ _STR_LIST = {"type": "array", "items": {"type": "string"}}
 HANDOFF_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["status", "summary", "decisions", "artifacts", "open_questions", "next_steps", "verdict"],
+    "required": ["status", "summary", "decisions", "artifacts", "open_questions", "next_steps", "items", "verdict"],
     "properties": {
         "status": {"type": "string", "enum": list(STATUSES),
                    "description": "done = goal met; partial = some of it; blocked = cannot proceed without input; failed = could not do it"},
@@ -73,6 +73,7 @@ HANDOFF_SCHEMA: Dict[str, Any] = {
         },
         "open_questions": {**_STR_LIST, "description": "Unresolved questions"},
         "next_steps": {**_STR_LIST, "description": "What should happen next"},
+        "items": {**_STR_LIST, "description": "Independent work items for a fan-out (map) step to run one per worker; empty unless asked for"},
         "verdict": {"type": "string", "enum": list(VERDICTS),
                     "description": "Did the step meet its goal? pass / fail / unknown"},
     },
@@ -80,7 +81,7 @@ HANDOFF_SCHEMA: Dict[str, Any] = {
 
 _KEYS_DOC = ('{"status": "done|partial|blocked|failed", "summary": "...", "decisions": ["..."], '
              '"artifacts": [{"path": "relative/path", "kind": "code|doc|data|...", "description": "..."}], '
-             '"open_questions": ["..."], "next_steps": ["..."], "verdict": "pass|fail|unknown"}')
+             '"open_questions": ["..."], "next_steps": ["..."], "items": ["..."], "verdict": "pass|fail|unknown"}')
 
 
 def instructions(engine: str) -> str:
@@ -180,7 +181,8 @@ def validate(obj: Any, work_dir: Optional[Path] = None) -> Tuple[Optional[Dict[s
     return {
         "status": status, "summary": summary, "decisions": _str_list(obj.get("decisions")),
         "artifacts": arts, "open_questions": _str_list(obj.get("open_questions")),
-        "next_steps": _str_list(obj.get("next_steps")), "verdict": verdict, "derived": False,
+        "next_steps": _str_list(obj.get("next_steps")), "items": _str_list(obj.get("items")),
+        "verdict": verdict, "derived": False,
         **({"notes": problems} if problems else {}),
     }, problems
 
@@ -195,7 +197,7 @@ def derive(text: str, *, step_status: str, error: Optional[str] = None,
         f"Step {step_status}: {error}" if error else f"Step {step_status} without a reply.")
     return {
         "status": "failed" if failed and step_status in ("failed", "budget_exceeded") else "unknown",
-        "summary": summary, "decisions": [], "artifacts": [], "open_questions": [], "next_steps": [],
+        "summary": summary, "decisions": [], "artifacts": [], "open_questions": [], "next_steps": [], "items": [],
         "verdict": "fail" if failed and step_status == "failed" else "unknown",
         "derived": True, "derive_reason": reason,
     }
@@ -252,12 +254,12 @@ def artifacts_dir(run_id: str, step_id: str) -> Path:
 
 def collect_artifacts(run_id: str, step_id: str, work_dir: Path, handoff: Dict[str, Any],
                       files_changed: Optional[List[Dict[str, Any]]] = None,
-                      include_changed: bool = False) -> List[Dict[str, Any]]:
+                      include_changed: bool = False, dest_root: Optional[Path] = None) -> List[Dict[str, Any]]:
     """Copy declared artifacts (and, for ephemeral steps, every added/modified
     file) into ``data/runs/<run>/artifacts/<step>/``. Updates
     ``handoff["artifacts"]`` in place with ``stored_path`` / ``bytes`` /
     ``missing``; returns the stored list."""
-    dest_root = artifacts_dir(run_id, step_id)
+    dest_root = Path(dest_root) if dest_root is not None else artifacts_dir(run_id, step_id)
     work_dir = Path(work_dir)
     declared = list(handoff.get("artifacts") or [])
     seen = {a["path"] for a in declared}
@@ -323,7 +325,7 @@ def render_block(o: Dict[str, Any]) -> str:
              f'verdict="{_esc(ho.get("verdict", "unknown"))}">']
     if ho.get("summary"):
         lines += ["<summary>", ho["summary"], "</summary>"]
-    for key in ("decisions", "open_questions", "next_steps"):
+    for key in ("decisions", "open_questions", "next_steps", "items"):
         items = ho.get(key) or []
         if items:
             lines += [f"<{key}>", *(f"- {x}" for x in items), f"</{key}>"]

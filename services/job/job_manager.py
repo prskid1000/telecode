@@ -66,8 +66,11 @@ def _normalize_pipeline(data: Dict[str, Any]) -> Dict[str, Any]:
             "budget": _normalize_budget(s.get("budget")),
             "auto_retry": _normalize_auto_retry(s.get("auto_retry")),
         }
-        if not step["agent_id"]:
-            continue  # drop malformed steps
+        step.update(_normalize_kind(s))
+        if not step["agent_id"] and step["kind"] != "gate":
+            continue  # drop malformed steps (every kind but a gate runs an agent)
+        if step["kind"] == "gate":
+            step["agent_id"] = None
         out_steps.append(step)
 
     if mode == "single":
@@ -97,8 +100,113 @@ def _normalize_pipeline(data: Dict[str, Any]) -> Dict[str, Any]:
         for s in out_steps:
             s["phase"] = renumber[s["phase"]]
 
+    _check_kind_phases(out_steps)
     pipe["steps"] = out_steps
     return pipe
+
+
+# ── Step kinds (P3) ─────────────────────────────────────────────────────────
+# agent   one agent run (default)
+# map     fan-out: one worker per item of the previous phase's handoff field
+# loop    evaluator-optimizer: body → check (command | grader | schema) → feedback
+# gate    human approval (run status awaiting_input) — no agent
+# reduce  an agent that merges the previous phase's handoffs into one
+STEP_KINDS = ("agent", "map", "loop", "gate", "reduce")
+MAP_SOURCES = ("next_steps", "items", "open_questions", "decisions", "artifacts")
+MAP_WORKER_SESSIONS = ("ephemeral", "fork")
+CHECK_TYPES = ("command", "grader", "schema")
+MAX_MAP_PARALLEL = 16
+MAX_MAP_ITEMS = 100
+MAX_LOOP_ITERATIONS = 10
+
+
+def _int_in(value: Any, default: int, lo: int, hi: int, name: str) -> int:
+    if value is None or value == "":
+        return default
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be an integer {lo}..{hi}, got {value!r}") from None
+    if n < lo or n > hi:
+        raise ValueError(f"{name} must be {lo}..{hi}, got {n}")
+    return n
+
+
+def _normalize_kind(s: Dict[str, Any]) -> Dict[str, Any]:
+    kind = str(s.get("kind") or "agent").strip().lower()
+    if kind not in STEP_KINDS:
+        raise ValueError(f"step kind must be one of {STEP_KINDS}, got {s.get('kind')!r}")
+    out: Dict[str, Any] = {"kind": kind}
+    if kind == "map":
+        m = s.get("map") if isinstance(s.get("map"), dict) else {}
+        src = str(m.get("items_from") or "next_steps").strip().lower()
+        if src not in MAP_SOURCES:
+            raise ValueError(f"map.items_from must be one of {MAP_SOURCES}, got {src!r}")
+        ws = str(m.get("worker_session") or "ephemeral").strip().lower()
+        if ws not in MAP_WORKER_SESSIONS:
+            raise ValueError(f"map.worker_session must be one of {MAP_WORKER_SESSIONS}")
+        out["map"] = {
+            "items_from": src,
+            "max_parallel": _int_in(m.get("max_parallel"), 3, 1, MAX_MAP_PARALLEL, "map.max_parallel"),
+            "max_items": _int_in(m.get("max_items"), 20, 1, MAX_MAP_ITEMS, "map.max_items"),
+            "worker_session": ws,
+        }
+    elif kind == "loop":
+        lp = s.get("loop") if isinstance(s.get("loop"), dict) else {}
+        chk = lp.get("check") if isinstance(lp.get("check"), dict) else {}
+        ctype = str(chk.get("type") or "command").strip().lower()
+        if ctype not in CHECK_TYPES:
+            raise ValueError(f"loop.check.type must be one of {CHECK_TYPES}, got {ctype!r}")
+        check: Dict[str, Any] = {"type": ctype}
+        if ctype == "command":
+            cmd = str(chk.get("command") or "").strip()
+            if not cmd:
+                raise ValueError("loop.check.command is required for a command check")
+            check["command"] = cmd[:4000]
+            check["timeout_seconds"] = _int_in(chk.get("timeout_seconds"), 300, 5, 3600, "loop.check.timeout_seconds")
+        elif ctype == "grader":
+            check["rubric"] = str(chk.get("rubric") or "").strip()[:16000]
+            if not check["rubric"]:
+                raise ValueError("loop.check.rubric is required for a grader check")
+            check["grader_agent_id"] = (str(chk.get("grader_agent_id") or "").strip() or None)
+            check["grader_engine"] = _normalize_step_engine(chk.get("grader_engine"))
+            check["grader_model"] = str(chk.get("grader_model") or "").strip()
+        else:
+            schema = chk.get("schema")
+            if isinstance(schema, str):
+                try:
+                    schema = json.loads(schema) if schema.strip() else None
+                except ValueError as exc:
+                    raise ValueError(f"loop.check.schema is not valid JSON: {exc}") from None
+            if not isinstance(schema, dict):
+                raise ValueError("loop.check.schema must be a JSON Schema object")
+            check["schema"] = schema
+            # blank = validate the body's handoff; else a JSON file in the workspace
+            check["path"] = str(chk.get("path") or "").strip()[:500]
+        out["loop"] = {"max_iterations": _int_in(lp.get("max_iterations"), 3, 1, MAX_LOOP_ITERATIONS,
+                                                 "loop.max_iterations"), "check": check}
+    elif kind == "gate":
+        g = s.get("gate") if isinstance(s.get("gate"), dict) else {}
+        out["gate"] = {"title": str(g.get("title") or s.get("name") or "Approval").strip()[:200],
+                       "instructions": str(g.get("instructions") or "").strip()[:8000]}
+    return out
+
+
+def _check_kind_phases(steps: List[Dict[str, Any]]) -> None:
+    """map / loop / gate / reduce steps own their phase; map and reduce need a
+    previous phase to read from."""
+    by_phase: Dict[int, List[Dict[str, Any]]] = {}
+    for s in steps:
+        by_phase.setdefault(int(s.get("phase") or 0), []).append(s)
+    first = min(by_phase) if by_phase else 0
+    for p, group in by_phase.items():
+        special = [s for s in group if s.get("kind", "agent") != "agent"]
+        if special and len(group) > 1:
+            raise ValueError(f"a {special[0]['kind']} step must be alone in its phase (phase {p + 1} has "
+                             f"{len(group)} steps) — use the custom mode to give it its own phase")
+        for s in special:
+            if s["kind"] in ("map", "reduce") and p == first:
+                raise ValueError(f"a {s['kind']} step needs a previous phase to read handoffs from")
 
 
 
@@ -176,12 +284,8 @@ class JobManager:
     def create_job(self, data: Dict[str, Any]) -> Dict[str, Any]:
         job_id = str(uuid.uuid4())
         now = _now_iso()
-        kind = data.get("kind", "user")
-        if kind not in ("user", "heartbeat"):
-            kind = "user"
-
         # Build pipeline from the explicit `pipeline` dict, or from a single
-        # `agent_id` (HB jobs and the simple create-job modal use this shape).
+        # `agent_id` (the simple create-job modal uses this shape).
         if "pipeline" in data:
             pipeline = _normalize_pipeline(data["pipeline"])
         elif data.get("agent_id"):
@@ -203,8 +307,7 @@ class JobManager:
             "pipeline": pipeline,
             # Run-level budget {max_usd, max_tokens, max_seconds} split across the steps.
             "budget": _normalize_budget(data.get("budget")),
-            "kind": kind,
-            "heartbeat_entry": data.get("heartbeat_entry"),  # dict or None; only for kind=="heartbeat"
+            "kind": "user",   # the only kind since P3 (heartbeat jobs became triggers)
             "archived": bool(data.get("archived", False)),
             "created_at": now,
             "updated_at": now
@@ -230,11 +333,8 @@ class JobManager:
         if not job:
             return None
 
-        # Mutable fields. heartbeat_entry/archived are mainly written by the
-        # reconciliation pass for kind=="heartbeat" jobs but accepted via API too.
         for key in ["title", "actions", "tasks", "task_description",
-                    "agent_id", "workspace_id",
-                    "heartbeat_entry", "archived"]:
+                    "agent_id", "workspace_id", "archived"]:
             if key in data:
                 job[key] = data[key]
         if "pipeline" in data:
@@ -245,15 +345,6 @@ class JobManager:
         job["updated_at"] = _now_iso()
         self._get_job_path(job_id).write_text(json.dumps(job, indent=2), encoding="utf-8")
         return job
-
-    def find_heartbeat_job(self, agent_id: str, entry_name: str) -> Optional[Dict[str, Any]]:
-        for j in self.list_jobs(kind="heartbeat", include_archived=True):
-            if j.get("agent_id") != agent_id:
-                continue
-            entry = j.get("heartbeat_entry") or {}
-            if entry.get("name") == entry_name:
-                return j
-        return None
 
     def delete_job(self, job_id: str) -> bool:
         p = self._get_job_path(job_id)

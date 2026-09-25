@@ -89,18 +89,17 @@ def task_request(engine: str, *, prompt: str, cwd: Path, sid: Optional[str], mod
         on_event=on_event, on_progress=lambda p, m: task_utils.update_progress(p, m),
         cancel_check=task_utils.is_cancelled, on_spawn=on_spawn, on_exit=on_exit,
         session_id=sid, kill_grace_sec=app_config.tasks_kill_grace_seconds(),
+        permission_mode=((task.metadata or {}).get("permission_mode") if task else None) or None,
     )
 
 
 def _lineage_kind(md: Dict[str, Any]) -> str:
     if md.get("source") == "design":
         return "design"
-    if md.get("routine_id"):
-        return "routine"
-    if md.get("source") == "heartbeat":
-        return "heartbeat"
     if md.get("run_id"):
         return "run"
+    if md.get("trigger_id"):
+        return "trigger"
     return "task"
 
 

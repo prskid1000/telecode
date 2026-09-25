@@ -9,6 +9,8 @@ Pillow>=10.0.0
 pyautogui>=0.9.54
 PyYAML>=6.0
 croniter>=2.0.0
+# IANA time zones for trigger cron / active hours (Windows has no system tz database)
+tzdata>=2024.1
 
 # FastMCP SDK — used by mcp_server/ and bridged into the proxy's
 # managed-tool registry. Pip package "mcp"; import name "mcp".

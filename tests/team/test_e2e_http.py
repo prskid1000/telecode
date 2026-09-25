@@ -245,20 +245,20 @@ def test_heartbeat_validate_endpoint_reports_errors():
     _cleanup(agents=[aid])
 
 
-def test_heartbeat_reconcile_creates_hb_jobs():
+def test_heartbeat_compiles_to_triggers():
     aid = _make_agent("hb-rec-agent", heartbeat_md=(
         "```yaml\n"
         "- name: morning\n  cron: \"0 9 * * *\"\n  prompt: brief\n  workspace: ephemeral\n"
         "```\n"
     ))
-    # Reconcile already triggered by the PUT; verify the HB job exists.
-    sc, jobs_hb = req("GET", "/api/jobs?kind=heartbeat", None)
-    mine = [j for j in jobs_hb["jobs"] if j["agent_id"] == aid]
-    assert len(mine) == 1 and mine[0]["title"] == "morning"
-    _cleanup(agents=[aid], jobs=[mine[0]["id"]])
+    # The PUT compiled HEARTBEAT.md; the entry is a trigger now (P3).
+    sc, tr = req("GET", f"/api/triggers?agent_id={aid}", None)
+    mine = [t for t in tr["triggers"] if t["source"] == "heartbeat"]
+    assert len(mine) == 1 and mine[0]["name"] == "morning" and mine[0]["session"] == "fresh"
+    _cleanup(agents=[aid])
 
 
-def test_heartbeat_archive_on_yaml_removal():
+def test_heartbeat_trigger_removed_with_yaml_entry():
     aid = _make_agent("hb-arch-agent", heartbeat_md=(
         "```yaml\n"
         "- name: keepme\n  cron: \"0 9 * * *\"\n  prompt: x\n  workspace: ephemeral\n"
@@ -269,9 +269,6 @@ def test_heartbeat_archive_on_yaml_removal():
     sc, _ = req("PUT", f"/api/agents/{aid}/internal", {"files": {"HEARTBEAT.md":
         "```yaml\n- name: keepme\n  cron: \"0 9 * * *\"\n  prompt: x\n  workspace: ephemeral\n```"
     }})
-    sc, jobs_hb = req("GET", "/api/jobs?kind=heartbeat&include_archived=true", None)
-    mine = [j for j in jobs_hb["jobs"] if j["agent_id"] == aid]
-    by_name = {(j["heartbeat_entry"] or {}).get("name"): j for j in mine}
-    assert by_name["keepme"]["archived"] is False
-    assert by_name["dropme"]["archived"] is True
-    _cleanup(agents=[aid], jobs=[j["id"] for j in mine])
+    sc, tr = req("GET", f"/api/triggers?agent_id={aid}", None)
+    assert sorted(t["name"] for t in tr["triggers"] if t["source"] == "heartbeat") == ["keepme"]
+    _cleanup(agents=[aid])

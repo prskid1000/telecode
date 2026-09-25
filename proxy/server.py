@@ -31,7 +31,8 @@ from proxy import managed_tools  # noqa: F401  side-effect: registers tools
 from proxy import request_log
 from proxy import translate as xlate
 from proxy import tokenizer as toks
-from proxy import api_routines
+from proxy import api_triggers
+from proxy import api_approvals
 from proxy import api_sessions
 from proxy import api_tasks
 from proxy import api_agents
@@ -2813,7 +2814,8 @@ def create_app() -> web.Application:
     api_skills.register_routes(app)
     api_runs.register_routes(app)
     api_events.register_routes(app)
-    api_routines.register_routes(app)
+    api_triggers.register_routes(app)
+    api_approvals.register_routes(app)
     api_design.register_routes(app)
     api_design_export.register_routes(app)
     api_design_systems.register_routes(app)
@@ -2822,6 +2824,7 @@ def create_app() -> web.Application:
 
     app.router.add_get("/ui/legacy", _redirect_to("/tasks"))
     app.on_cleanup.append(_stop_design_services)
+    app.on_cleanup.append(_stop_trigger_scheduler)
 
     return app
 
@@ -2845,12 +2848,13 @@ async def start_proxy_background() -> web.AppRunner | None:
     await site.start()
     log.info("proxy listening on %s:%d — protocols=%s", host, port, proxy_config.protocols())
 
-    # Start the routine heartbeat thread so saved routines fire on their interval.
+    # The one scheduler (triggers: schedules, webhooks' bookkeeping, file watch,
+    # HEARTBEAT.md compile). Replaces the routine manager and the heartbeat loop.
     try:
-        from services.routine import routine_manager
-        routine_manager.start()
+        from services.triggers import scheduler as trigger_scheduler
+        trigger_scheduler.start()
     except Exception:
-        log.exception("routine_manager: failed to start")
+        log.exception("trigger scheduler: failed to start")
 
     # TeleDesign preview origin: a second site on design.preview_port serving
     # generated pages cross-origin from this API (docs/teledesign-contract.md §5).
@@ -2861,6 +2865,14 @@ async def start_proxy_background() -> web.AppRunner | None:
         log.exception("design preview: failed to start")
 
     return runner
+
+
+async def _stop_trigger_scheduler(_app: web.Application) -> None:
+    try:
+        from services.triggers import scheduler as trigger_scheduler
+        trigger_scheduler.stop()
+    except Exception:
+        log.exception("trigger scheduler: failed to stop")
 
 
 async def _stop_design_services(_app: web.Application) -> None:

@@ -38,17 +38,13 @@ def test_invalid_kind_falls_back_to_user(tmp_data_root):
     assert j["kind"] == "user"
 
 
-def test_list_jobs_filters_by_kind(tmp_data_root):
+def test_heartbeat_kind_is_gone(tmp_data_root):
+    # P3: HEARTBEAT.md compiles to triggers; every job is a user job.
     m = get_job_manager()
-    u = m.create_job({"title": "user-job", "agent_id": "a"})
     h = m.create_job({"title": "hb-job", "kind": "heartbeat", "agent_id": "a",
                       "heartbeat_entry": {"name": "x", "cron": "0 9 * * *"}})
-
-    user_only = m.list_jobs(kind="user")
-    assert {j["id"] for j in user_only} == {u["id"]}
-
-    hb_only = m.list_jobs(kind="heartbeat")
-    assert {j["id"] for j in hb_only} == {h["id"]}
+    assert h["kind"] == "user" and "heartbeat_entry" not in h
+    assert m.list_jobs(kind="heartbeat") == []
 
 
 def test_archived_jobs_hidden_by_default(tmp_data_root):
@@ -58,18 +54,6 @@ def test_archived_jobs_hidden_by_default(tmp_data_root):
 
     assert j["id"] not in {x["id"] for x in m.list_jobs()}
     assert j["id"] in {x["id"] for x in m.list_jobs(include_archived=True)}
-
-
-def test_find_heartbeat_job_by_name(tmp_data_root):
-    m = get_job_manager()
-    h = m.create_job({
-        "title": "tick", "kind": "heartbeat", "agent_id": "agent-x",
-        "heartbeat_entry": {"name": "tick", "cron": "0 9 * * *"},
-    })
-    found = m.find_heartbeat_job("agent-x", "tick")
-    assert found is not None and found["id"] == h["id"]
-    assert m.find_heartbeat_job("agent-x", "no-such") is None
-    assert m.find_heartbeat_job("other-agent", "tick") is None
 
 
 def test_update_job_normalises_pipeline(tmp_data_root):

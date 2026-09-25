@@ -35,7 +35,7 @@ MAX_JOB_FILE_BYTES = 64 * 1024 * 1024
 logger = logging.getLogger("telecode.proxy.api_jobs")
 
 async def list_jobs(request: web.Request) -> web.Response:
-    kind = request.query.get("kind")  # "user" | "heartbeat" | None
+    kind = request.query.get("kind")  # "user" | None (heartbeat jobs became triggers in P3)
     include_archived = request.query.get("include_archived") in ("1", "true", "yes")
     jobs = get_job_manager().list_jobs(kind=kind, include_archived=include_archived)
     return web.json_response({"jobs": jobs})
@@ -73,7 +73,14 @@ async def delete_job(request: web.Request) -> web.Response:
     success = get_job_manager().delete_job(job_id)
     if not success:
         return web.json_response({"error": "Job not found"}, status=404)
-    return web.json_response({"success": True})
+    removed = 0
+    try:  # triggers that ran this job have nothing left to fire
+        from services.triggers import store as trigger_store
+        for rec in trigger_store.list_all(target_kind="job", target_id=job_id):
+            removed += int(trigger_store.delete(rec["id"]))
+    except Exception:
+        logger.exception(f"deleting the triggers of job {job_id} failed")
+    return web.json_response({"success": True, "triggers_deleted": removed})
 
 async def list_job_files(request: web.Request) -> web.Response:
     job_id = request.match_info["job_id"]

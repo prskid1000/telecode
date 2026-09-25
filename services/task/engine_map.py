@@ -1,7 +1,6 @@
 """Single source of truth for engine -> task_type mapping.
 
-Used by services.run.executor, services.heartbeat.scheduler, and
-services.routine.routine_manager so adding a new engine never drifts across
+Used by services.run.executor and services.triggers so adding a new engine never drifts across
 call sites.
 
 Engine string is the lowercase form stored on agent / pipeline step / HB entry

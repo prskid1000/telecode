@@ -19,7 +19,7 @@ stages the agent's files and calls :func:`run`, which drives its
      "pinned": "<constraints kept across a rotation>"}
 
 Rotation: when the conversation about to be resumed has passed
-``tasks.rotate_after_tokens`` budget tokens, or (routines) its row has run
+``tasks.rotate_after_tokens`` budget tokens, or (trigger fires) its row has run
 ``tasks.rotate_after_fires`` times, or ``step_ctl.rotate`` — the old
 conversation is asked for a handoff (structured, like a pipeline step) and the
 task continues in a **fresh** conversation whose prompt starts with that
@@ -101,7 +101,7 @@ def _rotation_check(ctx: TaskContext) -> None:
         ctx.rotate_reason = f"{int(row.get('cumulative_tokens') or 0)} tokens >= rotate_after_tokens {max_tok}"
         return
     max_fires = app_config.tasks_rotate_after_fires()
-    if max_fires and _current_task_metadata().get("routine_id") and int(row.get("runs_count") or 0) >= max_fires:
+    if max_fires and _current_task_metadata().get("trigger_id") and int(row.get("runs_count") or 0) >= max_fires:
         ctx.rotate_row = row
         ctx.rotate_reason = f"{int(row.get('runs_count') or 0)} fires >= rotate_after_fires {max_fires}"
 

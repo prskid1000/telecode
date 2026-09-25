@@ -12,8 +12,8 @@ Endpoints:
   GET    /api/runs                         list runs (recent)
   POST   /api/runs/:run_id/steps/:step_id/retry   {mode: retry|retry_clean, budget?} — re-run one
                                            step, then the downstream phases (409 while the run is live)
-  GET    /api/runs/:run_id/steps/:step_id/diff    ?attempt=N&path=P — unified diff before→after
-                                           of an attempt (default the latest) + its file list
+  GET    /api/runs/:run_id/steps/:step_id/diff    ?attempt=N&path=P&worker=W — unified diff before→after
+                                           of an attempt (default the latest) or of map worker W + its file list
   POST   /api/runs/:run_id/steps/:step_id/revert  {attempt?} — restore the job workspace to the
                                            attempt's pre-step snapshot (a safety snapshot is taken first)
 """
@@ -148,7 +148,7 @@ async def step_diff(request: web.Request) -> web.Response:
     try:
         out = await asyncio.get_running_loop().run_in_executor(None, lambda: executor.step_diff(
             request.match_info["run_id"], request.match_info["step_id"], attempt=_int_q(request, "attempt"),
-            path=request.query.get("path") or None))
+            path=request.query.get("path") or None, worker=_int_q(request, "worker")))
     except LookupError as exc:
         return web.json_response({"error": str(exc)}, status=404)
     except ValueError as exc:
@@ -192,7 +192,7 @@ async def get_artifact(request: web.Request) -> web.Response:
 
 
 def _reconcile_on_startup() -> None:
-    """Runs/heartbeat state left "running" by a previous process → interrupted (B6).
+    """Runs / trigger fires left "running" by a previous process → interrupted (B6).
 
     Called once when the proxy app is built. Only records whose task is not
     alive in this process's queue (and runs without a live driver) are
@@ -210,11 +210,10 @@ def _reconcile_on_startup() -> None:
     except Exception:
         logger.exception("startup reconcile of runs failed")
     try:
-        from services.heartbeat import state as hb_state
-        from services.task.task_manager import get_task_queue
-        hb_state.reconcile_interrupted(get_task_queue().is_active)
+        from services.triggers import fire as trigger_fire
+        trigger_fire.reconcile_all()
     except Exception:
-        logger.exception("startup reconcile of heartbeat state failed")
+        logger.exception("startup reconcile of trigger fires failed")
 
 
 def register_routes(app: web.Application):

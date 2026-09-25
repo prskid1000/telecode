@@ -69,11 +69,12 @@ from services.task.safe_paths import validate_id
 
 logger = logging.getLogger("telecode.services.run")
 
-VALID_RUN_STATUSES = ("pending", "running", "completed", "failed", "partial", "cancelled", "interrupted",
-                      "budget_exceeded")
-VALID_STEP_STATUSES = ("pending", "running", "completed", "failed", "cancelled", "skipped", "interrupted",
-                       "budget_exceeded")
-TERMINAL_RUN_STATUSES = ("completed", "failed", "partial", "cancelled", "interrupted", "budget_exceeded")
+VALID_RUN_STATUSES = ("pending", "running", "awaiting_input", "completed", "failed", "partial", "cancelled",
+                      "interrupted", "budget_exceeded", "rejected")
+VALID_STEP_STATUSES = ("pending", "running", "awaiting_input", "completed", "failed", "cancelled", "skipped",
+                       "interrupted", "budget_exceeded", "rejected")
+TERMINAL_RUN_STATUSES = ("completed", "failed", "partial", "cancelled", "interrupted", "budget_exceeded",
+                         "rejected")
 
 _USAGE_INT_FIELDS = ("input_tokens", "output_tokens", "cache_read_tokens",
                      "cache_write_tokens", "num_turns", "duration_ms")
@@ -287,10 +288,12 @@ class RunStore:
         overrides: Optional[Dict[str, Any]] = None,
         budget: Optional[Dict[str, Any]] = None,
         job_snapshot: Optional[Dict[str, Any]] = None,
+        extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         run_id = str(uuid.uuid4())
         now = _now_iso()
         run = {
+            **{k: v for k, v in (extra or {}).items() if v is not None},
             "run_id": run_id,
             "job_id": job_id,
             "mode": mode,
@@ -310,6 +313,7 @@ class RunStore:
                     "agent_id": s.get("agent_id"),
                     "agent_name": s.get("agent_name", ""),
                     "name": s.get("name", ""),
+                    "kind": s.get("kind") or (s.get("spec") or {}).get("kind") or "agent",
                     "engine": s.get("engine") or "claude_code",
                     "model": s.get("model") or "",
                     "is_local": bool(s.get("is_local", False)),
@@ -404,10 +408,14 @@ class RunStore:
                 statuses = {s.get("status") for s in steps}
                 if statuses == {"completed"}:
                     run["status"] = "completed"
+                elif "awaiting_input" in statuses and not run.get("cancel_requested"):
+                    run["status"] = "awaiting_input"
                 elif "running" in statuses or "pending" in statuses:
                     run["status"] = "running"
                 elif run.get("cancel_requested"):
                     run["status"] = "cancelled"
+                elif "rejected" in statuses:
+                    run["status"] = "rejected"
                 elif "budget_exceeded" in statuses or run.get("budget_exhausted"):
                     run["status"] = "budget_exceeded"
                 elif "interrupted" in statuses:
@@ -418,8 +426,10 @@ class RunStore:
                     run["status"] = "partial" if "completed" in statuses else "failed"
                 else:
                     run["status"] = "completed"
-            if run["status"] not in ("running", "pending"):
+            if run["status"] not in ("running", "pending", "awaiting_input"):
                 run["completed_at"] = run.get("completed_at") or _now_iso()
+            else:
+                run["completed_at"] = None
             run["usage"] = rollup_usage(steps)
             from services.run.budget import spent
             run["spent"] = spent(run)

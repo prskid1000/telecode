@@ -24,12 +24,26 @@ from services.engine.types import EngineBudgetExceeded, EngineError, EngineReque
 logger = logging.getLogger("telecode.services.engine.claude")
 
 
+SKIP_MODES = (None, "", "skip", "bypassPermissions")
+
+
+def permission_args(permission_mode: Optional[str]) -> List[str]:
+    """``--dangerously-skip-permissions`` (interactive / pipeline runs), or for
+    autonomous runs ``--permission-mode <mode> --permission-prompts none``: the
+    mode decides what is allowed, and anything that would prompt is denied —
+    nobody is there to answer (verified on claude 2.1.282)."""
+    if permission_mode in SKIP_MODES:
+        return ["--dangerously-skip-permissions"]
+    return ["--permission-mode", str(permission_mode), "--permission-prompts", "none"]
+
+
 def build_argv(*, resume_id: Optional[str], model: Optional[str], is_local: bool,
                append_system_prompt_file=None, schema: Optional[Dict[str, Any]] = None,
-               add_dirs=(), fork: bool = False, max_budget_usd: Optional[float] = None) -> List[str]:
+               add_dirs=(), fork: bool = False, max_budget_usd: Optional[float] = None,
+               permission_mode: Optional[str] = None) -> List[str]:
     cmd = [
         "claude", "-p",
-        "--dangerously-skip-permissions",
+        *permission_args(permission_mode),
         "--output-format", "stream-json",
         "--verbose",
         "--include-partial-messages",
@@ -105,7 +119,8 @@ class ClaudeAdapter(Adapter):
         argv = build_argv(resume_id=req.resume_id, model=req.model, is_local=req.is_local,
                           append_system_prompt_file=req.system_append_file, schema=req.schema,
                           add_dirs=req.add_dirs, fork=req.fork,
-                          max_budget_usd=None if req.is_local else req.max_usd)
+                          max_budget_usd=None if req.is_local else req.max_usd,
+                          permission_mode=req.permission_mode)
         return Launch(argv=argv, stdin=req.prompt, env=env)
 
     def parse(self, evt: Dict[str, Any], st: ParseState) -> List[Dict[str, Any]]:

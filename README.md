@@ -84,7 +84,7 @@ pythonw main.py
 
 ### Session & Task Management
 
-Telecode includes a fully-featured stateful **Session and Task Management** system, with persistent **Agents**, multi-step **Job pipelines**, and a cron-style **Heartbeat scheduler** for self-running agents.
+Telecode includes a fully-featured stateful **Session and Task Management** system, with persistent **Agents**, multi-step **Job pipelines** (agents, map fan-outs, loops with checks, approval gates, reduces), an **approvals inbox** (web + Telegram buttons) and one **Trigger scheduler** (cron / interval / one-off, webhooks, GitHub, file watch) for self-running work.
 
 - **Stateful Workspaces**: Isolated filesystem directories for each session, with persistent metadata and `data` carrying state across multiple tasks/turns.
 - **Persistent Agents** with five OpenClaw-style internal files:
@@ -92,40 +92,39 @@ Telecode includes a fully-featured stateful **Session and Task Management** syst
   - **USER.md** — who the user is, address conventions
   - **AGENT.md** — operating rules / behavioural guidance (auto-renamed to `CLAUDE.md` in the workspace so the underlying CLI auto-loads it)
   - **MEMORY.md** — long-term memory the agent self-curates
-  - **HEARTBEAT.md** — YAML-fenced cron schedule (read by the scheduler, never staged into the workspace)
+  - **HEARTBEAT.md** — YAML-fenced schedule entries that compile to triggers on save (never staged into the workspace)
   - All five files live under `data/agents/<id>/internal/`. SOUL/USER/AGENT/MEMORY are **staged** into the workspace for the run, then **written back** verbatim on exit.
-- **Multi-agent Job Pipelines**: a Job's pipeline can be `single`, `sequential` (output of step N → context for step N+1), `parallel` (fan-out to ephemeral sessions), or `custom` (phase-grouped — mix sequential and parallel, e.g. `A → [B ∥ C] → D`). Each step has an optional prompt override and "feed previous phase's output" toggle.
+- **Multi-agent Job Pipelines**: a Job's pipeline can be `single`, `sequential` (output of step N → context for step N+1), `parallel` (fan-out to ephemeral sessions), or `custom` (phase-grouped — mix sequential and parallel, e.g. `A → [B ∥ C] → D`). Each step has an optional prompt override and "feed previous phase's output" toggle, and a **kind**: `agent`, `map` (one worker per item of the previous step's handoff, `max_parallel` at a time), `loop` (run → check with a command / a grader agent in a fresh session / a JSON Schema → feed the findings back, up to `max_iterations`), `gate` (the run waits — `awaiting input` — until someone approves in the inbox or on Telegram; edited text on approval becomes the next step's handoff) or `reduce` (merge every handoff of the previous phase).
 - **Run + per-step monitor**: each ▶ Run creates a Run record with one task per step, status pills per step, stacked execution monitors with cost/duration/token stats and event streams.
-- **Heartbeat scheduler** (off by default — flip `heartbeat.enabled: true`): periodic tick reads each agent's HEARTBEAT.md, reconciles HB Jobs in the sidebar, fires due cron entries on either ephemeral or persistent workspaces. State persists across restarts in `data/heartbeat-state.json`.
+- **Triggers**: one scheduler for everything recurring or event-driven (see below). HEARTBEAT.md entries compile to agent triggers; they fire on schedule while `heartbeat.enabled` is on.
 - **Background Task Queue**: Submit jobs (like `CLAUDE_CODE`) that run asynchronously. The model can poll for status and rich tool-use events.
 - **Web Interface**: Dual-mode UI for monitoring tasks and managing files:
-  - **Team Mode** (`/ui`): Workspaces / Agents (with the 5-tab internal-file editor + YAML-validated HEARTBEAT.md) / Jobs (USER and HEARTBEAT sidebar tabs, pipeline builder, run history).
-  - **Task Mode** (`/ui/legacy`): Simplified session-based task submission and monitoring. Includes a **Routines** tab (recurring task fires on an interval against a permanent session) and a **By routine** right-panel tab for browsing run history grouped per routine.
+  - **Team Mode** (`/team`): Workspaces / Agents (with the 5-tab internal-file editor + YAML-validated HEARTBEAT.md) / Jobs (pipeline builder with step kinds, run monitor with map lanes, loop iterations and gate cards) / Triggers.
+  - **Task Mode** (`/tasks`): Simplified session-based task submission and monitoring, plus a **Triggers** tab and a **By trigger** history panel.
+  - An **approvals** button in the top bar shows how many gates are waiting and opens the inbox.
   - Browser titles ("Telecode-Team" / "Telecode-Task") and icons match the active mode for easy navigation.
 
-#### Routines (Task Mode)
+#### Triggers
 
-A routine is a saved recipe — `{name, prompt, schedule.every_seconds ≥ 60, task_type, session_id}` — that the routine manager's heartbeat fires on its interval against a long-lived session. The CLI (`CLAUDE_CODE`) resumes the same conversation every tick, so the agent walks back into the same folder and history each time. Skip-if-running is enforced (no two fires of the same routine in flight); pause / resume / edit / delete are pure file ops on `data/routines/<id>.json` — the manager picks up changes on its next tick (≤ 60s).
+A trigger fires a **target** — a Task-mode prompt, an agent prompt, or a Team job run — from a **schedule** (`cron` in an IANA time zone, `every` N seconds / `15m` / `2h`, or a one-off `at`), from an **event** (a webhook with a per-trigger bearer token, a GitHub webhook with an HMAC secret and event / branch / author / label filters, a file-watch glob with debounce) or by hand ("Fire now"). Every trigger gets the same guarantees: skip-if-running under a lock, catch-up policy (skip or fire once for slots missed while telecode was down), active hours, skip-if-empty (a file or a HEARTBEAT.md section), OK-reply suppression (`HEARTBEAT_OK` / `NO_REPLY` → recorded as ok, no notification), a cheap-model override, a goal (a check command, a `features.json` that must be all passing, max fires, max cost) and auto-pause after K consecutive failures — both notify on Telegram. Pinned constraints are appended at the tail of every fire; event payloads always reach the agent wrapped as `<trigger-payload untrusted="true">`. Claude runs started by triggers use `--permission-mode auto --permission-prompts none` (per-trigger setting) instead of skipping permissions. Sessions are `shared` (one conversation continues across fires) or `fresh`.
 
-Each fire's prompt is prefixed with a heartbeat preface (tick number, cadence, time-since-last-fire, "this is a recurring wake-up, build on prior work, stop if nothing new") so the model treats the session as one ongoing assignment instead of restarting work each cycle.
+The first start after upgrading migrates `data/routines/*.json` into task triggers and HEARTBEAT.md into agent triggers (keeping their counters and last fire times).
 
-The Routines tab on the left has the create/edit form + Save / Pause / Resume / Run-now / Delete and live counters (`Next fire`, `Last fire`, `Last completed` with a status pill, `Total`, `Skipped`). The right panel's **By routine** tab lists every routine with run/skipped counters; click to expand and lazy-load that routine's task history via `/api/routines/<id>/runs`. Clicking a run pops back to the Active-task view and starts watching it.
-
-REST surface (open, no auth — same as `/api/tasks`):
+REST surface (open like `/api/tasks`, except the two webhook routes, which authenticate per trigger):
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/routines` | List (?status, ?namespace) |
-| POST | `/api/routines` | Create routine + bound session |
-| GET | `/api/routines/<id>` | One routine + last 5 runs |
-| PATCH | `/api/routines/<id>` | Update prompt/schedule/options |
-| DELETE | `/api/routines/<id>` | Cancel (?delete_session=true also drops the session folder) |
-| POST | `/api/routines/<id>/pause` | Pause scheduling |
-| POST | `/api/routines/<id>/resume` | Resume scheduling |
-| POST | `/api/routines/<id>/run-now` | Fire one tick immediately |
-| GET | `/api/routines/<id>/runs` | Task history for this routine |
+| GET / POST | `/api/triggers` | List (secrets masked) / create |
+| POST | `/api/triggers/preview` | Next fire times for a schedule + active hours |
+| GET / PATCH / DELETE | `/api/triggers/<id>` | One trigger (token shown) / edit / delete (`?delete_session=true`) |
+| POST | `/api/triggers/<id>/pause`, `/resume`, `/run-now`, `/token` | Pause, resume, fire now, rotate the webhook token |
+| GET | `/api/triggers/<id>/fires` | History: running / completed / ok / skipped / failed / … |
+| POST | `/api/triggers/<id>/fire` | Webhook — `Authorization: Bearer <token>`, JSON or text body ≤ 256 KB |
+| POST | `/api/triggers/<id>/github` | GitHub webhook — `X-Hub-Signature-256` |
 
-The manager thread starts inside `start_proxy_background()` (proxy process). **Routines only fire while the proxy is running** — bot-only deployments won't tick.
+Approvals: `GET /api/approvals`, `POST /api/approvals/<id>/approve` (`{note?, edited_text?}`) and `/reject`.
+
+The scheduler thread starts inside the proxy process, so **triggers only fire while the proxy is running**.
 
 ### TeleDesign (design canvas)
 
@@ -532,33 +531,30 @@ Ships with `speak`, `transcribe`, `web_search`. Add new tools by dropping a `.py
 
 Register with CC: `claude mcp add telecode --transport streamable-http --url http://127.0.0.1:1236/mcp`
 
-### `heartbeat` — cron-style scheduler for self-running agents
-
-Periodic loop that reads each agent's `HEARTBEAT.md`, parses the YAML schedule entries, reconciles the matching `kind:"heartbeat"` Jobs in the sidebar, and fires any due entries through the same task pipeline as user-triggered runs. Disabled by default.
+### `triggers` / `heartbeat` — the scheduler
 
 | Key | Description |
 |---|---|
-| `enabled` | Start the scheduler. Default `false`. |
-| `tick_seconds` | How often to evaluate cron expressions (default `60`). |
-| `ephemeral_ttl_seconds` | Safety-net TTL on ephemeral heartbeat sessions (default `3600`). Sessions are deleted right after the task completes; the TTL only matters if the bot crashes mid-run. |
-| `max_concurrent_fires` | Cap on heartbeat fires per tick (default `2`). Extra due entries spill over to the next tick — no piled-up backlog after a downtime. |
-| `min_fire_gap_seconds` | Hard floor between two fires of the same entry (default `60`). Defends against rapid-fire crons during catch-up windows. |
+| `triggers.tick_seconds` | How often due schedules are checked (default `15`; file watch polls every 2 s). |
+| `triggers.max_fires_per_tick` | At most this many scheduled fires start per tick (default `4`). |
+| `heartbeat.enabled` | HEARTBEAT.md-compiled triggers fire on their schedule only while this is on (default `false`); "Fire now" always works. |
+| `heartbeat.ephemeral_ttl_seconds` | Lifetime of a `session: fresh` fire's throwaway session (default `3600`). |
 
-`HEARTBEAT.md` syntax: free-form markdown notes plus one or more `\`\`\`yaml` fenced blocks. Each block is a YAML list of entries:
+`HEARTBEAT.md` syntax: free-form markdown notes plus one or more `\`\`\`yaml` fenced blocks. Each block is a YAML list of entries, compiled to one trigger each when the file is saved:
 
 ```yaml
 - name: morning-briefing      # required, unique per file
-  cron: "0 9 * * *"           # required, 5-field cron (croniter)
+  cron: "0 9 * * 1-5"         # one of cron / every (900, 15m, 2h, 1d) / at (ISO time, once)
+  tz: Europe/London           # IANA zone for cron / at / active_hours (default UTC)
   prompt: |                   # required
-    Summarise today's calendar and unread mail.
-  workspace: ephemeral        # ephemeral (default) | persistent
-  engine: claude_code         # claude_code (default)
+    Summarise today's calendar and unread mail. Reply HEARTBEAT_OK if there is nothing new.
+  workspace: ephemeral        # ephemeral (fresh copy per fire, default) | persistent (+ workspace_id)
+  engine: claude_code         # claude_code | codex | antigravity
+  active_hours: "08:00-18:00" # optional; or {start, end, days, tz}
+  skip_if_empty: {section: Inbox}   # optional: skip while that HEARTBEAT.md section is empty
+  goal: {max_fires: 30}       # optional: check / features / max_fires / max_cost → auto-pause
   enabled: true               # default true
 ```
-
-`workspace: persistent` requires `workspace_id: <existing-session-uuid>`. Ephemeral fires create a fresh session under namespace `heartbeat`, run the task, write back the agent's internal files to storage, then delete the session.
-
-State (`data/heartbeat-state.json`) tracks `(agent_id, entry_name) → {last_run, last_status, last_task_id}`. Missed fires during downtime are not backfilled — only the next scheduled fire runs.
 
 ### `proxy` — middleware for local models
 

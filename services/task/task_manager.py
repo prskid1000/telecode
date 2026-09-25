@@ -1,7 +1,7 @@
 """In-process task queue for telecode. Ported from pythonmagic.
 
 Two worker pools (B12): ``interactive`` (Task-mode submits, TeleDesign turns)
-and ``background`` (routines, heartbeat fires, pipeline-run steps), sized by
+and ``background`` (trigger fires, pipeline-run steps), sized by
 ``config.tasks_interactive_workers()`` / ``tasks_background_workers()``, so
 background work can never occupy every worker an interactive request needs.
 
@@ -89,7 +89,7 @@ class Task:
 def _classify_pool(metadata: Dict[str, Any]) -> str:
     """Default pool from submit metadata: scheduled/pipeline work is background."""
     md = metadata or {}
-    if md.get("routine_id") or md.get("run_id") or md.get("source") == "heartbeat":
+    if md.get("trigger_id") or md.get("run_id"):
         return POOL_BACKGROUND
     return POOL_INTERACTIVE
 

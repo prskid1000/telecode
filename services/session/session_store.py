@@ -1,8 +1,9 @@
 """Generic filesystem-backed task sessions. Ported from pythonmagic.
 
 Expiry (B1). A session is *ephemeral* when ``data.ephemeral`` is true or it
-lives in one of EPHEMERAL_NAMESPACES (run fan-out, heartbeat); everything else
-(Task-mode sessions, Team workspaces, routine and design sessions) is a
+lives in one of EPHEMERAL_NAMESPACES (run fan-out, fresh trigger fires; "heartbeat"
+is the pre-P3 name); everything else (Task-mode sessions, Team workspaces,
+shared trigger sessions and design sessions) is a
 *workspace*.
 
 - Absolute TTL applies to ephemeral sessions only; workspaces expire on idle
@@ -45,7 +46,7 @@ def get_sessions_dir() -> Path:
 _NAMESPACES_DIR_NAME = "_ns"
 _ARCHIVE_DIR_NAME = "_archived"
 _ARCHIVE_ROOT_NS = "~root"
-EPHEMERAL_NAMESPACES = frozenset({"run-parallel", "heartbeat"})
+EPHEMERAL_NAMESPACES = frozenset({"run-parallel", "heartbeat", "trigger"})
 _ARCHIVE_STAMP_RE = re.compile(r"\.\d{8}T\d{6}Z$")
 DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS = 86400
 

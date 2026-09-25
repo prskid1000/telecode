@@ -4128,34 +4128,20 @@ def _telegram(window) -> QWidget:
     cb.addWidget(_number_row("capture.video_interval", "Video Chunk",    10, 600, 10, 0, "s"))
     layout.addWidget(cap_card)
 
-    hb_card, hb = _card("Heartbeat Scheduler",
-                         "heartbeat.* — periodic agent job firing from HEARTBEAT.md entries")
-    hb.addWidget(_toggle_row("heartbeat.enabled", "Enabled",
-                              "Run the heartbeat tick loop. When off, no HEARTBEAT.md entries fire."))
-    # Only ticks while Heartbeat is enabled.
-    hb.addWidget(_dependent(
-        _number_row("heartbeat.tick_seconds", "Tick Interval",
-                              10, 3600, 10, 0, "s",
-                              "How often the scheduler checks each agent's HEARTBEAT.md for due entries."),
-        ["heartbeat.enabled"], lambda e: bool(e)))
-    # Only ticks while Heartbeat is enabled.
-    hb.addWidget(_dependent(
-        _number_row("heartbeat.ephemeral_ttl_seconds", "Ephemeral TTL",
-                              60, 86400, 60, 0, "s",
-                              "Seconds after which fired ephemeral entries are auto-deleted."),
-        ["heartbeat.enabled"], lambda e: bool(e)))
-    # Only ticks while Heartbeat is enabled.
-    hb.addWidget(_dependent(
-        _number_row("heartbeat.max_concurrent_fires", "Max Concurrent",
-                              1, 20, 1, 0, "",
-                              "Maximum heartbeat entries allowed to fire simultaneously per tick."),
-        ["heartbeat.enabled"], lambda e: bool(e)))
-    # Only ticks while Heartbeat is enabled.
-    hb.addWidget(_dependent(
-        _number_row("heartbeat.min_fire_gap_seconds", "Min Fire Gap",
-                              0, 3600, 10, 0, "s",
-                              "Minimum seconds between consecutive fires of the same heartbeat entry."),
-        ["heartbeat.enabled"], lambda e: bool(e)))
+    hb_card, hb = _card("Triggers",
+                         "triggers.* / heartbeat.* — the one scheduler (schedules, webhooks, file watch)")
+    hb.addWidget(_toggle_row("heartbeat.enabled", "Fire HEARTBEAT.md triggers",
+                              "Agents' HEARTBEAT.md entries compile to triggers; they fire on their schedule "
+                              "only while this is on. Other triggers always fire while the proxy runs."))
+    hb.addWidget(_number_row("triggers.tick_seconds", "Tick Interval",
+                             5, 600, 5, 0, "s",
+                             "How often the scheduler checks for due triggers (file watch polls every 2 s)."))
+    hb.addWidget(_number_row("triggers.max_fires_per_tick", "Max Fires / Tick",
+                             1, 50, 1, 0, "",
+                             "At most this many scheduled fires start per tick; the rest wait for the next."))
+    hb.addWidget(_number_row("heartbeat.ephemeral_ttl_seconds", "Fresh Session TTL",
+                             60, 86400, 60, 0, "s",
+                             "A fire with session: fresh runs in a throwaway session deleted after this long."))
     layout.addWidget(hb_card)
 
     layout.addStretch(1)

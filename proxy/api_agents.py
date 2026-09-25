@@ -81,6 +81,12 @@ async def delete_agent(request: web.Request) -> web.Response:
     success = get_agent_manager().delete_agent(agent_id)
     if not success:
         return web.json_response({"error": "Agent not found"}, status=404)
+    try:  # its HEARTBEAT.md triggers go with it
+        from services.triggers import store as trigger_store
+        for rec in trigger_store.list_all(source="heartbeat", agent_id=agent_id):
+            trigger_store.delete(rec["id"])
+    except Exception:
+        logger.exception(f"deleting heartbeat triggers of {agent_id} failed")
     return web.json_response({"success": True})
 
 async def list_agent_files(request: web.Request) -> web.Response:
@@ -140,13 +146,12 @@ async def update_agent_internal(request: web.Request) -> web.Response:
     if not ok:
         return web.json_response({"error": "Agent not found"}, status=404)
 
-    # If HEARTBEAT.md changed, reconcile HB jobs synchronously so the sidebar
-    # picks up changes on its next refresh.
+    # HEARTBEAT.md compiles to triggers on save.
     reconcile_summary = None
     if "HEARTBEAT.md" in files:
         try:
-            from services.heartbeat.reconcile import reconcile_agent
-            reconcile_summary = reconcile_agent(agent_id)
+            from services.triggers.heartbeat import compile_agent
+            reconcile_summary = compile_agent(agent_id)
         except Exception as exc:
             logger.exception(f"reconcile_agent failed for {agent_id}: {exc}")
             reconcile_summary = {"errors": [{"msg": str(exc)}]}
@@ -170,25 +175,19 @@ async def validate_agent_heartbeat(request: web.Request) -> web.Response:
         files = get_agent_manager().get_internal_files(agent_id)
         text = files.get("HEARTBEAT.md", "") or ""
 
-    from services.heartbeat.parser import parse, next_fires
-    parsed = parse(text)
-    out = parsed.to_dict()
-    # decorate each entry with next 3 fire times
-    for e_obj, e_dict in zip(parsed.entries, out["entries"]):
-        try:
-            e_dict["next_fires"] = next_fires(e_obj, count=3)
-        except Exception as exc:
-            e_dict["next_fires_error"] = str(exc)
-    return web.json_response(out)
+    from services.triggers.heartbeat import parse
+    parsed = parse(text, agent_id)
+    for e in parsed["entries"]:
+        e.pop("body", None)
+    return web.json_response(parsed)
 
 
 async def reconcile_agent_heartbeat(request: web.Request) -> web.Response:
     agent_id = request.match_info["agent_id"]
     if not get_agent_manager().get_agent(agent_id):
         return web.json_response({"error": "Agent not found"}, status=404)
-    from services.heartbeat.reconcile import reconcile_agent
-    summary = reconcile_agent(agent_id)
-    return web.json_response(summary)
+    from services.triggers.heartbeat import compile_agent
+    return web.json_response(compile_agent(agent_id))
 
 def register_routes(app: web.Application):
     g = _guarded

@@ -79,6 +79,9 @@ class EngineRequest:
     max_seconds: Optional[float] = None
     env_extra: Dict[str, str] = field(default_factory=dict)
     add_dirs: List[Path] = field(default_factory=list)
+    # Autonomous runs (triggers): Claude --permission-mode <mode> --permission-prompts none
+    # instead of --dangerously-skip-permissions. None / "skip" / "bypassPermissions" = skip.
+    permission_mode: Optional[str] = None
     # Sinks (all optional). on_event gets every normalised event dict.
     on_event: Optional[Callable[[Dict[str, Any]], None]] = None
     on_progress: Optional[Callable[[float, str], None]] = None
