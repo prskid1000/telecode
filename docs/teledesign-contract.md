@@ -50,6 +50,13 @@ Need a change in someone else's file? Put it in your report as "request for <own
 | `design.agent_turn_timeout_sec` | `1800` | per-turn cap inside parallel runs |
 | `design.jury.critics_local` | `true` | critique turns on the local model |
 | `design.mcp_name` | `"telecode"` | server name used by MCP registration |
+| `design.brief_mode` | `"system"` | Claude Code: a new chat's brief in `--append-system-prompt-file` (`"message"`: first user message; other engines always message) |
+| `design.brief_select` | `true` | edit turns (comments, mentions, auto-fix, short change requests) get a lean brief |
+| `design.claude.strict_mcp` | `true` | `--strict-mcp-config` + only telecode's server (drops user MCP servers and claude.ai connectors) |
+| `design.claude.tools` | `"Read,Write,Edit,Glob,Grep,Bash"` | `--tools`; `"default"` = the CLI's set |
+| `design.claude.disallowed_tools` | telecode MCP tools design never uses | `--disallowedTools`; bare names are qualified `mcp__<mcp_name>__…` |
+| `design.claude.setting_sources` | `"user"` | `--setting-sources`; `"all"` = CLI default (loads the CLAUDE.md chain above the project) |
+| `design.claude.claude_md` / `.auto_memory` / `.skills` | `false` | load the user's CLAUDE.md / auto-memory / skills listing |
 
 ---
 
@@ -59,7 +66,7 @@ Already implemented by `store.py`: `<pid>.json`, `doc.fig`, `boards.json`, `impo
 New (W1 unless noted):
 
 ```
-chats/index.json          [{id, title, engine, is_local, effort, session_id, created_at, updated_at}]
+chats/index.json          [{id, title, engine, is_local, effort, model, permission_mode, session_id, created_at, updated_at}]
 chats/<chat_id>.jsonl     one JSON object per line: turn records (§4.3)
 chats/<chat_id>.md        transcript, handoff format (§4.6), rewritten after every turn
 assets.json               {"assets":[{id, name, group, path, board_id?, viewport:{width,height}?,
@@ -102,9 +109,9 @@ or `http://localhost:<proxy.port>`) — a preview page on `:1237` must never be 
 | `GET /design/app/{path}` | — | static from `proxy/static/design/app/` (W1 adds the route; W2 fills the dir) |
 | `GET …/chats` | — | `{"chats":[…]}` |
 | `POST …/chats` | `{title?, engine?, is_local?, effort?, from_chat_id?}` | `{"chat":{…}}` — `from_chat_id` seeds a "Continuing from X" summary |
-| `PATCH …/chats/{cid}` / `DELETE …/chats/{cid}` | `{title?, engine?, is_local?, effort?}` | `{"chat"}` / `{"ok"}` |
+| `PATCH …/chats/{cid}` / `DELETE …/chats/{cid}` | `{title?, engine?, is_local?, effort?, model?, permission_mode?}` — `permission_mode`: `auto`/`acceptEdits`/`dontAsk`/`plan`/`ask`/`skip`/null (null = `design.permission_mode`, default `acceptEdits`) | `{"chat"}` / `{"ok"}` |
 | `GET …/chats/{cid}/turns` | `?after=<turn_id>` | `{"turns":[…]}` |
-| `POST …/chats/{cid}/turns` | `{text, attachments?:[rel paths in uploads/], comment_ids?:[…], form_answers?:{…}, selection?:{…}, engine?, is_local?, effort?, kind_skill?}` | `{"turn":{…}}` (status `queued`/`running`) — 409 if a turn is running in this chat (client queues) |
+| `POST …/chats/{cid}/turns` | `{text, attachments?:[rel paths in uploads/], comment_ids?:[…], form_answers?:{…}, selection?:{…}, engine?, is_local?, effort?, permission_mode?, kind_skill?}` (body over chat over `design.permission_mode`) | `{"turn":{…}}` (status `queued`/`running`) — 409 if a turn is running in this chat (client queues) |
 | `POST …/chats/{cid}/stop` | — | `{"ok"}` — cancels the running turn (terminates the CLI) |
 | `GET …/events` | SSE, `?chat_id=` optional | §4.4 |
 | `GET …/files` | `?prefix=` | `{"files":[{path,size,mtime,kind}]}` (excludes `.versions`, `.td`, `chats`) |
@@ -168,7 +175,11 @@ Turn record (one line in `chats/<cid>.jsonl`):
 `show` `{path, target}` (agent asks the UI to open a file) · `agents` `{run_id, status}` (parallel runs, W7).
 W7 helper routes: `POST …/show`, `GET/PUT …/app-state` (W2 PUTs active file/board/selection on change),
 `GET /api/design/app-state`, `POST …/screenshot`, `POST …/eval`, `GET …/console`, `POST …/canvas/call`,
-`GET /api/design/canvas/tools`, `GET /api/design/skills[/{name}]`, `…/agents` (§11).
+`GET /api/design/canvas/tools`, `GET /api/design/skills[/{name}]`, `…/agents` (§11),
+`GET/POST …/console/live` (the UI relays `td:console` lines; `{file, entries:[{level,args,at}], reset?}`),
+`POST …/verify` `{files?, task?, screenshots?, layers?, model?, turn_id?, chat_id?}` (directed when `task`;
+`check` events carry `directed:true`), `POST …/file-ops` `{op:"copy"|"move", from, to, overwrite?}`,
+`POST /api/design/browser` `{url | project_id+file, width?, height?, full_page?, steps?, save_path?}`.
 Implementation: `events.py` in-process pub/sub keyed by pid; `generate.py` polls the task's
 `metadata["events"]` (appended by handlers via `append_event`) every 250 ms and republishes.
 
@@ -325,7 +336,7 @@ Specimen cards render through the preview origin: W5 adds nothing there; the fro
 ## 10. W6 canvas editor (open-pencil) — as built
 
 `python tools/build_open_pencil.py` (`--check` = patches still apply; `--tag` = try another release) →
-clones into `data/design/.open-pencil-src`, applies `patches/open-pencil/0001…0007`, bun install + build,
+clones into `data/design/.open-pencil-src`, applies `patches/open-pencil/0001…0012`, bun install + build,
 vendors `proxy/static/design/editor/` (+ `NOTICE`, `BUILD_INFO.json`) and dumps
 `services/design/editor_tools.json`. Never edit inside the source dir — every build hard-resets it.
 
@@ -344,6 +355,15 @@ vendors `proxy/static/design/editor/` (+ `NOTICE`, `BUILD_INFO.json`) and dumps
   canvas rect offset + iframe offset. **Host → editor:** `td-editor:open {pid}`, `td-editor:focus
   {node_id}`, `td-editor:insert-frame {name, width, height, x?, y?}` → `td-editor:frame-created {id,
   node_id}`, `td-editor:mark-board {node_id, src, width, height}`.
+- **Parity commands (0008–0011):** `telecode_import_html {src|snapshot|html,css, beside_id?, name?}` →
+  `{id, nodes}` · `telecode_export_html {id, path?}` → `{html, width, height}` · `telecode_variables_apply
+  {collections:[{name, modes, default_mode, variables:[{name, type, values:{mode: v}}]}]}` /
+  `telecode_variables_read` · `telecode_slides_list` / `telecode_slides_reorder {ids, arrange}` ·
+  `telecode_placeholder_set {node_id, label?}` / `_clear {node_id?}` / `_list`. REST (same origin +
+  JSON guard): `POST …/editor/convert`, `POST …/editor/layer-preview`, `GET …/editor/tokens`,
+  `POST …/editor/tokens/{push,pull}`, `GET …/editor/slides`, `POST …/editor/slides/{order,pdf}`.
+  Editor → host adds `td-editor:placeholders [{node_id, label, stale, x, y, width, height}]` and
+  `td-editor:present {node_id}` (Ctrl/Cmd+Enter inside the editor).
 - Settings: `design.editor.allow_eval` (default false — open-pencil's `eval` tool), `design.editor.disabled_tools` (list).
 - Prompts `canvas.md` + `layer_boards.md` describe the real tools via `design_canvas_call`.
 
@@ -393,3 +413,23 @@ kinds + job progress + download cards), Share dialog, Systems browser (list, spe
 table, components, fonts; create/extract/import/publish/default/remix/try), keyboard shortcut sheet (`?`),
 deep links (`?project=&board=&node=&file=&chat=`), light/dark theme toggle, toasts. Must degrade gracefully
 when an API route returns 404 (feature not built yet) — hide the control, never crash.
+
+---
+
+## 13. Additions after the parity pass (2026-09-25)
+
+Routes (all under `/api/design/projects/{pid}` unless absolute): `PATCH …/share/{token}` (role, expiry,
+update snapshot), `GET …/share/{token}/check` (missing files, changes since shared), `GET /api/design/s/{token}/download`
+(recipient ZIP; snapshots served on the preview origin at `/s/{token}/…`), `POST …/versions/undo` / `…/versions/redo`
+(`{file}` — each step writes a new version), `GET …/download?path=&kind=file|folder|project` (download cards),
+`GET /api/design/fs/dirs?path=` (folder picker for handoff; marks git repos), `POST …/handoff/session`
+(`{repo, engine, model?, is_local?}` → Task-mode session + starter prompt), `GET /api/design/gslides/status`,
+`POST …/send/google-slides`, `POST …/import/figma` (`{url}`), `POST /api/design/welcome` (seed the sample project),
+`POST …/verify` (directed check), `GET/POST …/console/live`, `POST …/file-ops` (copy/move), `POST /api/design/browser`.
+
+Settings: `design.welcome_project` (bool, seeded once), `design.figma.token`, `design.permission_mode`
+(default `acceptEdits`), `design.verifier.layer_boards`, `design.claude.{strict_mcp, tools, disallowed_tools,
+setting_sources, claude_md, auto_memory, skills}`, `design.brief_mode`, `design.brief_select`.
+
+Agent markers: `<download-card path="…" label="…" kind="file|folder|project"/>` in a reply renders a download
+card (documented in `prompts/charter.md` §2 Finish).

@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Prithwiraj Samanta <app@datainsights.ae>
+Date: Fri, 25 Sep 2026 18:37:03 +0530
+Subject: [PATCH] telecode: bound the wait for the original .fig archive so
+ autosave cannot stall
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Exporting a .fig that was opened from a file first asks the population
+worker for the original archive. The worker answers only on success: a
+request it fails, or one sent after it was disposed, is never settled.
+Autosave runs its saves one after another, so the first autosave of an
+opened document — which fires while the document is still settling, when
+exactly that can happen — hung forever and every later change queued
+behind it: nothing an agent (or the user) did after reopening a TeleDesign
+canvas was saved until an explicit Save.
+
+Wait at most five seconds for the archive, then mark it unavailable and
+let the exporter encode the graph, as it already does once the document
+has diverged from the file.
+---
+ .../core/src/kiwi/fig/population/client.ts    | 19 ++++++++++++++++++-
+ 1 file changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/packages/core/src/kiwi/fig/population/client.ts b/packages/core/src/kiwi/fig/population/client.ts
+index 72027e7f..d925be54 100644
+--- a/packages/core/src/kiwi/fig/population/client.ts
++++ b/packages/core/src/kiwi/fig/population/client.ts
+@@ -89,10 +89,27 @@ export function registerOriginalArchiveRequest(
+   originalArchiveRequests.set(graph, entry)
+ }
+ 
++// The population worker answers an archive request only on success: a request it
++// fails (no retained archive) or one sent after it was disposed is never settled.
++// Callers fall back to encoding the graph, so waiting is bounded rather than
++// letting one unanswered request stall every later save (autosave serialises
++// its saves, so one hung export used to disable autosave for the session).
++const ORIGINAL_ARCHIVE_TIMEOUT_MS = 5000
++
+ export async function requestOriginalArchive(graph: SceneGraph): Promise<Uint8Array | null> {
+   const entry = originalArchiveRequests.get(graph)
+   if (!entry?.valid) return null
+-  const archive = await entry.request()
++  let timer: ReturnType<typeof setTimeout> | undefined
++  const archive = await Promise.race([
++    entry.request(),
++    new Promise<null>((resolve) => {
++      timer = setTimeout(() => resolve(null), ORIGINAL_ARCHIVE_TIMEOUT_MS)
++    })
++  ]).finally(() => clearTimeout(timer))
++  if (!archive) {
++    entry.valid = false
++    return null
++  }
+   return originalArchiveRequests.get(graph)?.valid === true &&
+     originalArchiveRequests.get(graph) === entry
+     ? archive

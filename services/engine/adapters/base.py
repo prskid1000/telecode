@@ -81,6 +81,9 @@ class Adapter:
     resume_start_key = ""      # key of the resumed id in the start event
     persist_deltas = False     # agy streams text only as deltas
     stdin_close_wait = 30.0    # proc.wait timeout after stdout EOF
+    # The CLI's reported cost includes the conversation's earlier runs (Claude);
+    # the runner subtracts the last recorded total (services.engine.cost).
+    cumulative_cost = False
 
     def build(self, req: EngineRequest) -> Launch:  # pragma: no cover - abstract
         raise NotImplementedError
@@ -97,6 +100,11 @@ class Adapter:
     def finish(self, req: EngineRequest, st: ParseState, returncode: Optional[int],
                stderr: str, wall_ms: int) -> EngineResult:  # pragma: no cover
         raise NotImplementedError
+
+    def reported_total_cost(self, st: ParseState) -> Optional[float]:
+        """The CLI's own cost figure for the run (cumulative when
+        ``cumulative_cost``), or None when it reported none."""
+        return None
 
     def trailing_events(self, st: ParseState) -> List[Dict[str, Any]]:
         """Events emitted after the stream ends (before usage/done)."""

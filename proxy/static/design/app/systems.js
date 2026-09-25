@@ -304,11 +304,18 @@ function componentsView(body, sid, manifest) {
 function fontsView(body, manifest, tokens) {
   const fonts = manifest?.fonts || [];
   const fam = tokens?.typography?.fontFamily || {};
-  if (!fonts.length && !Object.keys(fam).length) { mount(body, emptyState("text", "No fonts listed", "")); return; }
+  const brand = Array.isArray(manifest?.brandFonts) ? manifest.brandFonts : [];
+  if (!fonts.length && !Object.keys(fam).length && !brand.length) { mount(body, emptyState("text", "No fonts listed", "")); return; }
   const list = fonts.length ? fonts : Object.entries(fam).map(([role, f]) => ({ family: f.family, roles: [role] }));
   list.forEach((f) => f.family && loadFont(f.family));
-  mount(body, list.map((f) => h("div", { class: "font-card" },
-    h("div", { class: "row" }, h("b", { class: "grow" }, f.family), (f.roles || []).map((r) => h("span", { class: "pill" }, r)), f.license ? h("span", { class: "faint", style: { fontSize: "11.5px" } }, f.license) : null),
+  // brandFonts: what happened to the brand's own typefaces (provided / substituted / missing).
+  const BF = { provided: ["Provided", "ok"], substituted: ["Substituted", "warn"], missing: ["Missing", "err"] };
+  const brandBox = brand.length ? h("div", { class: "font-card brand-fonts" }, h("div", { class: "row" }, h("b", { class: "grow" }, "Brand fonts"), h("span", { class: "faint", style: { fontSize: "11.5px" } }, "From the manifest's brandFonts")),
+    h("table", { class: "tok-table", style: { marginTop: "6px" } }, brand.map((b) => h("tr", null,
+      h("td", null, h("b", null, b.family || "—")), h("td", null, h("span", { class: "pill " + (BF[b.status]?.[1] || "") }, BF[b.status]?.[0] || b.status || "")),
+      h("td", { class: "muted" }, b.substitute ? "→ " + b.substitute : ""), h("td", { class: "mono faint" }, (b.tokens || []).join(" ")), h("td", { class: "faint" }, b.note || ""))))) : null;
+  mount(body, brandBox, list.map((f) => h("div", { class: "font-card" },
+    h("div", { class: "row" }, h("b", { class: "grow" }, f.family), (f.roles || []).map((r) => h("span", { class: "pill" }, r)), f.style && f.style !== "normal" ? h("span", { class: "pill" }, f.style) : null, f.license ? h("span", { class: "faint", style: { fontSize: "11.5px" } }, f.license) : null),
     h("div", { class: "sample", style: { fontFamily: `'${f.family}', system-ui` } }, "Sphinx of black quartz, judge my vow"),
     h("div", { class: "row wrap", style: { gap: "14px", fontFamily: `'${f.family}', system-ui`, color: "var(--muted)" } }, (f.weights || [400, 600]).map((w) => h("span", { style: { fontWeight: w } }, `${w} — Aa Bb Cc 0123`))),
     h("div", { class: "faint", style: { fontSize: "11.5px", marginTop: "8px" } }, f.source || "", f.specimen && /^https:\/\//.test(f.specimen) ? h("a", { href: f.specimen, target: "_blank", rel: "noopener noreferrer", style: { marginLeft: "8px" } }, "Specimen") : null))));

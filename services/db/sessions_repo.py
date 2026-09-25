@@ -118,3 +118,27 @@ def list_sessions(workspace_id: Optional[str] = None, namespace: Optional[str] =
     sql += " ORDER BY updated_at DESC LIMIT ?"
     args.append(int(limit))
     return [_row(r) for r in connect().execute(sql, args)]
+
+
+# ── Per-run cost base ───────────────────────────────────────────────────────
+# Claude Code's ``total_cost_usd`` on a resumed conversation includes every
+# earlier invocation of it (verified on 2.1.282). The runner keeps the last
+# figure a CLI reported per conversation here and subtracts it from the next
+# run's (services.engine.cost), so every consumer records per-run cost.
+
+def cost_total(engine: str, engine_session_id: Optional[str]) -> Optional[float]:
+    """The last cumulative total the CLI reported for this conversation, or None."""
+    if not engine_session_id:
+        return None
+    r = connect().execute("SELECT total_cost_usd FROM engine_cost_totals WHERE engine=? AND engine_session_id=?",
+                          (engine, engine_session_id)).fetchone()
+    return float(r[0]) if r and r[0] is not None else None
+
+
+def set_cost_total(engine: str, engine_session_id: Optional[str], total: Optional[float]) -> None:
+    if not engine_session_id or not isinstance(total, (int, float)):
+        return
+    connect().execute(
+        "INSERT INTO engine_cost_totals (engine, engine_session_id, total_cost_usd, updated_at) VALUES (?,?,?,?) "
+        "ON CONFLICT(engine, engine_session_id) DO UPDATE SET total_cost_usd=excluded.total_cost_usd, "
+        "updated_at=excluded.updated_at", (engine, engine_session_id, float(total), now_iso()))

@@ -281,6 +281,17 @@ MIGRATIONS = [
 
     ALTER TABLE sessions_index ADD COLUMN switched_from TEXT;
     """,
+    # 5 — per-run cost: the last cumulative total_cost_usd a CLI reported for a
+    #     conversation (Claude sums a resumed session's cost across invocations)
+    """
+    CREATE TABLE engine_cost_totals (
+        engine            TEXT NOT NULL,
+        engine_session_id TEXT NOT NULL,
+        total_cost_usd    REAL NOT NULL,
+        updated_at        TEXT,
+        PRIMARY KEY (engine, engine_session_id)
+    );
+    """,
 ]
 
 

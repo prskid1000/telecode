@@ -1,0 +1,351 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Prithwiraj Samanta <app@datainsights.ae>
+Date: Fri, 25 Sep 2026 17:27:36 +0530
+Subject: [PATCH] =?UTF-8?q?telecode:=20"working=E2=80=A6"=20placeholders?=
+ =?UTF-8?q?=20and=20a=20present=20shortcut=20for=20the=20host?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+An agent marks a frame it is still building (telecode_placeholder_set):
+the mark is shared plugin data telecode/placeholder = {label, at}, so it
+survives a reload, and the host is told about marked frames on the current
+page (td-editor:placeholders) to draw a hatched "working…" badge over them.
+telecode_placeholder_clear removes one mark or all of them (TeleDesign
+clears every mark when the agent's turn ends); marks older than two hours
+are reported stale.
+
+Ctrl/Cmd+Enter inside the editor posts td-editor:present so the shell can
+present the page's frame slides.
+---
+ scripts/telecode-dump-tools.ts                |  38 ++++++
+ src/app/integrations/telecode/commands.ts     |  22 ++++
+ src/app/integrations/telecode/host.ts         |  47 ++++++-
+ src/app/integrations/telecode/placeholders.ts | 115 ++++++++++++++++++
+ 4 files changed, 220 insertions(+), 2 deletions(-)
+ create mode 100644 src/app/integrations/telecode/placeholders.ts
+
+diff --git a/scripts/telecode-dump-tools.ts b/scripts/telecode-dump-tools.ts
+index 149e048e..4d89620e 100644
+--- a/scripts/telecode-dump-tools.ts
++++ b/scripts/telecode-dump-tools.ts
+@@ -208,6 +208,44 @@ const extra = [
+       })
+     )
+   },
++  {
++    name: 'telecode_placeholder_set',
++    description:
++      'Mark a frame as work in progress: TeleDesign shows it hatched with a "working…" badge (label customisable) until your turn ends, when every mark is cleared. Mark a frame before a long build step on it; clear it yourself when done.',
++    command: 'telecode_placeholder_set',
++    effect: 'write',
++    availability: 'default',
++    capabilities: ['document:write'],
++    enabled: true,
++    input_schema: schemaOf(
++      v.object({
++        node_id: v.pipe(v.string(), v.description('Frame to mark')),
++        label: v.optional(v.pipe(v.string(), v.description('Badge text (default "Working…")')))
++      })
++    )
++  },
++  {
++    name: 'telecode_placeholder_clear',
++    description: 'Remove the "working…" mark from one frame (node_id), or from every frame when node_id is omitted.',
++    command: 'telecode_placeholder_clear',
++    effect: 'write',
++    availability: 'default',
++    capabilities: ['document:write'],
++    enabled: true,
++    input_schema: schemaOf(
++      v.object({ node_id: v.optional(v.pipe(v.string(), v.description('Frame to unmark'))) })
++    )
++  },
++  {
++    name: 'telecode_placeholder_list',
++    description: 'Frames currently marked "working…": [{node_id, name, label, at, stale, page_id, x, y, width, height}].',
++    command: 'telecode_placeholder_list',
++    effect: 'read',
++    availability: 'default',
++    capabilities: ['document:read'],
++    enabled: true,
++    input_schema: schemaOf(v.object({}))
++  },
+   {
+     name: 'get_codegen_prompt',
+     description:
+diff --git a/src/app/integrations/telecode/commands.ts b/src/app/integrations/telecode/commands.ts
+index b2b754c3..e4841728 100644
+--- a/src/app/integrations/telecode/commands.ts
++++ b/src/app/integrations/telecode/commands.ts
+@@ -11,6 +11,9 @@
+  *   telecode_variables_read  {}            every collection, mode and value
+  *   telecode_slides_list     {}            top-level frames of the page, in order
+  *   telecode_slides_reorder  {ids, arrange?}
++ *   telecode_placeholder_set   {node_id, label?}  mark a frame "working…"
++ *   telecode_placeholder_clear {node_id?}         unmark one frame, or all
++ *   telecode_placeholder_list  {}
+  *
+  * They ride the same request/response protocol as the upstream commands; the
+  * proxy uses them to keep boards.json keyed by something that survives reloads.
+@@ -19,6 +22,7 @@ import type { AutomationTarget } from '@/app/automation/bridge/target'
+ 
+ import { isBoardKey, listBoards, markBoard, unmarkBoard } from './boards'
+ import { exportHTML, importHTML, importLayout, type LayoutSnapshot } from './html-layers'
++import { clearPlaceholders, listPlaceholders, setPlaceholder } from './placeholders'
+ import { listSlides, reorderSlides } from './slides'
+ import { applyVariables, readVariables } from './variables'
+ 
+@@ -89,5 +93,23 @@ export const telecodeAutomationCommands: Partial<Record<string, Handler>> = {
+   async telecode_slides_reorder(target, args) {
+     const { ids, arrange } = record(args)
+     return { ok: true, result: await reorderSlides(target.store, target.pageId, ids, arrange === true) }
++  },
++  async telecode_placeholder_set(target, args) {
++    const { node_id: nodeId, label } = record(args)
++    if (typeof nodeId !== 'string' || !nodeId) throw new Error('Missing "node_id"')
++    return {
++      ok: true,
++      result: await setPlaceholder(target.store, nodeId, typeof label === 'string' ? label : undefined)
++    }
++  },
++  async telecode_placeholder_clear(target, args) {
++    const { node_id: nodeId } = record(args)
++    return {
++      ok: true,
++      result: await clearPlaceholders(target.store, typeof nodeId === 'string' ? nodeId : undefined)
++    }
++  },
++  async telecode_placeholder_list(target) {
++    return { ok: true, result: { placeholders: listPlaceholders(target.store) } }
+   }
+ }
+diff --git a/src/app/integrations/telecode/host.ts b/src/app/integrations/telecode/host.ts
+index 7c242b00..ec1512d2 100644
+--- a/src/app/integrations/telecode/host.ts
++++ b/src/app/integrations/telecode/host.ts
+@@ -14,6 +14,8 @@
+  *                   td-editor:frame-created {id, node_id, request_id?}
+  *                   td-editor:board-marked  {id, node_id, request_id?}
+  *                   td-editor:error       {message, request_id?}
++ *                   td-editor:placeholders [{node_id, name, label, stale, x, y, width, height}]
++ *                   td-editor:present     {node_id?}   (Ctrl/Cmd+Enter in the editor)
+  *   host → editor   td-editor:open        {pid}
+  *                   td-editor:focus       {node_id}            (a node id or a board key)
+  *                   td-editor:insert-frame {name, width, height, x?, y?, key?, request_id?}
+@@ -45,6 +47,7 @@ import {
+   onBoardsChanged
+ } from './boards'
+ import type { TelecodeConfig } from './config'
++import { listPlaceholders, onPlaceholdersChanged } from './placeholders'
+ import { onTelecodeCanvasSaved } from './storage'
+ 
+ type Boards = Record<string, { src?: string; width?: number; height?: number }>
+@@ -115,6 +118,8 @@ export async function startTelecodeHost(config: TelecodeConfig): Promise<() => v
+   // Node ids of the frames last reported, so node events can be filtered cheaply.
+   let boardNodeIds = new Set<string>()
+   let framesQueued = false
++  let placeholderIds = new Set<string>()
++  let placeholdersQueued = false
+   let viewportQueued = false
+ 
+   const handlers = createAutomationCommandHandlers(makeFigmaFromStore)
+@@ -169,6 +174,22 @@ export async function startTelecodeHost(config: TelecodeConfig): Promise<() => v
+     post('selection', { ids, nodes })
+   }
+ 
++  function postPlaceholders(): void {
++    if (!store) return
++    const items = listPlaceholders(store, store.state.currentPageId)
++    placeholderIds = new Set(items.map((item) => item.node_id))
++    post('placeholders', items)
++  }
++
++  function queuePlaceholders(): void {
++    if (placeholdersQueued) return
++    placeholdersQueued = true
++    requestAnimationFrame(() => {
++      placeholdersQueued = false
++      postPlaceholders()
++    })
++  }
++
+   function queueFrames(): void {
+     if (framesQueued) return
+     framesQueued = true
+@@ -195,16 +216,25 @@ export async function startTelecodeHost(config: TelecodeConfig): Promise<() => v
+     const offs = [
+       next.onEditorEvent('viewport:changed', queueViewport),
+       next.onEditorEvent('selection:changed', postSelection),
+-      next.onEditorEvent('page:changed', queueFrames),
+-      next.onEditorEvent('graph:replaced', queueFrames),
++      next.onEditorEvent('page:changed', () => {
++        queueFrames()
++        queuePlaceholders()
++      }),
++      next.onEditorEvent('graph:replaced', () => {
++        queueFrames()
++        queuePlaceholders()
++      }),
+       next.onEditorEvent('node:updated', (id) => {
+         if (boardNodeIds.has(id)) queueFrames()
++        if (placeholderIds.has(id)) queuePlaceholders()
+       }),
+       next.onEditorEvent('node:deleted', (id) => {
+         if (boardNodeIds.has(id)) queueFrames()
++        if (placeholderIds.has(id)) queuePlaceholders()
+       }),
+       next.onEditorEvent('node:reparented', (id) => {
+         if (boardNodeIds.has(id)) queueFrames()
++        if (placeholderIds.has(id)) queuePlaceholders()
+       })
+     ]
+     unbindStore = () => {
+@@ -224,6 +254,7 @@ export async function startTelecodeHost(config: TelecodeConfig): Promise<() => v
+     postViewport()
+     postFrames()
+     postSelection()
++    postPlaceholders()
+   }
+ 
+   function focusNode(keyOrId: string): boolean {
+@@ -364,6 +395,18 @@ export async function startTelecodeHost(config: TelecodeConfig): Promise<() => v
+       void loadBoards().then(queueFrames)
+     })
+   )
++  cleanups.push(onPlaceholdersChanged(queuePlaceholders))
++  // Ctrl/Cmd+Enter presents the frame slides, as in the TeleDesign shell.
++  const onKey = (event: KeyboardEvent) => {
++    if (event.key !== 'Enter' || !(event.ctrlKey || event.metaKey) || event.shiftKey) return
++    const t = event.target as HTMLElement | null
++    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return
++    event.preventDefault()
++    event.stopPropagation()
++    post('present', { node_id: store ? ([...store.state.selectedIds][0] ?? null) : null })
++  }
++  window.addEventListener('keydown', onKey, true)
++  cleanups.push(() => window.removeEventListener('keydown', onKey, true))
+   const onResize = () => queueViewport()
+   window.addEventListener('resize', onResize)
+   cleanups.push(() => window.removeEventListener('resize', onResize))
+diff --git a/src/app/integrations/telecode/placeholders.ts b/src/app/integrations/telecode/placeholders.ts
+new file mode 100644
+index 00000000..157e1f1f
+--- /dev/null
++++ b/src/app/integrations/telecode/placeholders.ts
+@@ -0,0 +1,115 @@
++/**
++ * "Working…" placeholders (telecode / TeleDesign).
++ *
++ * An agent marks a frame it is still building, the way pen.dev's `placeholder: true`
++ * does: the mark is shared plugin data (`telecode` / `placeholder` = JSON
++ * {label, at}) on the node, so it survives a reload, and the TeleDesign shell draws
++ * a hatched "working…" badge over the frame (td-editor:placeholders). The shell
++ * clears every mark when the agent's turn ends; a mark older than STALE_MS is
++ * treated as abandoned (a turn that crashed) and ignored.
++ */
++import type { SceneNode } from '@open-pencil/scene-graph'
++
++import { makeFigmaFromStore } from '@/app/automation/bridge/figma-factory'
++import type { EditorStore } from '@/app/editor/session'
++
++export const PLACEHOLDER_NAMESPACE = 'telecode'
++export const PLACEHOLDER_FIELD = 'placeholder'
++const ENCODED = `${PLACEHOLDER_NAMESPACE}/${PLACEHOLDER_FIELD}`
++export const STALE_MS = 2 * 60 * 60 * 1000
++
++const listeners = new Set<() => void>()
++
++export function onPlaceholdersChanged(listener: () => void): () => void {
++  listeners.add(listener)
++  return () => listeners.delete(listener)
++}
++
++function emit(): void {
++  for (const listener of listeners) listener()
++}
++
++export function placeholderOf(node: SceneNode): { label: string; at: number } | null {
++  const entry = node.pluginData.find(
++    (e) =>
++      e.pluginId === PLACEHOLDER_NAMESPACE && (e.key === ENCODED || e.key === PLACEHOLDER_FIELD)
++  )
++  if (!entry?.value) return null
++  try {
++    const parsed = JSON.parse(entry.value) as { label?: unknown; at?: unknown }
++    const at = typeof parsed.at === 'number' ? parsed.at : 0
++    return { label: typeof parsed.label === 'string' ? parsed.label : 'Working…', at }
++  } catch {
++    return { label: 'Working…', at: 0 }
++  }
++}
++
++function pageOf(store: EditorStore, node: SceneNode | undefined): string | null {
++  let current = node
++  while (current) {
++    if (current.type === 'CANVAS') return current.id
++    current = current.parentId ? store.graph.getNode(current.parentId) : undefined
++  }
++  return null
++}
++
++async function write(store: EditorStore, nodeId: string, value: string): Promise<void> {
++  const pageId = store.state.currentPageId
++  await store.runMutationWithLayout(() => {
++    makeFigmaFromStore(store, pageId)
++      .getNodeById(nodeId)
++      ?.setSharedPluginData(PLACEHOLDER_NAMESPACE, PLACEHOLDER_FIELD, value)
++  }, pageId)
++}
++
++export async function setPlaceholder(store: EditorStore, nodeId: string, label?: string) {
++  const node = store.graph.getNode(nodeId)
++  if (!node) throw new Error(`Node not found: ${nodeId}`)
++  if (node.type === 'CANVAS') throw new Error('Mark a frame, not a page')
++  const text = (typeof label === 'string' && label.trim() ? label.trim() : 'Working…').slice(0, 80)
++  await write(store, nodeId, JSON.stringify({ label: text, at: Date.now() }))
++  store.requestRender()
++  emit()
++  return { node_id: nodeId, label: text }
++}
++
++export async function clearPlaceholders(store: EditorStore, nodeId?: string) {
++  const ids: string[] = []
++  if (nodeId) {
++    const node = store.graph.getNode(nodeId)
++    if (node && placeholderOf(node)) ids.push(node.id)
++  } else {
++    for (const node of store.graph.getAllNodes()) if (placeholderOf(node)) ids.push(node.id)
++  }
++  for (const id of ids) await write(store, id, '')
++  if (ids.length) {
++    store.requestRender()
++    emit()
++  }
++  return { cleared: ids.length, ids }
++}
++
++export function listPlaceholders(store: EditorStore, pageId?: string) {
++  const now = Date.now()
++  const out = []
++  for (const node of store.graph.getAllNodes()) {
++    const mark = placeholderOf(node)
++    if (!mark) continue
++    const page = pageOf(store, node)
++    if (pageId && page !== pageId) continue
++    const abs = store.graph.getAbsolutePosition(node.id)
++    out.push({
++      node_id: node.id,
++      name: node.name,
++      label: mark.label,
++      at: mark.at,
++      stale: !mark.at || now - mark.at > STALE_MS,
++      page_id: page,
++      x: abs.x,
++      y: abs.y,
++      width: node.width,
++      height: node.height
++    })
++  }
++  return out
++}

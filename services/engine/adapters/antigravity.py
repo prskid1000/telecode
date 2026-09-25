@@ -114,8 +114,18 @@ def permission_args(permission_mode: Optional[str]) -> Tuple[List[str], Optional
         f"permission mode '{m}' has no agy mapping — running with --mode accept-edits")
 
 
+# agy 1.2.11: --effort low|medium|high|max — no xhigh, which maps down to high.
+_EFFORT_MAP = {"low": "low", "medium": "medium", "high": "high", "xhigh": "high", "max": "max"}
+
+
+def effort_args(effort: Optional[str]) -> List[str]:
+    e = _EFFORT_MAP.get(effort or "")
+    return ["--effort", e] if e else []
+
+
 def build_argv(*, work_dir: Path, resume_id: Optional[str], model: Optional[str] = None,
-               add_dirs=(), permission_mode: Optional[str] = None) -> List[str]:
+               add_dirs=(), permission_mode: Optional[str] = None,
+               effort: Optional[str] = None) -> List[str]:
     cmd: List[str] = [
         "agy",
         "--input-format", "stream-json",
@@ -127,6 +137,7 @@ def build_argv(*, work_dir: Path, resume_id: Optional[str], model: Optional[str]
         cmd += ["--add-dir", str(d)]
     if model:
         cmd += ["--model", model]
+    cmd += effort_args(effort)
     if resume_id:
         cmd += ["--conversation", resume_id]
     cmd.append("-p=")
@@ -168,7 +179,7 @@ class AntigravityAdapter(Adapter):
         if warning:
             logger.warning(warning)
         argv = build_argv(work_dir=req.cwd, resume_id=resume_id, model=model_arg, add_dirs=req.add_dirs,
-                          permission_mode=req.permission_mode)
+                          permission_mode=req.permission_mode, effort=req.effort)
         # agy has no OTel export: own spans only. engine_extras args go before the trailing -p=.
         return Launch(argv=argv, stdin=stdin_message(req.prompt), env=env,
                       warnings=[warning] if warning else [], extras_at=len(argv) - 1)

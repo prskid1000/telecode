@@ -73,7 +73,8 @@ APP_NOT_CONNECTED = (
 RAW_COMMANDS = ("list_documents", "save_file", "eval", "export", "export_jsx", "selection")
 
 # Tool results that `path` writes to a file instead of returning (mcp/tool/output.ts).
-_PATH_OUTPUTS = {"export_svg": "svg", "export_image": "base64", "get_jsx": "jsx"}
+_PATH_OUTPUTS = {"export_svg": "svg", "export_image": "base64", "get_jsx": "jsx",
+                 "telecode_export_html": "html"}
 
 _TOKEN = secrets.token_hex(32)
 
@@ -317,7 +318,7 @@ async def request(pid: str, command: str, args: Dict[str, Any], *,
 
 
 def _write_output(pid: str, tool: str, rel: str, result: Any) -> Optional[Dict[str, Any]]:
-    """`path` on export_svg / export_image / get_jsx writes into the project folder."""
+    """`path` on export_svg / export_image / get_jsx / telecode_export_html writes into the project folder."""
     field = _PATH_OUTPUTS.get(tool)
     if not field or not isinstance(result, dict) or not isinstance(result.get(field), str):
         return None
@@ -415,6 +416,18 @@ async def call(pid: str, tool: str, args: Optional[Dict[str, Any]] = None,
         return {"ok": True, "result": board}
     if tool == "telecode_board_unmark":
         return {"ok": True, "result": await unregister_board(pid, args.get("key"), timeout)}
+    # HTML → layers from a project page: the proxy renders it and sends the layout
+    # snapshot (services/design/canvas_convert.py), so an agent gets the same
+    # conversion as the canvas's "To layers" button.
+    if tool == "telecode_import_html" and isinstance(args.get("src"), str) and "snapshot" not in args \
+            and "html" not in args:
+        from services.design import canvas_convert   # imports this module
+        try:
+            args["snapshot"] = await canvas_convert.layout_snapshot(
+                pid, args.pop("src"), args.pop("width", None) or 1440, args.pop("height", None) or 900)
+        except canvas_convert.ConvertError as exc:
+            raise EditorBridgeError(str(exc)) from None
+        timeout = max(timeout, 60.0)
     if command == "local":
         if tool == "get_codegen_prompt":
             return {"ok": True, "result": {"prompt": _tools_data().get("codegen_prompt", "")}}
@@ -464,6 +477,162 @@ def call_threadsafe(pid: str, tool: str, args: Optional[Dict[str, Any]] = None,
         raise EditorBridgeError(APP_NOT_CONNECTED)
     fut = asyncio.run_coroutine_threadsafe(call(pid, tool, args, timeout), loop)
     return fut.result(timeout + APP_WAIT_TIMEOUT + 5)
+
+
+# ── Layer-board inspection (the verifier's `pen_problems`) ────────────
+
+# open-pencil severity → verifier severity. Deliberately conservative: a hand-built
+# layer board stacks siblings all the time (a label on a rectangle is a "sibling
+# overlap"), so only a node mostly outside its parent — clipped text, a card
+# hanging off its frame — is `major` and can wake the designer for a fix turn.
+_OVERFLOW_SEVERITY = {"critical": "major", "major": "minor"}
+_OVERLAP_SEVERITY = {"critical": "major", "major": "minor"}
+LAYER_CHECK_TIMEOUT = 20.0
+
+
+def _fmt_bounds(b: Any) -> str:
+    if not isinstance(b, dict):
+        return ""
+    try:
+        return f"{round(b.get('x', 0))},{round(b.get('y', 0))} {round(b.get('width', 0))}×{round(b.get('height', 0))}"
+    except (TypeError, ValueError):
+        return ""
+
+
+def _node_label(n: Any) -> str:
+    if not isinstance(n, dict):
+        return "?"
+    return f"{n.get('type', 'NODE')} \"{n.get('name') or ''}\" ({n.get('id')})"
+
+
+def layer_issue(page: Dict[str, Any], f: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """One analyze_overlaps finding → a verifier issue, or None when it is below the bar."""
+    cat = f.get("category")
+    table = _OVERFLOW_SEVERITY if cat == "parent-overflow" else _OVERLAP_SEVERITY if cat == "sibling-overlap" else {}
+    sev = table.get(str(f.get("severity")))
+    if not sev:
+        return None
+    a, b = f.get("nodeA") or {}, f.get("nodeB") or {}
+    what = str(f.get("message") or cat)
+    where = f"page \"{page.get('name', '')}\" › {_node_label(a)}"
+    evidence = (f"{cat} {f.get('severity')}: {_node_label(a)} at {_fmt_bounds(a)} vs {_node_label(b)} at "
+                f"{_fmt_bounds(b)}; area {f.get('area')}px², ratio {f.get('ratio')}")
+    return {"severity": sev, "file": "doc.fig", "board": str(a.get("id") or ""), "where": where,
+            "what": what[:300], "evidence": evidence[:500], "fix": str(f.get("suggestion") or "")[:300],
+            "check": "layer_" + str(cat).replace("-", "_")}
+
+
+async def inspect_layers(pid: str, shots_dir: Optional[Path] = None, max_pages: int = 8,
+                         max_frames: int = 6, timeout: float = LAYER_CHECK_TIMEOUT) -> Dict[str, Any]:
+    """Run open-pencil's own analysis over every page of the project's live editor.
+
+    Returns {"ran": bool, "skipped": reason|None, "issues": [verifier issues],
+             "problems": [raw findings, compacted], "text": pen_problems text,
+             "typography": {page: small-size counts}, "screenshots": [paths]}.
+
+    Needs the editor page (the canvas is only parsed in the browser — there is no
+    Node at runtime to open doc.fig headless), so with no page attached it returns
+    `ran: False` with the reason instead of guessing; the caller logs it.
+    """
+    out: Dict[str, Any] = {"ran": False, "skipped": None, "issues": [], "problems": [], "text": "",
+                           "typography": {}, "screenshots": []}
+    pdir = store.project_dir(pid)
+    if not pdir:
+        out["skipped"] = "project not found"
+        return out
+    if not status(pid)["connected"]:
+        out["skipped"] = ("no canvas editor page is attached for this project — layer boards are only "
+                          "inspected while TeleDesign's canvas is open")
+        return out
+    tools_enabled = set(tool_names())
+    if "analyze_overlaps" not in tools_enabled:
+        out["skipped"] = "analyze_overlaps is disabled (design.editor.disabled_tools)"
+        return out
+    try:
+        pages_body = await call(pid, "list_pages", {}, timeout)
+        pages = [p for p in ((pages_body.get("result") or {}).get("pages") or []) if isinstance(p, dict)]
+    except EditorBridgeError as exc:
+        out["skipped"] = f"list_pages failed: {exc}"
+        return out
+    lines: List[str] = []
+    shot_n = 0
+    for page in pages[:max_pages]:
+        pg = str(page.get("id") or "")
+        try:
+            body = await call(pid, "analyze_overlaps", {
+                "page_id": pg, "category": "parent-overflow,sibling-overlap", "severity": "major",
+                "limit": 60}, timeout)
+        except EditorBridgeError as exc:
+            lines.append(f"- page \"{page.get('name')}\": analyze_overlaps failed ({exc})")
+            continue
+        res = body.get("result") or {}
+        for f in res.get("overlaps") or []:
+            if not isinstance(f, dict):
+                continue
+            a, b = f.get("nodeA") or {}, f.get("nodeB") or {}
+            out["problems"].append({"page": page.get("name"), "category": f.get("category"),
+                                    "severity": f.get("severity"), "message": f.get("message"),
+                                    "a": {k: a.get(k) for k in ("id", "name", "type", "x", "y", "width", "height")},
+                                    "b": {k: b.get(k) for k in ("id", "name", "type", "x", "y", "width", "height")},
+                                    "intersection": f.get("intersection")})
+            lines.append(f"- [{f.get('severity')}] page \"{page.get('name')}\": {f.get('message')} — "
+                         f"{_node_label(a)} {_fmt_bounds(a)}")
+            issue = layer_issue(page, f)
+            if issue:
+                out["issues"].append(issue)
+        if "analyze_typography" in tools_enabled:
+            try:
+                typo = await call(pid, "analyze_typography", {"page_id": pg, "group_by": "size"}, timeout)
+                groups = (typo.get("result") or {}).get("groups") or []
+                tiny = sum(int(g.get("count") or 0) for g in groups
+                           if isinstance(g, dict) and isinstance(g.get("size"), (int, float)) and g["size"] < 12)
+                if tiny:
+                    out["typography"][page.get("name") or pg] = tiny
+                    lines.append(f"- [minor] page \"{page.get('name')}\": {tiny} text node(s) under 12px")
+                    out["issues"].append({
+                        "severity": "minor", "file": "doc.fig", "board": "", "where": f"page \"{page.get('name')}\"",
+                        "what": f"{tiny} text node(s) under 12px", "evidence": "analyze_typography group_by=size",
+                        "fix": "Raise body and caption text to at least 12px.", "check": "layer_small_text"})
+            except EditorBridgeError:
+                pass
+        if shots_dir is not None and shot_n < max_frames and "export_image" in tools_enabled:
+            try:
+                tree = await call(pid, "get_page_tree", {"page_id": pg, "depth": 1}, timeout)
+                tops = [n for n in _tree_children(tree.get("result")) if n.get("type") in ("FRAME", "SECTION", "COMPONENT")]
+            except EditorBridgeError:
+                tops = []
+            for n in tops[:max(0, max_frames - shot_n)]:
+                try:
+                    img = await call(pid, "export_image", {"page_id": pg, "ids": [n["id"]], "format": "PNG",
+                                                           "maxEdge": 1280}, timeout)
+                    data = (img.get("result") or {}).get("base64")
+                    if not isinstance(data, str):
+                        continue
+                    shots_dir.mkdir(parents=True, exist_ok=True)
+                    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{page.get('name', 'page')}-{n.get('name', n['id'])}")[:80]
+                    p = shots_dir / f"layers-{shot_n + 1:02d}-{safe}.png"
+                    p.write_bytes(base64.b64decode(data))
+                    out["screenshots"].append(str(p))
+                    shot_n += 1
+                except (EditorBridgeError, ValueError, KeyError):
+                    continue
+    out["ran"] = True
+    out["text"] = "\n".join(lines) if lines else "none found (analyze_overlaps + analyze_typography on every page)"
+    return out
+
+
+def _tree_children(result: Any) -> List[Dict[str, Any]]:
+    """Top-level nodes from a get_page_tree result, whatever its exact nesting."""
+    if isinstance(result, list):
+        return [n for n in result if isinstance(n, dict) and n.get("id")]
+    if isinstance(result, dict):
+        for key in ("children", "nodes", "tree"):
+            if isinstance(result.get(key), list):
+                return [n for n in result[key] if isinstance(n, dict) and n.get("id")]
+        page = result.get("page")
+        if isinstance(page, dict) and isinstance(page.get("children"), list):
+            return [n for n in page["children"] if isinstance(n, dict) and n.get("id")]
+    return []
 
 
 def status(pid: str) -> Dict[str, Any]:

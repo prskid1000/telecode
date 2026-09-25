@@ -16,7 +16,7 @@ One record type for everything that starts work on its own::
      ok_suppression, ok_tokens[], notify, model_override,
      goal: {check_command, features_file, max_fires, max_cost_usd} | null,
      auto_pause_after_failures, catch_up: skip|once, pinned,
-     permission_mode, task_timeout_seconds, preface, outputs_only,
+     permission_mode, effort, task_timeout_seconds, preface, outputs_only,
      state: {...counters and scheduling state, owned by the scheduler...},
      created_at, updated_at}
 """
@@ -44,7 +44,7 @@ PROMPT_MAX = 256 * 1024
 EDITABLE = {"name", "description", "status", "target", "schedule", "events", "session", "active_hours",
             "skip_if_empty", "ok_suppression", "ok_tokens", "notify", "model_override", "goal",
             "auto_pause_after_failures", "catch_up", "pinned", "permission_mode", "task_timeout_seconds",
-            "preface", "outputs_only"}
+            "preface", "outputs_only", "effort"}
 
 
 def new_token() -> str:
@@ -246,6 +246,8 @@ def normalize(body: Dict[str, Any], existing: Optional[Dict[str, Any]] = None) -
     if pm not in PERMISSION_MODES:
         raise ValueError(f"permission_mode must be one of {PERMISSION_MODES}")
     rec["permission_mode"] = pm
+    from services.engine.types import normalize_effort
+    rec["effort"] = normalize_effort(get("effort")) or None
     rec["task_timeout_seconds"] = _int(get("task_timeout_seconds"), 1800, 30, 7 * 86400, "task_timeout_seconds")
     rec["preface"] = bool(get("preface", True))
     rec["outputs_only"] = bool(get("outputs_only", False))

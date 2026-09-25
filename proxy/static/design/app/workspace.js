@@ -120,6 +120,8 @@ export function setPanel(p) {
 }
 export function openFile(path, { view, background = false, agent = false } = {}) {
   if (!path) return;
+  // A saved sketch opens in the sketch editor (draw on, save, send to chat).
+  if (/\.napkin$/i.test(path) && view !== "code" && !background) { import("./napkin.js").then((m) => m.openNapkin(path)); return; }
   if (!S.tabs.includes(path)) S.tabs.push(path);
   if (!background) {
     S.activeFile = path;
@@ -272,6 +274,7 @@ function projectMore(anchor) {
     { label: "Design system", icon: "palette", hint: S.systems.find((s) => s.id === p.design_system_id)?.name || "None", onClick: () => pickSystem() },
     { label: "Check design-system adherence", icon: "checkCircle", hint: "Hard-coded colours, fonts, off-system components", onClick: () => lintDialog() },
     { label: "Import a .pen file", icon: "upload", hint: "Lossy: no gradients, image fills or prompt nodes", onClick: () => importPen() },
+    features.figma === false ? null : { label: "Import from a Figma link", icon: "figma", hint: "Frames come in as pictures on boards", onClick: () => import("./exporter.js").then((m) => m.figmaDialog()) },
     { label: "Save as template", icon: "template", onClick: () => import("./gallery.js").then((m) => m.saveAsTemplate(p)) },
     { label: "Preferences", icon: "settings", onClick: () => import("./exporter.js").then((m) => m.settingsDialog()) },
     { label: "Copy link to this view", icon: "link", onClick: () => navigator.clipboard?.writeText(location.href).then(() => toast("Link copied", { kind: "success" })) },
@@ -370,7 +373,10 @@ export function drawRail() {
   up.addEventListener("change", () => { uploadFiles([...up.files]); up.value = ""; });
   const head = h("div", { class: "rail-head" }, h("span", { class: "t" }, "Files"),
     btn("", { kind: "quiet", icon: "upload", cls: "sm", title: "Upload files", onClick: () => up.click() }),
-    btn("", { kind: "quiet", icon: "plus", cls: "sm", title: "New file", onClick: () => newFile() }),
+    btn("", { kind: "quiet", icon: "plus", cls: "sm", title: "New file or sketch", onClick: (e) => menu(e.currentTarget, [
+      { label: "New file", icon: "file", onClick: () => newFile() },
+      { label: "New sketch", icon: "draw", hint: "Saved to scraps/ as a .napkin", onClick: () => import("./napkin.js").then((m) => m.newNapkin()) },
+    ]) }),
     btn("", { kind: "quiet", icon: "refresh", cls: "sm", title: "Refresh", onClick: () => loadFiles().then(drawRail) }), up);
   const body = h("div", { class: "rail-body" });
   if (features.files === false) body.appendChild(emptyState("folder", "File list unavailable", "This server doesn't expose project files yet."));
@@ -379,7 +385,8 @@ export function drawRail() {
     body.append(h("div", { class: "rail-group" }, icon("canvas"), "Boards", h("span", { class: "faint", style: { marginLeft: "auto", fontWeight: 400 } }, boards.length || "")));
     if (!boards.length) body.appendChild(h("div", { class: "faint", style: { padding: "4px 8px 8px", fontSize: "12px" } }, "Pages the agent writes appear here."));
     boards.forEach((f) => body.appendChild(fileItem(f, true)));
-    const rest = S.files.filter((f) => !boards.includes(f) && !INTERNAL.has(f.path));
+    // Dot-files (sketch thumbnails like scraps/.x.thumbnail.png) are support files, not listed.
+    const rest = S.files.filter((f) => !boards.includes(f) && !INTERNAL.has(f.path) && !f.path.split("/").pop().startsWith("."));
     if (rest.length) {
       body.append(h("div", { class: "rail-group" }, icon("folder"), "All files"));
       body.append(tree(rest));
@@ -438,6 +445,7 @@ function fileMenu(anchor, f) {
     isHtml(f.path) ? { label: "Open preview", icon: "eye", onClick: () => openFile(f.path, { view: "preview" }) } : null,
     { label: "Open in code", icon: "code", onClick: () => openFile(f.path, { view: "code" }) },
     isHtml(f.path) ? { label: "Open in new tab", icon: "external", onClick: () => window.open(previewUrl(S.project.id, f.path), "_blank", "noopener") } : null,
+    { label: "Download", icon: "download", onClick: () => { const a = h("a", { href: `${P_(S.project.id)}/download?path=${encodeURIComponent(f.path)}`, download: "" }); document.body.appendChild(a); a.click(); a.remove(); } },
     { label: "Add to chat", icon: "paperclip", onClick: () => bus.emit("attach", [f.path]) },
     { label: "Copy path", icon: "copy", onClick: () => navigator.clipboard?.writeText(f.path) },
     "-",

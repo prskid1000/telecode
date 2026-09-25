@@ -4,10 +4,14 @@ The stack splits in two:
 
 - **brief** — layers 2–6 (charter, canvas, board rules, kind skill + companions,
   design system, craft) plus the engine notes. Stable across the turns of a
-  project, so it is written to `.td/brief.md` and sent in full only when the
-  CLI session has not seen this exact text yet (first turn of a chat, or the
-  brief changed: system attached, kind switched…). A resumed session already
-  holds it in context; resending ~60 KB every turn would bury the conversation.
+  project, so it is written to `.td/brief.md` and delivered per *section*: a
+  section is sent only when the CLI session has not seen that exact text yet
+  (first turn of a chat, or it changed: system attached, kind switched…). A
+  resumed session already holds it; resending ~60 KB every turn would bury the
+  conversation. Edit turns (comments, mentions, auto-fix, short change
+  requests) need only a lean subset — see `classify_turn`. With
+  `design.brief_mode: system` (Claude Code) a fresh session gets it through
+  `--append-system-prompt-file` instead of the first message.
 - **turn** — discovery (when it applies), comment instructions, and the layer-7
   blocks: project facts → canvas → references → attachments → web capture →
   mentioned elements → attached comments → form answers → the user's message.
@@ -64,7 +68,7 @@ CRAFT_BY_KIND = {
 
 ENGINE_NOTES = {
     "claude_code": (
-        "- Keep your todo list in the TodoWrite tool — the host renders it live in the chat.\n"
+        "- If a todo tool (TodoWrite) is available, keep your todo list in it — the host renders it live.\n"
         "- Write files with paths relative to your working directory (the project folder).\n"
     ),
     "codex": (
@@ -129,8 +133,13 @@ def _load(rel: str) -> str:
     return (PROMPTS_DIR / rel).read_text(encoding="utf-8")
 
 
+# Source-only notes (licence attributions) at the top of a prompt file: they stay in
+# the files — see prompts/NOTICE — but the model has no use for them.
+_HTML_COMMENT_RE = re.compile(r"\A\s*<!--.*?-->\s*", re.S)
+
+
 def load_prompt(rel: str, values: Dict[str, Any]) -> str:
-    return render(_load(rel), values, name=rel).strip()
+    return render(_HTML_COMMENT_RE.sub("", _load(rel)), values, name=rel).strip()
 
 
 def comments_part_a() -> str:
@@ -414,10 +423,60 @@ def style_block(style_id: Optional[str]) -> str:
     ])
 
 
+# ── Turn types (which brief sections a turn needs) ───────────────────────
+
+# A change request to something that exists. Deliberately narrow: "make …" and
+# "add …" read as new work, so they stay "build".
+_EDIT_RE = re.compile(
+    r"^\s*(please\s+)?(change|rename|replace|fix|move|update|set|remove|delete|hide|swap|increase|decrease|"
+    r"align|cent(er|re)|recolou?r|shorten|lengthen|reduce|enlarge|shrink|edit|adjust|correct|tweak|nudge)\b",
+    re.I)
+EDIT_MAX_CHARS = 400
+
+
+def _lean_skip(section_id: str, kind: str) -> bool:
+    """Sections an edit turn does without: the kind skill, tweaks, code export and
+    craft rules steer *new* work. The deck contract stays for slides (an edit must
+    not break it); board rules, charter, canvas and the design system always stay."""
+    return section_id in ("kind", "tweaks", "code_export") or section_id.startswith("craft_")
+
+
+def has_content(project_dir: Path, boards: Dict[str, Any]) -> bool:
+    if boards:
+        return True
+    from services.design import files as dfiles
+    return any(rel.lower().endswith(".html") and not rel.startswith("_ds/")
+               for rel, _ in dfiles.iter_project_files(project_dir, include_readonly=False))
+
+
+def classify_turn(turn: Dict[str, Any], *, comments: Optional[List[Dict[str, Any]]], is_convert: bool,
+                  has_content: bool, project_turns: int) -> str:
+    """``build`` (new work: full brief), ``edit`` (a scoped change to what exists:
+    lean brief) or ``convert`` (full brief + code export). Anything unclear is
+    ``build`` — a missing rule costs quality, an extra one only tokens."""
+    if is_convert:
+        return "convert"
+    from services.design import engine_opts
+    if not engine_opts.brief_select() or turn.get("kind_skill") or not has_content:
+        return "build"
+    if comments or mentioned_block(turn.get("selection")) or turn.get("auto") == "fix":
+        return "edit"
+    text = turn.get("text") or ""
+    if project_turns > 0 and len(text) <= EDIT_MAX_CHARS and _EDIT_RE.match(text) \
+            and not turn.get("form_answers") and not turn.get("attachments") and not turn.get("web_capture") \
+            and not turn.get("new_brief"):
+        return "edit"
+    return "build"
+
+
 def build(project: Dict[str, Any], chat: Dict[str, Any], turn: Dict[str, Any], *,
           project_dir: Path, comments: Optional[List[Dict[str, Any]]] = None,
           turn_number: int = 1, project_turns: int = 0) -> Dict[str, Any]:
-    """Returns {"brief", "brief_sha", "turn"} — see the module docstring."""
+    """Returns {"brief", "brief_sha", "sections", "needed", "turn_type", "turn"}.
+
+    ``brief`` is the full text (written to ``.td/brief.md``); ``sections`` the same
+    text split into ``{id, text, sha}``; ``needed`` the section ids this turn type
+    needs (see :func:`classify_turn`). :func:`plan_delivery` decides what to send."""
     kind = project.get("kind") if project.get("kind") in CRAFT_BY_KIND else "prototype"
     kind_skill = turn.get("kind_skill")
     kind_file = f"kinds/{kind_skill if kind_skill in CRAFT_BY_KIND else kind}.md"
@@ -429,39 +488,49 @@ def build(project: Dict[str, Any], chat: Dict[str, Any], turn: Dict[str, Any], *
     ds_block, ds_bundle = design_system_block(project, project_dir)
     values = _stable_values(project, ds_block, ds_bundle)
 
-    brief_parts = [
-        f"# TeleDesign brief — {project.get('title') or 'Untitled'}\n"
-        f"_(The host rewrites this file each turn; do not edit it.)_",
-        load_prompt("charter.md", values),
+    parts: List[Tuple[str, str]] = [
+        ("header", f"# TeleDesign brief — {project.get('title') or 'Untitled'}\n"
+                   f"_(The host rewrites this file each turn; do not edit it.)_"),
+        ("charter", load_prompt("charter.md", values)),
     ]
     persona = persona_block(project)
     if persona:
-        brief_parts.append(persona)
-    brief_parts.append(load_prompt("canvas.md", values))
+        parts.append(("persona", persona))
+    parts.append(("canvas", load_prompt("canvas.md", values)))
     wants_html = kind in HTML_KINDS or bool(boards) or is_convert
     wants_layer = kind in LAYER_KINDS or is_convert or (project_dir / "doc.fig").is_file()
     if wants_html:
-        brief_parts.append(load_prompt("html_boards.md", values))
+        parts.append(("html_boards", load_prompt("html_boards.md", values)))
     if wants_layer:
-        brief_parts.append(load_prompt("layer_boards.md", values))
-    brief_parts.append(load_prompt(kind_file, values))
+        parts.append(("layer_boards", load_prompt("layer_boards.md", values)))
+    parts.append(("kind", load_prompt(kind_file, values)))
     if kind == "slides":
-        brief_parts.append(load_prompt("deck.md", values))
+        parts.append(("deck", load_prompt("deck.md", values)))
     if kind in TWEAK_KINDS or (wants_html and _VARIANT_RE.search(text)):
-        brief_parts.append(load_prompt("tweaks.md", values))
+        parts.append(("tweaks", load_prompt("tweaks.md", values)))
     if is_convert:
-        brief_parts.append(load_prompt("code_export.md", values))
+        parts.append(("code_export", load_prompt("code_export.md", values)))
     if ds_block:
-        brief_parts.append(ds_block.strip())
+        parts.append(("design_system", ds_block.strip()))
     else:
         style = style_block(turn.get("style_id") or project.get("style_id"))
         if style:
-            brief_parts.append(style)
+            parts.append(("style", style))
     for craft in ("anti_slop", "accessibility") + tuple(CRAFT_BY_KIND[kind]):
-        brief_parts.append(load_prompt(f"craft/{craft}.md", values))
-    brief_parts.append("## Engine notes\n" + ENGINE_NOTES.get(engine, ENGINE_NOTES["claude_code"]).rstrip())
-    brief = "\n\n---\n\n".join(p for p in brief_parts if p) + "\n"
+        parts.append((f"craft_{craft}", load_prompt(f"craft/{craft}.md", values)))
+    parts.append(("engine_notes",
+                  "## Engine notes\n" + ENGINE_NOTES.get(engine, ENGINE_NOTES["claude_code"]).rstrip()))
+    parts = [(k, v) for k, v in parts if v]
+    brief = "\n\n---\n\n".join(v for _, v in parts) + "\n"
     brief_sha = hashlib.sha256(brief.encode("utf-8")).hexdigest()
+    sections = [{"id": k, "text": v, "sha": hashlib.sha256(v.encode("utf-8")).hexdigest()[:16]}
+                for k, v in parts]
+    turn_type = classify_turn(turn, comments=comments, is_convert=is_convert,
+                              has_content=has_content(project_dir, boards), project_turns=project_turns)
+    if turn_type == "edit":
+        needed = [sec["id"] for sec in sections if not _lean_skip(sec["id"], kind)]
+    else:
+        needed = [sec["id"] for sec in sections]
 
     # ── Turn part ──
     form_answers = form_answers_block(turn.get("form_answers"))
@@ -513,7 +582,53 @@ def build(project: Dict[str, Any], chat: Dict[str, Any], turn: Dict[str, Any], *
                 ("critic_role", "designer"), ("artifact_ref", "the boards changed most recently"),
                 ("brief", "see the user's message"), ("round", "1"), ("previous_scores", "none"))}))
     turn_parts.append("## The user's message\n" + (text.strip() or "(no message — act on the blocks above)"))
-    return {"brief": brief, "brief_sha": brief_sha, "turn": "\n\n".join(turn_parts) + "\n"}
+    return {"brief": brief, "brief_sha": brief_sha, "sections": sections, "needed": needed,
+            "turn_type": turn_type, "turn": "\n\n".join(turn_parts) + "\n"}
+
+
+def _join(sections: List[Dict[str, Any]]) -> str:
+    return "\n\n---\n\n".join(s["text"] for s in sections) + "\n"
+
+
+def plan_delivery(built: Dict[str, Any], *, sent: Optional[Dict[str, str]], fresh: bool,
+                  mode: str = "message") -> Dict[str, Any]:
+    """What this turn sends, given what the CLI session already holds.
+
+    ``sent`` maps section id → sha of what the session has seen (empty/None =
+    unknown); ``fresh`` = no conversation to resume. Only needed sections that
+    are missing or changed are sent, so a brief edit (system attached, title
+    renamed) costs that section, not the whole brief again.
+
+    ``mode="system"`` (Claude Code): a fresh session gets its sections as
+    ``system`` text for ``--append-system-prompt-file`` — the caller passes the
+    same file on every later launch of the conversation (the CLI records the
+    system prompt on the first request anyway), and later additions go in the
+    message. Returns ``{"prompt", "system", "sections"}`` — ``sections`` being
+    the updated sent map to record once the turn succeeds.
+    """
+    by_id = {s["id"]: s for s in built["sections"]}
+    have = {} if fresh else dict(sent or {})
+    missing = [by_id[i] for i in built["needed"] if i in by_id and have.get(i) != by_id[i]["sha"]]
+    omitted = [s["id"] for s in built["sections"] if s["id"] not in built["needed"] and have.get(s["id"]) != s["sha"]]
+    more = (f" It also holds rules not loaded for this turn ({', '.join(omitted)}) — read them there if the "
+            f"request turns out to be new work.") if omitted else ""
+    sections = {**have, **{s["id"]: s["sha"] for s in missing}}
+    turn = built["turn"]
+    if fresh and mode == "system" and missing:
+        return {"system": _join(missing), "sections": sections,
+                "prompt": f"_(Your standing brief is in your system prompt and saved at `{BRIEF_REL}`.{more})_\n\n"
+                          + turn}
+    if not missing:
+        prompt = (f"_(Your standing brief is unchanged since your last turn. It is saved at `{BRIEF_REL}` — "
+                  f"re-read it if you need the rules.{more})_\n\n" + turn)
+    elif not have:
+        prompt = (_join(missing) + "\n---\n\n"
+                  f"_(This brief is also saved at `{BRIEF_REL}` in your working directory.{more})_\n\n---\n\n" + turn)
+    else:
+        prompt = ("## Brief update\nThese sections of your standing brief are new or changed since your last "
+                  f"turn; each replaces any earlier version of the same section (full brief: `{BRIEF_REL}`).{more}"
+                  "\n\n---\n\n" + _join(missing) + "\n---\n\n" + turn)
+    return {"system": None, "sections": sections, "prompt": prompt}
 
 
 def compose(built: Dict[str, Any], *, include_brief: bool) -> str:

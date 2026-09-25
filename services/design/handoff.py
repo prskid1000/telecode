@@ -204,3 +204,131 @@ async def export(ctx) -> Path:
     ctx.progress(0.7, "Zipping")
     out = await asyncio.to_thread(zip_bundle, bundle, ctx.out_dir / ctx.name("zip", "-handoff"))
     return out
+
+
+# ── Handoff straight into a coding session (Task Mode) ────────────────────
+#
+# The bundle is staged into a fresh Task-Mode workspace session (`handoff/`), and
+# one CLI task is submitted on that session with a starter prompt that names the
+# chosen repository. The CLI's own cwd stays the session folder (Task Mode owns
+# where a CLI runs); the prompt tells it to work in the repository by absolute
+# path, and every engine runs with full file access, so it can. Follow-up turns
+# go through Task Mode (/tasks) on the same session, which resumes the same CLI
+# conversation.
+
+MAX_DIRS_LISTED = 400
+HANDOFF_ENGINES = ("claude_code", "codex", "antigravity")
+
+
+def list_dirs(path: Optional[str]) -> Dict[str, Any]:
+    """Sub-directories of an absolute `path` (default: the user's home), for the
+    repo picker. Names only — never file contents."""
+    import os
+    base = Path(path).expanduser() if path else Path.home()
+    if not base.is_absolute():
+        raise ValueError("path must be absolute")
+    try:
+        base = base.resolve()
+    except OSError:
+        raise ValueError("path not found")
+    if not base.is_dir():
+        raise ValueError("not a folder")
+    dirs = []
+    try:
+        with os.scandir(base) as it:
+            for e in it:
+                try:
+                    if not e.is_dir(follow_symlinks=False) or e.name.startswith((".", "$")):
+                        continue
+                except OSError:
+                    continue
+                p = Path(e.path)
+                dirs.append({"name": e.name, "path": str(p), "git": (p / ".git").exists()})
+                if len(dirs) >= MAX_DIRS_LISTED:
+                    break
+    except PermissionError:
+        raise ValueError("permission denied")
+    dirs.sort(key=lambda d: d["name"].lower())
+    roots = []
+    if os.name == "nt":
+        import string
+        roots = [f"{d}:\\" for d in string.ascii_uppercase if Path(f"{d}:\\").exists()]
+    parent = str(base.parent) if base.parent != base else None
+    return {"path": str(base), "parent": parent, "git": (base / ".git").exists(), "dirs": dirs,
+            "home": str(Path.home()), "roots": roots}
+
+
+def session_prompt(repo: Path, bundle_rel: str, primary: Optional[str], extra: str = "") -> str:
+    lines = [
+        f"Implement a TeleDesign design in the repository at:\n\n    {repo}\n",
+        f"That repository is where every code change goes: `cd` into it before running any command, and edit "
+        f"files there by absolute path. Your current folder is only a staging area holding the handoff bundle "
+        f"at `{bundle_rel}/`.",
+        f"Start with `{bundle_rel}/README.md` — it says what to read and in what order: every conversation in "
+        f"`{bundle_rel}/chats/` (oldest first), then the primary design"
+        + (f" `{bundle_rel}/project/{primary}`" if primary else "") + " and everything it loads.",
+        "Read the repository's own conventions first (its CLAUDE.md / AGENTS.md / README, framework, components, "
+        "tokens, routing) and rebuild the design in that stack, matching the visual result exactly — spacing, "
+        "sizes, colour, type, radii, states and motion. The HTML/JSX files are a specification, not code to paste; "
+        "leave out prototype plumbing (Tweaks panel, data-td-* attributes, deck controls, device frames).",
+        "If the scope is unclear (which screens, which variation), stop and ask before writing code.",
+    ]
+    if extra.strip():
+        lines.append("Notes from the designer:\n\n" + extra.strip()[:8000])
+    return "\n\n".join(lines) + "\n"
+
+
+def start_session(pid: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    """Stage the bundle into a new Task-Mode session and submit the first turn.
+
+    body: {repo (absolute folder), engine, model?, is_local?, file?, note?}
+    Returns {session_id, namespace, task_id, task_type, repo, prompt}.
+    """
+    import tempfile
+    import uuid
+
+    from services.session import session_store
+    from services.task.engine_map import ENGINE_TO_TASK_TYPE
+    from services.task.task_manager import get_task_queue
+
+    rec = store.get_project(pid)
+    if not rec:
+        raise LookupError("project not found")
+    repo_raw = body.get("repo")
+    if not isinstance(repo_raw, str) or not repo_raw.strip():
+        raise ValueError("repo (an absolute folder path) is required")
+    repo = Path(repo_raw.strip()).expanduser()
+    if not repo.is_absolute() or not repo.is_dir():
+        raise ValueError("repo must be an existing absolute folder")
+    repo = repo.resolve()
+    engine = body.get("engine") or "claude_code"
+    if engine not in HANDOFF_ENGINES:
+        raise ValueError("engine must be claude_code, codex or antigravity")
+    model = body.get("model")
+    if model is not None and (not isinstance(model, str) or len(model) > 200 or not re.match(r"^[\w.:/@+-]*$", model)):
+        raise ValueError("invalid model")
+    file = body.get("file")
+    if file is not None and (not isinstance(file, str) or not store.safe_relpath(file)):
+        raise ValueError("invalid file")
+    note = body.get("note") if isinstance(body.get("note"), str) else ""
+
+    sid = f"handoff-{_slug(rec.get('title') or 'design')[:40]}-{uuid.uuid4().hex[:8]}"
+    meta = session_store.create(session_id=sid, session_idle_timeout_seconds=0, data={
+        "source": "teledesign-handoff", "project_id": pid, "repo": str(repo)})
+    folder = session_store._session_dir(sid, None)
+    with tempfile.TemporaryDirectory(prefix="td-handoff-") as tmp:
+        bundle = build_bundle(pid, Path(tmp), file)
+        dest = folder / "handoff"
+        shutil.copytree(bundle, dest)
+    primary = render.primary_file(pid, file)
+    prompt = session_prompt(repo, "handoff", primary, note)
+    params: Dict[str, Any] = {"prompt": prompt, "is_local": bool(body.get("is_local"))}
+    if model:
+        params["model"] = model
+    task_type = ENGINE_TO_TASK_TYPE[engine]
+    task_id = get_task_queue().submit_task(
+        task_type=task_type, params=params, session_id=meta["session_id"],
+        metadata={"source": "teledesign-handoff", "project_id": pid, "repo": str(repo)})
+    return {"session_id": meta["session_id"], "namespace": None, "task_id": task_id, "task_type": task_type,
+            "repo": str(repo), "prompt": prompt, "engine": engine, "model": model,
+            "is_local": params["is_local"]}

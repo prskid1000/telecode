@@ -118,10 +118,21 @@ def permission_plan(permission_mode: Optional[str]) -> PermissionPlan:
                                   f"(workspace-write sandbox, approval_policy=never)")
 
 
+# ReasoningEffort in codex-cli 0.157: none | minimal | low | medium | high | xhigh | max
+# (whether a model accepts a level is the API's call).
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
+def effort_overrides(effort: Optional[str]) -> List[str]:
+    """``-c model_reasoning_effort=<level>`` (a config override, valid before
+    ``resume`` / ``fork`` like every ``-c``); None / unknown = config default."""
+    return ["-c", f"model_reasoning_effort={effort}"] if effort in EFFORTS else []
+
+
 def build_argv(*, work_dir: Path, resume_id: Optional[str], last_msg_path: Path,
                model: Optional[str], provider_overrides: Optional[List[str]] = None,
                schema_path: Optional[Path] = None, fork: bool = False, add_dirs=(),
-               permission_mode: Optional[str] = None) -> List[str]:
+               permission_mode: Optional[str] = None, effort: Optional[str] = None) -> List[str]:
     plan = permission_plan(permission_mode)
     exec_only = [*plan.exec_args, "-C", str(work_dir)]
     # --add-dir is exec-only too (verified on 0.157: absent from `exec resume|fork --help`).
@@ -137,7 +148,7 @@ def build_argv(*, work_dir: Path, resume_id: Optional[str], last_msg_path: Path,
         common += ["--model", model]
     if schema_path:
         common += ["--output-schema", str(schema_path)]
-    overrides = [*(provider_overrides or []), *plan.overrides]
+    overrides = [*(provider_overrides or []), *plan.overrides, *effort_overrides(effort)]
     # "-" = read the prompt from stdin. `exec fork <id>` (verified on 0.157)
     # takes the same trailing options as `exec resume <id>`.
     if resume_id:
@@ -219,7 +230,8 @@ class CodexAdapter(Adapter):
             logger.warning(plan.warning)
         argv = build_argv(work_dir=req.cwd, resume_id=req.resume_id, last_msg_path=req.last_msg_path,
                           model=model, provider_overrides=overrides, schema_path=schema_path,
-                          fork=req.fork, add_dirs=req.add_dirs, permission_mode=req.permission_mode)
+                          fork=req.fork, add_dirs=req.add_dirs, permission_mode=req.permission_mode,
+                          effort=req.effort)
         return Launch(argv=argv, stdin=req.prompt, env=env, cleanup=cleanup, warnings=warnings,
                       extras_at=len(argv) - 1)
 

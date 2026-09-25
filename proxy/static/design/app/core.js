@@ -113,6 +113,10 @@ const P = {
   panel: '<rect x="3.5" y="4.5" width="17" height="15" rx="1.5"/><path d="M15 4.5v15"/>',
   panelLeft: '<rect x="3.5" y="4.5" width="17" height="15" rx="1.5"/><path d="M9 4.5v15"/>',
   wand: '<path d="M4 20L15 9M13.5 5.5V3M17 7l1.8-1.8M18.5 10.5H21M11.5 7H9M17 13l1.8 1.8"/>',
+  undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
+  redo: '<path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>',
+  figma: '<path d="M9 3.5h3v6H9a3 3 0 0 1 0-6zM12 3.5h3a3 3 0 0 1 0 6h-3zM9 9.5h3v6H9a3 3 0 0 1 0-6zM12 12.5a3 3 0 1 0 6 0 3 3 0 0 0-6 0zM9 15.5h3v2a3 3 0 1 1-3-2z"/>',
+  repo: '<path d="M6 4.5h11a1 1 0 0 1 1 1V17H7a2 2 0 0 0 0 4h11"/><path d="M6 4.5A1.5 1.5 0 0 0 4.5 6v13"/><path d="M9 8.5h6"/>',
 };
 
 export function icon(name, cls = "") {
@@ -370,7 +374,12 @@ export function menu(anchor, items, { align = "left", width, cls } = {}) {
   el.style.left = x + "px"; el.style.top = y + "px";
   openMenu = el;
   setTimeout(() => {
-    const off = (e) => { if (!el.contains(e.target)) { closeMenu(); document.removeEventListener("mousedown", off, true); } };
+    // A menu opened from another menu's item replaces it: the old menu's
+    // listener must not close the new one.
+    const off = (e) => {
+      if (openMenu !== el) { document.removeEventListener("mousedown", off, true); return; }
+      if (!el.contains(e.target)) { closeMenu(); document.removeEventListener("mousedown", off, true); }
+    };
     document.addEventListener("mousedown", off, true);
   });
   return el;

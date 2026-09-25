@@ -3,20 +3,28 @@
 // cost / context meter.
 import {
   h, icon, btn, mount, clear, api, tryApi, toast, toastError, menu, confirmDialog, promptDialog, bus, P_, prefs,
-  renderMarkdown, relTime, fmtTokens, fmtCost, fmtDuration, features, emptyState, skeleton, modal,
+  renderMarkdown, relTime, fmtTokens, fmtCost, fmtDuration, fmtBytes, features, emptyState, skeleton, modal,
 } from "./core.js";
 import { S, currentTurns, chatRunning, loadEngines } from "./state.js";
 import { splitForm, parseStreamingForm, renderForm } from "./form.js";
 
 const ENGINE_LABEL = { claude_code: "Claude Code", codex: "Codex", antigravity: "Antigravity" };
 const EFFORTS = [["", "Default effort"], ["low", "Low"], ["medium", "Medium"], ["high", "High"], ["xhigh", "Extra high"], ["max", "Max"]];
+// Per-chat permission mode (PATCH chat {permission_mode}); "" = design.permission_mode (acceptEdits).
+const PERMS = [["", "Default permissions"], ["acceptEdits", "Accept edits"], ["auto", "Auto"], ["dontAsk", "Don't ask"], ["plan", "Plan only"], ["ask", "Ask me"], ["skip", "Skip checks"]];
+const permItems = (c) => [{ heading: "Permissions" }, ...PERMS.map(([v, l]) => ({ label: l, icon: (c?.permission_mode || "") === v ? "check" : null, checked: (c?.permission_mode || "") === v, disabled: !c, onClick: () => setChatOpt({ permission_mode: v || null }) }))];
 
 let host = null, els = {};
 const turnChat = new Map();      // turn_id -> chat_id
 const formState = new Map();     // turn_id -> answers (kept while the form streams)
 const openTools = new Set();     // turn ids whose tool list is expanded
 const queues = new Map();        // chat_id -> [{text, body}]
-const draft = { attachments: [], selection: null, commentIds: [], skills: [] };
+// Selection context for the next turn:
+//   pinned  — elements added with "Add to chat" (kept until sent or removed)
+//   auto    — whatever is selected right now, added automatically: the last
+//             element picked in a preview (td:select) and the canvas editor's
+//             selected layers (node ids). Each is a chip the user can remove.
+const draft = { attachments: [], pinned: [], auto: { element: null, canvas: null }, dismissed: new Set(), commentIds: [], skills: [] };
 let skillsCache = null;
 let unsub = [];
 
@@ -26,8 +34,51 @@ export async function sendToChat(text, extra = {}) {
   if (!cid) return null;
   return submit(cid, text, extra);
 }
+const selKey = (s) => s ? [s.file || "", s.td_id || "", s.source_loc || "", s.selector || "", s.node_id || ""].join("|") : "";
+export const autoContextOn = () => prefs.get("autoContext", true) !== false;
 bus.on("attach", (paths) => { for (const p of paths) if (!draft.attachments.includes(p)) draft.attachments.push(p); drawChips(); focusComposer(); });
-bus.on("chat-selection", (sel) => { draft.selection = sel; drawChips(); focusComposer(); });
+bus.on("chat-selection", (sel) => {
+  if (!sel) return;
+  if (!draft.pinned.some((p) => selKey(p) === selKey(sel))) draft.pinned.push(sel);
+  if (selKey(draft.auto.element) === selKey(sel)) draft.auto.element = null;
+  drawChips(); focusComposer();
+});
+bus.on("chat-context", ({ kind, sel }) => {
+  if (!autoContextOn() || kind !== "element" || !sel) return;
+  // Every td:select is a click, so a re-click brings a removed chip back.
+  if (draft.pinned.some((p) => selKey(p) === selKey(sel))) return;
+  draft.auto.element = sel; drawChips();
+});
+bus.on("editor-selection", (p) => {
+  if (!autoContextOn()) return;
+  const ids = (p && p.ids) || [];
+  const k = "canvas|" + ids.join(",");
+  draft.auto.canvas = ids.length && !draft.dismissed.has(k) ? { ids: ids.slice(0, 20), nodes: (p.nodes || []).slice(0, 20), key: k } : null;
+  drawChips();
+});
+// The selection payload the turn API takes (prompt_builder.mentioned_block):
+// {file, board_id, elements: [<element dict with mentioned_element> | {node_id, board_id, text}]}.
+function draftSelection() {
+  const elements = [];
+  const el = (s) => ({ file: s.file || null, td_id: s.td_id || null, selector: s.selector || null, source_loc: s.source_loc || null,
+    node_id: s.node_id || null, text: s.text ? String(s.text).slice(0, 300) : null, mentioned_element: s.mentioned_element ? String(s.mentioned_element).slice(0, 8000) : null });
+  for (const s of draft.pinned) elements.push(el(s));
+  if (draft.auto.element) elements.push(el(draft.auto.element));
+  if (draft.auto.canvas) {
+    const nodes = draft.auto.canvas.nodes || [];
+    draft.auto.canvas.ids.forEach((id, i) => {
+      const n = nodes.find((x) => x && (x.id === id || x.node_id === id)) || nodes[i] || {};
+      elements.push({ node_id: id, board_id: n.board || S.deepBoard || null, text: n.name || null });
+    });
+  }
+  if (!elements.length) return null;
+  return { file: S.activeFile || null, board_id: S.deepBoard || null, elements };
+}
+function clearDraftSelection() {
+  // The editor re-reports an unchanged selection; don't re-add the one just sent.
+  if (draft.auto.canvas?.key) draft.dismissed.add(draft.auto.canvas.key);
+  draft.pinned = []; draft.auto = { element: null, canvas: null };
+}
 bus.on("chat-prefill", (t) => { if (els.ta) { els.ta.value = t; autosize(); focusComposer(); } });
 bus.on("project-opened", async ({ firstPrompt, styleId }) => {
   await loadChats();
@@ -46,7 +97,7 @@ export function render(target) {
   mount(host, h("div", { class: "pane" }, els.tabs, els.meta, els.msgs, els.composer));
   if (features.chats === false) { drawMissing(); return; }
   if (!S.chats.length) mount(els.msgs, skeleton(5));
-  loadChats().then(() => { drawTabs(); drawMeta(); drawMessages(); });
+  loadChats().then(() => { drawTabs(); drawMeta(); drawMessages(); loadJobs(); });
   unsub.push(
     bus.on("ev:turn", onTurn), bus.on("ev:delta", onDelta), bus.on("ev:tool", onTool), bus.on("ev:todo", onTodo),
     bus.on("ev:form", onForm), bus.on("ev:check", onCheck), bus.on("ev:files", onFiles), bus.on("ev:chat", () => loadChats(true)),
@@ -182,8 +233,12 @@ function meterPopover(anchor, u, ctxUsed, ctxWin) {
 function drawMessages() {
   if (!els.msgs) return;
   const turns = currentTurns();
+  const mine = jobs.list.filter((j) => jobs.ui.has(j.id));
+  const exportsBlock = () => mine.length ? h("div", { class: "msg system", dataset: { turn: "exports" } },
+    h("div", { class: "who" }, h("span", { class: "av" }, icon("download")), "Your exports"),
+    h("div", { class: "dl-cards" }, mine.map(jobCardEl))) : null;
   if (!S.chatId || !turns.length) {
-    mount(els.msgs, emptyState("sparkle", "Start with a brief", "Describe the design, attach screenshots or a brand PDF, or point at an element in the preview and ask for a change.",
+    mount(els.msgs, exportsBlock(), emptyState("sparkle", "Start with a brief", "Describe the design, attach screenshots or a brand PDF, or point at an element in the preview and ask for a change.",
       h("div", { class: "col", style: { width: "100%", maxWidth: "300px" } }, ["A landing page for a climbing gym, bold and warm", "Three directions for a pricing page", "Turn the attached screenshot into a clickable prototype"].map((s) =>
         h("button", { class: "opt", style: { width: "100%" }, onclick: () => { els.ta.value = s; autosize(); focusComposer(); } }, s)))));
     return;
@@ -191,6 +246,8 @@ function drawMessages() {
   const atBottom = els.msgs.scrollHeight - els.msgs.scrollTop - els.msgs.clientHeight < 60;
   clear(els.msgs);
   turns.forEach((t, i) => els.msgs.appendChild(renderTurn(t, turns, i)));
+  const eb = exportsBlock();
+  if (eb) els.msgs.appendChild(eb);
   if (atBottom || !els.msgs._scrolled) { els.msgs.scrollTop = els.msgs.scrollHeight; els.msgs._scrolled = true; }
 }
 let rafPending = new Set(), rafId = 0;
@@ -232,7 +289,8 @@ function renderTurn(t, turns, i) {
     t.status === "cancelled" ? h("span", { class: "pill" }, "Stopped") : null,
     t.status === "failed" ? h("span", { class: "pill err" }, "Failed") : null));
 
-  const { before, formSrc, after, complete } = splitForm(t.text || "");
+  const { clean, cards: dlCards } = extractDownloads(t.text || "");
+  const { before, formSrc, after, complete } = splitForm(clean);
   const body = (before + (complete ? after : "")).trim();
   if (body) {
     const md = renderMarkdown(body);
@@ -272,6 +330,8 @@ function renderTurn(t, turns, i) {
       }));
     }
   }
+  const dls = [...dlCards.map(markerCard).filter(Boolean), ...jobsForTurn(t).map(jobCardEl)];
+  if (dls.length) wrap.appendChild(h("div", { class: "dl-cards" }, dls));
   for (const c of t.checks || []) wrap.appendChild(checkLine(c));
   if (t.error) {
     const msg = typeof t.error === "string" ? t.error : t.error.message || "The turn failed.";
@@ -321,10 +381,95 @@ function renderUser(t) {
 }
 function selLabel(sel) {
   if (!sel) return "";
+  if (Array.isArray(sel.elements)) return sel.elements.length === 1 ? selLabel(sel.elements[0]) : `${sel.elements.length} selected`;
+  if (sel.node_id && !sel.selector) return sel.text || "layer " + sel.node_id;
   if (sel.td_id) return "#" + sel.td_id;
   if (sel.text) return `"${String(sel.text).slice(0, 30)}"`;
   return (sel.selector || "element").split(" ").slice(-1)[0];
 }
+
+// ── Download cards ───────────────────────────────────────────────────────
+// Two sources: (1) the agent writes `<download-card path="exports/deck.pdf"
+// label="Deck (PDF)"/>` (also `<download …/>`; kind="file|folder|project",
+// a path ending in "/" is a folder, no path = the whole project) — the marker
+// is stripped from the text and becomes a card; (2) export jobs (GET
+// …/export/jobs) started while an agent turn ran show under that turn, and
+// ones the user started from the Export menu under "Your exports".
+const DL_RE = /<download(?:-card)?\b([^>]*?)\/?>(?:\s*<\/download(?:-card)?>)?/gi;
+const DL_PARTIAL_RE = /<download(?:-card)?\b[^>]*$/i;
+export function extractDownloads(text) {
+  const cards = [];
+  let clean = String(text || "").replace(DL_RE, (_m, attrs) => {
+    const a = {};
+    attrs.replace(/([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g, (_x, k, v1, v2) => { a[k.toLowerCase()] = v1 ?? v2; return ""; });
+    cards.push(a);
+    return "";
+  });
+  clean = clean.replace(DL_PARTIAL_RE, "");
+  return { clean, cards };
+}
+const DL_ICON = { file: "file", folder: "folder", project: "archive" };
+function safeProjectPath(p) { return typeof p === "string" && p.length < 400 && !/(^|\/)\.\.(\/|$)|^\/|:|\\/.test(p); }
+function markerCard(a) {
+  if (!S.project) return null;
+  const path = (a.path || a.file || "").trim();
+  if (path && !safeProjectPath(path)) return null;
+  const kind = ["file", "folder", "project"].includes(a.kind) ? a.kind : !path ? "project" : path.endsWith("/") ? "folder" : "file";
+  const q = kind === "project" ? "kind=project" : `kind=${kind}&path=${encodeURIComponent(path.replace(/\/$/, ""))}`;
+  const name = a.label || a.title || (kind === "project" ? `${S.project.title} (whole project)` : path.replace(/\/$/, "").split("/").pop());
+  const sub = kind === "project" ? "ZIP of every project file" : kind === "folder" ? `Folder ${path} · ZIP` : path;
+  return h("div", { class: "dl-card" }, h("span", { class: "dl-ic" }, icon(DL_ICON[kind])),
+    h("div", { class: "dl-info" }, h("b", { class: "ellipsis", title: name }, name), h("span", { class: "faint ellipsis", title: sub }, sub)),
+    h("a", { class: "btn sm", href: `${P_(S.project.id)}/download?${q}`, download: "", title: "Download " + name }, icon("download"), "Download"));
+}
+
+const jobs = { list: [], ui: new Set(), pid: null, timer: 0 };
+const JOB_LABEL = { html: "Standalone HTML", zip: "Project ZIP", pdf: "PDF", pptx: "PowerPoint", png: "Image", mp4: "Video", handoff: "Handoff bundle" };
+async function loadJobs() {
+  if (!S.project || features.exportJobs === false) return;
+  const pid = S.project.id;
+  const j = await tryApi("GET", `${P_(pid)}/export/jobs`, undefined, { feature: "exportJobs" }).catch(() => null);
+  if (!j || !S.project || S.project.id !== pid) return;
+  if (jobs.pid !== pid) { jobs.ui.clear(); jobs.pid = pid; }
+  const before = new Map(jobs.list.map((x) => [x.id, x.status]));
+  jobs.list = j.jobs || [];
+  let changed = jobs.list.length !== before.size;
+  for (const x of jobs.list) {
+    if (before.get(x.id) !== x.status) changed = true;
+    const el = els.msgs?.querySelector(`[data-job="${CSS.escape(x.id)}"]`);
+    if (el) el.replaceWith(jobCardEl(x));
+  }
+  if (changed && host) drawMessages();
+  clearTimeout(jobs.timer);
+  if (jobs.list.some((x) => x.status === "queued" || x.status === "running")) jobs.timer = setTimeout(loadJobs, 1500);
+}
+function jobsForTurn(t) {
+  if (t.role === "user" || !t.created_at || !jobs.list.length) return [];
+  const t0 = Date.parse(t.created_at) - 2000;
+  const t1 = t.finished_at ? Date.parse(t.finished_at) + 5000 : Infinity;
+  return jobs.list.filter((x) => !jobs.ui.has(x.id) && x.created_at && Date.parse(x.created_at) >= t0 && Date.parse(x.created_at) <= t1).slice(0, 8);
+}
+function jobCardEl(x) {
+  const done = x.status === "done", failed = x.status === "failed" || x.status === "cancelled";
+  const label = JOB_LABEL[x.kind] || x.kind;
+  const pct = Math.max(3, Math.min(100, Math.round(((x.progress <= 1 ? x.progress * 100 : x.progress) || 0))));
+  const sub = done ? [x.filename, x.size ? fmtBytes(x.size) : null].filter(Boolean).join(" · ")
+    : failed ? "Failed: " + (x.error || "unknown error") : `${x.message || "Working"} · ${pct}%`;
+  const flags = (x.flags || []).map((f) => (typeof f === "string" ? f : f.message || f.code)).filter(Boolean);
+  return h("div", { class: "dl-card" + (failed ? " failed" : ""), dataset: { job: x.id } },
+    h("span", { class: "dl-ic" }, icon(x.kind === "pptx" ? "present" : x.kind === "png" ? "image" : x.kind === "mp4" ? "play" : x.kind === "zip" || x.kind === "handoff" ? "archive" : "file")),
+    h("div", { class: "dl-info" }, h("b", { class: "ellipsis" }, label + (x.file ? ` — ${x.file}` : "")), h("span", { class: "faint ellipsis", title: sub }, sub),
+      !done && !failed ? h("span", { class: "dl-bar" }, h("i", { style: { width: pct + "%" } })) : null,
+      flags.length ? h("span", { class: "dl-flags", title: flags.join("\n") }, "⚠ " + flags[0] + (flags.length > 1 ? ` (+${flags.length - 1})` : "")) : null),
+    done && x.download_url && x.download_url.startsWith("/") ? h("a", { class: "btn sm primary", href: x.download_url, download: "" }, icon("download"), "Download") : null);
+}
+bus.on("export-started", (d) => {
+  if (!d || !d.job_id) return;
+  jobs.ui.add(d.job_id);
+  if (!jobs.list.some((x) => x.id === d.job_id)) jobs.list.unshift({ id: d.job_id, kind: d.kind, file: d.file, status: "queued", progress: 0, created_at: new Date().toISOString() });
+  if (host) drawMessages();
+  loadJobs();
+});
 
 // ── Events ───────────────────────────────────────────────────────────────
 function turnsOf(cid) { if (!S.turns.has(cid)) S.turns.set(cid, []); return S.turns.get(cid); }
@@ -362,6 +507,7 @@ function onTurn(t) {
   if (cid === S.chatId) { redrawTurn(t.id); drawMeta(); drawSendState(); }
   drawTabs();
   if (done && t.role !== "user") {
+    setTimeout(loadJobs, 800);
     if (t.status === "failed" && cid === S.chatId) toast("The turn failed. See the chat for details.", { kind: "error" });
     setTimeout(() => drainQueue(cid), 50);
   }
@@ -477,7 +623,7 @@ function drawPickers() {
     { label: "Route through the local model", icon: local ? "check" : null, checked: local, hint: S.engines?.local?.available === false ? "Local model not running" : S.engines?.local?.model || null, disabled: S.engines?.local?.available === false && !local, onClick: () => setChatOpt({ is_local: !local }) },
   ]) }, icon("bolt"), (ENGINE_LABEL[eng] || eng) + (local ? " · local" : ""), icon("chevronDown"));
   const effBtn = h("button", { class: "pick", title: "Reasoning effort", onclick: (e) => menu(e.currentTarget, [{ heading: "Effort" },
-    ...EFFORTS.map(([v, l]) => ({ label: l, icon: (effort || "") === v ? "check" : null, checked: (effort || "") === v, onClick: () => setChatOpt({ effort: v || null }) }))]) },
+    ...EFFORTS.map(([v, l]) => ({ label: l, icon: (effort || "") === v ? "check" : null, checked: (effort || "") === v, onClick: () => setChatOpt({ effort: v || null }) })), ...permItems(c)]) },
     (EFFORTS.find(([v]) => v === (effort || ""))?.[1] || "Effort").replace(" effort", ""), icon("chevronDown"));
   // Local mode as a visible switch, not only a menu item: it changes where the
   // turn runs (the local llama.cpp model via the proxy), so it should be seen.
@@ -514,6 +660,7 @@ function drawPickers() {
     ...models.map((m) => ({ label: m.label && m.label !== m.id ? `${m.label}` : m.id, hint: m.label && m.label !== m.id ? m.id : null, icon: m.id === model ? "check" : null, checked: m.id === model, onClick: () => setChatOpt({ model: m.id }) })),
     { heading: "Effort" },
     ...EFFORTS.map(([v, l]) => ({ label: l, icon: (effort || "") === v ? "check" : null, checked: (effort || "") === v, onClick: () => setChatOpt({ effort: v || null }) })),
+    ...permItems(c),
     "-",
     { label: "Run on the local model", icon: local ? "check" : null, checked: local, hint: localOff ? "Local model not available" : localInfo.model || "Through the telecode proxy", disabled: localOff, onClick: () => setChatOpt({ is_local: !local }) },
   ], { width: "280px" }) },
@@ -547,8 +694,18 @@ function drawChips() {
     h("button", { class: "x", "aria-label": "Remove", onclick: () => { draft.attachments.splice(i, 1); drawChips(); } }, icon("x")))));
   draft.skills.forEach((n, i) => chips.push(h("span", { class: "chip", title: "Skill the agent reads this turn" }, icon("bolt"), h("span", { class: "nm" }, "/" + n),
     h("button", { class: "x", "aria-label": "Remove", onclick: () => { draft.skills.splice(i, 1); drawChips(); } }, icon("x")))));
-  if (draft.selection) chips.push(h("span", { class: "chip sel", title: draft.selection.mentioned_element || "" }, icon("inspect"), h("span", { class: "nm" }, selLabel(draft.selection)),
-    h("button", { class: "x", "aria-label": "Remove", onclick: () => { draft.selection = null; drawChips(); } }, icon("x"))));
+  draft.pinned.forEach((s, i) => chips.push(h("span", { class: "chip sel", title: s.mentioned_element || s.selector || "" }, icon("inspect"), h("span", { class: "nm" }, selLabel(s)),
+    h("button", { class: "x", "aria-label": "Remove", onclick: () => { draft.pinned.splice(i, 1); drawChips(); } }, icon("x")))));
+  const a = draft.auto.element;
+  if (a) chips.push(h("span", { class: "chip sel auto", title: "Selected in the preview — goes with your next message.\n\n" + (a.mentioned_element || a.selector || "") }, icon("inspect"), h("span", { class: "nm" }, selLabel(a)),
+    h("button", { class: "x", "aria-label": "Don't include the selection", onclick: () => { draft.auto.element = null; drawChips(); } }, icon("x"))));
+  const cv = draft.auto.canvas;
+  if (cv) {
+    const names = cv.ids.map((id, i) => cv.nodes.find((n) => n && (n.id === id || n.node_id === id))?.name || cv.nodes[i]?.name || id);
+    chips.push(h("span", { class: "chip sel auto", title: "Selected on the canvas — goes with your next message.\n\n" + names.join("\n") }, icon("layers"),
+      h("span", { class: "nm" }, cv.ids.length === 1 ? names[0] : `${cv.ids.length} layers`),
+      h("button", { class: "x", "aria-label": "Don't include the canvas selection", onclick: () => { draft.dismissed.add(cv.key); draft.auto.canvas = null; drawChips(); } }, icon("x"))));
+  }
   mount(els.chips, chips);
   els.chips.classList.toggle("hidden", !chips.length);
 }
@@ -573,7 +730,8 @@ async function onSend() {
   if (!text) { if (chatRunning()) stop(); return; }
   const extra = {};
   if (draft.attachments.length) extra.attachments = draft.attachments.slice();
-  if (draft.selection) extra.selection = draft.selection;
+  const sel = draftSelection();
+  if (sel) extra.selection = sel;
   let sendText = text;
   if (draft.skills.length) {
     // kind skills map onto the turn's kind_skill; any other skill is named in the
@@ -585,7 +743,7 @@ async function onSend() {
     if (others.length) sendText += `\n\n(Before you start, read these skills with design_read_skill: ${others.join(", ")}.)`;
   }
   els.ta.value = ""; autosize();
-  draft.attachments = []; draft.selection = null; draft.skills = []; drawChips();
+  draft.attachments = []; clearDraftSelection(); draft.skills = []; drawChips();
   await sendToChat(sendText, extra);
 }
 async function submit(cid, text, extra) {

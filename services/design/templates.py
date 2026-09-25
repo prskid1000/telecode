@@ -135,3 +135,45 @@ def instantiate(tid: str, data: Optional[Dict[str, Any]] = None) -> Optional[Dic
     versions.snapshot(proj["id"], "user", prompt=f"From template “{rec['name']}”")
     store.set_project_fields(proj["id"], template_id=tid, intro_text=rec.get("intro_text") or "")
     return store.get_project(proj["id"])
+
+
+# ── Welcome sample project (first run) ───────────────────────────────────
+
+WELCOME_DIR = Path(__file__).parent / "welcome"
+
+
+def _welcome_marker() -> Path:
+    return store.base_dir() / ".welcome.json"
+
+
+def ensure_welcome() -> Optional[Dict[str, Any]]:
+    """Create the sample project once, on the very first gallery load.
+
+    Only when `design.welcome_project` is on (default), no project exists yet
+    (archived included) and the marker is absent — deleting the sample never
+    brings it back. Returns the new project or None.
+    """
+    import config
+    if not config.get_nested("design.welcome_project", True):
+        return None
+    marker = _welcome_marker()
+    if marker.exists() or not WELCOME_DIR.is_dir():
+        return None
+    if store.list_projects(include_archived=True):
+        store._write_json(marker, {"skipped": True, "at": _now_iso()})
+        return None
+    proj = store.create_project({"title": "Welcome to TeleDesign", "kind": "landing_page"})
+    dst = store.project_dir(proj["id"])
+    if dst:
+        for p in WELCOME_DIR.rglob("*"):
+            if p.is_file():
+                rel = p.relative_to(WELCOME_DIR).as_posix()
+                if store.safe_relpath(rel):
+                    out = dst / rel
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(p, out)
+        versions.snapshot(proj["id"], "user", prompt="Welcome sample")
+    store.set_project_fields(proj["id"], sample=True, title_locked=True)
+    store._write_json(marker, {"project_id": proj["id"], "at": _now_iso()})
+    logger.info("design: created the welcome sample project %s", proj["id"])
+    return store.get_project(proj["id"])

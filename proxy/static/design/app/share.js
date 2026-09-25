@@ -21,7 +21,8 @@ async function boot() {
   S.project = project;
   document.title = `${project.title || "Shared design"} — TeleDesign`;
   const canComment = meta.role === "comment" || meta.role === "edit";
-  const pages = (meta.files || []).filter((f) => isHtml(f.path) && !f.path.startsWith("uploads/") && !f.path.startsWith("_ds/"));
+  const pages = (meta.files || []).filter((f) => isHtml(f.path) && !f.path.startsWith("uploads/") && !f.path.startsWith("_ds/"))
+    .sort((a, b) => (b.path === "index.html") - (a.path === "index.html") || a.path.localeCompare(b.path));
   let active = new URLSearchParams(location.search).get("file");
   if (!pages.some((p) => p.path === active)) active = pages[0]?.path || null;
   let mode = "view", frame = null, comments = meta.comments || [];
@@ -37,7 +38,9 @@ async function boot() {
       h("span", { class: "brand" }, h("span", { class: "brand-mark" }, icon("edit")), "TeleDesign"),
       h("span", { class: "crumb-sep" }, "/"), h("b", { style: { fontSize: "13px" } }, project.title || "Shared design"),
       h("span", { class: "pill" }, meta.role === "view" ? "View only" : meta.role === "comment" ? "Can comment" : "Can edit"),
-      h("div", { class: "right" }, modeBtn, canComment ? btn("", { kind: "quiet", icon: "edit", title: "Your name on comments", onClick: async () => { const n = await promptDialog("Your name", { value: prefs.get("author", "Guest"), confirm: "Save" }); if (n) { prefs.set("author", n); drawComments(); } } }) : null, themeBtn)),
+      meta.snapshot ? h("span", { class: "faint share-snap", title: meta.snapshot.at || "" }, "Snapshot · " + relTime(meta.snapshot.at)) : null,
+      h("div", { class: "right" }, modeBtn,
+        meta.download_url && meta.download_url.startsWith("/api/design/s/") ? h("a", { class: "btn sm", href: meta.download_url, download: "", title: "Download these files as a ZIP" }, icon("download"), h("span", { class: "lbl" }, "Download")) : null, canComment ? btn("", { kind: "quiet", icon: "edit", title: "Your name on comments", onClick: async () => { const n = await promptDialog("Your name", { value: prefs.get("author", "Guest"), confirm: "Save" }); if (n) { prefs.set("author", n); drawComments(); } } }) : null, themeBtn)),
     h("div", { class: "ws" }, h("section", { class: "stage", style: { flex: 1 } }, tabs, h("div", { class: "stage-body" }, h("div", { class: "preview-area" }, stage))), side));
 
   function setMode(m) { mode = m; modeBtn?.classList.toggle("on", m === "comment"); if (frame) post(frame, { type: "td:set-mode", mode: m }); if (m === "comment") toast("Click anything in the design to comment on it."); }
@@ -48,7 +51,9 @@ async function boot() {
     if (frame) unregisterFrame(frame);
     clear(stage);
     if (!active) { mount(stage, h("div", { style: { display: "grid", placeItems: "center", height: "100%" } }, emptyState("eye", "Nothing to show yet", "This project has no pages."))); return; }
-    frame = makePreviewFrame(`${S.previewOrigin}/p/${encodeURIComponent(project.id)}/${active.split("/").map(encodeURIComponent).join("/")}?td_host=${encodeURIComponent(location.origin)}`, { file: active, role: "preview" });
+    // Snapshot links load the frozen copy (/s/<token>/…); older links the live project.
+    const base = typeof meta.pages_base === "string" && /^\/(s|p)\/[A-Za-z0-9_-]+\/$/.test(meta.pages_base) ? meta.pages_base : `/p/${encodeURIComponent(project.id)}/`;
+    frame = makePreviewFrame(`${S.previewOrigin}${base}${active.split("/").map(encodeURIComponent).join("/")}?td_host=${encodeURIComponent(location.origin)}`, { file: active, role: "preview" });
     stage.appendChild(h("div", { class: "device", style: { width: "100%", height: "100%", borderRadius: 0, boxShadow: "none" } }, frame));
   }
   function drawComments() {
@@ -60,7 +65,7 @@ async function boot() {
   }
   bus.on("preview", async ({ msg, info }) => {
     if (msg.type === "td:ready" && mode !== "view") post(frame, { type: "td:set-mode", mode });
-    if (msg.type === "td:navigate" && typeof msg.path === "string") { const p = msg.path.split(/[?#]/)[0]; if (pages.some((x) => x.path === p)) { active = p; drawTabs(); drawComments(); } }
+    if (msg.type === "td:navigate" && typeof msg.path === "string") { const p = msg.path.split(/[?#]/)[0].replace(/^s\/[A-Za-z0-9_-]+\//, ""); if (pages.some((x) => x.path === p)) { active = p; drawTabs(); drawComments(); } }
     if (msg.type !== "td:comment-target" || !canComment) return;
     const note = await promptDialog("Comment", { label: msg.td_id ? "#" + msg.td_id : msg.selector || "", multiline: true, confirm: "Add comment" });
     if (!note) return;

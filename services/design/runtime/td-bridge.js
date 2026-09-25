@@ -950,6 +950,17 @@
       return;
     }
     if (TD.mode === 'knobs' && knobEl && e.key === 'Escape') { swallow(e); closeKnobs(); return; }
+    // Undo / redo on the board as version steps: the host owns history, so the
+    // keys are forwarded (focus is inside this frame, where the host can't see
+    // them). A page's own inputs keep their native undo.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'z' || e.key === 'Z' || e.key === 'y' || e.key === 'Y')) {
+      var tgt = e.target, tn = tgt && tgt.tagName;
+      if (!(tn === 'INPUT' || tn === 'TEXTAREA' || tn === 'SELECT' || (tgt && tgt.isContentEditable))) {
+        swallow(e);
+        post({ type: 'td:key', action: (e.key === 'y' || e.key === 'Y' || e.shiftKey) ? 'redo' : 'undo' });
+        return;
+      }
+    }
     if (TD.mode === 'edit' && selEl) {
       var tag = e.target && e.target.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;

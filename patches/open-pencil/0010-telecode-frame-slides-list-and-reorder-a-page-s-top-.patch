@@ -1,0 +1,186 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Prithwiraj Samanta <app@datainsights.ae>
+Date: Fri, 25 Sep 2026 17:27:13 +0530
+Subject: [PATCH] =?UTF-8?q?telecode:=20frame=20slides=20=E2=80=94=20list?=
+ =?UTF-8?q?=20and=20reorder=20a=20page's=20top-level=20frames?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A page's top-level frames are its slides, in layer order. TeleDesign's
+Slides panel lists them (telecode_slides_list), reorders them by drag
+(telecode_slides_reorder, one undo step; the slides keep the child slots
+they occupied, and arrange=true lines them up left to right so the canvas
+reads in slide order), and presents / exports them to PDF through the
+regular export_image and export_pdf tools.
+---
+ scripts/telecode-dump-tools.ts            | 27 +++++++
+ src/app/integrations/telecode/commands.ts | 10 +++
+ src/app/integrations/telecode/slides.ts   | 86 +++++++++++++++++++++++
+ 3 files changed, 123 insertions(+)
+ create mode 100644 src/app/integrations/telecode/slides.ts
+
+diff --git a/scripts/telecode-dump-tools.ts b/scripts/telecode-dump-tools.ts
+index 92937d20..149e048e 100644
+--- a/scripts/telecode-dump-tools.ts
++++ b/scripts/telecode-dump-tools.ts
+@@ -181,6 +181,33 @@ const extra = [
+     enabled: true,
+     input_schema: schemaOf(v.object({}))
+   },
++  {
++    name: 'telecode_slides_list',
++    description:
++      'The current page\'s top-level frames as slides, in layer order (first child = slide 1): {page_id, page_name, slides:[{id, name, index, x, y, width, height, board?}]}.',
++    command: 'telecode_slides_list',
++    effect: 'read',
++    availability: 'default',
++    capabilities: ['document:read'],
++    enabled: true,
++    input_schema: schemaOf(v.object({}))
++  },
++  {
++    name: 'telecode_slides_reorder',
++    description:
++      'Reorder the page\'s top-level frames (slides) to follow `ids`; with arrange=true also line them up left to right in that order. One undo step. Returns the new slide list.',
++    command: 'telecode_slides_reorder',
++    effect: 'write',
++    availability: 'default',
++    capabilities: ['document:write'],
++    enabled: true,
++    input_schema: schemaOf(
++      v.object({
++        ids: v.pipe(v.array(v.string()), v.description('Slide node ids in the new order')),
++        arrange: v.optional(v.pipe(v.boolean(), v.description('Also reposition them in a row')))
++      })
++    )
++  },
+   {
+     name: 'get_codegen_prompt',
+     description:
+diff --git a/src/app/integrations/telecode/commands.ts b/src/app/integrations/telecode/commands.ts
+index 3fd92c21..b2b754c3 100644
+--- a/src/app/integrations/telecode/commands.ts
++++ b/src/app/integrations/telecode/commands.ts
+@@ -9,6 +9,8 @@
+  *   telecode_export_html  {id}             frame → standalone HTML      → {html, name, width, height}
+  *   telecode_variables_apply {collections} upsert collections / modes / variables by name
+  *   telecode_variables_read  {}            every collection, mode and value
++ *   telecode_slides_list     {}            top-level frames of the page, in order
++ *   telecode_slides_reorder  {ids, arrange?}
+  *
+  * They ride the same request/response protocol as the upstream commands; the
+  * proxy uses them to keep boards.json keyed by something that survives reloads.
+@@ -17,6 +19,7 @@ import type { AutomationTarget } from '@/app/automation/bridge/target'
+ 
+ import { isBoardKey, listBoards, markBoard, unmarkBoard } from './boards'
+ import { exportHTML, importHTML, importLayout, type LayoutSnapshot } from './html-layers'
++import { listSlides, reorderSlides } from './slides'
+ import { applyVariables, readVariables } from './variables'
+ 
+ type Handler = (target: AutomationTarget, args: unknown) => Promise<unknown>
+@@ -79,5 +82,12 @@ export const telecodeAutomationCommands: Partial<Record<string, Handler>> = {
+   },
+   async telecode_variables_read(target) {
+     return { ok: true, result: readVariables(target.store) }
++  },
++  async telecode_slides_list(target) {
++    return { ok: true, result: listSlides(target.store, target.pageId) }
++  },
++  async telecode_slides_reorder(target, args) {
++    const { ids, arrange } = record(args)
++    return { ok: true, result: await reorderSlides(target.store, target.pageId, ids, arrange === true) }
+   }
+ }
+diff --git a/src/app/integrations/telecode/slides.ts b/src/app/integrations/telecode/slides.ts
+new file mode 100644
+index 00000000..d0140891
+--- /dev/null
++++ b/src/app/integrations/telecode/slides.ts
+@@ -0,0 +1,86 @@
++/**
++ * Frame slides (telecode / TeleDesign).
++ *
++ * A page's top-level frames are its slides, in layer order (first child = slide 1).
++ * TeleDesign's Slides panel lists them, reorders them (one undo step, optionally
++ * lining them up left to right so the canvas reads in slide order too) and
++ * presents / exports them through the regular export_image / export_pdf tools.
++ */
++import type { SceneNode } from '@open-pencil/scene-graph'
++
++import type { EditorStore } from '@/app/editor/session'
++
++import { boardKeyOf } from './boards'
++
++const SLIDE_TYPES = new Set(['FRAME', 'COMPONENT', 'COMPONENT_SET', 'SECTION', 'INSTANCE'])
++const GAP = 100
++
++function isSlide(node: SceneNode | undefined): node is SceneNode {
++  return !!node && SLIDE_TYPES.has(node.type) && node.visible !== false
++}
++
++export function listSlides(store: EditorStore, pageId: string) {
++  const page = store.graph.getNode(pageId)
++  if (!page || page.type !== 'CANVAS') throw new Error(`Page not found: ${pageId}`)
++  const out = []
++  for (const id of page.childIds) {
++    const node = store.graph.getNode(id)
++    if (!isSlide(node)) continue
++    const board = boardKeyOf(node)
++    out.push({
++      id: node.id,
++      name: node.name,
++      type: node.type,
++      index: out.length + 1,
++      x: node.x,
++      y: node.y,
++      width: node.width,
++      height: node.height,
++      ...(board ? { board } : {})
++    })
++  }
++  return { page_id: page.id, page_name: page.name, slides: out }
++}
++
++export async function reorderSlides(
++  store: EditorStore,
++  pageId: string,
++  ids: unknown,
++  arrange: boolean
++) {
++  if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) {
++    throw new Error('"ids" must be an array of node ids')
++  }
++  const graph = store.graph
++  const page = graph.getNode(pageId)
++  if (!page || page.type !== 'CANVAS') throw new Error(`Page not found: ${pageId}`)
++  const current = page.childIds.filter((id) => isSlide(graph.getNode(id)))
++  const wanted = (ids as string[]).filter((id, i, all) => current.includes(id) && all.indexOf(id) === i)
++  const order = [...wanted, ...current.filter((id) => !wanted.includes(id))]
++  // The slots the slides occupy among all the page's children stay theirs.
++  const slots = page.childIds.flatMap((id, i) => (current.includes(id) ? [i] : []))
++
++  const before = store.snapshotPage()
++  await store.runMutationWithLayout(() => {
++    order.forEach((id, i) => {
++      graph.reorderChild(id, page.id, slots[i])
++    })
++    if (arrange && order.length) {
++      const nodes = order.map((id) => graph.getNode(id)!).filter(Boolean)
++      let x = Math.min(...nodes.map((n) => n.x))
++      const y = Math.min(...nodes.map((n) => n.y))
++      for (const n of nodes) {
++        graph.updateNode(n.id, { x: Math.round(x), y: Math.round(y) })
++        x += n.width + GAP
++      }
++    }
++  }, page.id)
++  const after = store.snapshotPage()
++  store.pushUndoEntry({
++    label: 'Reorder slides',
++    forward: () => store.restorePageFromSnapshot(after),
++    inverse: () => store.restorePageFromSnapshot(before)
++  })
++  store.requestRender()
++  return listSlides(store, page.id)
++}

@@ -51,6 +51,8 @@ const PREVIEW_TYPES = new Set([
   "__edit_mode_available", "__edit_mode_dismissed", "__edit_mode_set_keys",
   // The deck contract's reference skeleton uses this spelling; accept both.
   "slideIndexChanged", "td:pin-click", "td:pong",
+  // Ctrl+Z / Ctrl+Shift+Z pressed inside the page (focus is in the frame).
+  "td:key",
 ]);
 
 window.addEventListener("message", (e) => {

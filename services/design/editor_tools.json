@@ -1,7 +1,7 @@
 {
   "generated_by": "scripts/telecode-dump-tools.ts",
   "open_pencil_version": "0.15.1",
-  "count": 116,
+  "count": 125,
   "tools": [
     {
       "name": "get_selection",
@@ -5744,6 +5744,329 @@
       "name": "telecode_board_list",
       "description": "List every frame carrying a TeleDesign board key: [{key, node_id, name, page_id, x, y, width, height}].",
       "command": "telecode_board_list",
+      "effect": "read",
+      "availability": "default",
+      "capabilities": [
+        "document:read"
+      ],
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "description": "Optional OpenPencil document/tab ID to target"
+          },
+          "page_id": {
+            "type": "string",
+            "description": "Optional page ID to target within the document"
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "telecode_import_html",
+      "description": "Convert a web page into editable canvas layers in a new frame. Pass `src` (a project .html file): TeleDesign renders it in headless Edge after its scripts run and sends the measured layout (boxes, text, images, inline SVG) as `snapshot`. Or pass `html` (+ optional `css`) to run OpenPencil's DOM/CSS importer on static markup (no scripts; flexbox becomes auto-layout). `beside_id` places the new frame to the right of that node (e.g. the HTML board). Returns {id, name, width, height, nodes}. One undo step; the source stays.",
+      "command": "telecode_import_html",
+      "effect": "write",
+      "availability": "default",
+      "capabilities": [
+        "document:write"
+      ],
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "src": {
+            "type": "string",
+            "description": "Project-relative .html page to render and convert"
+          },
+          "width": {
+            "type": "number",
+            "description": "Viewport width to render src at (default 1440)"
+          },
+          "height": {
+            "type": "number",
+            "description": "Viewport height to render src at (default 900)"
+          },
+          "snapshot": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "Layout snapshot {width, height, title, root} (sent by TeleDesign for src)"
+          },
+          "html": {
+            "type": "string",
+            "description": "Static HTML markup (DOM/CSS importer)"
+          },
+          "css": {
+            "type": "string",
+            "description": "Extra CSS for the html importer"
+          },
+          "name": {
+            "type": "string",
+            "description": "Name of the new frame"
+          },
+          "x": {
+            "type": "number",
+            "description": "Canvas x of the new frame"
+          },
+          "y": {
+            "type": "number",
+            "description": "Canvas y of the new frame"
+          },
+          "beside_id": {
+            "type": "string",
+            "description": "Place the new frame to the right of this node"
+          },
+          "parent_id": {
+            "type": "string",
+            "description": "Parent node (default: the page)"
+          },
+          "document_id": {
+            "type": "string",
+            "description": "Optional OpenPencil document/tab ID to target"
+          },
+          "page_id": {
+            "type": "string",
+            "description": "Optional page ID to target within the document"
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "telecode_export_html",
+      "description": "Export a frame as one standalone HTML document (OpenPencil dom-css export: absolutely positioned elements, inline styles, images inlined). Returns {html, name, width, height}; with `path` the page is written into the project instead ({written, byteLength}) — then telecode_board_mark a new frame with src=path to show it as an HTML board.",
+      "command": "telecode_export_html",
+      "effect": "read",
+      "availability": "default",
+      "capabilities": [
+        "document:read"
+      ],
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Frame to export"
+          },
+          "path": {
+            "type": "string",
+            "description": "Project-relative .html path to write it to"
+          },
+          "document_id": {
+            "type": "string",
+            "description": "Optional OpenPencil document/tab ID to target"
+          },
+          "page_id": {
+            "type": "string",
+            "description": "Optional page ID to target within the document"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    },
+    {
+      "name": "telecode_variables_apply",
+      "description": "Upsert variable collections by name: {collections:[{name, modes:[mode names], default_mode?, variables:[{name, type: COLOR|FLOAT|STRING|BOOLEAN, values:{<mode name>: value}}]}]}. Creates missing collections, modes and variables, overwrites values, never deletes. TeleDesign uses it to mirror the design system's tokens.json (light/dark → modes). One undo step. Returns counts.",
+      "command": "telecode_variables_apply",
+      "effect": "write",
+      "availability": "default",
+      "capabilities": [
+        "document:write"
+      ],
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "collections": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "description": "Collections to upsert"
+          },
+          "document_id": {
+            "type": "string",
+            "description": "Optional OpenPencil document/tab ID to target"
+          },
+          "page_id": {
+            "type": "string",
+            "description": "Optional page ID to target within the document"
+          }
+        },
+        "required": [
+          "collections"
+        ]
+      }
+    },
+    {
+      "name": "telecode_variables_read",
+      "description": "Every variable collection with its modes and every variable's value per mode name (colours as #RRGGBB[AA], aliases as {alias:\"Collection/name\"}).",
+      "command": "telecode_variables_read",
+      "effect": "read",
+      "availability": "default",
+      "capabilities": [
+        "document:read"
+      ],
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "description": "Optional OpenPencil document/tab ID to target"
+          },
+          "page_id": {
+            "type": "string",
+            "description": "Optional page ID to target within the document"
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "telecode_slides_list",
+      "description": "The current page's top-level frames as slides, in layer order (first child = slide 1): {page_id, page_name, slides:[{id, name, index, x, y, width, height, board?}]}.",
+      "command": "telecode_slides_list",
+      "effect": "read",
+      "availability": "default",
+      "capabilities": [
+        "document:read"
+      ],
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "description": "Optional OpenPencil document/tab ID to target"
+          },
+          "page_id": {
+            "type": "string",
+            "description": "Optional page ID to target within the document"
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "telecode_slides_reorder",
+      "description": "Reorder the page's top-level frames (slides) to follow `ids`; with arrange=true also line them up left to right in that order. One undo step. Returns the new slide list.",
+      "command": "telecode_slides_reorder",
+      "effect": "write",
+      "availability": "default",
+      "capabilities": [
+        "document:write"
+      ],
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Slide node ids in the new order"
+          },
+          "arrange": {
+            "type": "boolean",
+            "description": "Also reposition them in a row"
+          },
+          "document_id": {
+            "type": "string",
+            "description": "Optional OpenPencil document/tab ID to target"
+          },
+          "page_id": {
+            "type": "string",
+            "description": "Optional page ID to target within the document"
+          }
+        },
+        "required": [
+          "ids"
+        ]
+      }
+    },
+    {
+      "name": "telecode_placeholder_set",
+      "description": "Mark a frame as work in progress: TeleDesign shows it hatched with a \"working…\" badge (label customisable) until your turn ends, when every mark is cleared. Mark a frame before a long build step on it; clear it yourself when done.",
+      "command": "telecode_placeholder_set",
+      "effect": "write",
+      "availability": "default",
+      "capabilities": [
+        "document:write"
+      ],
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "description": "Frame to mark"
+          },
+          "label": {
+            "type": "string",
+            "description": "Badge text (default \"Working…\")"
+          },
+          "document_id": {
+            "type": "string",
+            "description": "Optional OpenPencil document/tab ID to target"
+          },
+          "page_id": {
+            "type": "string",
+            "description": "Optional page ID to target within the document"
+          }
+        },
+        "required": [
+          "node_id"
+        ]
+      }
+    },
+    {
+      "name": "telecode_placeholder_clear",
+      "description": "Remove the \"working…\" mark from one frame (node_id), or from every frame when node_id is omitted.",
+      "command": "telecode_placeholder_clear",
+      "effect": "write",
+      "availability": "default",
+      "capabilities": [
+        "document:write"
+      ],
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "description": "Frame to unmark"
+          },
+          "document_id": {
+            "type": "string",
+            "description": "Optional OpenPencil document/tab ID to target"
+          },
+          "page_id": {
+            "type": "string",
+            "description": "Optional page ID to target within the document"
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "telecode_placeholder_list",
+      "description": "Frames currently marked \"working…\": [{node_id, name, label, at, stale, page_id, x, y, width, height}].",
+      "command": "telecode_placeholder_list",
       "effect": "read",
       "availability": "default",
       "capabilities": [

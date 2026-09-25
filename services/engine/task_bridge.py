@@ -9,7 +9,8 @@
 * the CLI pid is registered with the queue together with the runner's
   non-blocking ``stop`` so ``TaskQueue.cancel`` and the timeout watchdog take
   the graceful → tree-kill path;
-* the task's ``timeout_seconds`` is also handed to the runner;
+* the task's ``timeout_seconds`` is also handed to the runner, and its
+  metadata ``permission_mode`` / ``effort`` become the request's;
 * after a successful run, one row of session lineage (``sessions_index``);
 * P5: the task's ids (task / run / step / agent / job / trigger) become the
   request's ``correlation`` — OTel resource attributes for the CLI and the
@@ -27,9 +28,10 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from services.engine.adapters import get_adapter
-from services.engine.types import EngineRequest
+from services.engine.types import EFFORTS, EngineRequest
 
 logger = logging.getLogger("telecode.services.engine.task_bridge")
+
 
 
 def legacy_resume_writer(sid: str, ns: Optional[str], key: str) -> Callable[[str], None]:
@@ -96,7 +98,8 @@ def task_request(engine: str, *, prompt: str, cwd: Path, sid: Optional[str], mod
         on_event=on_event, on_progress=lambda p, m: task_utils.update_progress(p, m),
         cancel_check=task_utils.is_cancelled, on_spawn=on_spawn, on_exit=on_exit,
         session_id=sid, kill_grace_sec=app_config.tasks_kill_grace_seconds(),
-        permission_mode=((task.metadata or {}).get("permission_mode") if task else None) or None,
+        permission_mode=md.get("permission_mode") or None,
+        effort=md.get("effort") if md.get("effort") in EFFORTS else None,
         correlation=correlation,
     )
 

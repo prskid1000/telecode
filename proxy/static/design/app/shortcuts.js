@@ -37,6 +37,8 @@ const SHORTCUTS = [
   ["Canvas", ["Shift", "0"], "Zoom to 100%", (e) => e.shiftKey && e.code === "Digit0" && !mod(e), () => bus.emit("canvas-zoom", "100"), () => inProject() && S.view === "canvas"],
   ["Canvas", ["Double-click"], "Open a board in Preview", null, null],
   ["Preview", ["[", "/", "]"], "Previous / next slide", (e) => e.key === "[" || e.key === "]", (e) => bus.emit("preview-slide", e.key === "[" ? "prev" : "next"), () => inProject() && S.view === "preview"],
+  ["Preview", [MOD, "Z"], "Undo — step the page back a version", (e) => mod(e) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "z", (e) => { e.preventDefault(); import("./interact.js").then((m) => m.undoStep(S.activeFile, "undo")); }, () => inProject() && S.view === "preview" && !!S.activeFile],
+  ["Preview", [MOD, "Shift", "Z"], "Redo", (e) => mod(e) && !e.altKey && ((e.shiftKey && e.key.toLowerCase() === "z") || (!e.shiftKey && e.key.toLowerCase() === "y")), (e) => { e.preventDefault(); import("./interact.js").then((m) => m.undoStep(S.activeFile, "redo")); }, () => inProject() && S.view === "preview" && !!S.activeFile],
   ["Preview", [MOD, "R"], "Reload the page", (e) => mod(e) && e.key.toLowerCase() === "r" && !e.shiftKey, (e) => { e.preventDefault(); bus.emit("preview-reload"); }, () => inProject() && S.view === "preview", true],
   ["Chat", ["Enter"], "Send (queues while the agent works)", null, null],
   ["Chat", ["Shift", "Enter"], "New line", null, null],

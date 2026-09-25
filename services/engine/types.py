@@ -23,6 +23,17 @@ EVENT_KINDS = ("start", "delta", "narrative", "tool", "todo", "usage",
 
 ENGINES = ("claude_code", "codex", "antigravity")
 
+# Reasoning effort vocabulary (Claude Code's levels; each adapter maps it onto its CLI).
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
+def normalize_effort(value) -> str:
+    """"" (= the CLI's default) or one of EFFORTS; anything else is a ValueError."""
+    v = str(value or "").strip()
+    if v and v not in EFFORTS:
+        raise ValueError(f"effort must be one of {EFFORTS} (or empty)")
+    return v
+
 
 class EngineError(RuntimeError):
     """The CLI failed (non-zero exit with no output, error result, spawn failure)."""
@@ -78,11 +89,22 @@ class EngineRequest:
     max_tokens: Optional[int] = None
     max_seconds: Optional[float] = None
     env_extra: Dict[str, str] = field(default_factory=dict)
+    # Extra CLI flags appended to the adapter's argv (Claude only; TeleDesign's
+    # cost options: --strict-mcp-config, --tools, --setting-sources …).
+    extra_args: List[str] = field(default_factory=list)
     add_dirs: List[Path] = field(default_factory=list)
     # Autonomous runs (triggers): Claude --permission-mode <mode> --permission-prompts none
     # instead of --dangerously-skip-permissions. None / "skip" / "bypassPermissions" = skip.
     # "ask" (P5): permission prompts go to telecode's MCP approve_tool (web inbox + Telegram).
     permission_mode: Optional[str] = None
+    # Reasoning effort (low | medium | high | xhigh | max; None = the CLI's default):
+    # Claude --effort, Codex -c model_reasoning_effort=…, agy --effort (xhigh → high).
+    effort: Optional[str] = None
+    # Claude reports ``total_cost_usd`` cumulatively across a resumed session. The
+    # runner looks up the conversation's last reported total (sessions_repo
+    # cost_total) and subtracts it; this is only the caller's fallback when the
+    # shared table has no entry (e.g. TeleDesign's pre-existing per-chat record).
+    cost_base_usd: Optional[float] = None
     # Sinks (all optional). on_event gets every normalised event dict.
     on_event: Optional[Callable[[Dict[str, Any]], None]] = None
     on_progress: Optional[Callable[[float, str], None]] = None
@@ -105,7 +127,9 @@ class EngineResult:
     engine: str
     text: str = ""
     engine_session_id: Optional[str] = None
-    cost_usd: Optional[float] = None
+    cost_usd: Optional[float] = None       # this run's own cost (per-run, see cost_base_usd)
+    # The CLI's own figure before the per-run correction (Claude: cumulative per session).
+    cost_total_usd: Optional[float] = None
     duration_ms: int = 0
     duration_api_ms: int = 0
     num_turns: int = 0

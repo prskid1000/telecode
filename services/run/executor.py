@@ -255,6 +255,8 @@ def _resolve_step_config(step: Dict[str, Any], overrides: Dict[str, Any],
         "engine": engine,
         "model": str(pick("model", "") or "").strip(),
         "is_local": bool(is_local) if is_local is not None else False,
+        # step > run override (a trigger's effort); "" = the CLI's default
+        "effort": str(step.get("effort") or overrides.get("effort") or ""),
     }
 
 
@@ -410,6 +412,8 @@ def create_and_launch(job: Dict[str, Any], *, is_local: Optional[bool] = None, s
         overrides["permission_mode"] = job["permission_mode"]      # P5: a job can ask for "ask" / "auto"
     if trigger.get("session_policy"):
         overrides["session_policy"] = trigger["session_policy"]
+    if trigger.get("effort"):
+        overrides["effort"] = trigger["effort"]
     run_budget = {k: v for k, v in budget_mod.merge(budget, job.get("budget")).items() if v is not None}
 
     phase_sizes: Dict[int, int] = {}
@@ -1050,6 +1054,8 @@ def _run_unit(run: Dict[str, Any], step: Dict[str, Any], *, driver: _RunDriver, 
           "agent_id": agent_id, "engine": engine, **meta}
     if overrides.get("permission_mode"):
         md["permission_mode"] = overrides["permission_mode"]
+    if step.get("effort") or overrides.get("effort"):
+        md["effort"] = step.get("effort") or overrides.get("effort")   # → EngineRequest.effort
     if run.get("trigger_id"):
         md["trigger_id"] = run["trigger_id"]
     task_id = queue.submit_task(task_type=_engine_to_task_type(engine), params=params, metadata=md,

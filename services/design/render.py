@@ -20,10 +20,12 @@ line names *our* profile directory and retries once.
 
 Every page this module loads is a §5 preview-origin URL
 (`http://127.0.0.1:<design.preview_port>/p/<pid>/<file>`) or a `file://` URL of
-an export we wrote; nothing here navigates to a caller-supplied URL, so the SSRF
-boundary (`proxy/media_fetch.py`) is not crossed. `screenshot` / `eval_js` /
-`dom_snapshot` / `print_pdf` accept a URL for in-process callers only — REST
-callers must go through `preview_url()`.
+an export we wrote — with one exception, `browse()` (the `design_browser` tool),
+which opens a caller-supplied URL in a throwaway browser context where Edge makes
+no network request of its own: CDP `Fetch` hands every request to the host, which
+fetches it under `proxy/media_fetch.py`'s rules (see the section above `browse`).
+`screenshot` / `eval_js` / `dom_snapshot` / `print_pdf` accept a URL for
+in-process callers only — REST callers must go through `preview_url()`.
 
 Public API (async unless noted):
     screenshot(url, width, height, full_page=False, selector=None, steps=None, scale=1, fmt="png", quality=None)
@@ -32,7 +34,9 @@ Public API (async unless noted):
     print_pdf(url, landscape=False, width_px=None, height_px=None) -> bytes
     eval_js(url, code, width=1280, height=800) -> any
     dom_snapshot(url, width=1280, height=800) -> dict
-    verify(pid, files, screenshots=True) -> {"status": "pass"|"issues", "issues": [...], ...}
+    verify(pid, files, screenshots=True, layers=None) -> {"status": "pass"|"issues", "issues": [...],
+                                                          "pen_problems": str, ...}
+    browse(url, width, height, full_page=False, steps=None) -> {screenshot, outline, blocked, …}
     preview_url(pid, rel) / preview_origin()          (sync)
     stop()                                             (sync)
 """
@@ -423,8 +427,11 @@ def _exception_text(details: dict) -> str:
 
 
 class Page:
-    def __init__(self, conn: _Conn, width: int, height: int, scale: float, offline: bool) -> None:
+    def __init__(self, conn: _Conn, width: int, height: int, scale: float, offline: bool,
+                 context_id: Optional[str] = None) -> None:
         self.conn = conn
+        self.context_id = context_id
+        self.extra_handler: Optional[Callable[[str, dict], None]] = None
         self.width, self.height, self.scale, self.offline = int(width), int(height), float(scale), offline
         self.sid: Optional[str] = None
         self.target_id: Optional[str] = None
@@ -436,7 +443,10 @@ class Page:
         self._load = asyncio.Event()
 
     async def open(self) -> None:
-        r = await self.conn.send("Target.createTarget", {"url": "about:blank"})
+        params: Dict[str, Any] = {"url": "about:blank"}
+        if self.context_id:
+            params["browserContextId"] = self.context_id
+        r = await self.conn.send("Target.createTarget", params)
         self.target_id = r["targetId"]
         r = await self.conn.send("Target.attachToTarget", {"targetId": self.target_id, "flatten": True})
         self.sid = r["sessionId"]
@@ -468,6 +478,9 @@ class Page:
 
     # events
     def _on_event(self, method: str, p: dict) -> None:
+        if self.extra_handler is not None and method.startswith("Fetch."):
+            self.extra_handler(method, p)
+            return
         if method == "Page.loadEventFired":
             self._load.set()
         elif method == "Runtime.consoleAPICalled":
@@ -876,6 +889,214 @@ async def dom_snapshot(url: str, width: int = 1280, height: int = 800, max_nodes
         return snap
 
 
+# ── design_browser: open a caller-supplied URL, guarded ───────────────────
+#
+# The one place this module navigates to a URL a caller chose. The page runs in its
+# own throwaway browser context (no cookies/storage shared with preview renders),
+# and Edge itself never touches the network: CDP `Fetch` pauses every request and
+# the host fetches it with proxy/media_fetch.py's rules — http/https only, every
+# resolved address public, each redirect hop re-validated, byte caps while
+# streaming — then fulfils the request with the bytes. A request that fails the
+# rules is failed with `BlockedByClient` and listed in `blocked`. WebSockets are not
+# covered by `Fetch`, so they are refused outright with `Network.setBlockedURLs`.
+
+BROWSE_MAX_RESOURCE_BYTES = 16 * 1024 * 1024
+BROWSE_MAX_TOTAL_BYTES = 64 * 1024 * 1024
+BROWSE_MAX_REQUESTS = 400
+BROWSE_FETCH_TIMEOUT = 20.0
+_HOP_HEADERS = {"set-cookie", "set-cookie2", "content-encoding", "content-length", "transfer-encoding",
+                "connection", "keep-alive", "alt-svc", "strict-transport-security"}
+_FWD_REQUEST_HEADERS = {"accept", "accept-language", "user-agent", "content-type", "range", "referer"}
+
+
+class _GuardedFetcher:
+    def __init__(self) -> None:
+        self.allowed_hosts: Dict[str, bool] = {}
+        self.blocked: List[Dict[str, str]] = []
+        self.total = 0
+        self.count = 0
+        self.http: Optional[aiohttp.ClientSession] = None
+
+    async def __aenter__(self) -> "_GuardedFetcher":
+        self.http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=BROWSE_FETCH_TIMEOUT),
+                                          cookie_jar=aiohttp.DummyCookieJar())
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        if self.http:
+            await self.http.close()
+
+    async def check(self, url: str) -> None:
+        from proxy import media_fetch
+        from urllib.parse import urlsplit
+        u = urlsplit(url)
+        key = f"{u.scheme}://{(u.hostname or '').lower()}"
+        ok = self.allowed_hosts.get(key)
+        if ok is None:
+            try:
+                await asyncio.to_thread(media_fetch._check_url, url)
+                ok = True
+            except media_fetch.MediaFetchError as exc:
+                self.allowed_hosts[key] = False
+                raise RenderError(str(exc))
+            self.allowed_hosts[key] = ok
+        if not ok:
+            raise RenderError(f"refused host {u.hostname}")
+
+    async def fetch(self, url: str, method: str, headers: Dict[str, str],
+                    body: Optional[bytes]) -> Dict[str, Any]:
+        """One hop → {status, headers: [(k, v)], body: bytes}.
+
+        Redirects are *not* followed here: the 3xx goes back to Edge, whose next
+        request for the Location is paused and validated like any other — so every
+        hop passes the rules and the page keeps the right base URL.
+        """
+        if self.count >= BROWSE_MAX_REQUESTS:
+            raise RenderError("request budget exhausted")
+        self.count += 1
+        fwd = {k: v for k, v in (headers or {}).items() if k.lower() in _FWD_REQUEST_HEADERS}
+        await self.check(url)
+        assert self.http is not None
+        async with self.http.request(method, url, headers=fwd, data=body, allow_redirects=False) as resp:
+            chunks, size = [], 0
+            if not (300 <= resp.status < 400):
+                async for chunk in resp.content.iter_chunked(1 << 16):
+                    size += len(chunk)
+                    if size > BROWSE_MAX_RESOURCE_BYTES or self.total + size > BROWSE_MAX_TOTAL_BYTES:
+                        raise RenderError("resource exceeds the byte cap")
+                    chunks.append(chunk)
+            self.total += size
+            hdrs = [(k, v) for k, v in resp.headers.items() if k.lower() not in _HOP_HEADERS]
+            return {"status": resp.status, "headers": hdrs, "body": b"".join(chunks)}
+
+
+_OUTLINE_JS = r"""
+(maxLinks) => {
+  const txt = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+  const vis = (el) => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && cs.display !== 'none' && cs.visibility !== 'hidden'; };
+  const count = (m, k) => m.set(k, (m.get(k) || 0) + 1);
+  const top = (m, n) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, v]) => ({value: k, count: v}));
+  const fonts = new Map(), colors = new Map(), bgs = new Map();
+  let n = 0;
+  for (const el of document.querySelectorAll('body *')) {
+    if (++n > 3000) break;
+    const cs = getComputedStyle(el);
+    if (cs.backgroundColor && cs.backgroundColor !== 'rgba(0, 0, 0, 0)') count(bgs, cs.backgroundColor);
+    if ([...el.childNodes].some(c => c.nodeType === 3 && c.textContent.trim())) {
+      count(fonts, cs.fontFamily.split(',')[0].replace(/["']/g, '').trim()); count(colors, cs.color);
+    }
+  }
+  const heads = [...document.querySelectorAll('h1,h2,h3,h4')].filter(vis).slice(0, 60)
+    .map(h => ({level: +h.tagName[1], text: txt(h).slice(0, 140)}));
+  const land = [...document.querySelectorAll('header,nav,main,aside,footer,section,form,[role=banner],[role=navigation],[role=main],[role=contentinfo]')]
+    .filter(vis).slice(0, 40).map(e => { const r = e.getBoundingClientRect();
+      return {tag: e.tagName.toLowerCase(), role: e.getAttribute('role') || undefined, id: e.id || undefined,
+              label: (e.getAttribute('aria-label') || (e.querySelector('h1,h2,h3') ? txt(e.querySelector('h1,h2,h3')) : '')).slice(0, 80),
+              rect: [Math.round(r.x + scrollX), Math.round(r.y + scrollY), Math.round(r.width), Math.round(r.height)]}; });
+  const links = [...document.querySelectorAll('a[href]')].filter(vis).slice(0, maxLinks)
+    .map(a => ({text: txt(a).slice(0, 80), href: a.href.slice(0, 300)}));
+  const buttons = [...document.querySelectorAll('button,[role=button],input[type=submit],input[type=button]')].filter(vis)
+    .slice(0, 40).map(b => (txt(b) || b.value || b.getAttribute('aria-label') || '').slice(0, 60));
+  const images = [...document.querySelectorAll('img')].filter(vis).slice(0, 30)
+    .map(i => ({alt: (i.alt || '').slice(0, 100), src: (i.currentSrc || i.src || '').slice(0, 300),
+                size: [i.naturalWidth, i.naturalHeight]}));
+  const meta = (name) => { const m = document.querySelector(`meta[name="${name}"],meta[property="${name}"]`); return m ? m.content.slice(0, 300) : undefined; };
+  return {title: document.title, url: location.href, lang: document.documentElement.lang || undefined,
+          description: meta('description') || meta('og:description'),
+          size: {width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight},
+          headings: heads, landmarks: land, links, buttons, images,
+          inputs: document.querySelectorAll('input:not([type=hidden]),select,textarea').length,
+          fonts: top(fonts, 6), text_colors: top(colors, 6), background_colors: top(bgs, 6),
+          text: txt(document.body || document.documentElement).slice(0, 4000)};
+}
+"""
+
+
+async def browse(url: str, width: int = 1280, height: int = 800, full_page: bool = False,
+                 steps: Optional[List[dict]] = None, fmt: str = "jpeg", quality: int = 80,
+                 guarded: bool = True, max_links: int = 60) -> Dict[str, Any]:
+    """Load `url` headless and return {screenshot: bytes, mime, outline, blocked, console, final_url}.
+
+    `guarded=True` (every caller-supplied URL) routes all traffic through the
+    media_fetch rules described above. `guarded=False` is only for the §5 preview
+    origin, which is ours.
+    """
+    if guarded:
+        from urllib.parse import urlsplit
+        if urlsplit(url).scheme not in ("http", "https"):
+            raise RenderError("only http(s) URLs can be browsed")
+    width = max(320, min(int(width or 1280), 2560))
+    height = max(240, min(int(height or 800), 2560))
+    conn = await _get_conn()
+    _BROWSER.touch(+1)
+    context_id: Optional[str] = None
+    try:
+        async with conn.sem:
+            if guarded:
+                context_id = (await conn.send("Target.createBrowserContext", {"disposeOnDetach": True}))[
+                    "browserContextId"]
+            page = Page(conn, width, height, 1.0, False, context_id=context_id)
+            fetcher = _GuardedFetcher()
+            try:
+                await page.open()
+                async with fetcher:
+                    if guarded:
+                        loop = asyncio.get_running_loop()
+
+                        async def _serve(p: dict) -> None:
+                            rid = p.get("requestId")
+                            req = p.get("request") or {}
+                            rurl = req.get("url", "")
+                            method = (req.get("method") or "GET").upper()
+                            try:
+                                if method not in ("GET", "HEAD", "POST"):
+                                    raise RenderError(f"method {method} not allowed")
+                                body = None
+                                if method == "POST" and req.get("postData"):
+                                    body = str(req["postData"]).encode("utf-8")
+                                res = await fetcher.fetch(rurl, method, req.get("headers") or {}, body)
+                                await page.cmd("Fetch.fulfillRequest", {
+                                    "requestId": rid, "responseCode": int(res["status"]),
+                                    "responseHeaders": [{"name": k, "value": v} for k, v in res["headers"]],
+                                    "body": base64.b64encode(res["body"]).decode("ascii")}, timeout=30)
+                            except Exception as exc:
+                                if len(fetcher.blocked) < 100:
+                                    fetcher.blocked.append({"url": rurl[:300], "reason": str(exc)[:200]})
+                                try:
+                                    await page.cmd("Fetch.failRequest", {"requestId": rid,
+                                                                         "errorReason": "BlockedByClient"}, timeout=10)
+                                except Exception:
+                                    pass
+
+                        def _on_fetch(method: str, p: dict) -> None:
+                            if method == "Fetch.requestPaused":
+                                loop.create_task(_serve(p))
+                        page.extra_handler = _on_fetch
+                        await page.cmd("Network.setBlockedURLs", {"urls": ["ws://*", "wss://*"]})
+                        await page.cmd("Fetch.enable", {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]})
+                    await page.goto(url)
+                    await page.run_steps(steps)
+                    outline = await page.call(_OUTLINE_JS, int(max_links), timeout=30)
+                    shot = await page.capture("jpeg" if fmt == "jpeg" else "png",
+                                              quality if fmt == "jpeg" else None, full_page=full_page)
+                    return {"screenshot": shot, "mime": "image/jpeg" if fmt == "jpeg" else "image/png",
+                            "outline": outline, "blocked": list(fetcher.blocked),
+                            "console": list(page.errors)[:30], "final_url": (outline or {}).get("url", url),
+                            "bytes_fetched": fetcher.total, "requests": fetcher.count}
+            finally:
+                page.extra_handler = None
+                await page.close()
+                if context_id and not conn.closed:
+                    try:
+                        await conn.send("Target.disposeBrowserContext", {"browserContextId": context_id},
+                                        timeout=10)
+                    except Exception:
+                        pass
+    finally:
+        _BROWSER.touch(-1)
+
+
 # ── Thumbnails ───────────────────────────────────────────────────────────
 
 def primary_file(pid: str, preferred: Optional[str] = None) -> Optional[str]:
@@ -985,7 +1206,78 @@ _CHECKS_JS = r"""
     .filter(i => i.complete && i.naturalWidth === 0 && (i.currentSrc || i.getAttribute('src')))
     .map(i => ({where: path(i), src: (i.currentSrc || i.getAttribute('src')).slice(0, 200)}));
   const deepest = (els) => els.filter(el => !els.some(o => o !== el && el.contains(o)));
+  // WCAG 2.x contrast: text colour vs the colour actually behind it. The background
+  // is composited from the element's own and its ancestors' background-color up to
+  // the first opaque one (then white). When anything that is not a flat colour sits
+  // behind the text — a background-image/gradient, or an img/video/canvas/svg under
+  // it — the pair is "unknown" and skipped, never guessed: a false contrast failure
+  // would send the designer off to "fix" white text on a hero photo.
+  const cv = document.createElement('canvas'); cv.width = cv.height = 1;
+  const cx = cv.getContext('2d', {willReadFrequently: true});
+  const rgba = (c) => {
+    if (!c || c === 'transparent') return [0, 0, 0, 0];
+    const m = c.match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/);
+    if (m) {
+      let a = m[4] === undefined ? 1 : (m[4].endsWith('%') ? parseFloat(m[4]) / 100 : +m[4]);
+      return [+m[1], +m[2], +m[3], a];
+    }
+    try {  // oklch(), color(), lab() … — let the canvas convert to sRGB
+      cx.clearRect(0, 0, 1, 1); cx.fillStyle = '#000'; cx.fillStyle = c; cx.fillRect(0, 0, 1, 1);
+      const d = cx.getImageData(0, 0, 1, 1).data; return [d[0], d[1], d[2], d[3] / 255];
+    } catch (e) { return null; }
+  };
+  const over = (top, under) => {  // top (rgba) composited over an opaque colour
+    const a = top[3]; return [0, 1, 2].map(i => top[i] * a + under[i] * (1 - a));
+  };
+  const lum = (c) => {
+    const ch = c.slice(0, 3).map(v => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); });
+    return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+  };
+  const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+  const MEDIA = 'img,video,canvas,svg,picture,iframe,object,embed';
+  const behind = (el) => {
+    const r = el.getBoundingClientRect(); const layers = [];
+    for (let e = el; e && e.nodeType === 1; e = e.parentElement) {
+      const cs = getComputedStyle(e);
+      if (cs.backgroundImage && cs.backgroundImage !== 'none') return null;
+      if (e !== el) {
+        for (const m of e.querySelectorAll(MEDIA)) {
+          if (m === el || el.contains(m) || m.contains(el)) continue;
+          const mr = m.getBoundingClientRect();
+          if (mr.width && mr.height && mr.left < r.right && mr.right > r.left && mr.top < r.bottom && mr.bottom > r.top) return null;
+        }
+      }
+      const bg = rgba(cs.backgroundColor); if (!bg) return null;
+      if (bg[3] > 0) layers.push(bg);
+      if (bg[3] >= 0.999) break;
+    }
+    let col = [255, 255, 255];
+    for (let i = layers.length - 1; i >= 0; i--) col = over(layers[i], col);
+    return col;
+  };
+  const contrast = (root) => {
+    const out = [];
+    for (const el of textEls(root).slice(0, 600)) {
+      if (el.closest('button:disabled,input:disabled,select:disabled,textarea:disabled,[aria-disabled=true],[aria-hidden=true]')) continue;
+      const cs = getComputedStyle(el);
+      if (cs.textShadow && cs.textShadow !== 'none') continue;
+      if ((cs.webkitBackgroundClip || cs.backgroundClip) === 'text') continue;
+      const fg = rgba(cs.color); if (!fg || fg[3] < 0.1) continue;
+      const bg = behind(el); if (!bg) continue;
+      const ink = over(fg, bg);
+      const size = parseFloat(cs.fontSize), weight = parseInt(cs.fontWeight, 10) || 400;
+      const large = size >= 24 || (size >= 18.66 && weight >= 700);
+      const need = large ? 3 : 4.5, got = ratio(ink, bg);
+      if (got + 1e-6 < need) {
+        const hex = (c) => '#' + c.slice(0, 3).map(v => Math.round(v).toString(16).padStart(2, '0')).join('');
+        out.push({where: path(el), ratio: Math.round(got * 100) / 100, need, large, size,
+                  fg: hex(ink), bg: hex(bg), text: el.textContent.trim().slice(0, 40)});
+      }
+    }
+    return out.sort((a, b) => a.ratio - b.ratio);
+  };
   window.__tdChecks = {
+    contrast,
     page(minPx) {
       const de = document.documentElement, vw = de.clientWidth;
       const overflow = de.scrollWidth > vw + 1;
@@ -1002,7 +1294,8 @@ _CHECKS_JS = r"""
       const b = document.body;
       const blank = !b || (b.innerText.trim() === '' && !b.querySelector('img,svg,canvas,video,picture,iframe'));
       return {overflow_x: overflow, scroll_width: de.scrollWidth, viewport: vw, culprits,
-              small: small(b, minPx), targets: targets(b, 1), images: images(b), blank};
+              small: small(b, minPx), targets: targets(b, 1), images: images(b), blank,
+              contrast: contrast(b)};
     },
     slide(index, W, minPx) {
       const s = window.__tdDeck.slides()[index - 1];
@@ -1017,7 +1310,8 @@ _CHECKS_JS = r"""
       const blank = s.innerText.trim() === '' && !s.querySelector('img,svg,canvas,video,picture');
       return {label: s.getAttribute('data-td-screen') || '',
               offslide: deepest(off).slice(0, 5).map(el => ({where: path(el), text: el.textContent.trim().slice(0, 40)})),
-              small: small(s, minPx), targets: targets(s, factor), images: images(s), blank};
+              small: small(s, minPx), targets: targets(s, factor), images: images(s), blank,
+              contrast: contrast(s)};
     },
   };
   return true;
@@ -1032,6 +1326,29 @@ def _issue(severity: str, file: str, where: str, what: str, evidence: str, fix: 
 
 def _examples(items: List[dict], key: str = "where", n: int = 3) -> str:
     return "; ".join(str(i.get(key)) for i in items[:n])
+
+
+def contrast_issue(rel: str, items: List[dict]) -> Optional[Dict[str, str]]:
+    """One verifier issue for the text/background pairs below WCAG AA.
+
+    `major` when any pair is under 3:1 (unreadable for many people, and below even
+    the large-text bar), else `minor` — verifier.md's "contrast below 4.5:1 (3:1
+    large) on primary content" is judged by the model pass, which sees these too.
+    """
+    if not items:
+        return None
+    items = sorted(items, key=lambda c: c.get("ratio", 99))
+    worst = items[0]
+    severity = "major" if worst.get("ratio", 99) < 3 else "minor"
+    slides = sorted({c["slide"] for c in items if c.get("slide")})
+    evidence = "; ".join(f"{c.get('fg')} on {c.get('bg')} = {c.get('ratio')}:1 (needs {c.get('need'):g}:1, "
+                         f"{c.get('size'):g}px) \"{c.get('text', '')}\"" for c in items[:3])
+    return _issue(severity, rel, _examples(items),
+                  f"{len(items)} text element(s) below WCAG AA contrast (worst {worst.get('ratio')}:1"
+                  + (f", slides {slides[:6]}" if slides else "") + ")",
+                  evidence, "Darken the text or lighten its background (or the reverse) until normal text reaches "
+                            "4.5:1 and large text 3:1; use the design system's text/surface token pairs.",
+                  "contrast")
 
 
 async def _verify_file(pid: str, rel: str, shots: bool, max_slides: int = 40) -> Dict[str, Any]:
@@ -1071,6 +1388,9 @@ async def _verify_file(pid: str, rel: str, shots: bool, max_slides: int = 40) ->
                                      ", ".join(f"{t['w']}×{t['h']}" for t in tg[:3]),
                                      "Give buttons and controls a hit area of at least 44×44px (padding or min-width/min-height).",
                                      "hit_target"))
+            ci = contrast_issue(rel, res.get("contrast") or [])
+            if ci:
+                issues.append(ci)
             imgs = res.get("images") or []
             if shots:
                 p = out_dir / f"{stem}.png"
@@ -1091,7 +1411,7 @@ async def _verify_file(pid: str, rel: str, shots: bool, max_slides: int = 40) ->
                                      "Slide labels do not follow data-td-screen=\"NN Name\" (1-indexed)",
                                      "; ".join(bad_labels[:4]), "Label every slide \"NN Name\" in order, starting at 01.",
                                      "slide_label"))
-            counter_bad, forced, small_all, off_all, tg_all = [], [], [], [], []
+            counter_bad, forced, small_all, off_all, tg_all, con_all = [], [], [], [], [], []
             sticky: set = set()
             for i in range(1, count + 1):
                 nav = await deck_go(page, i, settle_ms=250)
@@ -1109,6 +1429,7 @@ async def _verify_file(pid: str, rel: str, shots: bool, max_slides: int = 40) ->
                 small_all += [dict(s, slide=i) for s in res.get("small") or []]
                 off_all += [dict(o, slide=i) for o in res.get("offslide") or []]
                 tg_all += [dict(t, slide=i) for t in res.get("targets") or []]
+                con_all += [dict(c, slide=i) for c in res.get("contrast") or []]
                 imgs += res.get("images") or []
                 if shots and i <= 12:
                     await page.hide([".deck-controls"])
@@ -1151,6 +1472,9 @@ async def _verify_file(pid: str, rel: str, shots: bool, max_slides: int = 40) ->
                                      f"{len(tg_all)} interactive element(s) on slides smaller than 44×44px",
                                      ", ".join(f"{t['w']}×{t['h']}" for t in tg_all[:3]),
                                      "Give controls a hit area of at least 44×44px.", "hit_target"))
+            ci = contrast_issue(rel, con_all)
+            if ci:
+                issues.append(ci)
             if count and not info.get("notes"):
                 pass  # notes are optional (only when the user asked) — reported by PPTX export, not here
 
@@ -1175,13 +1499,26 @@ async def _verify_file(pid: str, rel: str, shots: bool, max_slides: int = 40) ->
 _SEV_ORDER = {"blocker": 0, "major": 1, "minor": 2, "info": 3}
 
 
-async def verify(pid: str, files: List[str], screenshots: bool = True) -> Dict[str, Any]:
+def _layer_checks_enabled(layers: Optional[bool]) -> bool:
+    if layers is not None:
+        return bool(layers)
+    return bool(config.get_nested("design.verifier.layer_boards", True))
+
+
+async def verify(pid: str, files: List[str], screenshots: bool = True,
+                 layers: Optional[bool] = None) -> Dict[str, Any]:
     """Render checks for the verifier / done gate.
 
     Returns {"status": "pass"|"issues", "issues": [verifier.md items + "check"],
-             "screenshots": [paths], "console": {file: [errors]}, "decks": {file: info}}.
+             "screenshots": [paths], "console": {file: [errors]}, "decks": {file: info},
+             "pen_problems": str, "layers": {ran, skipped, problems, …}}.
     Non-HTML or missing files are skipped. Never raises for a page problem — a
     render failure becomes a blocker issue on that file.
+
+    Layer boards (`layers`, default `design.verifier.layer_boards` = true) are
+    checked with open-pencil's own analysis in the live editor
+    (`editor_bridge.inspect_layers`); with no editor attached the check is skipped
+    and the reason logged and returned — never guessed.
     """
     d = store.project_dir(pid)
     if not d:
@@ -1207,9 +1544,27 @@ async def verify(pid: str, files: List[str], screenshots: bool = True) -> Dict[s
         console[rel] = r["console"]
         if r["deck"].get("is_deck"):
             decks[rel] = r["deck"]
+    layer_report: Dict[str, Any] = {"ran": False, "skipped": "disabled", "issues": [], "problems": [],
+                                    "text": "", "screenshots": []}
+    if _layer_checks_enabled(layers) and (d / "doc.fig").is_file():
+        try:
+            from services.design import editor_bridge
+            layer_report = await editor_bridge.inspect_layers(
+                pid, shots_dir=(cache_dir(pid) / "verify") if screenshots else None)
+        except Exception as exc:
+            layer_report = {**layer_report, "skipped": f"layer inspection failed: {exc}"}
+        if layer_report.get("skipped"):
+            log.info("render: verify %s — layer boards not checked: %s", pid, layer_report["skipped"])
+        issues += layer_report.get("issues") or []
+        shots += layer_report.get("screenshots") or []
+    elif _layer_checks_enabled(layers):
+        layer_report["skipped"] = "project has no canvas (doc.fig)"
     issues.sort(key=lambda i: _SEV_ORDER.get(i["severity"], 9))
+    pen = layer_report.get("text") or (f"(not checked: {layer_report['skipped']})"
+                                       if layer_report.get("skipped") else "")
     return {"status": "issues" if issues else "pass", "issues": issues, "screenshots": shots,
-            "console": console, "decks": decks}
+            "console": console, "decks": decks, "pen_problems": pen,
+            "layers": {k: layer_report.get(k) for k in ("ran", "skipped", "problems", "typography")}}
 
 
 def sha256(data: bytes) -> str:

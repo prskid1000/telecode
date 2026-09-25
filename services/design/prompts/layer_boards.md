@@ -74,11 +74,16 @@ and any instances survive.
 1. **Tokens first.** `list_collections` / `list_variables` to see what exists (don't clobber it), then
    `create_collection` + `create_variable` for anything missing. Reference variables in JSX with
    `designVar('Color/accent')`; bind existing layers with `bind_variable` (colour fields use indexed
-   paths such as `fills/0/color`). When a design system is attached, its variables are already in the
-   document — use them.
+   paths such as `fills/0/color`). When a design system is attached and its variables are not in the
+   document yet (`telecode_variables_read` shows no `Color` collection), mirror its `tokens.json` with
+   `telecode_variables_apply` (`canvas.md` §10) rather than creating them one by one — then use them.
 2. **Components that repeat**, in the component row above the screens (see §4).
 3. **The board frame**, named for what it is, at its final width; height `"hug"` for screens that grow.
-   Give it a first rough pass quickly so the user sees the structure early.
+   Mark it in progress straight away — `telecode_placeholder_set` `{"node_id": "<frame id>", "label":
+   "Building pricing…"}` — so the user sees a hatched **working…** badge on it instead of a half-built
+   board. Clear it with `telecode_placeholder_clear` `{"node_id"}` when the board is done; every mark
+   left over is cleared when your turn ends anyway. Give it a first rough pass quickly so the user sees
+   the structure early.
 4. **Sections**, in the order a designer would lay them out, each a `render` into the board.
 5. **Check** (§5), then move to the next board. Finish a board before starting another.
 

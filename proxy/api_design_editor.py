@@ -9,6 +9,14 @@
     POST /api/design/projects/{pid}/editor/call   {tool, args?, timeout?, format?: "raw"|"mcp"}
     POST /api/design/projects/{pid}/editor/boards {node_id, src, width?, height?, key?}
     DELETE /api/design/projects/{pid}/editor/boards/{key}
+    POST /api/design/projects/{pid}/editor/convert        {direction:"to-layers", key?|src?} | {direction:"to-html", node_id, path?}
+    POST /api/design/projects/{pid}/editor/layer-preview  {node_id} → {path, url} (.layers/<slug>.html)
+    GET  /api/design/projects/{pid}/editor/tokens         where the tokens are + what would be mirrored
+    POST /api/design/projects/{pid}/editor/tokens/push    tokens.json → canvas variable collections
+    POST /api/design/projects/{pid}/editor/tokens/pull    canvas variables → tokens.json (+ tokens.css), diff
+    GET  /api/design/projects/{pid}/editor/slides         top-level frames of the current page, in order
+    POST /api/design/projects/{pid}/editor/slides/order   {ids, arrange?}
+    POST /api/design/projects/{pid}/editor/slides/pdf     {ids?} → application/pdf (vector, one page per slide)
 
 The build is produced by tools/build_open_pencil.py and is never edited by hand.
 Serving rules: `.wasm` is `application/wasm` (streaming compile refuses anything
@@ -31,7 +39,7 @@ from urllib.parse import urlsplit
 from aiohttp import web
 
 import config
-from services.design import editor_bridge, store
+from services.design import canvas_convert, canvas_tokens, editor_bridge, store
 
 logger = logging.getLogger("telecode.proxy.api_design_editor")
 
@@ -280,6 +288,167 @@ async def unregister_board(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, **result})
 
 
+# ── Canvas parity: convert, layer preview, tokens, slides (gaps #1 #3 #4 #14) ──
+
+def _bridge_error(exc: Exception) -> web.Response:
+    msg = str(exc)
+    if isinstance(exc, editor_bridge.EditorBridgeError) and msg == editor_bridge.APP_NOT_CONNECTED:
+        return web.json_response({"ok": False, "error": msg}, status=409)
+    if isinstance(exc, (editor_bridge.EditorBridgeError, canvas_convert.ConvertError, canvas_tokens.TokensError)):
+        return web.json_response({"ok": False, "error": msg}, status=400)
+    logger.exception("canvas route failed")
+    return web.json_response({"ok": False, "error": msg or exc.__class__.__name__}, status=502)
+
+
+async def convert(request: web.Request) -> web.Response:
+    """{direction: "to-layers", key?|src?, width?, height?} | {direction: "to-html", node_id, path?}"""
+    parsed, err = await _guarded_json(request)
+    if err:
+        return err
+    pid, data = parsed
+    try:
+        if data.get("direction") == "to-layers":
+            result = await canvas_convert.to_layers(pid, key=data.get("key"), src=data.get("src"),
+                                                    width=data.get("width"), height=data.get("height"),
+                                                    name=data.get("name"))
+        elif data.get("direction") == "to-html":
+            result = await canvas_convert.to_html(pid, data.get("node_id"), data.get("path"))
+        else:
+            return web.json_response({"ok": False, "error": 'direction must be "to-layers" or "to-html"'},
+                                     status=400)
+    except Exception as exc:
+        return _bridge_error(exc)
+    return web.json_response({"ok": True, **result})
+
+
+async def layer_preview(request: web.Request) -> web.Response:
+    parsed, err = await _guarded_json(request)
+    if err:
+        return err
+    pid, data = parsed
+    try:
+        result = await canvas_convert.layer_preview(pid, data.get("node_id"))
+    except editor_bridge.EditorBridgeError as exc:
+        # The previewed frame was deleted (or the canvas reloaded, renumbering ids):
+        # an expected outcome of a refresh, answered in-band so the pane just closes.
+        if str(exc).startswith("Node not found"):
+            return web.json_response({"ok": False, "missing": True, "error": str(exc)})
+        return _bridge_error(exc)
+    except Exception as exc:
+        return _bridge_error(exc)
+    return web.json_response({"ok": True, **result})
+
+
+async def tokens_info(request: web.Request) -> web.Response:
+    pid = request.match_info["project_id"]
+    pdir = store.project_dir(pid) if store.valid_id(pid) else None
+    if not pdir:
+        return web.json_response({"error": "Project not found"}, status=404)
+    try:
+        where, tokens = canvas_tokens.load(pdir)
+        payload = canvas_tokens.to_collections(tokens)
+    except canvas_tokens.TokensError as exc:
+        return web.json_response({"ok": False, "available": False, "error": str(exc)})
+    return web.json_response({"ok": True, "available": True, **where,
+                              "collections": [{"name": c["name"], "modes": c["modes"],
+                                               "variables": len(c["variables"])} for c in payload["collections"]],
+                              "count": payload["count"], "skipped": payload["skipped"]})
+
+
+async def tokens_push(request: web.Request) -> web.Response:
+    parsed, err = await _guarded_json(request)
+    if err:
+        return err
+    pid, _data = parsed
+    try:
+        where, tokens = canvas_tokens.load(store.project_dir(pid))
+        payload = canvas_tokens.to_collections(tokens)
+        body = await editor_bridge.call(pid, "telecode_variables_apply",
+                                        {"collections": payload["collections"]}, 60)
+    except Exception as exc:
+        return _bridge_error(exc)
+    return web.json_response({"ok": True, "source": where["json"], "count": payload["count"],
+                              "skipped": payload["skipped"], "report": body.get("result") or {}})
+
+
+async def tokens_pull(request: web.Request) -> web.Response:
+    """Write the canvas's variables back into the project's tokens (user-initiated: no approval)."""
+    parsed, err = await _guarded_json(request)
+    if err:
+        return err
+    pid, _data = parsed
+    try:
+        canvas_tokens.load(store.project_dir(pid))   # fail fast before asking the editor
+        body = await editor_bridge.call(pid, "telecode_variables_read", {}, 30)
+        result = canvas_tokens.pull(store.project_dir(pid), body.get("result") or {})
+    except Exception as exc:
+        return _bridge_error(exc)
+    if result["written"]:
+        try:
+            from services.design import events
+            events.publish(pid, "files", {"changed": result["written"], "origin": "canvas-tokens"})
+        except Exception:
+            logger.debug("tokens pull: files event not published", exc_info=True)
+    return web.json_response({"ok": True, **result})
+
+
+async def slides_list(request: web.Request) -> web.Response:
+    pid = request.match_info["project_id"]
+    if not store.valid_id(pid) or not store.get_project(pid):
+        return web.json_response({"error": "Project not found"}, status=404)
+    args = {"page_id": request.query["page_id"]} if request.query.get("page_id") else {}
+    try:
+        body = await editor_bridge.call(pid, "telecode_slides_list", args, 20)
+    except Exception as exc:
+        return _bridge_error(exc)
+    return web.json_response({"ok": True, **(body.get("result") or {})})
+
+
+async def slides_order(request: web.Request) -> web.Response:
+    parsed, err = await _guarded_json(request)
+    if err:
+        return err
+    pid, data = parsed
+    ids = data.get("ids")
+    if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids) or len(ids) > 500:
+        return web.json_response({"ok": False, "error": "ids must be a list of node ids"}, status=400)
+    try:
+        body = await editor_bridge.call(pid, "telecode_slides_reorder",
+                                        {"ids": ids, "arrange": bool(data.get("arrange", True))}, 30)
+    except Exception as exc:
+        return _bridge_error(exc)
+    return web.json_response({"ok": True, **(body.get("result") or {})})
+
+
+async def slides_pdf(request: web.Request) -> web.StreamResponse:
+    """{ids?: [...]} → one vector PDF of those slides in order (all slides when omitted)."""
+    parsed, err = await _guarded_json(request)
+    if err:
+        return err
+    pid, data = parsed
+    ids = data.get("ids")
+    try:
+        if not ids:
+            listing = await editor_bridge.call(pid, "telecode_slides_list", {}, 20)
+            ids = [s["id"] for s in (listing.get("result") or {}).get("slides") or [] if isinstance(s, dict)]
+        if not isinstance(ids, list) or not ids or not all(isinstance(i, str) for i in ids) or len(ids) > 500:
+            return web.json_response({"ok": False, "error": "No slides to export"}, status=400)
+        body = await editor_bridge.call(pid, "export_pdf", {"ids": ids}, 120)
+    except Exception as exc:
+        return _bridge_error(exc)
+    result = body.get("result") or {}
+    b64 = result.get("base64") if isinstance(result, dict) else None
+    if not isinstance(b64, str):
+        return web.json_response({"ok": False, "error": "The editor returned no PDF"}, status=502)
+    import base64
+    data_bytes = base64.b64decode(b64)
+    title = re.sub(r"[^A-Za-z0-9._ -]+", "", (store.get_project(pid) or {}).get("title") or "slides").strip() or "slides"
+    return web.Response(body=data_bytes, content_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="{title[:60]} - slides.pdf"',
+        "Cache-Control": "no-store",
+    })
+
+
 def register_routes(app: web.Application):
     app.router.add_get("/design/editor", redirect_editor)
     app.router.add_get("/design/editor/{path:.*}", serve_editor)
@@ -294,3 +463,12 @@ def register_routes(app: web.Application):
     app.router.add_post("/api/design/projects/{project_id}/canvas/call", editor_call)
     app.router.add_post("/api/design/projects/{project_id}/editor/boards", register_board)
     app.router.add_delete("/api/design/projects/{project_id}/editor/boards/{key}", unregister_board)
+    P = "/api/design/projects/{project_id}/editor"
+    app.router.add_post(P + "/convert", convert)
+    app.router.add_post(P + "/layer-preview", layer_preview)
+    app.router.add_get(P + "/tokens", tokens_info)
+    app.router.add_post(P + "/tokens/push", tokens_push)
+    app.router.add_post(P + "/tokens/pull", tokens_pull)
+    app.router.add_get(P + "/slides", slides_list)
+    app.router.add_post(P + "/slides/order", slides_order)
+    app.router.add_post(P + "/slides/pdf", slides_pdf)

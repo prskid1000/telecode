@@ -64,6 +64,10 @@ The tools you will use most:
 | Check your work | `analyze_overlaps` · `analyze_spacing` · `analyze_typography` · `analyze_colors` · `export_image` (`ids`, `scale`) |
 | Pages and view | `create_page` · `switch_page` · `viewport_zoom_to_fit` (`ids`) · `select_nodes` (`ids`) |
 | HTML boards | `telecode_board_mark` · `telecode_board_list` · `telecode_board_unmark` (§5) |
+| Convert (§8) | `telecode_import_html` (`src`, `beside_id`) · `telecode_export_html` (`id`, `path`) |
+| Design tokens | `telecode_variables_read` · `telecode_variables_apply` (upsert collections / modes / variables by name) |
+| Slides (§10) | `telecode_slides_list` · `telecode_slides_reorder` (`ids`, `arrange`) · `export_pdf` (`ids`) |
+| Work in progress | `telecode_placeholder_set` (`node_id`, `label`) · `telecode_placeholder_clear` (`node_id`) · `telecode_placeholder_list` |
 | Code | `get_codegen_prompt` (read before exporting code) · `get_jsx` · `design_to_tokens` · `design_to_component_map` |
 
 `{"tool": "list"}` returns every tool with its argument schema. A misspelled tool fails with
@@ -117,7 +121,9 @@ same `key` and the new `src`. Never put layers inside an HTML board frame — th
 
 Every board has **Canvas | Code | Preview**:
 - Layer board — Canvas: the rendered layers. Code: generated JSX / Tailwind / HTML+CSS from the layers
-  (the editor's Code panel; editable, re-imported on commit). Preview: that code running in an iframe.
+  (the editor's Code panel; editable, re-imported on commit). Preview: the board's HTML export
+  (`telecode_export_html`) running in the preview origin, re-exported every time the canvas saves —
+  so give layers real names and keep text as `Text`, because that is what the preview shows.
 - HTML board — Canvas: the live page at board size. Code: the source file(s). Preview: the page
   full-window.
 
@@ -125,9 +131,17 @@ You change a board through its source of truth (tools for layers, files for HTML
 
 ## 8. Convert
 
-**HTML → layers.** Build a new layer board beside the source, named `<source name> (layers)`; the
-source board stays. The host gives you a DOM snapshot of the rendered page (element tree, computed
-styles, rects). Rebuild it with `render`:
+The canvas toolbar has **To layers** (on a selected HTML board) and **To HTML** (on a selected frame);
+when the user asks you instead, use the same two tools.
+
+**HTML → layers.** `telecode_import_html` `{"src": "pricing.html", "beside_id": "<board node id>",
+"name": "Pricing — V1 (layers)"}` renders the page in a headless browser (after its scripts run) and
+builds every painted box, text run, image and inline SVG as layers in a new frame beside the source,
+at the measured positions — one undo step; the source board stays. The result is faithful but flat
+(absolute positions, no auto-layout, no components). When the user wants an editable spec rather than
+a picture of the page, refine the imported board in place: wrap rows and columns in auto-layout
+frames, turn repeats into components, bind colours to variables — or, for a small page, rebuild it by
+hand with `render`, following these rules:
 - Flex containers → frames with the same direction, gap, padding and alignment (`flex`, `gap`, `p`,
   `justify`, `items`). CSS grid → `grid` with `columns` / `rows` when it is a real grid; otherwise rows.
 - Widths that fill their parent → `w="fill"`; shrink-to-content → `w="hug"`; fixed → numbers. Never
@@ -142,11 +156,28 @@ styles, rects). Rebuild it with `render`:
 - `position: absolute` overlays → `position="absolute"` with `x` / `y`.
 - Interactions, animation and script state do not survive; list what was dropped in a note board.
 
-**Layers → code.** Read `get_codegen_prompt`, then `get_jsx` on the board, and write the result as a
-new HTML board (new file, e.g. `checkout-code.html`) beside the source, per `code_export.md`. Layer
-names become component and class names; variables become CSS custom properties.
+**Layers → HTML.** For a faithful static page, `telecode_export_html` `{"id": "<frame id>", "path":
+"checkout.html"}` writes the frame as one standalone HTML file; then create a frame beside the source
+and `telecode_board_mark` it with that `src` (§5). For real code (semantic markup, flex layout,
+tokens), read `get_codegen_prompt`, then `get_jsx` on the board, and write the result as a new HTML
+board (new file, e.g. `checkout-code.html`) beside the source, per `code_export.md`. Layer names
+become component and class names; variables become CSS custom properties.
 
 Never convert in place, and never delete the source.
+
+## 10. Slides and design tokens on the canvas
+
+**Frame slides.** A page's top-level frames are its slides, in layer order (first child = slide 1):
+`telecode_slides_list` reads them, `telecode_slides_reorder` `{"ids": [...], "arrange": true}` puts
+them in a new order (and lines them up left to right). The user presents them from the Slides panel
+(Ctrl+Enter) and exports them to PDF — one page per slide at the frame's size. Build a layer deck as
+1920×1080 frames named `Deck / 01 Title`, `Deck / 02 Problem`, … in one row.
+
+**Tokens.** When the project has a design system, its `tokens.json` is mirrored into variable
+collections — `Color` (one mode per theme, e.g. `light` / `dark`), `Spacing`, `Radius`, `Typography`
+(`font-size/lg`, `font-weight/bold`, `font-family/body`, …) — by the canvas's **Tokens → Push** (or
+`telecode_variables_apply` with the same shape). Bind layers to those variables instead of copying hex
+values. **Tokens → Pull** writes variables the user edited back into `tokens.json` and `tokens.css`.
 
 ## 9. Working alongside the user
 

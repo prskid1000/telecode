@@ -8,6 +8,7 @@ import { S, loadProjects, loadSystems, writeUrl } from "./state.js";
 let el = null;
 let q = "", sort = prefs.get("sort", "updated"), layout = prefs.get("layout", "grid"), kindFilter = "";
 const selected = new Set();
+let welcomeTried = false;
 
 // Deterministic placeholder art per project — a miniature of the kind of thing it is.
 function hash(s) { let x = 2166136261; for (const c of String(s)) { x ^= c.charCodeAt(0); x = Math.imul(x, 16777619); } return x >>> 0; }
@@ -96,6 +97,12 @@ async function renderProjects(main) {
     listHost);
   try { await Promise.all([loadProjects(), S.systems.length ? null : loadSystems()]); }
   catch (e) { mount(listHost, emptyState("alert", "Couldn't load projects", e.message, btn("Try again", { onClick: () => renderProjects(main) }))); return; }
+  // First run: the server creates the sample project once (never again after it's deleted).
+  if (!S.projects.length && !welcomeTried) {
+    welcomeTried = true;
+    const r = await tryApi("POST", "/api/design/welcome", {}, { feature: "welcome" }).catch(() => null);
+    if (r && r.project) await loadProjects().catch(() => {});
+  }
   drawList(listHost);
 }
 

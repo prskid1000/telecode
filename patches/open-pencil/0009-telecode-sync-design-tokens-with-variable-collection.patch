@@ -1,0 +1,311 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Prithwiraj Samanta <app@datainsights.ae>
+Date: Fri, 25 Sep 2026 17:27:03 +0530
+Subject: [PATCH] telecode: sync design tokens with variable collections
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+telecode_variables_apply upserts collections, modes and variables by name
+(ids are document-local), so TeleDesign can mirror a design system's
+tokens.json — light/dark themes become modes of one collection — and
+pushing twice is a no-op. Nothing is deleted. One undo step restores the
+whole variable state. telecode_variables_read returns every collection
+with its modes and each variable's value per mode name (colours as hex,
+aliases as Collection/name) for the reverse sync.
+---
+ scripts/telecode-dump-tools.ts             |  26 +++
+ src/app/integrations/telecode/commands.ts  |   9 +
+ src/app/integrations/telecode/variables.ts | 213 +++++++++++++++++++++
+ 3 files changed, 248 insertions(+)
+ create mode 100644 src/app/integrations/telecode/variables.ts
+
+diff --git a/scripts/telecode-dump-tools.ts b/scripts/telecode-dump-tools.ts
+index e5f57e13..92937d20 100644
+--- a/scripts/telecode-dump-tools.ts
++++ b/scripts/telecode-dump-tools.ts
+@@ -155,6 +155,32 @@ const extra = [
+       })
+     )
+   },
++  {
++    name: 'telecode_variables_apply',
++    description:
++      'Upsert variable collections by name: {collections:[{name, modes:[mode names], default_mode?, variables:[{name, type: COLOR|FLOAT|STRING|BOOLEAN, values:{<mode name>: value}}]}]}. Creates missing collections, modes and variables, overwrites values, never deletes. TeleDesign uses it to mirror the design system\'s tokens.json (light/dark → modes). One undo step. Returns counts.',
++    command: 'telecode_variables_apply',
++    effect: 'write',
++    availability: 'default',
++    capabilities: ['document:write'],
++    enabled: true,
++    input_schema: schemaOf(
++      v.object({
++        collections: v.pipe(v.array(v.record(v.string(), v.unknown())), v.description('Collections to upsert'))
++      })
++    )
++  },
++  {
++    name: 'telecode_variables_read',
++    description:
++      'Every variable collection with its modes and every variable\'s value per mode name (colours as #RRGGBB[AA], aliases as {alias:"Collection/name"}).',
++    command: 'telecode_variables_read',
++    effect: 'read',
++    availability: 'default',
++    capabilities: ['document:read'],
++    enabled: true,
++    input_schema: schemaOf(v.object({}))
++  },
+   {
+     name: 'get_codegen_prompt',
+     description:
+diff --git a/src/app/integrations/telecode/commands.ts b/src/app/integrations/telecode/commands.ts
+index 955bd61b..3fd92c21 100644
+--- a/src/app/integrations/telecode/commands.ts
++++ b/src/app/integrations/telecode/commands.ts
+@@ -7,6 +7,8 @@
+  *   telecode_import_html  {snapshot | html, css?, name?, x?, y?, beside_id?, parent_id?}
+  *                                          page → layers in a new frame → {id, name, nodes, …}
+  *   telecode_export_html  {id}             frame → standalone HTML      → {html, name, width, height}
++ *   telecode_variables_apply {collections} upsert collections / modes / variables by name
++ *   telecode_variables_read  {}            every collection, mode and value
+  *
+  * They ride the same request/response protocol as the upstream commands; the
+  * proxy uses them to keep boards.json keyed by something that survives reloads.
+@@ -15,6 +17,7 @@ import type { AutomationTarget } from '@/app/automation/bridge/target'
+ 
+ import { isBoardKey, listBoards, markBoard, unmarkBoard } from './boards'
+ import { exportHTML, importHTML, importLayout, type LayoutSnapshot } from './html-layers'
++import { applyVariables, readVariables } from './variables'
+ 
+ type Handler = (target: AutomationTarget, args: unknown) => Promise<unknown>
+ 
+@@ -70,5 +73,11 @@ export const telecodeAutomationCommands: Partial<Record<string, Handler>> = {
+     const id = text(record(args).id)
+     if (!id) throw new Error('Missing "id"')
+     return { ok: true, result: await exportHTML(target.store, id) }
++  },
++  async telecode_variables_apply(target, args) {
++    return { ok: true, result: applyVariables(target.store, record(args)) }
++  },
++  async telecode_variables_read(target) {
++    return { ok: true, result: readVariables(target.store) }
+   }
+ }
+diff --git a/src/app/integrations/telecode/variables.ts b/src/app/integrations/telecode/variables.ts
+new file mode 100644
+index 00000000..d106bfd6
+--- /dev/null
++++ b/src/app/integrations/telecode/variables.ts
+@@ -0,0 +1,213 @@
++/**
++ * Design tokens ⇄ variable collections (telecode / TeleDesign).
++ *
++ * TeleDesign keeps a project's tokens in tokens.json; services/design/canvas_tokens.py
++ * turns them into the payload below and back. Everything is matched by *name*
++ * (collection name, mode name, variable name) — ids are document-local — so an
++ * apply is an idempotent upsert: missing collections/modes/variables are created,
++ * existing values are overwritten, and nothing the user added is removed.
++ *
++ *   apply {collections: [{name, modes: [name…], default_mode?, variables: [
++ *            {name, type: COLOR|FLOAT|STRING|BOOLEAN, values: {<mode name>: "<value>"}}]}]}
++ *   read  → {collections: [{id, name, default_mode, modes: [{id, name}], variables: [
++ *            {id, name, type, values: {<mode name>: "#RRGGBB[AA]" | number | string | boolean |
++ *            {alias: "<collection>/<variable>"}}}]}]}
++ *
++ * An apply is one undo step.
++ */
++import { colorToHex8, parseColor } from '@open-pencil/core/color'
++import { generateId } from '@open-pencil/scene-graph'
++import type {
++  Variable,
++  VariableCollection,
++  VariableType,
++  VariableValue
++} from '@open-pencil/scene-graph'
++
++import type { EditorStore } from '@/app/editor/session'
++
++const TYPES = new Set<VariableType>(['COLOR', 'FLOAT', 'STRING', 'BOOLEAN'])
++const MAX_VARIABLES = 4000
++
++type ApplyVariable = { name?: unknown; type?: unknown; values?: unknown }
++type ApplyCollection = {
++  name?: unknown
++  modes?: unknown
++  default_mode?: unknown
++  variables?: unknown
++}
++
++function str(value: unknown): string {
++  return typeof value === 'string' ? value.trim() : ''
++}
++
++function parseValue(type: VariableType, raw: unknown): VariableValue | undefined {
++  if (raw === null || raw === undefined) return undefined
++  if (type === 'COLOR') {
++    if (typeof raw !== 'string' || !raw.trim()) return undefined
++    return parseColor(raw.trim())
++  }
++  if (type === 'FLOAT') {
++    const n = typeof raw === 'number' ? raw : Number.parseFloat(String(raw))
++    return Number.isFinite(n) ? n : undefined
++  }
++  if (type === 'BOOLEAN') return raw === true || raw === 'true'
++  return String(raw)
++}
++
++function sameValue(a: VariableValue | undefined, b: VariableValue): boolean {
++  return JSON.stringify(a) === JSON.stringify(b)
++}
++
++type VariableState = {
++  collections: VariableCollection[]
++  variables: Variable[]
++  activeMode: Array<[string, string]>
++}
++
++function snapshot(store: EditorStore): VariableState {
++  const g = store.graph
++  return {
++    collections: [...g.variableCollections.values()].map((c) => structuredClone(c)),
++    variables: [...g.variables.values()].map((v) => structuredClone(v)),
++    activeMode: [...g.activeMode.entries()]
++  }
++}
++
++function restore(store: EditorStore, state: VariableState): void {
++  const g = store.graph
++  const keep = new Set(state.variables.map((v) => v.id))
++  for (const id of [...g.variables.keys()]) if (!keep.has(id)) g.removeVariable(id)
++  const keepCollections = new Set(state.collections.map((c) => c.id))
++  for (const id of [...g.variableCollections.keys()]) {
++    if (!keepCollections.has(id)) g.removeCollection(id)
++  }
++  for (const c of state.collections) g.variableCollections.set(c.id, structuredClone(c))
++  for (const v of state.variables) g.variables.set(v.id, structuredClone(v))
++  g.activeMode.clear()
++  for (const [k, m] of state.activeMode) g.activeMode.set(k, m)
++  store.requestRender()
++}
++
++export function applyVariables(store: EditorStore, payload: unknown) {
++  const input = (payload && typeof payload === 'object' ? payload : {}) as { collections?: unknown }
++  if (!Array.isArray(input.collections)) throw new Error('Missing "collections"')
++  const g = store.graph
++  const before = snapshot(store)
++  const report = { collections_created: 0, modes_created: 0, created: 0, updated: 0, unchanged: 0, skipped: [] as string[] }
++  let total = 0
++
++  for (const raw of input.collections as ApplyCollection[]) {
++    const cname = str(raw?.name)
++    if (!cname) continue
++    const modeNames = (Array.isArray(raw.modes) ? raw.modes : []).map(str).filter(Boolean)
++    if (!modeNames.length) modeNames.push('Value')
++    let collection = [...g.variableCollections.values()].find((c) => c.name === cname)
++    if (!collection) {
++      collection = g.createCollection(cname)
++      // A new collection starts with one "Mode 1": it becomes the first mode.
++      g.renameMode(collection.id, collection.modes[0].modeId, modeNames[0])
++      report.collections_created++
++    }
++    const modeIds = new Map<string, string>()
++    for (const m of collection.modes) modeIds.set(m.name, m.modeId)
++    for (const name of modeNames) {
++      if (modeIds.has(name)) continue
++      const id = generateId()
++      g.addMode(collection.id, id, name)
++      modeIds.set(name, id)
++      report.modes_created++
++    }
++    const defaultName = str(raw.default_mode)
++    if (defaultName && modeIds.has(defaultName)) {
++      g.setDefaultMode(collection.id, modeIds.get(defaultName)!)
++      if (report.collections_created) g.setActiveMode(collection.id, modeIds.get(defaultName)!)
++    }
++
++    const existing = new Map(g.getVariablesForCollection(collection.id).map((v) => [v.name, v]))
++    for (const rv of (Array.isArray(raw.variables) ? raw.variables : []) as ApplyVariable[]) {
++      const vname = str(rv?.name)
++      const type = str(rv?.type).toUpperCase() as VariableType
++      if (!vname || !TYPES.has(type)) {
++        report.skipped.push(`${cname}/${vname || '?'}`)
++        continue
++      }
++      if (++total > MAX_VARIABLES) throw new Error(`Too many variables (> ${MAX_VARIABLES})`)
++      const values = (rv.values && typeof rv.values === 'object' ? rv.values : {}) as Record<string, unknown>
++      let variable = existing.get(vname)
++      if (variable && variable.type !== type) {
++        report.skipped.push(`${cname}/${vname} (is ${variable.type})`)
++        continue
++      }
++      const parsed = new Map<string, VariableValue>()
++      for (const [mode, value] of Object.entries(values)) {
++        const modeId = modeIds.get(mode)
++        const v = parseValue(type, value)
++        if (modeId && v !== undefined) parsed.set(modeId, v)
++      }
++      if (!variable) {
++        const first = parsed.values().next().value
++        variable = g.createVariable(vname, type, collection.id, first)
++        existing.set(vname, variable)
++        for (const [modeId, v] of parsed) variable.valuesByMode[modeId] = structuredClone(v)
++        report.created++
++        continue
++      }
++      let changed = false
++      for (const [modeId, v] of parsed) {
++        if (sameValue(variable.valuesByMode[modeId], v)) continue
++        variable.valuesByMode[modeId] = structuredClone(v)
++        changed = true
++      }
++      if (changed) report.updated++
++      else report.unchanged++
++    }
++  }
++
++  const after = snapshot(store)
++  if (report.collections_created || report.modes_created || report.created || report.updated) {
++    store.pushUndoEntry({
++      label: 'Sync design tokens',
++      forward: () => restore(store, after),
++      inverse: () => restore(store, before)
++    })
++  }
++  store.requestRender()
++  return report
++}
++
++function exportValue(store: EditorStore, variable: Variable, value: VariableValue | undefined): unknown {
++  if (value === undefined) return null
++  if (typeof value === 'object' && value && 'aliasId' in value) {
++    const target = store.graph.variables.get(value.aliasId)
++    const col = target ? store.graph.variableCollections.get(target.collectionId) : undefined
++    return { alias: target ? `${col?.name ?? '?'}/${target.name}` : value.aliasId }
++  }
++  if (variable.type === 'COLOR' && typeof value === 'object') {
++    return colorToHex8(value as { r: number; g: number; b: number; a: number })
++  }
++  return value
++}
++
++export function readVariables(store: EditorStore) {
++  const g = store.graph
++  return {
++    collections: [...g.variableCollections.values()].map((c) => {
++      const modeName = new Map(c.modes.map((m) => [m.modeId, m.name]))
++      return {
++        id: c.id,
++        name: c.name,
++        default_mode: modeName.get(c.defaultModeId) ?? null,
++        modes: c.modes.map((m) => ({ id: m.modeId, name: m.name })),
++        variables: g.getVariablesForCollection(c.id).map((v) => ({
++          id: v.id,
++          name: v.name,
++          type: v.type,
++          values: Object.fromEntries(
++            c.modes.map((m) => [m.name, exportValue(store, v, v.valuesByMode[m.modeId])])
++          )
++        }))
++      }
++    })
++  }
++}

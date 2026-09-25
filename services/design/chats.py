@@ -1,7 +1,7 @@
 """Project chats and their turn records (docs/teledesign-contract.md §3, §4.2, §4.5).
 
-    chats/index.json        [{id, title, engine, is_local, effort, session_id, created_at, updated_at,
-                              continuing_from?}]
+    chats/index.json        [{id, title, engine, is_local, effort, model, permission_mode, session_id,
+                              created_at, updated_at, continuing_from?}]
     chats/<cid>.jsonl       one turn record per line (user and assistant), rewritten atomically
     chats/<cid>.md          transcript in handoff format, rewritten after every turn
 
@@ -29,6 +29,25 @@ logger = logging.getLogger("telecode.services.design.chats")
 SESSION_NAMESPACE = "design"
 ENGINES = ("claude_code", "codex", "antigravity")
 EFFORTS = (None, "low", "medium", "high", "xhigh", "max")
+# Permission modes for a design turn — the trigger / job vocabulary, mapped per
+# engine by the adapters (CLAUDE.md "Permission modes"). None = design.permission_mode.
+PERMISSION_MODES = (None, "auto", "acceptEdits", "dontAsk", "plan", "ask", "skip")
+DEFAULT_PERMISSION_MODE = "acceptEdits"
+
+
+def default_permission_mode() -> str:
+    """``design.permission_mode`` (default acceptEdits: a design turn only edits
+    files in its project folder)."""
+    v = config.get_nested("design.permission_mode", DEFAULT_PERMISSION_MODE)
+    return v if v in PERMISSION_MODES and v else DEFAULT_PERMISSION_MODE
+
+
+def clean_permission_mode(value: Any) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    if value not in PERMISSION_MODES:
+        raise ValueError("invalid permission_mode (one of " + ", ".join(m for m in PERMISSION_MODES if m) + ")")
+    return value
 # A model is passed to the CLI as a single argv value on a shell=True spawn, so
 # only characters that need no quoting: Claude aliases/full names, Codex slugs,
 # agy ids, llama model keys.
@@ -92,6 +111,8 @@ def _clean_opts(data: Dict[str, Any], base: Dict[str, Any]) -> Dict[str, Any]:
         out["effort"] = data["effort"]
     if "model" in data:
         out["model"] = clean_model(data["model"])
+    if "permission_mode" in data:
+        out["permission_mode"] = clean_permission_mode(data["permission_mode"])
     return out
 
 
@@ -132,6 +153,7 @@ def create_chat(pid: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "is_local": bool(config.get_nested("design.default_is_local", False)),
             "effort": None,
             "model": None,          # None = design.models.* default, then the CLI's own
+            "permission_mode": None,  # None = design.permission_mode (acceptEdits)
             "session_id": session_id_for(pid, cid),
             "created_at": now,
             "updated_at": now,

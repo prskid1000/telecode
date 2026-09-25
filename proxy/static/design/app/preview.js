@@ -5,8 +5,30 @@ import { h, icon, btn, mount, clear, bus, prefs, menu, tryApi, P_, encPath, empt
 import { S, previewUrl, htmlFiles, writeUrl } from "./state.js";
 import { makePreviewFrame, unregisterFrame, post } from "./bridge.js";
 import { modeToolbar, openFile, closeTab, setMode } from "./workspace.js";
-import { live, toggleTweaks } from "./interact.js";
+import { live, toggleTweaks, undoStep, refreshUndo, undoInfo } from "./interact.js";
 import { boardSize } from "./canvas.js";
+import { features } from "./core.js";
+
+// Relay the live preview console to the host (POST …/console/live), so an agent's
+// design_get_console(source="live") reads what the user's own preview logged.
+const consoleRelayed = new WeakSet();
+const consoleRelayFiles = new Set();
+let consoleRelayTimer = 0;
+bus.on("console", (file) => {
+  consoleRelayFiles.add(file);
+  if (!consoleRelayTimer) consoleRelayTimer = setTimeout(flushConsoleRelay, 400);
+});
+function flushConsoleRelay() {
+  consoleRelayTimer = 0;
+  const files = [...consoleRelayFiles];
+  consoleRelayFiles.clear();
+  if (!S.project || features.consoleRelay === false) return;
+  for (const file of files) {
+    const entries = (live.console.get(file) || []).filter((l) => !consoleRelayed.has(l));
+    entries.forEach((l) => consoleRelayed.add(l));
+    if (entries.length) tryApi("POST", P_(S.project.id) + "/console/live", { file, entries: entries.slice(-200) }, { feature: "consoleRelay" }).catch(() => {});
+  }
+}
 
 const DEVICES = [
   { id: "fit", label: "Fill", icon: "fit", w: 0, h: 0 },
@@ -51,8 +73,17 @@ export function render(body, bar) {
   const tweaksBtn = btn("Tweaks", { icon: "sliders", cls: "sm hidden", title: "Show the page's live controls", onClick: () => { const t = live.tweaks.get(S.activeFile); toggleTweaks(S.activeFile, !(t && t.on)); } });
   const notesBtn = btn("", { kind: "quiet", icon: "notes", cls: "sm hidden", title: "Speaker notes", onClick: () => { showNotes = !showNotes; prefs.set("notes", showNotes); drawBody(); } });
   const consoleBtn = h("button", { class: "btn quiet sm", title: "Console", onclick: () => { showConsole = !showConsole; drawBody(); } });
-  const presentBtn = btn("Present", { icon: "present", cls: "sm hidden", onClick: () => present() });
-  bar.append(tb, h("span", { class: "divider-v" }), devSeg, devBtn, zoomBtn, deckBox, h("span", { class: "grow" }), tweaksBtn, notesBtn, consoleBtn,
+  const presentBtn = btn("Present", { icon: "present", cls: "sm hidden present-btn", title: "Present", onClick: () => present() });
+  // Undo / redo = step the active file back / forward through its versions.
+  const undoBtn = btn("", { kind: "quiet", icon: "undo", cls: "sm", title: "Undo — previous version of this page  (Ctrl+Z)", onClick: () => S.activeFile && undoStep(S.activeFile, "undo") });
+  const redoBtn = btn("", { kind: "quiet", icon: "redo", cls: "sm", title: "Redo  (Ctrl+Shift+Z)", onClick: () => S.activeFile && undoStep(S.activeFile, "redo") });
+  const drawUndo = () => {
+    const u = undoInfo.get(S.activeFile) || {};
+    undoBtn.disabled = !u.can_undo; redoBtn.disabled = !u.can_redo;
+    const gone = features.undo === false || !S.activeFile || !isHtml(S.activeFile);
+    undoBtn.classList.toggle("hidden", gone); redoBtn.classList.toggle("hidden", gone);
+  };
+  bar.append(tb, h("span", { class: "divider-v" }), devSeg, devBtn, zoomBtn, deckBox, h("span", { class: "grow" }), undoBtn, redoBtn, tweaksBtn, notesBtn, consoleBtn,
     btn("", { kind: "quiet", icon: "refresh", cls: "sm", title: "Reload  (Ctrl+R)", onClick: () => reload() }),
     btn("", { kind: "quiet", icon: "external", cls: "sm", title: "Open in a new tab", onClick: () => S.activeFile && window.open(previewUrl(pid, S.activeFile), "_blank", "noopener") }),
     presentBtn);
@@ -166,7 +197,7 @@ export function render(body, bar) {
     return z > 0 ? z : 1;
   }
   function reload() { if (frame && S.activeFile) frame.src = previewUrl(pid, S.activeFile, "&r=" + Date.now()); }
-  function drawAll() { drawTabs(); drawBar(); drawBody(); }
+  function drawAll() { drawTabs(); drawBar(); drawBody(); drawUndo(); refreshUndo(S.activeFile).then(drawUndo); }
 
   function present() {
     import("./present.js").then((m) => m.present(S.activeFile, live.slides.get(S.activeFile)));
@@ -185,6 +216,7 @@ export function render(body, bar) {
     bus.on("files-changed", () => drawTabs()),
     bus.on("preview-slide", (a) => slide(a)),
     bus.on("preview-reload", reload),
+    bus.on("undo-state", (e) => { if (e.file === S.activeFile) drawUndo(); }),
   );
   return () => { ro.disconnect(); offs.forEach((f) => f()); tb._cleanup && tb._cleanup(); if (frame) unregisterFrame(frame); };
 }

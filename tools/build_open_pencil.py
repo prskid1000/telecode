@@ -220,7 +220,7 @@ def _bundled_package_dirs(src: Path, dist: Path) -> Dict[str, Path]:
             pkg_dir = (base / s[: idx + len("node_modules/") + len(name)]).resolve()
             # Workspace packages (symlinked into node_modules) are OpenPencil itself;
             # @open-pencil/yoga-layout etc. from the registry are third-party builds.
-            if (src / "packages") in pkg_dir.parents:
+            if (src.resolve() / "packages") in pkg_dir.parents:
                 continue
             if (pkg_dir / "package.json").is_file():
                 found[name] = pkg_dir
@@ -367,7 +367,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--skip-install", action="store_true", help="reuse node_modules as-is")
     args = ap.parse_args(argv)
 
-    src = (args.src or source_dir()).resolve()
+    # absolute(), not resolve(): a short alias for the source dir (subst drive or
+    # junction) has to survive, because Windows' MAX_PATH breaks native addons
+    # (sharp's DLL) loaded from deep paths.
+    src = (args.src or source_dir()).absolute()
     timer = _Timer()
     _log(f"open-pencil {args.tag} → {src}")
     with timer.step("checkout"):

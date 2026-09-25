@@ -24,6 +24,12 @@ is enforced by Claude itself (``--max-budget-usd``). The final ``usage``
 event is emitted *before* the adapter's ``finish`` so a run that ends in an
 error still reports what it spent.
 
+Cost: an adapter with ``cumulative_cost`` (Claude) reports a resumed
+conversation's cost cumulatively; the runner subtracts the conversation's last
+recorded total (:mod:`services.engine.cost`), so ``usage`` / ``done`` events,
+the span and the result carry the run's own cost (``result.cost_total_usd``
+keeps the CLI's figure).
+
 Cancellation raises :class:`EngineCancelled` ("Task cancelled"), a timeout
 :class:`EngineTimeout` ("timeout"), a CLI failure :class:`EngineError` with
 the CLI's own stderr — the messages the handlers always raised, which
@@ -41,6 +47,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from services.engine import cost
 from services.engine.adapters import get_adapter
 from services.engine.adapters.base import ParseState
 from services.engine.drain import StreamDrain
@@ -151,6 +158,8 @@ def _run(req: EngineRequest, span) -> EngineResult:
     def progress(p: float, msg: str) -> None:
         _safe(req.on_progress, p, msg)
 
+    if adapter.cumulative_cost:
+        req.cost_base_usd = cost.lookup_base(req.engine, req.resume_id, req.cost_base_usd)
     extras = engine_extras(req)
     if extras.get("add_dirs"):
         req.add_dirs = list(req.add_dirs or []) + [Path(d) for d in extras["add_dirs"] if d]
@@ -163,6 +172,8 @@ def _run(req: EngineRequest, span) -> EngineResult:
           **prompt_digest(req.prompt), "resumed": bool(req.resume_id),
           adapter.resume_start_key: req.resume_id, "is_local": req.is_local,
           **({"model": req.model} if req.model else {}),
+          **({"effort": req.effort} if req.effort else {}),
+          **({"permission_mode": req.permission_mode} if req.permission_mode else {}),
           **({"fork": True} if req.fork and req.resume_id else {}),
           **({"budget": {k: v for k, v in (("max_usd", req.max_usd), ("max_tokens", req.max_tokens),
                                            ("max_seconds", req.max_seconds)) if v}}
@@ -276,6 +287,14 @@ def _run(req: EngineRequest, span) -> EngineResult:
                 p.unlink()
 
     wall_ms = int((time.monotonic() - started) * 1000)
+    reported = adapter.reported_total_cost(st)
+    if reported is not None and adapter.cumulative_cost:
+        # Even for a run that then fails (e.g. its budget): the next resume's base.
+        cost.record_total(req.engine, st.session_id or req.resume_id, reported)
+    # Subtract only from the same conversation continued (or forked from it): a
+    # different id without a fork means the CLI started over — its figure is its own.
+    if req.cost_base_usd is not None and not req.fork and st.session_id and st.session_id != req.resume_id:
+        req.cost_base_usd = None
     reason = stop["reason"]
     if reason is None and req.cancel_check is not None:
         with contextlib.suppress(Exception):
@@ -297,6 +316,8 @@ def _run(req: EngineRequest, span) -> EngineResult:
         emit(e)
     ue = adapter.usage_event(st)
     if ue:
+        if adapter.cumulative_cost and ue.get("cost_usd") is not None:
+            ue["cost_usd"] = cost.per_run_cost(ue["cost_usd"], req.cost_base_usd)
         emit(ue)
     try:
         result = adapter.finish(req, st, getattr(proc, "returncode", None), stderr, wall_ms)
@@ -305,6 +326,9 @@ def _run(req: EngineRequest, span) -> EngineResult:
               **({"budget_exceeded": True} if isinstance(exc, EngineBudgetExceeded) else {})})
         raise
     result.log_path = str(req.log_path) if req.log_path else None
+    result.cost_total_usd = result.cost_usd
+    if adapter.cumulative_cost:
+        result.cost_usd = cost.per_run_cost(result.cost_usd, req.cost_base_usd)
     progress(1.0, "done")
     tok = result.tokens or {}
     emit({"kind": "done", "tool_count": len(result.tool_calls), "cost_usd": result.cost_usd,

@@ -617,9 +617,35 @@ _SPLASH_TEMPLATE = (
 )
 
 
-async def build_standalone(pid: str, rel: str, *, splash: bool = True,
+def _noscript_fallback(shot: Optional[bytes], title: str) -> str:
+    """`<noscript>` block: hides the page's own (script-dependent) markup and shows a
+    static picture of the rendered design instead. Without a render, just a note."""
+    img = ""
+    if shot:
+        try:
+            from PIL import Image
+            im = Image.open(io.BytesIO(shot)).convert("RGB")
+            if im.width > 1280:
+                im = im.resize((1280, max(1, round(im.height * 1280 / im.width))), Image.LANCZOS)
+            buf = io.BytesIO()
+            im.save(buf, "WEBP", quality=72)
+            img = (f'<img alt="{title} — static snapshot" src="{_data_uri(buf.getvalue(), "image/webp")}" '
+                   f'style="display:block;width:100%;max-width:{im.width}px;height:auto;margin:0 auto">')
+        except Exception as exc:
+            log.info("export: noscript picture skipped: %s", exc)
+    return ('<noscript><style>body>*:not(noscript){display:none !important}</style>'
+            '<div style="font:500 13px/1.5 system-ui,sans-serif;padding:10px 14px;background:#fff8e1;color:#5d4200;'
+            'border-bottom:1px solid #f0d890">This design is interactive and needs JavaScript. '
+            f'Below is a static snapshot of {title}.</div>{img}</noscript>')
+
+
+async def build_standalone(pid: str, rel: str, *, splash: bool = True, noscript: bool = True,
                            progress: Optional[Callable[[float, str], None]] = None) -> Tuple[str, Dict[str, Any]]:
-    """Return (html, report) for a single self-contained file of project page `rel`."""
+    """Return (html, report) for a single self-contained file of project page `rel`.
+
+    `noscript` adds a `<noscript>` fallback: a static full-page picture of the
+    rendered design (and the page's own markup hidden), so a reader with
+    JavaScript off still sees the design instead of an empty React root."""
     pdir = store.project_dir(pid)
     if not pdir or not store.safe_relpath(rel) or not (pdir / rel).is_file():
         raise ExportError("file not found")
@@ -744,29 +770,42 @@ async def build_standalone(pid: str, rel: str, *, splash: bool = True,
         blob = "\n".join(deferred)
         doc = doc[:closing.start()] + blob + doc[closing.start():] if closing else doc + blob
 
-    if splash:
+    shot = None
+    if splash or noscript:
         if progress:
             progress(0.8, "Rendering splash thumbnail")
+        try:
+            # One full-page render feeds both: the splash crops its top, the
+            # no-JS fallback shows all of it.
+            shot = await render.screenshot(render.preview_url(pid, rel), 1280, 800, full_page=noscript, fmt="jpeg",
+                                           quality=72, hide_selectors=[".deck-controls"])
+        except Exception as exc:
+            log.info("export: splash/noscript render skipped: %s", exc)
+    title = html_mod.escape((store.get_project(pid) or {}).get("title") or rel)
+    inject = ""
+    if splash:
         img = ""
         try:
-            png = await render.screenshot(render.preview_url(pid, rel), 1280, 800, fmt="jpeg", quality=70,
-                                          hide_selectors=[".deck-controls"])
-            from PIL import Image
-            im = Image.open(io.BytesIO(png)).convert("RGB")
-            im = im.resize((480, max(1, round(im.height * 480 / im.width))), Image.LANCZOS)
-            buf = io.BytesIO()
-            im.save(buf, "WEBP", quality=70)
-            img = (f'<img alt="" src="{_data_uri(buf.getvalue(), "image/webp")}" style="width:min(480px,70vw);'
-                   f'height:auto;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.45)">')
+            if shot:
+                from PIL import Image
+                im = Image.open(io.BytesIO(shot)).convert("RGB")
+                im = im.crop((0, 0, im.width, min(im.height, round(im.width * 800 / 1280))))
+                im = im.resize((480, max(1, round(im.height * 480 / im.width))), Image.LANCZOS)
+                buf = io.BytesIO()
+                im.save(buf, "WEBP", quality=70)
+                img = (f'<img alt="" src="{_data_uri(buf.getvalue(), "image/webp")}" style="width:min(480px,70vw);'
+                       f'height:auto;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.45)">')
         except Exception as exc:
             log.info("export: splash thumbnail skipped: %s", exc)
-        title = html_mod.escape((store.get_project(pid) or {}).get("title") or rel)
-        splash_html = _SPLASH_TEMPLATE.format(img=img, title=title)
+        inject += _SPLASH_TEMPLATE.format(img=img, title=title)
+    if noscript:
+        inject += _noscript_fallback(shot, title)
+    if inject:
         m = _BODY_OPEN_RE.search(doc)
         if m:
-            doc = doc[:m.end()] + splash_html + doc[m.end():]
+            doc = doc[:m.end()] + inject + doc[m.end():]
         else:
-            doc = splash_html + doc
+            doc = inject + doc
 
     report = {"remote_inlined": inl.remote, "unresolved": inl.unresolved,
               "integrity_failed": inl.integrity_failed, "js_asset_refs": inl.js_refs, "bytes": len(doc)}
@@ -784,6 +823,7 @@ def _standalone_flags(ctx: JobCtx, report: Dict[str, Any]) -> None:
 
 async def _export_html(ctx: JobCtx) -> Path:
     doc, report = await build_standalone(ctx.pid, ctx.file, splash=ctx.options.get("splash", True) is not False,
+                                         noscript=ctx.options.get("noscript", True) is not False,
                                          progress=ctx.progress)
     _standalone_flags(ctx, report)
     out = ctx.out_dir / ctx.name("html")

@@ -350,6 +350,70 @@ async def design_delete_file(project_id: str, path: str) -> str:
         return _err(e)
 
 
+async def _file_op(op: str, project_id: str, src: str, dst: str, overwrite: bool) -> str:
+    try:
+        pid = _p(project_id)
+        return _dump(await _req("POST", f"/api/design/projects/{pid}/file-ops",
+                                body={"op": op, "from": _rel(src), "to": _rel(dst), "overwrite": overwrite}))
+    except Exception as e:
+        return _err(e)
+
+
+@mcp_app.tool()
+async def design_copy_file(project_id: str, src: str, dst: str, overwrite: bool = False) -> str:
+    """Copy a project file or folder (e.g. `checkout.html` → `checkout-v2.html`, or `screens/` → `screens-v2/`).
+
+    A copy of a registered deliverable is registered too (same name/group/subtitle/viewport,
+    status needs-review), so the Review tab shows the new take. `dst` ending in `/` or naming
+    an existing folder copies into it. Refuses to overwrite unless `overwrite=true`.
+    """
+    return await _file_op("copy", project_id, src, dst, overwrite)
+
+
+@mcp_app.tool()
+async def design_move_file(project_id: str, src: str, dst: str, overwrite: bool = False) -> str:
+    """Move / rename a project file or folder. Its Review-tab registration (id and status)
+    and any HTML board on the canvas that renders it follow it to the new path."""
+    return await _file_op("move", project_id, src, dst, overwrite)
+
+
+@mcp_app.tool()
+async def design_browser(url: str = "", project_id: str = "", file: str = "", width: int = 1280,
+                         height: int = 800, full_page: bool = False, steps: list[dict] | None = None,
+                         save_path: str = ""):
+    """Open a web page in TeleDesign's headless browser: a screenshot plus a DOM outline
+    (title, headings, landmarks, links, buttons, images, top fonts and colours, text excerpt).
+
+    Use it to look at a reference site, a competitor, or the user's live product before
+    designing. `url` must be public http(s): every request the page makes is fetched by
+    telecode under its URL guard (no localhost / LAN / metadata addresses; blocked requests
+    are listed). Or pass `project_id` + `file` to outline a project page. `steps` run before
+    capture like design_screenshot's. With `project_id` + `save_path` the screenshot is
+    saved into the project (e.g. `references/acme-home.jpg`) instead of returned.
+    """
+    from mcp.server.fastmcp import Image
+    try:
+        body: dict = {"width": width, "height": height, "full_page": full_page}
+        if url:
+            body["url"] = url
+        if project_id:
+            body["project_id"] = _p(project_id)
+            if file:
+                body["file"] = _rel(file)
+            if save_path:
+                body["save_path"] = _rel(save_path)
+        if steps:
+            body["steps"] = steps
+        res = await _req("POST", "/api/design/browser", body=body, timeout=180)
+        shot = res.pop("screenshot_b64", None)
+        text = _dump(res)
+        if not shot:
+            return text
+        return [Image(data=base64.b64decode(shot), format="png" if "png" in res.get("mime", "") else "jpeg"), text]
+    except Exception as e:
+        return _err(e)
+
+
 @mcp_app.tool()
 async def design_copy_starter(project_id: str, kind: str, directory: str = "") -> str:
     """Copy a TeleDesign starter component into the project and return how to load it.
@@ -526,15 +590,65 @@ async def design_eval_js(project_id: str, code: str, file: str = "index.html") -
 
 
 @mcp_app.tool()
-async def design_get_console(project_id: str, file: str = "index.html") -> str:
-    """Load a project page headlessly and return its console errors (empty list = clean).
+async def design_get_console(project_id: str, file: str = "index.html", source: str = "auto",
+                             level: str = "", since: int = 0) -> str:
+    """Console output of a project page.
 
+    source:
+      live     — what the page logged in the USER's open TeleDesign preview (their clicks,
+                 tweaks and slide changes included), relayed by the web UI. `level`
+                 = error | warn filters; `since` = a `seq` from a previous call returns only
+                 newer lines. Empty `file` = every open file.
+      headless — reload the page headless and return its load-time errors (empty = clean).
+      auto     — live when the UI has reported lines for this file, plus the headless errors.
     Check this after writing a page; fix every error before telling the user it's done.
     """
+    if source not in ("auto", "live", "headless"):
+        return "error: source must be auto, live or headless"
     try:
-        pid, rel = _p(project_id), _rel(file)
-        return _dump(await _req("GET", f"/api/design/projects/{pid}/console",
-                                params={"file": rel}, timeout=120))
+        pid = _p(project_id)
+        rel = _rel(file) if file else ""
+        out: dict = {}
+        if source in ("auto", "live"):
+            params = {k: str(v) for k, v in (("file", rel), ("level", level), ("since", since)) if v}
+            live = await _req("GET", f"/api/design/projects/{pid}/console/live", params=params or None)
+            if source == "live" or live.get("entries"):
+                out["live"] = live
+            if source == "live" and not live.get("ui_seen_at"):
+                out["note"] = "TeleDesign is not open for this project, so there is no live console to read"
+        if source == "headless" or (source == "auto" and rel):
+            out["headless"] = await _req("GET", f"/api/design/projects/{pid}/console",
+                                         params={"file": rel or "index.html"}, timeout=120)
+        return _dump(out)
+    except Exception as e:
+        return _err(e)
+
+
+@mcp_app.tool()
+async def design_verify(project_id: str, task: str = "", files: list[str] | None = None,
+                        layers: bool = True, screenshots: bool = True, turn_id: str = "",
+                        chat_id: str = "") -> str:
+    """Run TeleDesign's verifier now and get its report.
+
+    task empty  — full sweep: console errors, blank boards, overflow, text under 12px (24px on
+                  decks), hit targets under 44px, WCAG contrast, broken images/fonts, deck
+                  navigation/labels, and layer-board overflow/overlap (needs the canvas open).
+    task set    — directed check (always reports, pass or fail), e.g. "the pricing cards line
+                  up at 375px" or "every slide has a title". The report carries the evidence;
+                  when no local model is enabled for helpers, judge the task from it yourself.
+    files       — project-relative HTML files (default: the project's registered deliverables).
+    turn_id / chat_id — show the result on that turn in the user's chat.
+    """
+    try:
+        pid = _p(project_id)
+        body: dict = {"task": task, "layers": layers, "screenshots": screenshots}
+        if files:
+            body["files"] = [_rel(f) for f in files]
+        if turn_id:
+            body["turn_id"] = turn_id
+        if chat_id:
+            body["chat_id"] = chat_id
+        return _dump(await _req("POST", f"/api/design/projects/{pid}/verify", body=body, timeout=600))
     except Exception as e:
         return _err(e)
 

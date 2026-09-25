@@ -1,7 +1,8 @@
 """AIOHTTP routes for TeleDesign core (docs/teledesign-contract.md §4).
 
 Projects, canvas, boards, chats + turns, SSE events, files, uploads, versions,
-comments, assets, tweaks / deterministic edits, templates, share tokens, engines.
+comments, assets, tweaks / deterministic edits, templates, share snapshots, engines,
+undo/redo version steps, download cards, handoff-to-session, Google Slides (gws), Figma import.
 
 The REST surface has no auth, so:
 - every id is checked with `store.valid_id`, every path with `store.safe_relpath`
@@ -138,6 +139,8 @@ async def get_config(request: web.Request) -> web.Response:
         "default_is_local": bool(config.get_nested("design.default_is_local", False)),
         "max_parallel_agents": int(config.get_nested("design.max_parallel_agents", 6)),
         "kinds": list(store.VALID_KINDS),
+        "features": {"share_snapshots": True, "undo_steps": True, "downloads": True, "handoff_session": True,
+                     "google_slides": True, "figma_import": True},
     })
 
 
@@ -150,6 +153,17 @@ async def get_engines(request: web.Request) -> web.Response:
 async def list_projects(request: web.Request) -> web.Response:
     include_archived = request.query.get("include_archived") in ("1", "true", "yes")
     return web.json_response({"projects": store.list_projects(include_archived)})
+
+
+async def ensure_welcome(request: web.Request) -> web.Response:
+    """The gallery calls this when it finds no projects: creates the sample project
+    once per install (a marker keeps a deleted sample from coming back)."""
+    try:
+        proj = await asyncio.to_thread(templates.ensure_welcome)
+    except Exception as exc:
+        logger.exception("design: welcome sample project failed")
+        return _err(f"Couldn't create the sample project: {exc}", 500)
+    return web.json_response({"project": proj})
 
 
 async def create_project(request: web.Request) -> web.Response:
@@ -787,10 +801,44 @@ async def create_share(request: web.Request) -> web.Response:
     if data is None:
         return _err("Invalid JSON")
     try:
-        rec = share.create_share(pid, data.get("role") or "view")
+        rec = await asyncio.to_thread(share.create_share, pid, data.get("role") or "view",
+                                      data.get("expires_in"), data.get("snapshot", True) is not False)
     except ValueError as exc:
         return _err(str(exc))
-    return web.json_response({"share": rec, "url": f"/design/s/{rec['token']}"})
+    full = share._load().get(rec["token"]) or {}
+    deps = await asyncio.to_thread(share.dependency_report, full) if full else []
+    return web.json_response({"share": rec, "url": f"/design/s/{rec['token']}", "missing_dependencies": deps})
+
+
+async def update_share(request: web.Request) -> web.Response:
+    pid = _pid(request)
+    if not pid:
+        return _err("Project not found", 404)
+    if not share.enabled():
+        return _share_disabled()
+    data = await _json_body(request)
+    if data is None:
+        return _err("Invalid JSON")
+    try:
+        rec = await asyncio.to_thread(share.update_share, pid, request.match_info["token"],
+                                      resnapshot=bool(data.get("resnapshot")), role=data.get("role"),
+                                      expires_in=data["expires_in"] if "expires_in" in data else "keep")
+    except ValueError as exc:
+        return _err(str(exc))
+    if not rec:
+        return _err("Share not found", 404)
+    full = share._load().get(rec["token"]) or {}
+    deps = await asyncio.to_thread(share.dependency_report, full) if full else []
+    return web.json_response({"share": rec, "missing_dependencies": deps})
+
+
+async def check_share(request: web.Request) -> web.Response:
+    pid = _pid(request)
+    full = share._load().get(request.match_info["token"]) if pid else None
+    if not full or full.get("project_id") != pid:
+        return _err("Share not found", 404)
+    deps = await asyncio.to_thread(share.dependency_report, full)
+    return web.json_response({"share": share.public(full), "missing_dependencies": deps})
 
 
 async def delete_share(request: web.Request) -> web.Response:
@@ -812,22 +860,45 @@ async def share_meta(request: web.Request) -> web.Response:
     if not rec:
         return _err("Share not found", 404)
     pid = rec["project_id"]
+    snap = share.snapshot_files(rec)
+    token = request.match_info["token"]
     return web.json_response({
         "role": rec["role"],
-        "project": store.get_project(pid),
+        "project": {k: v for k, v in (store.get_project(pid) or {}).items()
+                    if k in ("id", "title", "kind", "created_at", "updated_at")},
         "boards": store.get_boards(pid),
-        "files": dfiles.list_files(pid),
+        "files": share.list_recipient_files(rec),
         "comments": dcomments.list_comments(pid) if rec["role"] in ("comment", "edit") else [],
         "preview_origin": preview.preview_origin(),
+        "snapshot": None if snap is None else {"at": (rec.get("snapshot") or {}).get("at"), "file_count": len(snap)},
+        # Where the recipient's frames load: the frozen snapshot on the preview origin, or
+        # (links made before snapshots) the live project.
+        "pages_base": f"/s/{token}/" if snap is not None else f"/p/{pid}/",
+        "expires_at": rec.get("expires_at"),
+        "download_url": f"/api/design/s/{token}/download",
     })
 
 
 async def share_file(request: web.Request) -> web.StreamResponse:
     rec = share.resolve(request.match_info["token"])
-    p = dfiles.read_path(rec["project_id"], request.match_info["path"]) if rec else None
-    if not p:
+    rel = request.match_info["path"]
+    data = await asyncio.to_thread(share.read_file, rec, rel) if rec else None
+    if data is None:
         return _err("File not found", 404)
-    return _inert_file_response(p)
+    return _inert_bytes(rel, data)
+
+
+async def share_download(request: web.Request) -> web.StreamResponse:
+    rec = share.resolve(request.match_info["token"])
+    if not rec:
+        return _err("Share not found", 404)
+    try:
+        name, data = await asyncio.to_thread(share.recipient_zip, rec)
+    except ValueError as exc:
+        return _err(str(exc), 413)
+    return web.Response(body=data, content_type="application/zip", headers={
+        "Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff"})
 
 
 async def share_comment(request: web.Request) -> web.Response:
@@ -848,6 +919,232 @@ async def share_comment(request: web.Request) -> web.Response:
     return web.json_response({"comment": c})
 
 
+# ── Undo / redo on HTML boards (version steps) ───────────────────────────
+
+async def get_undo_state(request: web.Request) -> web.Response:
+    pid = _pid(request)
+    if not pid:
+        return _err("Project not found", 404)
+    rel = request.query.get("path") or ""
+    if not store.safe_relpath(rel):
+        return _err("path required")
+    return web.json_response(await asyncio.to_thread(versions.undo_state, pid, rel))
+
+
+async def post_undo(request: web.Request) -> web.Response:
+    pid = _pid(request)
+    if not pid:
+        return _err("Project not found", 404)
+    data = await _json_body(request)
+    if data is None:
+        return _err("Invalid JSON")
+    rel = data.get("path")
+    if not isinstance(rel, str) or not dfiles.writable(rel):
+        return _err("path must be a writable project file")
+    try:
+        res = await asyncio.to_thread(versions.step, pid, rel, data.get("direction") or "undo")
+    except ValueError as exc:
+        return _err(str(exc))
+    if not res:
+        return web.json_response({"ok": False, "reason": "nothing to " + (data.get("direction") or "undo")})
+    v = res["version"]["v"] if res.get("version") else None
+    events.publish(pid, "files", {"changed": [rel], "version": v})
+    return web.json_response({"ok": True, **res})
+
+
+# ── Downloads (chat download cards) ──────────────────────────────────────
+
+MAX_DOWNLOAD_ZIP_BYTES = 512 * 1024 * 1024
+
+
+def _zip_project_paths(pid: str, prefix: str) -> tuple:
+    import io
+    import zipfile
+    root = store.project_dir(pid)
+    title = (store.get_project(pid) or {}).get("title") or "design"
+    slug = "".join(c if c.isalnum() else "-" for c in title).strip("-").lower()[:60] or "design"
+    name = slug if not prefix else f"{slug}-{prefix.rstrip('/').replace('/', '-')}"
+    buf = io.BytesIO()
+    total = 0
+    count = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for rel, p in dfiles.iter_project_files(root, include_readonly=True):
+            if rel in ("comments.json", "assets.json"):
+                continue
+            if prefix and not rel.startswith(prefix):
+                continue
+            total += p.stat().st_size
+            if total > MAX_DOWNLOAD_ZIP_BYTES:
+                raise ValueError("too large to download as one ZIP — use Export → Project ZIP")
+            z.write(p, f"{name}/{rel[len(prefix):] if prefix else rel}")
+            count += 1
+    return f"{name}.zip", buf.getvalue(), count
+
+
+async def download(request: web.Request) -> web.StreamResponse:
+    """`?path=<file>` → the file as an attachment; `?path=<folder>/` or `?kind=folder`
+    → that folder zipped; `?kind=project` (no path) → the whole project zipped."""
+    pid = _pid(request)
+    if not pid:
+        return _err("Project not found", 404)
+    rel = (request.query.get("path") or "").strip()
+    kind = request.query.get("kind") or ("project" if not rel else "file")
+    if kind == "file":
+        p = dfiles.read_path(pid, rel)
+        if p:
+            resp = web.FileResponse(p)
+            resp.content_type = "application/octet-stream"
+            resp.headers["Content-Disposition"] = f'attachment; filename="{p.name}"'
+            resp.headers["X-Content-Type-Options"] = "nosniff"
+            resp.headers["Cache-Control"] = "no-store"
+            return resp
+        kind = "folder"
+    prefix = ""
+    if kind == "folder":
+        prefix = rel.strip("/")
+        if not store.safe_relpath(prefix) or prefix.split("/", 1)[0] in dfiles.HIDDEN_TOP:
+            return _err("File or folder not found", 404)
+        d = dfiles.resolve(pid, prefix)
+        if not d or not d.is_dir():
+            return _err("File or folder not found", 404)
+        prefix += "/"
+    elif kind != "project":
+        return _err("kind must be file, folder or project")
+    try:
+        name, data, count = await asyncio.to_thread(_zip_project_paths, pid, prefix)
+    except ValueError as exc:
+        return _err(str(exc), 413)
+    if not count:
+        return _err("Nothing to download there", 404)
+    return web.Response(body=data, content_type="application/zip", headers={
+        "Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff"})
+
+
+# ── Handoff into a coding session ────────────────────────────────────────
+
+async def list_dirs(request: web.Request) -> web.Response:
+    from services.design import handoff
+    try:
+        return web.json_response(await asyncio.to_thread(handoff.list_dirs, request.query.get("path") or None))
+    except ValueError as exc:
+        return _err(str(exc))
+
+
+async def handoff_session(request: web.Request) -> web.Response:
+    from services.design import handoff
+    pid = _pid(request)
+    if not pid:
+        return _err("Project not found", 404)
+    data = await _json_body(request)
+    if data is None:
+        return _err("Invalid JSON")
+    try:
+        res = await asyncio.to_thread(handoff.start_session, pid, data)
+    except LookupError as exc:
+        return _err(str(exc), 404)
+    except (ValueError, FileExistsError) as exc:
+        return _err(str(exc))
+    return web.json_response(res)
+
+
+# ── Send to Google Slides (gws) ──────────────────────────────────────────
+
+async def gslides_status(request: web.Request) -> web.Response:
+    from services.design import gslides
+    refresh = request.query.get("refresh") in ("1", "true")
+    return web.json_response(await asyncio.to_thread(gslides.status, refresh))
+
+
+async def gslides_send(request: web.Request) -> web.Response:
+    from services.design import gslides
+    pid = _pid(request)
+    if not pid:
+        return _err("Project not found", 404)
+    data = await _json_body(request)
+    if data is None:
+        return _err("Invalid JSON")
+    f = data.get("file")
+    if f is not None and (not isinstance(f, str) or not store.safe_relpath(f)):
+        return _err("invalid file")
+    try:
+        st = await asyncio.to_thread(gslides.status, True)
+        if not st.get("installed") or not st.get("authed") or not st.get("can_upload", True):
+            return web.json_response({"error": st.get("instructions"), "status": st}, status=412)
+        job = gslides.start(pid, data)
+    except PermissionError as exc:
+        return web.json_response({"error": str(exc)}, status=412)
+    return web.json_response({"job_id": job["id"], "job": job})
+
+
+async def gslides_job(request: web.Request) -> web.Response:
+    from services.design import gslides
+    pid = _pid(request)
+    job = gslides.get_job(request.match_info["job_id"]) if pid else None
+    if not job or job.get("pid") != pid:
+        return _err("Job not found", 404)
+    return web.json_response(job)
+
+
+# ── Figma link import ────────────────────────────────────────────────────
+
+async def figma_status(request: web.Request) -> web.Response:
+    from services.design import figma_import
+    return web.json_response({"has_token": bool(figma_import.token())})
+
+
+async def figma_set_token(request: web.Request) -> web.Response:
+    from services.design import figma_import
+    data = await _json_body(request)
+    if data is None:
+        return _err("Invalid JSON")
+    try:
+        await asyncio.to_thread(figma_import.set_token, data.get("token"))
+    except ValueError as exc:
+        return _err(str(exc))
+    return web.json_response({"has_token": bool(figma_import.token())})
+
+
+async def figma_frames(request: web.Request) -> web.Response:
+    from services.design import figma_import
+    pid = _pid(request)
+    if not pid:
+        return _err("Project not found", 404)
+    data = await _json_body(request)
+    if data is None:
+        return _err("Invalid JSON")
+    try:
+        return web.json_response(await figma_import.list_frames(data.get("url")))
+    except ValueError as exc:
+        return _err(str(exc))
+    except figma_import.FigmaError as exc:
+        return _err(str(exc), 502)
+
+
+async def figma_import_route(request: web.Request) -> web.Response:
+    from services.design import figma_import
+    pid = _pid(request)
+    if not pid:
+        return _err("Project not found", 404)
+    data = await _json_body(request)
+    if data is None:
+        return _err("Invalid JSON")
+    ids = data.get("ids")
+    if ids is not None and (not isinstance(ids, list) or not all(isinstance(i, str) for i in ids)):
+        return _err("ids must be a list of node ids")
+    try:
+        res = await figma_import.import_frames(pid, data.get("url"), ids)
+    except ValueError as exc:
+        return _err(str(exc))
+    except figma_import.FigmaError as exc:
+        return _err(str(exc), 502)
+    except Exception as exc:  # media_fetch refusal etc.
+        return _err(f"Figma import failed: {exc}", 502)
+    v = await asyncio.to_thread(_snapshot_and_publish, pid, "user", res["files"],
+                                f"Imported {len(res['boards'])} frame(s) from Figma")
+    return web.json_response({**res, "version": v})
+
+
 # ── Registration ─────────────────────────────────────────────────────────
 
 def register_routes(app: web.Application):
@@ -866,6 +1163,7 @@ def register_routes(app: web.Application):
     P = "/api/design/projects/{project_id}"
     r.add_get("/api/design/projects", list_projects)
     r.add_post("/api/design/projects", create_project)
+    r.add_post("/api/design/welcome", ensure_welcome)
     r.add_get(P, get_project)
     r.add_patch(P, update_project)
     r.add_delete(P, delete_project)
@@ -918,7 +1216,23 @@ def register_routes(app: web.Application):
 
     r.add_get(P + "/share", list_shares)
     r.add_post(P + "/share", create_share)
+    r.add_patch(P + "/share/{token}", update_share)
+    r.add_get(P + "/share/{token}/check", check_share)
     r.add_delete(P + "/share/{token}", delete_share)
     r.add_get("/api/design/s/{token}", share_meta)
+    r.add_get("/api/design/s/{token}/download", share_download)
     r.add_get("/api/design/s/{token}/files/{path:.+}", share_file)
     r.add_post("/api/design/s/{token}/comments", share_comment)
+
+    r.add_get(P + "/versions/undo", get_undo_state)
+    r.add_post(P + "/versions/undo", post_undo)
+    r.add_get(P + "/download", download)
+    r.add_get("/api/design/fs/dirs", list_dirs)
+    r.add_post(P + "/handoff/session", handoff_session)
+    r.add_get("/api/design/gslides/status", gslides_status)
+    r.add_post(P + "/send/google-slides", gslides_send)
+    r.add_get(P + "/send/jobs/{job_id}", gslides_job)
+    r.add_get("/api/design/figma", figma_status)
+    r.add_put("/api/design/figma/token", figma_set_token)
+    r.add_post(P + "/import/figma/frames", figma_frames)
+    r.add_post(P + "/import/figma", figma_import_route)

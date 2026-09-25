@@ -10,6 +10,7 @@ routes reject a foreign `Origin` (docs/teledesign-contract.md §5).
     GET /starters/{name}     starter scaffolds (services/design/starters/, W3)
     GET /ds/{pid}/{path}     the project's staged `_ds/` (read-only)
     GET /dsys/{sid}/{path}   a design system's package (specimen cards, W5)
+    GET /s/{token}/{path}    a share link's frozen snapshot (share.py)
 
 The coordinator calls `start_background()` from proxy startup and `stop()` on
 shutdown.
@@ -202,6 +203,28 @@ async def serve_system(request: web.Request) -> web.StreamResponse:
     return _serve(_file(store.base_dir() / "systems" / sid, request.match_info["path"]))
 
 
+async def serve_share(request: web.Request) -> web.StreamResponse:
+    """A share link's frozen snapshot (services/design/share.py): the same page a
+    recipient saw when the link was made, bridge injected, served from blobs. A
+    revoked or expired token 404s, as does anything outside the snapshot."""
+    from services.design import share
+    rec = share.resolve(request.match_info["token"])
+    if not rec:
+        raise web.HTTPNotFound()
+    rel = request.match_info.get("path") or "index.html"
+    if rel.endswith("/"):
+        rel += "index.html"
+    data = share.read_file(rec, rel)
+    if data is None:
+        raise web.HTTPNotFound()
+    ext = Path(rel).suffix.lower()
+    if ext in (".html", ".htm"):
+        return web.Response(text=inject(data.decode("utf-8", errors="replace")), content_type="text/html",
+                            charset="utf-8")
+    ctype = _MIME.get(ext) or mimetypes.guess_type(rel)[0] or "application/octet-stream"
+    return web.Response(body=data, content_type=ctype)
+
+
 async def _project_root_redirect(request: web.Request) -> web.StreamResponse:
     pid = request.match_info["pid"]
     if not store.valid_id(pid):
@@ -224,6 +247,7 @@ def create_app() -> web.Application:
     app.router.add_get("/starters/{name}", serve_starter)
     app.router.add_get("/ds/{pid}/{path:.*}", serve_ds)
     app.router.add_get("/dsys/{sid}/{path:.*}", serve_system)
+    app.router.add_get("/s/{token}/{path:.*}", serve_share)
     return app
 
 

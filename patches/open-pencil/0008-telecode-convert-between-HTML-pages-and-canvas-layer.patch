@@ -1,0 +1,753 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Prithwiraj Samanta <app@datainsights.ae>
+Date: Fri, 25 Sep 2026 17:26:47 +0530
+Subject: [PATCH] telecode: convert between HTML pages and canvas layers
+
+telecode_import_html builds a web page as editable layers in a new frame,
+in one mutation and one undo step. With `snapshot` it takes the layout
+TeleDesign measured in headless Edge after the page's scripts ran (painted
+boxes with fills, gradients, borders, radii and shadows; text runs with
+their font and wrap width; images as image fills; inline SVG through
+import_svg), which is what a React/Babel page needs: its markup alone is
+empty. With `html` (+ `css`) it runs @open-pencil/dom-css's browser importer
+on static markup and copies the result under a frame.
+
+telecode_export_html projects a frame through dom-css and returns its
+standalone HTML export (absolute layout, inline styles, inlined images).
+---
+ scripts/telecode-dump-tools.ts               |  41 ++
+ src/app/integrations/telecode/commands.ts    |  36 ++
+ src/app/integrations/telecode/html-layers.ts | 609 +++++++++++++++++++
+ 3 files changed, 686 insertions(+)
+ create mode 100644 src/app/integrations/telecode/html-layers.ts
+
+diff --git a/scripts/telecode-dump-tools.ts b/scripts/telecode-dump-tools.ts
+index b5107755..e5f57e13 100644
+--- a/scripts/telecode-dump-tools.ts
++++ b/scripts/telecode-dump-tools.ts
+@@ -114,6 +114,47 @@ const extra = [
+     enabled: true,
+     input_schema: schemaOf(v.object({}))
+   },
++  {
++    name: 'telecode_import_html',
++    description:
++      'Convert a web page into editable canvas layers in a new frame. Pass `src` (a project .html file): TeleDesign renders it in headless Edge after its scripts run and sends the measured layout (boxes, text, images, inline SVG) as `snapshot`. Or pass `html` (+ optional `css`) to run OpenPencil\'s DOM/CSS importer on static markup (no scripts; flexbox becomes auto-layout). `beside_id` places the new frame to the right of that node (e.g. the HTML board). Returns {id, name, width, height, nodes}. One undo step; the source stays.',
++    command: 'telecode_import_html',
++    effect: 'write',
++    availability: 'default',
++    capabilities: ['document:write'],
++    enabled: true,
++    input_schema: schemaOf(
++      v.object({
++        src: v.optional(v.pipe(v.string(), v.description('Project-relative .html page to render and convert'))),
++        width: v.optional(v.pipe(v.number(), v.description('Viewport width to render src at (default 1440)'))),
++        height: v.optional(v.pipe(v.number(), v.description('Viewport height to render src at (default 900)'))),
++        snapshot: v.optional(v.pipe(v.record(v.string(), v.unknown()), v.description('Layout snapshot {width, height, title, root} (sent by TeleDesign for src)'))),
++        html: v.optional(v.pipe(v.string(), v.description('Static HTML markup (DOM/CSS importer)'))),
++        css: v.optional(v.pipe(v.string(), v.description('Extra CSS for the html importer'))),
++        name: v.optional(v.pipe(v.string(), v.description('Name of the new frame'))),
++        x: v.optional(v.pipe(v.number(), v.description('Canvas x of the new frame'))),
++        y: v.optional(v.pipe(v.number(), v.description('Canvas y of the new frame'))),
++        beside_id: v.optional(v.pipe(v.string(), v.description('Place the new frame to the right of this node'))),
++        parent_id: v.optional(v.pipe(v.string(), v.description('Parent node (default: the page)')))
++      })
++    )
++  },
++  {
++    name: 'telecode_export_html',
++    description:
++      'Export a frame as one standalone HTML document (OpenPencil dom-css export: absolutely positioned elements, inline styles, images inlined). Returns {html, name, width, height}; with `path` the page is written into the project instead ({written, byteLength}) — then telecode_board_mark a new frame with src=path to show it as an HTML board.',
++    command: 'telecode_export_html',
++    effect: 'read',
++    availability: 'default',
++    capabilities: ['document:read'],
++    enabled: true,
++    input_schema: schemaOf(
++      v.object({
++        id: v.pipe(v.string(), v.description('Frame to export')),
++        path: v.optional(v.pipe(v.string(), v.description('Project-relative .html path to write it to')))
++      })
++    )
++  },
+   {
+     name: 'get_codegen_prompt',
+     description:
+diff --git a/src/app/integrations/telecode/commands.ts b/src/app/integrations/telecode/commands.ts
+index 2fcc63d2..955bd61b 100644
+--- a/src/app/integrations/telecode/commands.ts
++++ b/src/app/integrations/telecode/commands.ts
+@@ -4,6 +4,9 @@
+  *   telecode_board_mark   {node_id, key?}  stamp a board key on a frame → {key, node_id}
+  *   telecode_board_unmark {key}            remove it                    → {removed}
+  *   telecode_board_list   {}               every stamped node           → {boards:[…]}
++ *   telecode_import_html  {snapshot | html, css?, name?, x?, y?, beside_id?, parent_id?}
++ *                                          page → layers in a new frame → {id, name, nodes, …}
++ *   telecode_export_html  {id}             frame → standalone HTML      → {html, name, width, height}
+  *
+  * They ride the same request/response protocol as the upstream commands; the
+  * proxy uses them to keep boards.json keyed by something that survives reloads.
+@@ -11,9 +14,18 @@
+ import type { AutomationTarget } from '@/app/automation/bridge/target'
+ 
+ import { isBoardKey, listBoards, markBoard, unmarkBoard } from './boards'
++import { exportHTML, importHTML, importLayout, type LayoutSnapshot } from './html-layers'
+ 
+ type Handler = (target: AutomationTarget, args: unknown) => Promise<unknown>
+ 
++function num(value: unknown): number | undefined {
++  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
++}
++
++function text(value: unknown): string | undefined {
++  return typeof value === 'string' && value ? value : undefined
++}
++
+ function record(args: unknown): Record<string, unknown> {
+   return args && typeof args === 'object' && !Array.isArray(args)
+     ? (args as Record<string, unknown>)
+@@ -34,5 +46,29 @@ export const telecodeAutomationCommands: Partial<Record<string, Handler>> = {
+   },
+   async telecode_board_list(target) {
+     return { ok: true, result: { boards: listBoards(target.store) } }
++  },
++  async telecode_import_html(target, args) {
++    const a = record(args)
++    const opts = {
++      name: text(a.name),
++      x: num(a.x),
++      y: num(a.y),
++      besideId: text(a.beside_id),
++      parentId: text(a.parent_id)
++    }
++    if (a.snapshot && typeof a.snapshot === 'object') {
++      const result = await importLayout(target.store, target.pageId, a.snapshot as LayoutSnapshot, opts)
++      return { ok: true, result }
++    }
++    if (typeof a.html === 'string') {
++      const css = typeof a.css === 'string' ? a.css : undefined
++      return { ok: true, result: await importHTML(target.store, target.pageId, a.html, css, opts) }
++    }
++    throw new Error('Pass "snapshot" (or "src" through TeleDesign) or "html"')
++  },
++  async telecode_export_html(target, args) {
++    const id = text(record(args).id)
++    if (!id) throw new Error('Missing "id"')
++    return { ok: true, result: await exportHTML(target.store, id) }
+   }
+ }
+diff --git a/src/app/integrations/telecode/html-layers.ts b/src/app/integrations/telecode/html-layers.ts
+new file mode 100644
+index 00000000..e9b02f93
+--- /dev/null
++++ b/src/app/integrations/telecode/html-layers.ts
+@@ -0,0 +1,609 @@
++/**
++ * HTML page ⇄ canvas layers (telecode / TeleDesign).
++ *
++ * Page → layers comes in two flavours:
++ *
++ *  - `layout` (what TeleDesign's Convert button sends): a layout snapshot the proxy
++ *    took of the *rendered* page in headless Edge — every painted box, text run,
++ *    image and inline SVG with its measured page rect and computed paint, after the
++ *    page's scripts ran. TeleDesign pages are mostly React/Babel, so their markup
++ *    alone is empty, and the result has to look like the page, not like its source.
++ *    Geometry is absolute (frames with positioned children).
++ *  - `html` + `css`: open-pencil's own DOM/CSS importer (@open-pencil/dom-css,
++ *    browser runtime), for static markup — flex containers come through as
++ *    auto-layout. Scripts do not run on this path.
++ *
++ * Layers → page uses @open-pencil/dom-css's scene-graph projection and its
++ * standalone HTML export (absolutely positioned elements, inline styles, images
++ * inlined as data URLs).
++ *
++ * Both import paths build the whole tree under one new frame in one mutation and
++ * push one undo entry (page snapshots, as the in-app AI tools do).
++ */
++import { cloneNodeProps } from '@open-pencil/scene-graph'
++import type { Effect, Fill, SceneGraph, SceneNode, Stroke } from '@open-pencil/scene-graph'
++import { computeImageHash } from '@open-pencil/scene-graph/images'
++
++import { makeFigmaFromStore } from '@/app/automation/bridge/figma-factory'
++import { createAutomationCommandHandlers } from '@/app/automation/bridge/handlers'
++import type { EditorStore } from '@/app/editor/session'
++import { ensureGraphFonts } from '@/app/editor/fonts'
++
++type RGBA = [number, number, number, number]
++
++export interface SnapNode {
++  k: 'box' | 'text' | 'img' | 'svg'
++  n?: string
++  x: number
++  y: number
++  w: number
++  h: number
++  bg?: RGBA
++  grad?: { type: 'linear' | 'radial'; angle?: number; stops: Array<[RGBA, number]> }
++  img?: string
++  fit?: 'FILL' | 'FIT' | 'CROP' | 'TILE'
++  r?: [number, number, number, number]
++  bw?: [number, number, number, number]
++  bc?: RGBA
++  bs?: 'solid' | 'dashed' | 'dotted'
++  sh?: Array<{ x: number; y: number; blur: number; spread: number; c: RGBA; inset?: boolean }>
++  op?: number
++  clip?: boolean
++  t?: string
++  c?: RGBA
++  fs?: number
++  fw?: number
++  ff?: string
++  it?: boolean
++  lh?: number
++  ls?: number
++  ta?: 'LEFT' | 'CENTER' | 'RIGHT' | 'JUSTIFIED'
++  tc?: 'UPPER' | 'LOWER' | 'TITLE'
++  td?: 'UNDERLINE' | 'STRIKETHROUGH'
++  lines?: number
++  svg?: string
++  ch?: SnapNode[]
++}
++
++export interface LayoutSnapshot {
++  title?: string
++  width: number
++  height: number
++  root: SnapNode
++}
++
++export interface ImportOptions {
++  name?: string
++  x?: number
++  y?: number
++  parentId?: string
++  besideId?: string
++}
++
++const MAX_NODES = 6000
++const GAP = 120
++
++function clamp01(n: unknown): number {
++  const v = typeof n === 'number' && Number.isFinite(n) ? n : 0
++  return Math.min(1, Math.max(0, v))
++}
++
++function color(c: RGBA | undefined) {
++  if (!c) return null
++  return { r: clamp01(c[0]), g: clamp01(c[1]), b: clamp01(c[2]), a: clamp01(c[3]) }
++}
++
++function solid(c: RGBA | undefined): Fill | null {
++  const col = color(c)
++  if (!col || col.a <= 0) return null
++  return { type: 'SOLID', color: { ...col, a: 1 }, opacity: col.a, visible: true }
++}
++
++function num(value: unknown, fallback = 0): number {
++  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
++}
++
++/** CSS angle (0deg = to top, clockwise) → open-pencil linear gradient transform. */
++function linearTransform(angleDeg: number, w: number, h: number) {
++  const a = (angleDeg * Math.PI) / 180
++  const dx = Math.sin(a)
++  const dy = -Math.cos(a)
++  const len = Math.abs(w * dx) + Math.abs(h * dy)
++  const sx = (w / 2 - (dx * len) / 2) / Math.max(w, 1)
++  const sy = (h / 2 - (dy * len) / 2) / Math.max(h, 1)
++  const ex = (w / 2 + (dx * len) / 2) / Math.max(w, 1)
++  const ey = (h / 2 + (dy * len) / 2) / Math.max(h, 1)
++  // The renderer reads start = (m00 + m02, m10 + m12), end = (m02, m12).
++  return { m00: sx - ex, m01: -(sy - ey), m02: ex, m10: sy - ey, m11: sx - ex, m12: ey }
++}
++
++function gradientFill(node: SnapNode): Fill | null {
++  const g = node.grad
++  if (!g || !Array.isArray(g.stops) || g.stops.length < 2) return null
++  const stops = g.stops.flatMap(([c, pos]) => {
++    const col = color(c)
++    return col ? [{ color: col, position: clamp01(pos) }] : []
++  })
++  if (stops.length < 2) return null
++  const identity = { m00: 1, m01: 0, m02: 0, m10: 0, m11: 1, m12: 0 }
++  return {
++    type: g.type === 'radial' ? 'GRADIENT_RADIAL' : 'GRADIENT_LINEAR',
++    color: { r: 0, g: 0, b: 0, a: 0 },
++    opacity: 1,
++    visible: true,
++    gradientStops: stops,
++    gradientTransform:
++      g.type === 'radial' ? identity : linearTransform(num(g.angle, 180), node.w, node.h)
++  }
++}
++
++function dataURLBytes(url: string | undefined): Uint8Array | null {
++  if (!url || !url.startsWith('data:')) return null
++  const comma = url.indexOf(',')
++  if (comma < 0 || !url.slice(0, comma).endsWith(';base64')) return null
++  try {
++    const bin = atob(url.slice(comma + 1))
++    const out = new Uint8Array(bin.length)
++    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
++    return out
++  } catch {
++    return null
++  }
++}
++
++function imageFill(graph: SceneGraph, node: SnapNode): Fill | null {
++  const bytes = dataURLBytes(node.img)
++  if (!bytes) return null
++  const imageHash = computeImageHash(bytes)
++  graph.images.set(imageHash, bytes)
++  return {
++    type: 'IMAGE',
++    imageHash,
++    imageScaleMode: node.fit ?? 'FILL',
++    color: { r: 0, g: 0, b: 0, a: 0 },
++    opacity: 1,
++    visible: true
++  }
++}
++
++function boxProps(graph: SceneGraph, node: SnapNode): Partial<SceneNode> {
++  const fills: Fill[] = []
++  const bg = solid(node.bg)
++  if (bg) fills.push(bg)
++  const grad = gradientFill(node)
++  if (grad) fills.push(grad)
++  const img = imageFill(graph, node)
++  if (img) fills.push(img)
++
++  const props: Partial<SceneNode> = { fills, clipsContent: !!node.clip }
++  if (node.r && node.r.some((v) => v > 0)) {
++    const [tl, tr, br, bl] = node.r.map((v) => Math.max(0, Math.min(v, node.w / 2, node.h / 2)))
++    const same = tl === tr && tr === br && br === bl
++    Object.assign(props, {
++      cornerRadius: same ? tl : 0,
++      topLeftRadius: tl,
++      topRightRadius: tr,
++      bottomRightRadius: br,
++      bottomLeftRadius: bl,
++      independentCorners: !same
++    })
++  }
++  const stroke = color(node.bc)
++  if (node.bw && stroke && stroke.a > 0 && node.bw.some((v) => v > 0)) {
++    const [t, r, b, l] = node.bw
++    const weight = Math.max(t, r, b, l)
++    const s: Stroke = {
++      color: { ...stroke, a: 1 },
++      weight,
++      opacity: stroke.a,
++      visible: true,
++      align: 'INSIDE'
++    }
++    if (node.bs === 'dashed') s.dashPattern = [weight * 3, weight * 2]
++    if (node.bs === 'dotted') s.dashPattern = [weight, weight]
++    Object.assign(props, {
++      strokes: [s],
++      borderTopWeight: t,
++      borderRightWeight: r,
++      borderBottomWeight: b,
++      borderLeftWeight: l,
++      independentStrokeWeights: [t, r, b, l].some((v) => v !== weight),
++      ...(s.dashPattern ? { dashPattern: s.dashPattern } : {})
++    })
++  }
++  const effects: Effect[] = []
++  for (const sh of node.sh ?? []) {
++    const c = color(sh.c)
++    if (!c || c.a <= 0) continue
++    effects.push({
++      type: sh.inset ? 'INNER_SHADOW' : 'DROP_SHADOW',
++      color: c,
++      offset: { x: num(sh.x), y: num(sh.y) },
++      radius: Math.max(0, num(sh.blur)),
++      spread: num(sh.spread),
++      visible: true
++    })
++  }
++  if (effects.length) props.effects = effects
++  if (typeof node.op === 'number' && node.op < 1) props.opacity = clamp01(node.op)
++  return props
++}
++
++function textProps(node: SnapNode): Partial<SceneNode> {
++  const fill = solid(node.c) ?? { type: 'SOLID', color: { r: 0, g: 0, b: 0, a: 1 }, opacity: 1, visible: true }
++  const multiline = num(node.lines, 1) > 1
++  return {
++    text: node.t ?? '',
++    fills: [fill as Fill],
++    fontSize: Math.max(1, num(node.fs, 16)),
++    fontWeight: num(node.fw, 400),
++    fontFamily: node.ff || 'Inter',
++    italic: !!node.it,
++    lineHeight: node.lh && node.lh > 0 ? node.lh : null,
++    letterSpacing: num(node.ls),
++    textAlignHorizontal: node.ta ?? 'LEFT',
++    textCase: node.tc ?? 'ORIGINAL',
++    textDecoration: node.td ?? 'NONE',
++    // One line: let the text size itself (a substituted font must not wrap it);
++    // several: keep the measured width so it wraps where the page wrapped.
++    textAutoResize: multiline ? 'HEIGHT' : 'WIDTH_AND_HEIGHT',
++    ...(typeof node.op === 'number' && node.op < 1 ? { opacity: clamp01(node.op) } : {})
++  }
++}
++
++function safeName(value: unknown, fallback: string): string {
++  const s = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : ''
++  return (s || fallback).slice(0, 120)
++}
++
++function placement(store: EditorStore, pageId: string, opts: ImportOptions, width: number) {
++  if (typeof opts.x === 'number' && typeof opts.y === 'number') return { x: opts.x, y: opts.y }
++  const graph = store.graph
++  if (opts.besideId) {
++    const beside = graph.getNode(opts.besideId)
++    if (beside) {
++      const abs = graph.getAbsolutePosition(beside.id)
++      return { x: Math.round(abs.x + beside.width + GAP), y: Math.round(abs.y) }
++    }
++  }
++  let right = Number.NEGATIVE_INFINITY
++  let top = 0
++  for (const child of graph.getChildren(pageId)) {
++    if (child.x + child.width > right) {
++      right = child.x + child.width
++      top = child.y
++    }
++  }
++  void width
++  return Number.isFinite(right) ? { x: Math.round(right + GAP), y: Math.round(top) } : { x: 0, y: 0 }
++}
++
++async function withUndo<T>(store: EditorStore, label: string, run: () => Promise<T>): Promise<T> {
++  const before = store.snapshotPage()
++  const result = await run()
++  const after = store.snapshotPage()
++  store.pushUndoEntry({
++    label,
++    forward: () => store.restorePageFromSnapshot(after),
++    inverse: () => store.restorePageFromSnapshot(before)
++  })
++  store.requestRender()
++  return result
++}
++
++type PendingSVG = { svg: string; parentId: string; x: number; y: number; w: number; h: number; name: string }
++
++/** Build the snapshot tree under a new frame; returns the root id and node count. */
++export async function importLayout(
++  store: EditorStore,
++  pageId: string,
++  snap: LayoutSnapshot,
++  opts: ImportOptions = {}
++): Promise<{ id: string; name: string; width: number; height: number; nodes: number; skipped: number }> {
++  if (!snap || typeof snap !== 'object' || !snap.root) throw new Error('Missing "snapshot.root"')
++  const width = Math.max(1, Math.round(num(snap.width, num(snap.root.w, 1280))))
++  const height = Math.max(1, Math.round(num(snap.height, num(snap.root.h, 800))))
++  const name = safeName(opts.name ?? snap.title, 'Imported page')
++  const parentId = opts.parentId && store.graph.getNode(opts.parentId) ? opts.parentId : pageId
++  const at = placement(store, pageId, opts, width)
++  let count = 0
++  let skipped = 0
++  const svgs: PendingSVG[] = []
++
++  return withUndo(store, 'Convert HTML to layers', async () => {
++    const root = await store.runMutationWithLayout(
++      () => {
++        const graph = store.graph
++        const rootNode = graph.createNode('FRAME', parentId, {
++          name,
++          x: at.x,
++          y: at.y,
++          width,
++          height,
++          clipsContent: true,
++          ...boxProps(graph, { ...snap.root, r: undefined, sh: undefined, op: undefined })
++        })
++        if (!(rootNode.fills ?? []).length) {
++          graph.updateNode(rootNode.id, {
++            fills: [{ type: 'SOLID', color: { r: 1, g: 1, b: 1, a: 1 }, opacity: 1, visible: true }]
++          })
++        }
++        const ox = num(snap.root.x)
++        const oy = num(snap.root.y)
++
++        const build = (items: SnapNode[] | undefined, parent: string, px: number, py: number) => {
++          for (const item of items ?? []) {
++            if (count >= MAX_NODES) {
++              skipped++
++              continue
++            }
++            const x = num(item.x) - px
++            const y = num(item.y) - py
++            const w = Math.max(0, num(item.w))
++            const h = Math.max(0, num(item.h))
++            if (item.k === 'text') {
++              if (!item.t || !item.t.trim()) continue
++              count++
++              graph.createNode('TEXT', parent, {
++                name: safeName(item.n ?? item.t, 'Text').slice(0, 48),
++                x,
++                y,
++                width: Math.max(1, Math.ceil(w) + 1),
++                height: Math.max(1, Math.ceil(h)),
++                ...textProps(item)
++              })
++              continue
++            }
++            if (item.k === 'svg' && item.svg) {
++              count++
++              svgs.push({ svg: item.svg, parentId: parent, x, y, w, h, name: safeName(item.n, 'SVG') })
++              continue
++            }
++            if (item.k === 'img') {
++              count++
++              const props = boxProps(graph, item)
++              if (!(props.fills ?? []).some((f) => f.type === 'IMAGE')) {
++                // A cross-origin or unreadable image: keep its place as a grey placeholder.
++                props.fills = [
++                  ...(props.fills ?? []),
++                  { type: 'SOLID', color: { r: 0.85, g: 0.86, b: 0.88, a: 1 }, opacity: 1, visible: true }
++                ]
++              }
++              graph.createNode('RECTANGLE', parent, {
++                name: safeName(item.n, 'Image'),
++                x,
++                y,
++                width: Math.max(1, w),
++                height: Math.max(1, h),
++                ...props
++              })
++              continue
++            }
++            count++
++            const frame = graph.createNode('FRAME', parent, {
++              name: safeName(item.n, 'Frame'),
++              x,
++              y,
++              width: Math.max(1, w),
++              height: Math.max(1, h),
++              ...boxProps(graph, item)
++            })
++            build(item.ch, frame.id, num(item.x), num(item.y))
++          }
++        }
++        build(snap.root.ch, rootNode.id, ox, oy)
++        return rootNode
++      },
++      pageId,
++      async (node) => {
++        await ensureGraphFonts(store.graph, [node.id], store.renderer)
++      }
++    )
++
++    if (svgs.length) {
++      const handlers = createAutomationCommandHandlers(makeFigmaFromStore)
++      for (const s of svgs) {
++        try {
++          const res = (await handlers.handleRequest(store, 'tool', {
++            name: 'import_svg',
++            args: { svg: s.svg, parent_id: s.parentId, x: s.x, y: s.y, name: s.name }
++          })) as { ok?: boolean; result?: { id?: string } }
++          const id = res?.result?.id
++          const created = id ? store.graph.getNode(id) : undefined
++          if (created && s.w > 0 && s.h > 0 && (Math.abs(created.width - s.w) > 0.5 || Math.abs(created.height - s.h) > 0.5)) {
++            store.graph.updateNode(created.id, { x: s.x, y: s.y })
++          }
++        } catch (error) {
++          skipped++
++          console.warn('[TeleDesign] inline SVG not imported:', error)
++        }
++      }
++    }
++    store.requestRender()
++    store.flashNodes?.([root.id])
++    return { id: root.id, name: root.name, width, height, nodes: count, skipped }
++  })
++}
++
++function copyTree(source: SceneGraph, target: SceneGraph, sourceId: string, parentId: string): string | null {
++  const node = source.getNode(sourceId)
++  if (!node) return null
++  const created = target.createNode(node.type, parentId, cloneNodeProps(node, null))
++  for (const fill of node.fills ?? []) {
++    if (fill.type === 'IMAGE' && fill.imageHash) {
++      const bytes = source.images.get(fill.imageHash)
++      if (bytes) target.images.set(fill.imageHash, new Uint8Array(bytes))
++    }
++  }
++  for (const childId of node.childIds) copyTree(source, target, childId, created.id)
++  return created.id
++}
++
++/** open-pencil's own DOM/CSS importer (static markup; flexbox → auto-layout). */
++export async function importHTML(
++  store: EditorStore,
++  pageId: string,
++  html: string,
++  cssText: string | undefined,
++  opts: ImportOptions = {}
++): Promise<{ id: string; name: string; width: number; height: number; nodes: number; skipped: number }> {
++  if (typeof html !== 'string' || !html.trim()) throw new Error('Missing "html"')
++  const { browserHTMLToSceneGraph } = await import('@open-pencil/dom-css/browser')
++  const name = safeName(opts.name, 'Imported HTML')
++  const imported = await browserHTMLToSceneGraph(html, { cssText, pageName: name })
++  const page = imported.getPages()[0]
++  if (!page) throw new Error('The importer produced no page')
++  const width = Math.max(1, Math.round(page.width || 1280))
++  const height = Math.max(1, Math.round(page.height || 800))
++  const parentId = opts.parentId && store.graph.getNode(opts.parentId) ? opts.parentId : pageId
++  const at = placement(store, pageId, opts, width)
++  let count = 0
++  return withUndo(store, 'Import HTML as layers', async () => {
++    const root = await store.runMutationWithLayout(
++      () => {
++        const frame = store.graph.createNode('FRAME', parentId, {
++          name,
++          x: at.x,
++          y: at.y,
++          width,
++          height,
++          fills: [{ type: 'SOLID', color: { r: 1, g: 1, b: 1, a: 1 }, opacity: 1, visible: true }]
++        })
++        for (const childId of page.childIds) {
++          if (copyTree(imported, store.graph, childId, frame.id)) count++
++        }
++        return frame
++      },
++      pageId,
++      async (node) => {
++        await ensureGraphFonts(store.graph, [node.id], store.renderer)
++      }
++    )
++    store.flashNodes?.([root.id])
++    return { id: root.id, name: root.name, width, height, nodes: count, skipped: 0 }
++  })
++}
++
++/** A frame (or any node) as one standalone HTML document. */
++export async function exportHTML(
++  store: EditorStore,
++  nodeId: string
++): Promise<{ html: string; name: string; width: number; height: number; files: number }> {
++  const node = store.graph.getNode(nodeId)
++  if (!node) throw new Error(`Node not found: ${nodeId}`)
++  if (node.type === 'CANVAS') throw new Error('Export a frame, not a page')
++  // The scene-graph projection and serializer only: the package root also pulls
++  // dom-css's headless CSSOM runtime, which is not meant for browser bundles.
++  const [{ sceneGraphToDesignDocument }, { serializeHTML }] = await Promise.all([
++    import('#dom-css/from-scene-graph'),
++    import('#dom-css/serialize')
++  ])
++  // The projection starts at a root's children: project the node's parent and
++  // keep only the node itself.
++  const document = sceneGraphToDesignDocument(store.graph, {
++    rootId: node.parentId ?? store.graph.rootId
++  })
++  const own = document.children.filter(
++    (child) => child.type === 'element' && child.sourceSceneNodeId === nodeId
++  )
++  if (!own.length) throw new Error('The frame produced no HTML')
++  const body = serializeHTML({ type: 'document', children: own.map((n) => standalone(n, true)) })
++  const w = Math.max(1, Math.round(node.width))
++  const h = Math.max(1, Math.round(node.height))
++  const css =
++    '*,*::before,*::after{box-sizing:border-box}html,body{margin:0;padding:0}' +
++    `body{font-family:system-ui,sans-serif;background:#fff}.op-stage{position:relative;width:${w}px;height:${h}px;overflow:hidden}`
++  const html =
++    `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=${w}">` +
++    `<title>${escapeHTML(node.name)}</title><meta name="td-layer-export" content="${w}x${h}">` +
++    `<style>${css}</style></head><body><main data-open-pencil-html="standalone" class="op-stage">${body}</main></body></html>`
++  return { html, name: node.name, width: node.width, height: node.height, files: 1 }
++}
++
++type DomNode = { type: 'text'; text: string } | {
++  type: 'element'
++  tagName: string
++  attrs: Record<string, string>
++  children: DomNode[]
++  inlineStyle?: Record<string, string>
++  sourceSceneNode?: SceneNode
++  [key: string]: unknown
++}
++
++function cssColor(c: { r: number; g: number; b: number; a: number }, opacity = 1): string {
++  const to255 = (v: number) => Math.round(Math.min(1, Math.max(0, v)) * 255)
++  return `rgba(${to255(c.r)}, ${to255(c.g)}, ${to255(c.b)}, ${+(c.a * opacity).toFixed(3)})`
++}
++
++/** dom-css projects only a node's first fill, and solids only: add its gradients. */
++function gradientCSS(fill: Fill, w: number, h: number): string | null {
++  const stops = fill.gradientStops ?? []
++  const t = fill.gradientTransform
++  if (stops.length < 2 || !t) return null
++  const op = fill.opacity ?? 1
++  if (fill.type === 'GRADIENT_LINEAR') {
++    // The renderer draws from (m00 + m02, m10 + m12) to (m02, m12), node-normalised.
++    const sx = (t.m00 + t.m02) * w
++    const sy = (t.m10 + t.m12) * h
++    const ex = t.m02 * w
++    const ey = t.m12 * h
++    const dx = ex - sx
++    const dy = ey - sy
++    const len = Math.hypot(dx, dy) || 1
++    const ux = dx / len
++    const uy = dy / len
++    const angle = (Math.atan2(ux, -uy) * 180) / Math.PI
++    // CSS measures stops along a line through the centre whose length covers the box.
++    const cssLen = Math.abs(w * ux) + Math.abs(h * uy) || 1
++    const at = (p: number) => {
++      const px = sx + dx * p - w / 2
++      const py = sy + dy * p - h / 2
++      return ((px * ux + py * uy) / cssLen + 0.5) * 100
++    }
++    const list = stops.map((st) => `${cssColor(st.color, op)} ${at(st.position).toFixed(2)}%`)
++    return `linear-gradient(${angle.toFixed(2)}deg, ${list.join(', ')})`
++  }
++  const list = stops.map((st) => `${cssColor(st.color, op)} ${(st.position * 100).toFixed(2)}%`)
++  if (fill.type === 'GRADIENT_ANGULAR') return `conic-gradient(${list.join(', ')})`
++  return `radial-gradient(closest-side, ${list.join(', ')})`
++}
++
++/** Absolute placement for every projected element (as dom-css's own standalone export does). */
++function standalone<T>(input: T, isRoot = false): T {
++  const node = input as unknown as DomNode
++  if (node.type === 'text') return input
++  const style = { ...node.inlineStyle }
++  const source = node.sourceSceneNode
++  if (source) {
++    style.position = 'absolute'
++    style.left = `${isRoot ? 0 : source.x}px`
++    style.top = `${isRoot ? 0 : source.y}px`
++    if (source.type === 'TEXT') {
++      // Auto-width text sizes itself on the canvas: a fixed width would wrap it
++      // (and overlap the next line) as soon as the text or the font differs.
++      if (source.textAutoResize === 'WIDTH_AND_HEIGHT') {
++        delete style.width
++        style['white-space'] = 'pre'
++      } else if (source.textAutoResize === 'HEIGHT') {
++        delete style.height
++      }
++    } else {
++      const gradients = (source.fills ?? [])
++        .filter((f) => f.visible !== false && f.type.startsWith('GRADIENT'))
++        .map((f) => gradientCSS(f, source.width, source.height))
++        .filter((g): g is string => !!g)
++        .reverse() // CSS paints the first layer on top; the canvas paints the last fill on top
++      if (gradients.length) style['background-image'] = gradients.join(', ')
++    }
++  }
++  return {
++    ...node,
++    attrs: { ...node.attrs },
++    inlineStyle: style,
++    children: node.children.map((child) => standalone(child))
++  } as unknown as T
++}
++
++function escapeHTML(s: string): string {
++  return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c)
++}

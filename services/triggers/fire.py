@@ -491,6 +491,7 @@ def _fire_locked(rec: Dict[str, Any], source: str, payload: Any, reason: Optiona
             model=model or None,
             trigger={"id": rec["id"], "fire_id": fire_id_hint, "context": job_context(rec, source, payload),
                      "pinned": _pinned(rec), "permission_mode": rec.get("permission_mode"),
+                     "effort": rec.get("effort"),
                      "session_policy": "fresh" if rec.get("session") == "fresh" else None})
         run_id = run["run_id"]
     else:
@@ -514,6 +515,7 @@ def _fire_locked(rec: Dict[str, Any], source: str, payload: Any, reason: Optiona
         md = {"source": "trigger", "trigger_id": rec["id"], "trigger_name": rec.get("name"),
               "trigger_fire_id": fire_id_hint, "fire_source": source, "engine": t["engine"],
               "permission_mode": rec.get("permission_mode"),
+              **({"effort": rec["effort"]} if rec.get("effort") else {}),
               **({"agent_id": t["agent_id"]} if t.get("agent_id") else {}),
               **({"ephemeral_session": True} if rec.get("session") == "fresh" else {})}
         task_id = get_task_queue().submit_task(

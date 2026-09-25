@@ -165,7 +165,7 @@ One scheduler for everything that starts work on its own — replaces Routines a
 scheduler thread runs inside the proxy** (`scheduler.start()` from `start_proxy_background()`) — bot-only
 deployments don't fire.
 
-- **Record** (`triggers` table, full JSON in `data`; `model.py` validates): `target {kind: task | agent_prompt | job, prompt, engine, model, is_local, agent_id, workspace_id, id}`, `schedule {cron, tz} | {every_seconds ≥ 60} | {at, tz}` (none = events / by hand), `events {webhook {enabled, token}, github {enabled, secret, events, branches, authors, labels}, file {enabled, workspace_id, glob, debounce_seconds}}`, `session shared | fresh`, `active_hours {start, end, tz, days}`, `skip_if_empty {path | heartbeat_section}`, `ok_suppression` + `ok_tokens` (default `HEARTBEAT_OK`, `NO_REPLY`), `notify`, `model_override`, `goal {check_command, features_file, max_fires, max_cost_usd}`, `auto_pause_after_failures` (3), `catch_up skip | once`, `pinned`, `permission_mode` (default `auto`), `task_timeout_seconds`, `preface`, `outputs_only`, `state {next_fire_at, last_fire_at, counters, consecutive_failures, cost_usd, paused_reason}`. History = `trigger_fires` rows (`running | completed | ok | skipped | failed | cancelled | interrupted`; consecutive identical skips collapse into one row with a count).
+- **Record** (`triggers` table, full JSON in `data`; `model.py` validates): `target {kind: task | agent_prompt | job, prompt, engine, model, is_local, agent_id, workspace_id, id}`, `schedule {cron, tz} | {every_seconds ≥ 60} | {at, tz}` (none = events / by hand), `events {webhook {enabled, token}, github {enabled, secret, events, branches, authors, labels}, file {enabled, workspace_id, glob, debounce_seconds}}`, `session shared | fresh`, `active_hours {start, end, tz, days}`, `skip_if_empty {path | heartbeat_section}`, `ok_suppression` + `ok_tokens` (default `HEARTBEAT_OK`, `NO_REPLY`), `notify`, `model_override`, `goal {check_command, features_file, max_fires, max_cost_usd}`, `auto_pause_after_failures` (3), `catch_up skip | once`, `pinned`, `permission_mode` (default `auto`), `effort` (null = CLI default), `task_timeout_seconds`, `preface`, `outputs_only`, `state {next_fire_at, last_fire_at, counters, consecutive_failures, cost_usd, paused_reason}`. History = `trigger_fires` rows (`running | completed | ok | skipped | failed | cancelled | interrupted`; consecutive identical skips collapse into one row with a count).
 - **Fire** (`fire.py`, under a per-trigger `RLock`, record re-read inside): due? → previous fire still running (→ skipped) → goal limits (max fires / cost → pause + notice) → active hours (not for "fire now") → skip-if-empty (not for "fire now") → submit. task / agent_prompt → a queue task on the background pool (shared = the trigger's permanent session `trigger-<id8>` or the agent's workspace; fresh = a throwaway session in namespace `trigger`); job → `executor.create_and_launch` with the preface/payload as `job_snapshot.context` and the pinned constraints at every step's tail. Prompt: preface → directive → `<trigger-payload untrusted="true" source="webhook|github|file">…</trigger-payload>` (always for event payloads; `</trigger-payload` inside is neutralised; 64 KB cap) → output rule → `<pinned_constraints>` (trigger's + the agent's `## Pinned constraints`). A one-off `at` disables itself.
 - **Completion** (`reconcile_fire`, every tick + inline on reads): a reply matching an OK token → `ok` (no notification); failures build the streak → auto-pause at K; the goal (check command exit 0 in the workspace / `features.json` all passing / limits) → pause + `trigger.notice` (Telegram).
 - **Scheduler** (`scheduler.py`): tick every `triggers.tick_seconds` (15), at most `triggers.max_fires_per_tick` (4); file watch polls every 2 s (first scan = baseline, fires `debounce_seconds` after the last change with the changed paths as payload, absorbs changes made while its fire runs); HEARTBEAT.md compiled every 60 s. Catch-up: a due time more than max(3 × tick, 120 s) old was missed → `skip` records one skipped fire and moves on, `once` fires once.
@@ -233,6 +233,28 @@ Three CLIs are dispatched as task types, all sharing the **same handler signatur
 | `plan` | `--permission-mode plan …none` | `--sandbox read-only -c approval_policy=never` | `--mode plan` |
 | `ask` / `manual` | `approve_tool` via `--permission-prompt-tool` (see Safety below) | as `acceptEdits` + warning | `--mode accept-edits` + warning |
 
+TeleDesign turns use the same vocabulary per chat (default `acceptEdits`, see "TeleDesign").
+
+**Effort** (`EngineRequest.effort`, from task metadata `effort` — TeleDesign chat/turn, a Task submit's
+`metadata.effort`, a job step's `effort`, a trigger's / HEARTBEAT.md entry's `effort` (run override for
+its job steps); values `low | medium | high | xhigh | max`, `services.engine.types.normalize_effort`):
+Claude `--effort <level>` (2.1.282 accepts all five), Codex `-c model_reasoning_effort=<level>` (0.157's
+enum is none/minimal/low/medium/high/xhigh/max; whether a model takes a level is the API's call), agy
+`--effort` (1.2.11: low/medium/high/max — `xhigh` → `high`). Empty = the CLI's own default. The `start`
+event records `effort` and `permission_mode`.
+
+**Per-run cost** (`services/engine/cost.py`). Claude's `total_cost_usd` on a resumed/forked conversation is
+cumulative across its invocations. The runner (adapter flag `cumulative_cost`) looks up the conversation's
+last reported total in `engine_cost_totals` (`sessions_repo.cost_total` / `set_cost_total`, keyed
+(engine, CLI session id), written after every run that reported a total — failed ones too) and subtracts
+it — only when the run continued that same conversation (same CLI id) or forked it; a new id without a
+fork means the CLI started over — so the `usage` / `done` events, the `invoke_agent` span (→ telemetry summaries), the handler result
+(Task tasks, run steps, trigger fires) and `sessions_index.cumulative_cost_usd` are per-run;
+`EngineResult.cost_total_usd` keeps the CLI's figure. A total **below** the base is taken as the run's own
+(the CLI restores a session's cost only in some cases, e.g. a session last run elsewhere). `EngineRequest.cost_base_usd` is a caller fallback when the table has no
+entry. Codex / agy report no cost (None), untouched. Not done: `--max-budget-usd` is passed as-is — if
+Claude checks it against the restored cumulative cost, a resumed step's budget is effectively smaller.
+
 Codex: `--sandbox` and `--approve-for-me` are exec-only (before `resume`/`fork`) and **mutually exclusive** (clap refuses both); `-a/--ask-for-approval` and `--full-auto` are not `exec` options in 0.157 — `-c approval_policy=never` is. workspace-write = writes in `-C` + `--add-dir`s, no network, refusals go back to the model; on Windows it is Codex's `[windows] sandbox = "elevated"` sandbox (set up on this machine). agy headless (verified with a real accept-edits run): the edit went through, `run_command` was auto-denied without hanging (`step_update` state `ERROR`, "user denied permission to run command"; `result.denied_actions`), both surfaced as `warning` events; settings allow-rules don't apply in `-p`. Not wired (would be the route to a real `ask`): Codex `app-server` JSON-RPC approval requests (a second adapter), agy `PreToolUse` hooks (`.agents/hooks.json`, decision `allow|deny|ask`; staging would have to write it into the workspace) or Codex hooks. agy `--sandbox` (terminal restrictions) is unused — unverified on Windows.
 
 **Why stdin for all three.** A prompt on the command line hits the Windows limit (32 KB, ~8 KB through a `.cmd` shim) — TeleDesign prompts stack the charter, a design system and comments and run far past it. Measured: a 48 KB prompt completes and resumes on Claude Code and Antigravity; Codex's `-` verified end to end on 0.157.
@@ -245,7 +267,7 @@ Codex: `--sandbox` and `--approve-for-me` are exec-only (before `resume`/`fork`)
 
 **stderr is drained on a thread (`engine/drain.StreamDrain`).** The runner iterates stdout only; an unread `stderr=PIPE` fills the ~4 KB Windows pipe buffer and the child blocks on its next stderr write while we block on its stdout — a silent hang. Codex hits it reliably on an expired ChatGPT login (one token-refresh error per request, even in local mode).
 
-**Persistent store — `data/telecode.db`** (`services/db/`: stdlib sqlite3, WAL, one connection per thread, `schema_migrations`; `core.MIGRATIONS` is append-only). It holds task/run/step state, parsed task events, the session lineage index and (P5, migration 4) telemetry — `spans` / `metric_points` / `log_events` — **nothing else**: `data/logs/*` and the raw CLI logs in `data/task_logs/` are unchanged.
+**Persistent store — `data/telecode.db`** (`services/db/`: stdlib sqlite3, WAL, one connection per thread, `schema_migrations`; `core.MIGRATIONS` is append-only). It holds task/run/step state, parsed task events, the session lineage index, (P5, migration 4) telemetry — `spans` / `metric_points` / `log_events` — and (migration 5) `engine_cost_totals` (per-run cost base, see **Per-run cost**) — **nothing else**: `data/logs/*` and the raw CLI logs in `data/task_logs/` are unchanged.
 - `tasks` + `task_events` (`task_repo`): `TaskQueue` writes through on every state change (`persist`; progress throttled to 2/s) and `append_event` stores each event with a 1-based `seq`, both via one ordered background writer thread (`db/writer.py`) so a worker never waits on disk. Events are capped per task: first 50 + last 2000. The in-memory queue stays authoritative for live tasks; `get_task_record` / `list_task_records` fall back to the DB, so `GET /api/tasks[/{id}]` survive a restart (DB-only tasks in the list carry just their `start` event). At startup (`api_runs._reconcile_on_startup`) DB tasks left pending/running and not live in this process become `failed` / `interrupted: telecode restarted …`.
 - `runs` + `run_steps`: `services/run/run_store.py` is SQLite-only (same record shape and API). Pre-SQLite `data/runs/*.json` are imported once per database (`meta.runs_json_imported`) and left on disk as a manual backup; nothing reads them afterwards.
 - `sessions_index` (`sessions_repo`): one row per CLI conversation, scoped like resume ids (namespace, workspace, agent, engine, local), with cumulative tokens/cost, `cumulative_tokens` (budget tokens, drives rotation), `runs_count`, `kind` (task/run/trigger/design; older rows routine/heartbeat), `parent_id` → the conversation it superseded, and `lineage` (fresh/resume/fork/rotation/ephemeral) + `forked_from` / `rotated_from`. `run_steps.handoff` holds each step's handoff (migration 2).
@@ -440,9 +462,44 @@ interface every module codes against: [docs/teledesign-contract.md](docs/teledes
   reopen), with the generated page overlaid live in a sandboxed iframe.
 - **Turns are direct task sessions, not Team Mode.** One session per project chat (namespace `design`),
   `DESIGN_TURN` task type, cwd = project folder, resumed per engine. `prompt_builder.py` stacks
-  `prompts/` in README order; the brief (~56 KB) is sent on a chat's first turn and whenever it changes,
-  otherwise the turn points at `.td/brief.md`. Post-turn: done gate (console errors → one fix turn) →
-  verifier (`render.verify`) → thumbnail → auto-title. Events: in-process pub/sub → SSE `…/events`.
+  `prompts/` in README order; the brief (~55 KB) is split into sections and each is sent only when the
+  CLI conversation hasn't seen that exact text (`plan_delivery`: first turn of a chat, or the section
+  changed); otherwise the turn points at `.td/brief.md`. Post-turn: done gate (console errors → one fix
+  turn) → verifier (`render.verify`) → thumbnail → auto-title. Events: in-process pub/sub → SSE `…/events`.
+- **Turn cost (Claude Code, `services/design/engine_opts.py`).** Every API call of a turn re-sends the
+  CLI's own context, and a design project sits in `data/design/projects/<id>` *inside this checkout*, so by
+  default the CLI walks up and loads this 93 KB CLAUDE.md. Measured on 2.1.282 (trivial first turn, first
+  API call): **~99k tokens before, ~37k after** — the rest was this CLAUDE.md + global CLAUDE.md + memory
+  (~95k chars), 33 built-in tool schemas (~85k), a 155-skill listing (~30k), user MCP servers and 30–60
+  claude.ai connector tools. Defaults: `--strict-mcp-config --mcp-config <only telecode's server>` (also
+  drops claude.ai connectors — verified in the init event), `--tools Read,Write,Edit,Glob,Grep,Bash`,
+  `--disallowedTools` for the telecode MCP tools meant for outside clients (`design_send_message`, file
+  CRUD, speak…; `--disallowedTools` does remove them from the request), `--setting-sources user`,
+  `--disable-slash-commands`, `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`.
+  All under `design.claude.*` (tray → TeleDesign → Turn cost); flags reach the CLI through
+  `EngineRequest.extra_args` (Claude adapter only). `TodoWrite` does not exist in 2.1.282 `-p` at all.
+- **Brief delivery.** `design.brief_mode: system` (Claude only): a fresh conversation gets its sections in
+  `.td/system-<chat>.md` → `--append-system-prompt-file`, and **the same file is passed on every later
+  launch** (the CLI records the system prompt on the first request; identical bytes also keep the cache);
+  sections added or changed later go in the message as `## Brief update`. `design.brief_select`
+  (`classify_turn`): comment / mention / auto-fix turns and short change requests on a project with
+  content are `edit` turns and skip `kind`, `tweaks`, `code_export` and `craft_*` (the deck contract
+  stays for slides); unclear → `build`. Licence `<!-- … -->` headers are stripped at load.
+- **Per-turn cost.** Claude's `total_cost_usd` (and `modelUsage`) on a resumed session is **cumulative**
+  over every invocation of that session, while `usage` is per invocation (verified: turn 2 reported
+  $1.04 = $0.92 turn 1 + $0.12). The correction is the Engine Runner's, shared with every caller (see
+  "Task engines" → **Per-run cost**), so `turn.usage.cost_usd` is the turn's own. The old per-chat
+  `session.data.design_cost[slot]` is only read as the runner's fallback base for chats that predate it.
+- **Permission mode & effort.** Per chat (`PATCH …/chats/{cid}` `{permission_mode, effort}`) or per turn
+  (turn body, wins), default `design.permission_mode` = **`acceptEdits`** (a turn only edits files in its
+  project folder; verified with a real `claude --model haiku --effort low` design launch: the page was
+  written, init reported `permissionMode: acceptEdits`). Vocabulary `auto | acceptEdits | dontAsk | plan |
+  ask | skip` (null = the setting), mapped per engine by the adapters (table under "Task engines"); it rides
+  in the task metadata (`generate._submit`) → `task_bridge` → `EngineRequest.permission_mode` / `effort`.
+  In `acceptEdits` Claude's Bash calls that are not simple file operations are denied (nobody is asked).
+  `ask` = `approve_tool` via the approvals inbox + Telegram (needs `mcp_server.enabled`, else `auto` + a
+  warning); the approve server's config joins the design `--strict-mcp-config` file in **one** variadic
+  `--mcp-config a b`. UI: `chat.js` effort menu + phone sheet carry a "Permissions" group.
 - **Two origins.** The API/UI on `proxy.port`; generated pages on `design.preview_port` (1237) —
   `preview.py`, CSP `connect-src 'self'`, bridge injected. Every mutating `/api/design/*` route requires a
   JSON/octet-stream/multipart content type and rejects a foreign `Origin` (middleware in `api_design.py`),
@@ -451,11 +508,99 @@ interface every module codes against: [docs/teledesign-contract.md](docs/teledes
   `patches/open-pencil/`, vendored at `proxy/static/design/editor/`). Agent tool calls reach the live page
   over `editor_bridge.py`'s WebSocket — no Node at runtime. Rebuild after bumping the tag; `--check` tells
   you whether the series still applies. Never hand-edit the vendored output or the disposable source dir.
+- **Canvas parity commands** (patches 0008–0011, `telecode_*` bridge commands; REST in
+  `api_design_editor.py` under `…/editor/`). **HTML → layers** is *not* open-pencil's dom-css importer on
+  the source (TeleDesign pages are React/Babel, and that importer lays out in a 1000px sandbox, only
+  positions flex children, reads only data-URL images): `canvas_convert.layout_snapshot` renders the page
+  in headless Edge and sends measured boxes/text/images/SVG to `telecode_import_html`, which builds them
+  flat (absolute) in a new frame beside the board, one undo step. `{html, css}` still runs the dom-css
+  importer. An agent's `telecode_import_html {src}` takes the snapshot server-side too
+  (`editor_bridge.call`). **Layers → HTML** = dom-css `exportHTMLBundle` (standalone) via
+  `telecode_export_html`; `…/convert {direction:"to-html"}` writes the file + registers a new board.
+  **Layer-board Preview** writes that export to `.layers/<slug>-<id>.html` (dot dir: hidden from Files,
+  served by the preview origin), re-exported on `td-editor:saved`. **Tokens** (`canvas_tokens.py`):
+  tokens.json → collections `Color` (mode per theme) / `Spacing` / `Radius` / `Typography`, upserted by
+  name; Pull writes changed values back into the tokens.json it came from (project root, else the staged
+  `_ds/<slug>/` copy — replaced on restage) and the matching `--var` in tokens.css. **Slides** = a page's
+  top-level frames in layer order; Present renders each via `export_image`, PDF via `export_pdf`.
+  **"working…"** marks are plugin data `telecode/placeholder`; the host draws the hatch and clears all
+  marks when a turn ends (and on canvas open with no turn running); marks older than 2 h show as stalled.
+- **Patch 0012 fixes autosave** of a reopened canvas: the first autosave awaited the .fig population
+  worker's original archive, which the worker never answers on failure, and autosave serialises saves —
+  so nothing after a reopen (agent or user) was saved until an explicit Save. The wait is now bounded.
+  Bridge `select_nodes` / `switch_page` only move the plugin-API selection/page, not the editor's; the
+  host's `td-editor:focus` does both. Building from a deep path (e.g. a scratch copy) fails on MAX_PATH
+  (sharp's DLL): use a short `--src`; `build_open_pencil.py` keeps the path as given (`absolute()`).
 - **Render/export** share one headless Edge (`render.py`, CDP, idle-closed, Job-bound); `render.stop()` on
   proxy cleanup. Exports are background jobs under `data/design/exports/` (24 h).
+- **Verifier checks.** `render.verify` = console, blank, overflow, small text, hit targets, **WCAG contrast**
+  (text vs the background composited from its ancestors' `background-color`; anything with a
+  background-image / gradient / media behind the text is *unknown and skipped*, never guessed; `<3:1` major,
+  else minor), broken resources, deck checks — plus **layer boards** (`design.verifier.layer_boards`, default
+  on): `editor_bridge.inspect_layers` runs open-pencil's own `analyze_overlaps` / `analyze_typography` per page
+  and `export_image` of top-level frames, and returns `pen_problems`. It needs the editor page (doc.fig is
+  only parsed in the browser — no Node at runtime), so with no page attached it **skips with a logged
+  reason**. Severity is deliberately conservative: only a node >25% outside its parent is `major` (can wake a
+  fix turn); sibling overlaps are minor (a label on a rectangle is a "sibling overlap"). **Directed checks**:
+  `verifier.run_check(task=…)` (`POST …/verify`, MCP `design_verify`, CLI `verify --task`) always reports;
+  its model pass runs only under `design.local_helpers`, otherwise the report hands the evidence to the
+  calling agent (`model.ran: false` + `note`).
+- **Live preview console.** `preview.js` relays every `td:console` line to `POST …/console/live` (in memory,
+  500/file, `seq` cursor); `design_get_console(source="live"|"headless"|"auto")` reads the user's own view.
+- **`design_browser`** (`POST /api/design/browser` → `render.browse`) is the one renderer path that opens a
+  caller-supplied URL: a throwaway browser context, `Network.setBlockedURLs` for `ws(s)://*`, and CDP `Fetch`
+  pausing **every** request so the host fetches it under `proxy/media_fetch.py`'s rules (http(s), every
+  resolved address public) and fulfils it; a 3xx goes back to Edge so each redirect hop is re-checked.
+  Blocked requests are listed. Loopback/LAN URLs are refused by design — test with a patched
+  `_GuardedFetcher.check`.
+- **File ops.** `POST …/file-ops {op: copy|move}` (MCP `design_copy_file` / `design_move_file`): a copy
+  inherits the source's assets.json entry as a fresh needs-review registration; a move keeps the entry's id
+  and status and repoints boards.json.
+- **MCP registration** (`mcp_registration.py`): CLI `mcp add` for Claude Code / Codex / Antigravity / Gemini;
+  JSON edit (parse-or-refuse, only our key, one `.telecode-bak`, atomic) for OpenCode / Kiro / Claude Desktop
+  (stdio `npx -y mcp-remote <url>` — its config file takes stdio servers only). **Never writes for a client
+  that is not installed** (binary / install path, not a leftover config folder — `~/.gemini` exists wherever
+  agy does). Tray card: MCP server reachability + "Re-check connection".
+- **Headless CLI**: `python -m services.design.cli [--base URL] [--json] projects|create|get|files|send|run|
+  export|screenshot|verify|console` over REST only (stdlib urllib; `send` streams the SSE events; `run` is
+  the batch form: `--prompt/--tasks/--in x.pen/--engine/--model/--effort/--export/--out`).
+- **Share links are snapshots** (`share.py`). Create = the tree (sources, uploads, staged `_ds/`) frozen as
+  blobs in the project's `.versions/objects` (shared with history); recipients load it from the **preview
+  origin** at `/s/{token}/…` (bridge injected, blobs only — a revoked/expired token 404s there too) and can
+  download it as a ZIP (`/api/design/s/{token}/download`). The owner's list shows "N changes since shared";
+  `PATCH …/share/{token}` `{resnapshot|role|expires_in}` updates in place (same URL). Create/update return a
+  missing-dependency list (relative refs the snapshot lacks). Records from before snapshots (no `snapshot`)
+  stay live. Expiry 60 s – 365 d or never; still gated by `design.share.enabled`.
+- **Undo on HTML boards = version steps** (`versions.step`, `POST …/versions/undo {path, direction}`): the
+  file's distinct states in history order; each step writes the older/newer content and records a `restore`
+  version marked `undo` (never destructive). Cursor in `.versions/undo.json`; when the file on disk no
+  longer matches the cursor's head (a user/agent edit), redo is dropped and the line rebuilt. Ctrl+Z inside
+  the page reaches the host because `td-bridge.js` forwards it as `td:key` (page inputs keep native undo).
+- **Chat context + download cards** (`chat.js`). The current preview selection and the editor's selected
+  layers ride along with the next turn as removable chips (`selection:{file, board_id, elements:[…]}`,
+  Preferences switch `autoContext`). `<download-card path="…" label="…" kind="file|folder|project"/>` in a
+  reply becomes a card → `GET …/download?path=&kind=` (folder/project zipped in memory, 512 MB cap); export
+  jobs render as cards under the turn they ran in (UI-started ones under "Your exports").
+- **Export extras.** PPTX: `googleFontImports` (fonts.googleapis.com only), `resetTransformSelector`,
+  `slides:[{index, selector, showJs, delay}]`, `save_to_project_path` (`pptx_export.py`). Standalone HTML
+  carries a `<noscript>` full-page picture (`export._noscript_fallback`; `options.noscript:false` to skip).
+  **Send to Google Slides** (`gslides.py`): `shutil.which("gws")`, npm shim unwrapped (no shell), `gws auth
+  status` checked first and **never** a login — signed out → 412 + "run `gws auth login`"; else PPTX →
+  `gws drive files create --upload` with the Slides MIME type. **Figma import** (`figma_import.py`): user
+  token at `design.figma.token` (`config.set_nested`), frames → `imports/figma/*.png` + `figma-*.html`
+  boards, image URLs through `media_fetch`.
+- **Handoff to a coding session** (`handoff.start_session`, `POST …/handoff/session`): new Task-Mode
+  workspace session `handoff-<slug>-<hex>` (root namespace, no expiry) with the bundle in `handoff/`, one
+  CLAUDE_CODE/CODEX/ANTIGRAVITY task whose prompt names the repo by absolute path (Task Mode owns the CLI's
+  cwd, so the agent is told to `cd` there). Repo picker: `GET /api/design/fs/dirs?path=` (dir names only).
+- **Sketches** are `scraps/<name>.napkin` (`{type:"td-napkin", image: PNG data URL, board, bbox}`) +
+  `scraps/.<name>.thumbnail.png`; draw mode saves one, opening a .napkin reopens it (`app/napkin.js`).
+  **Welcome sample**: an empty gallery calls `POST /api/design/welcome` → `templates.ensure_welcome` (once
+  per install via `data/design/.welcome.json`; `design.welcome_project: false` disables).
 - **Design systems**: seeds in `services/design/seeds/` auto-install on first listing (stable uuid5 ids;
   deleted seeds stay deleted). `systems.py` stages a selective copy into `_ds/`, `lint.py` enforces
-  `adherence.json`, `ds_bundle.py` precompiles components (node → Edge → in-browser fallback).
+  `adherence.json`, `ds_bundle.py` precompiles components (node → Edge → in-browser fallback). Manifest
+  `brandFonts` (provided / substituted / missing, list or Claude-Design object form) → `systems.brand_fonts`.
 - **MCP tools** live in `mcp_server/tools/design.py` (the normal drop-in framework, auto-bridged to local
   models) and call the proxy over HTTP; canvas tools go through one tool, `design_canvas_call`.
 - **Prompts are original.** Claude Design's leaked prompt and pen.dev's skill docs were read for behaviour
@@ -507,7 +652,7 @@ FastMCP streamable HTTP, port 1236. Drop-in `tools/`/`resources/`/`prompts/` aut
 - **llama-server won't start** — `data/logs/llama.log`; verify `binary` and `models.<default>.path`. **Model swap hangs** — bump `llamacpp.ready_timeout_sec`. **`<think>` leaks** — per-model `inference_defaults.reasoning.start/end` must match.
 - **Tests that drive the live telecode** — `tests/team/test_e2e_http.py` posts `is_local: true` runs to `:1235`, which makes the running telecode load llama; it only runs with `TELECODE_E2E_HTTP=1`.
 - **ToolSearch not triggered** — with `proxy.debug`, inspect `data/logs/requests/req_*.json` (`intercepts: []` means the proxy never intercepted; the round was decided as passthrough). The dumps directory is **cleared on every startup**, so capture the repro before restarting. `proxy_full_*.json` no longer exists. **Tools missing after search** — try `re:` prefix; check `MAX_SEARCH_RESULTS`. **MCP speak/transcribe** — VoxType on `:6600` or repoint URLs.
-- **TeleDesign turn fails instantly** — `PromptError: unknown placeholder` means a prompt gained a placeholder the builder doesn't fill. **Preview blank / console 404s** — preview site on `design.preview_port` not up (look for `design preview` in telecode.log). **Canvas blank** — `proxy/static/design/editor/` missing → rebuild with `python tools/build_open_pencil.py`.
+- **TeleDesign turn fails instantly** — `PromptError: unknown placeholder` means a prompt gained a placeholder the builder doesn't fill. **Preview blank / console 404s** — preview site on `design.preview_port` not up (look for `design preview` in telecode.log). **Canvas blank** — `proxy/static/design/editor/` missing → rebuild with `python tools/build_open_pencil.py`. **Design turn can't see a tool / MCP server / CLAUDE.md** — the `design.claude.*` cost defaults hide them on purpose; relax the one you need.
 - **DocGraph host won't start** — `data/logs/docgraph_host.log`; verify `docgraph.binary`. **Kuzu lock error** — `IndexRunner` should route through `/api/admin/index` (check `docgraph_index.log` for "host route failed"). **Bridge tools missing** — host alive AND `/mcp` responding (uvicorn lifespan `on`).
 
 ---

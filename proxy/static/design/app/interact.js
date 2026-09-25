@@ -46,6 +46,8 @@ bus.on("preview", ({ msg, frame, info }) => {
     case "td:select":
       S.selection = { ...msg, file };
       bus.emit("selection", S.selection);
+      // Selection rides along with the next chat turn as a removable chip (chat.js).
+      if (info.role === "preview" || info.role === "board") bus.emit("chat-context", { kind: "element", sel: S.selection });
       if (S.mode === "edit" || S.mode === "knobs") import("./workspace.js").then((m) => { if (S.panel !== "inspect") m.setPanel("inspect"); });
       break;
     case "td:comment-target": commentPopover(msg, frame, file); break;
@@ -58,8 +60,40 @@ bus.on("preview", ({ msg, frame, info }) => {
     case "td:pin-click":
       import("./workspace.js").then((m) => { m.setPanel("comments"); setTimeout(() => bus.emit("focus-comment", String(msg.id)), 80); });
       break;
+    case "td:key":
+      if ((msg.action === "undo" || msg.action === "redo") && info.role === "preview") undoStep(file, msg.action);
+      break;
   }
 });
+
+// ── Undo / redo on an HTML board = version steps (POST …/versions/undo) ───
+// Non-destructive: each step restores the file as it was in an earlier version
+// and records that as a new version, so the Versions panel shows every step.
+let stepping = false;
+export const undoInfo = new Map();   // file -> {can_undo, can_redo}
+export async function refreshUndo(file) {
+  if (!S.project || !file || !/\.html?$/i.test(file) || features.undo === false) return null;
+  const j = await tryApi("GET", `${P_(S.project.id)}/versions/undo?path=${encodeURIComponent(file)}`, undefined, { feature: "undo" }).catch(() => null);
+  if (j) { undoInfo.set(file, j); bus.emit("undo-state", { file, ...j }); }
+  return j;
+}
+export async function undoStep(file, direction = "undo") {
+  if (!S.project || !file || stepping) return;
+  if (features.undo === false) { toast("Undo isn't available on this server yet.", { kind: "error" }); return; }
+  stepping = true;
+  try {
+    const r = await api("POST", `${P_(S.project.id)}/versions/undo`, { path: file, direction }, { feature: "undo" });
+    if (!r.ok) { toast(direction === "undo" ? `Nothing earlier to go back to in ${file}` : `Nothing to redo in ${file}`); return; }
+    undoInfo.set(file, { can_undo: r.can_undo, can_redo: r.can_redo });
+    bus.emit("undo-state", { file, can_undo: r.can_undo, can_redo: r.can_redo });
+    const v = r.version?.v;
+    toast(`${direction === "undo" ? "Undid" : "Redid"} — ${file} is back to v${r.to_v}${v ? ` (saved as v${v})` : ""}`, {
+      action: direction === "undo" && r.can_redo !== false ? { label: "Redo", run: () => undoStep(file, "redo") } : r.can_undo ? { label: "Undo", run: () => undoStep(file, "undo") } : null });
+    bus.emit("reload-previews", [file]);
+  } catch (e) { toastError(e, direction === "undo" ? "Undo failed" : "Redo failed"); }
+  finally { stepping = false; }
+}
+bus.on("ev:files", (d) => { if (S.activeFile && (!d?.changed?.length || d.changed.includes(S.activeFile))) setTimeout(() => refreshUndo(S.activeFile), 300); });
 
 // ── Tweaks ───────────────────────────────────────────────────────────────
 function setTweaks(file, patch) {
@@ -186,17 +220,38 @@ export async function writeBack(file, edit) {
 // ── Draw ─────────────────────────────────────────────────────────────────
 async function onDraw(msg, file) {
   if (typeof msg.png_data_url !== "string" || !msg.png_data_url.startsWith("data:image/png;base64,")) return;
-  const bin = atob(msg.png_data_url.split(",")[1]);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  const name = `sketch-${file.replace(/[^\w]+/g, "-")}-${Date.now()}.png`;
+  const bytes = dataUrlBytes(msg.png_data_url);
+  const stem = `sketch-${file.replace(/\.html?$/i, "").replace(/[^\w]+/g, "-")}-${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "")}`;
   const { uploadFiles } = await import("./workspace.js");
-  const paths = await uploadFiles([new File([bytes], name, { type: "image/png" })]);
+  const paths = await uploadFiles([new File([bytes], stem + ".png", { type: "image/png" })]);
+  // Keep the sketch as a reopenable scrap too: scraps/<name>.napkin + its thumbnail.
+  const napkin = await saveNapkin(stem, { board: file, bbox: msg.bbox || null, image: msg.png_data_url, attachment: paths[0] || null }).catch(() => null);
   if (paths.length) {
     bus.emit("attach", paths);
-    bus.emit("chat-prefill", `See my sketch on ${file} (attached) — `);
+    bus.emit("chat-prefill", `See my sketch on ${file} (attached${napkin ? `, saved as ${napkin}` : ""}) — `);
     import("./workspace.js").then((m) => m.setPanel("chat"));
   }
+}
+export function dataUrlBytes(url) {
+  const bin = atob(String(url).split(",")[1] || "");
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+// .napkin = {type:"td-napkin", version:1, board, bbox, width, height, image (PNG data URL), attachment?, updated_at}
+// plus scraps/.<name>.thumbnail.png. Returns the napkin path.
+export async function saveNapkin(stem, data, { path } = {}) {
+  const rel = path || `scraps/${stem}.napkin`;
+  const i = rel.lastIndexOf("/");
+  const dir = i >= 0 ? rel.slice(0, i + 1) : "";
+  const name = rel.slice(i + 1).replace(/\.napkin$/, "");
+  const rec = { type: "td-napkin", version: 1, ...data, updated_at: new Date().toISOString() };
+  const enc = (p) => p.split("/").map(encodeURIComponent).join("/");
+  if (typeof data.image === "string" && data.image.startsWith("data:image/png;base64,")) {
+    await api("PUT", `${P_(S.project.id)}/files/${enc(`${dir}.${name}.thumbnail.png`)}`, new Blob([dataUrlBytes(data.image)])).catch(() => null);
+  }
+  await api("PUT", `${P_(S.project.id)}/files/${enc(rel)}`, new Blob([JSON.stringify(rec)]));
+  return rel;
 }
 
 // ── Navigation inside a preview ──────────────────────────────────────────

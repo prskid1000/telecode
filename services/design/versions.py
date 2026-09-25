@@ -127,7 +127,8 @@ def changed_between(a: Optional[Dict[str, str]], b: Dict[str, str]) -> List[str]
 
 
 def snapshot(pid: str, origin: str, *, turn_id: Optional[str] = None,
-             prompt: Optional[str] = None) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+             prompt: Optional[str] = None,
+             extra: Optional[Dict[str, Any]] = None) -> Tuple[Optional[Dict[str, Any]], List[str]]:
     """Record the current tree. Returns (version record or None, changed paths).
 
     No new version when nothing changed since the latest one.
@@ -166,6 +167,8 @@ def snapshot(pid: str, origin: str, *, turn_id: Optional[str] = None,
             rec["turn_id"] = turn_id
         if prompt:
             rec["prompt"] = prompt[:500]
+        if extra:
+            rec.update({k: v for k, v in extra.items() if k not in rec})
         manifest["versions"].append(rec)
         _write_manifest(root, manifest)
         store.set_project_fields(pid, current_version=rec["v"])
@@ -275,3 +278,117 @@ def diff(pid: str, a: int, b: Optional[int], rel: Optional[str] = None) -> Optio
         if out and not out[-1].endswith("\n"):
             out.append("\n")
     return "".join(out)
+
+
+# ── Undo / redo on one file as version steps ─────────────────────────────
+#
+# Ctrl+Z on an HTML board walks the *file's* history, not an in-memory buffer:
+# every step restores the file as it was in an earlier version and records that
+# as a new `restore` version (marked `undo`), so nothing is ever lost — the
+# version list shows each step and any of them can be restored again.
+#
+# The cursor lives in `.versions/undo.json` {rel: {line: [[v, sha], …], pos, head}}.
+# `line` is the file's distinct states in history order (consecutive duplicates
+# collapsed, states where the file did not exist skipped), captured at the first
+# undo. `head` is the sha the file had after our last step: when the file on disk
+# no longer matches it (the user or the agent edited it since), the cursor is
+# stale — the redo branch is dropped and the line is rebuilt from history, just
+# as an editor forgets redo after a fresh edit.
+
+def _undo_path(root: Path) -> Path:
+    return _vdir(root) / "undo.json"
+
+
+def _read_undo(root: Path) -> Dict[str, Any]:
+    try:
+        data = json.loads(_undo_path(root).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def file_line(pid: str, rel: str) -> List[List[Any]]:
+    """[[v, sha], …]: the distinct contents `rel` had, oldest first."""
+    line: List[List[Any]] = []
+    for rec in list_versions(pid) or []:
+        sha = (rec.get("files") or {}).get(rel)
+        if not sha:
+            continue
+        if line and line[-1][1] == sha:
+            continue
+        line.append([rec["v"], sha])
+    return line
+
+
+def _working_sha(root: Path, rel: str) -> Optional[str]:
+    p = store.resolve_in(root, rel)
+    if not p or not p.is_file():
+        return None
+    try:
+        return _hash_file(p)
+    except OSError:
+        return None
+
+
+def undo_state(pid: str, rel: str) -> Dict[str, Any]:
+    """{can_undo, can_redo, pos, count} for the UI's buttons."""
+    root = store.project_dir(pid)
+    if not root or not store.safe_relpath(rel):
+        return {"can_undo": False, "can_redo": False}
+    cur = _working_sha(root, rel)
+    st = _read_undo(root).get(rel)
+    if st and st.get("head") == cur and isinstance(st.get("line"), list):
+        line, pos = st["line"], int(st.get("pos", len(st["line"]) - 1))
+    else:
+        line = file_line(pid, rel)
+        if cur and (not line or line[-1][1] != cur):
+            line = line + [[None, cur]]      # unsaved-to-history working copy is the head
+        pos = len(line) - 1
+    return {"can_undo": pos > 0, "can_redo": pos < len(line) - 1, "pos": pos, "count": len(line)}
+
+
+def step(pid: str, rel: str, direction: str) -> Optional[Dict[str, Any]]:
+    """Undo (`direction="undo"`) or redo one step on `rel`.
+
+    Returns {version, to_v, direction, can_undo, can_redo} or None when there is
+    nothing to step to. Raises ValueError on a bad path / direction.
+    """
+    if direction not in ("undo", "redo"):
+        raise ValueError("direction must be undo or redo")
+    root = store.project_dir(pid)
+    if not root or not store.safe_relpath(rel):
+        raise ValueError("bad path")
+    with lock_for(pid):
+        cur = _working_sha(root, rel)
+        if cur is None:
+            return None
+        state = _read_undo(root)
+        st = state.get(rel)
+        if st and st.get("head") == cur and isinstance(st.get("line"), list) and st["line"]:
+            line, pos = st["line"], int(st.get("pos", len(st["line"]) - 1))
+        else:
+            # Fresh cursor. Record the working copy first if it isn't a version yet,
+            # so undoing never throws away an edit that was not snapshotted.
+            line = file_line(pid, rel)
+            if not line or line[-1][1] != cur:
+                rec, _ = snapshot(pid, "user", prompt=f"Before undo in {rel}")
+                line = file_line(pid, rel)
+            pos = len(line) - 1
+        target = pos - 1 if direction == "undo" else pos + 1
+        if target < 0 or target >= len(line):
+            return None
+        to_v, sha = line[target]
+        blob = read_blob(pid, sha)
+        p = store.resolve_in(root, rel)
+        if blob is None or not p:
+            return None
+        tmp = p.with_name(".td-undo.tmp")
+        tmp.write_bytes(blob)
+        os.replace(tmp, p)
+        verb = "Undo" if direction == "undo" else "Redo"
+        rec, _ = snapshot(pid, "restore", prompt=f"{verb} in {rel} — back to v{to_v}",
+                          extra={"undo": {"path": rel, "direction": direction, "to_v": to_v}})
+        state[rel] = {"line": line, "pos": target, "head": sha}
+        store._write_json(_undo_path(root), state)
+        return {"version": rec or latest(pid), "to_v": to_v, "direction": direction,
+                "can_undo": target > 0, "can_redo": target < len(line) - 1}

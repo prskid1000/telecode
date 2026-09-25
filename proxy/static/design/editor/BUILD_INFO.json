@@ -3,7 +3,7 @@
   "tag": "v0.15.1",
   "commit": "6cf1748e31a0e43d3794d43abbd003ce9caa3c6f",
   "base": "/design/editor/",
-  "built_at": "2026-09-25T03:11:52Z",
+  "built_at": "2026-09-25T13:10:35Z",
   "bun": "1.4.2",
   "patches": [
     {
@@ -33,12 +33,32 @@
     {
       "name": "0007-telecode-build-time-dump-of-the-automation-tool-desc.patch",
       "sha256": "4bb16150667d2c26c5e86575580e5db670ab1e6ba8fdec1a95d6815f4fbee856"
+    },
+    {
+      "name": "0008-telecode-convert-between-HTML-pages-and-canvas-layer.patch",
+      "sha256": "13872e9399940918942dc428881f2ab17ca312d92009cf5992f598cd20466e1e"
+    },
+    {
+      "name": "0009-telecode-sync-design-tokens-with-variable-collection.patch",
+      "sha256": "bddcfe4b8616f3e106a874b19293f6b9fb6459b055dc684206f6ef7afc1cf653"
+    },
+    {
+      "name": "0010-telecode-frame-slides-list-and-reorder-a-page-s-top-.patch",
+      "sha256": "1cf4cc68674d951d7ed72a3886d99ff8fda8c42af660acb675032c8945dc2280"
+    },
+    {
+      "name": "0011-telecode-working-placeholders-and-a-present-shortcut.patch",
+      "sha256": "085e08a13935571f9734bda8787ea5068dbdce8423f4edc90c4b8c0bdbd6eeba"
+    },
+    {
+      "name": "0012-telecode-bound-the-wait-for-the-original-.fig-archiv.patch",
+      "sha256": "9317b868e46bba0875593f0129f8a87d3fd3e0ba5fc1b3a94896b9c62f6c19c5"
     }
   ],
-  "tools": 116,
+  "tools": 125,
   "open_pencil_version": "0.15.1",
   "third_party_packages": 195,
-  "files": 579,
-  "bytes": 29053252,
-  "index_sha256": "a29848f42e0469b791017edd0299aef2d568920c1d45393772c21d87f2992ac5"
+  "files": 588,
+  "bytes": 29080195,
+  "index_sha256": "4183e0a0b579ba84dab863eb6c5bed9fb69135f4351b4a1426b39a0f0e26803f"
 }

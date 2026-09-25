@@ -18,7 +18,7 @@ place ``skip_if_empty.heartbeat_section`` looks at). Each entry::
     skip_if_empty  a workspace path, or {section: "<HEARTBEAT.md heading>"}
     ok_suppression bool (default true) · notify bool · catch_up skip|once
     goal        {check, features, max_fires, max_cost}
-    auto_pause_after_failures int · pinned str · permission_mode · timeout (s)
+    auto_pause_after_failures int · pinned str · permission_mode · effort · timeout (s)
 
 :func:`compile_agent` upserts one trigger per entry (``source: heartbeat``,
 ``source_key: hb:<agent_id>:<name>``), keeping each trigger's state and a
@@ -43,7 +43,8 @@ VALID_WORKSPACE_MODES = ("ephemeral", "persistent")
 _FENCE_RE = re.compile(r"```yaml\s*\n(.*?)\n```", re.DOTALL | re.IGNORECASE)
 _KNOWN = {"name", "prompt", "cron", "every", "at", "tz", "workspace", "workspace_id", "engine", "model",
           "is_local", "enabled", "active_hours", "skip_if_empty", "ok_suppression", "notify", "catch_up",
-          "goal", "auto_pause_after_failures", "pinned", "permission_mode", "timeout", "outputs_only"}
+          "goal", "auto_pause_after_failures", "pinned", "permission_mode", "timeout", "outputs_only",
+          "effort"}
 
 
 def _entry_to_body(agent_id: str, raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -119,6 +120,7 @@ def _entry_to_body(agent_id: str, raw: Dict[str, Any]) -> Dict[str, Any]:
         "pinned": raw.get("pinned") or "",
         "permission_mode": raw.get("permission_mode") or model.DEFAULT_PERMISSION_MODE,
         "task_timeout_seconds": raw.get("timeout") or 1800,
+        "effort": raw.get("effort") or None,
         "outputs_only": raw.get("outputs_only", False),
         "_enabled": raw.get("enabled", True),
     }

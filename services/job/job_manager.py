@@ -61,6 +61,7 @@ def _normalize_pipeline(data: Dict[str, Any]) -> Dict[str, Any]:
             # Per-step overrides; blank / None = inherit (run body → agent default).
             "engine": _normalize_step_engine(s.get("engine")),
             "model": (s.get("model") or "").strip() if isinstance(s.get("model"), str) else "",
+            "effort": _normalize_effort(s.get("effort")),
             "is_local": _normalize_tristate(s.get("is_local")),
             "session_policy": _normalize_policy(s.get("session_policy")),
             "budget": _normalize_budget(s.get("budget")),
@@ -252,6 +253,11 @@ def _normalize_outcome_check(value: Any) -> Optional[Dict[str, Any]]:
 
 
 JOB_PERMISSION_MODES = ("", "skip", "ask", "auto", "acceptEdits", "dontAsk", "plan", "manual")
+
+
+def _normalize_effort(value: Any) -> str:
+    from services.engine.types import normalize_effort
+    return normalize_effort(value)
 
 
 def _normalize_job_permission_mode(value: Any) -> str:

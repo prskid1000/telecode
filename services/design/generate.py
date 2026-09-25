@@ -37,7 +37,7 @@ import config
 from services.design import assets as dassets
 from services.design import chats as dchats
 from services.design import comments as dcomments
-from services.design import events, prompt_builder, store, versions
+from services.design import engine_opts, events, prompt_builder, store, versions
 from services.design import files as dfiles
 
 logger = logging.getLogger("telecode.services.design.generate")
@@ -106,14 +106,22 @@ def running_turn(pid: str, cid: str) -> Optional[Dict[str, Any]]:
 # ── DESIGN_TURN handler (runs in a task-queue thread) ────────────────────
 
 def design_turn_handler(pid: str, chat_id: str, turn_id: str, engine: str, prompt: str,
-                        is_local: bool = False, model: Optional[str] = None) -> Dict[str, Any]:
+                        is_local: bool = False, model: Optional[str] = None,
+                        system_file: Optional[str] = None) -> Dict[str, Any]:
     """Run the chat's CLI in the project folder through the Engine Runner.
 
     The runner spawns the CLI directly (no shell), bound to the Job Object
     before it runs, and registers it with the task queue, so Stop
     (``TaskQueue.cancel``) takes the graceful → tree-kill path. The raw log
     stays at ``data/task_logs/<task_id>.jsonl``, which ``_drive`` tails.
+
+    Claude Code also gets the cost options of :mod:`services.design.engine_opts`
+    (strict MCP, trimmed tools, no CLAUDE.md chain / skills) and, in
+    ``brief_mode: system``, the brief as ``--append-system-prompt-file``.
+    Permission mode and effort ride in the task metadata (``_submit``), which
+    ``task_request`` turns into ``EngineRequest.permission_mode`` / ``effort``.
     """
+    from services.design import engine_opts
     from services.engine.task_bridge import legacy_resume_writer, run_in_task, task_request
     from services.session import session_store
     from services.task.task_utils import get_session_id, get_session_namespace, get_task_id
@@ -136,6 +144,21 @@ def design_turn_handler(pid: str, chat_id: str, turn_id: str, engine: str, promp
         resume_id=data.get(slot_key), on_resume_id=legacy_resume_writer(sid, ns, slot_key),
         log_path=log_dir / f"{task_id}.jsonl",
         last_msg_path=(log_dir / f"{task_id}.codex_last_message.txt") if engine == "codex" else None)
+    # Per-turn cost is the runner's job (services.engine.cost). Chats that predate
+    # it kept their cumulative base in ``design_cost``: the runner's fallback.
+    legacy = (data.get("design_cost") or {}).get(resume_slot(engine, is_local)) or {}
+    if req.resume_id and legacy.get("resume") == req.resume_id and isinstance(legacy.get("total"), (int, float)):
+        req.cost_base_usd = float(legacy["total"])
+    if engine == "claude_code":
+        args, env = engine_opts.claude_launch()
+        req.extra_args = args
+        req.env_extra = {**(req.env_extra or {}), **env}
+        if system_file:
+            sf = store.resolve_in(root, system_file)
+            if sf and sf.is_file():
+                req.system_append_file = sf
+            else:
+                logger.warning("design: system prompt file %s missing — the brief is not in this turn", system_file)
     return run_in_task(req, sid=sid, ns=ns)
 
 
@@ -147,7 +170,7 @@ def register_task_type() -> None:
         params_schema={"type": "object", "properties": {
             "pid": {"type": "string"}, "chat_id": {"type": "string"}, "turn_id": {"type": "string"},
             "engine": {"type": "string"}, "prompt": {"type": "string"}, "is_local": {"type": "boolean"},
-            "model": {"type": "string"}},
+            "model": {"type": "string"}, "system_file": {"type": "string"}},
             "required": ["pid", "chat_id", "turn_id", "engine", "prompt"]},
     )
 
@@ -218,6 +241,8 @@ def _validate_body(pid: str, root: Path, body: Dict[str, Any]) -> Dict[str, Any]
         raise ValueError("invalid engine")
     if "effort" in body and body["effort"] not in dchats.EFFORTS:
         raise ValueError("invalid effort")
+    if "permission_mode" in body:
+        dchats.clean_permission_mode(body["permission_mode"])
     if body.get("style_id") is not None and not store._clean_style_id(body.get("style_id")):
         raise ValueError("invalid style_id")
     ks = body.get("kind_skill")
@@ -253,6 +278,7 @@ async def start_turn(pid: str, cid: str, body: Dict[str, Any], *, auto: Optional
         raise ValueError(f"engine {engine} is not installed (no `{BINARIES[engine]}` on PATH)")
     is_local = bool(body["is_local"]) if "is_local" in body else bool(chat.get("is_local"))
     effort = body.get("effort", chat.get("effort"))
+    permission_mode = body.get("permission_mode") or chat.get("permission_mode") or dchats.default_permission_mode()
     model = (dchats.clean_model(body["model"]) if "model" in body else chat.get("model")) \
         or dchats.default_model(engine, is_local)
 
@@ -268,13 +294,15 @@ async def start_turn(pid: str, cid: str, body: Dict[str, Any], *, auto: Optional
     _chat_running[key] = "reserved"
     try:
         user_turn = _new_record(cid, "user", text=body.get("text", ""), engine=engine, is_local=is_local, model=model,
-                                effort=effort, attachments=body.get("attachments") or [],
+                                effort=effort, permission_mode=permission_mode,
+                                attachments=body.get("attachments") or [],
                                 comment_ids=cids, form_answers=body.get("form_answers"),
                                 selection=body.get("selection"))
         if auto:
             user_turn["auto"] = auto
         turn = _new_record(cid, "assistant", status="queued", engine=engine, is_local=is_local, model=model,
-                           effort=effort, attachments=user_turn["attachments"], comment_ids=cids,
+                           effort=effort, permission_mode=permission_mode,
+                           attachments=user_turn["attachments"], comment_ids=cids,
                            reply_to=user_turn["id"])
         if auto:
             turn["auto"] = auto
@@ -304,8 +332,12 @@ async def start_turn(pid: str, cid: str, body: Dict[str, Any], *, auto: Optional
             return {"turn": turn, "user_turn": user_turn}
 
         sid = chat.get("session_id") or dchats.session_id_for(pid, cid)
-        include_brief = _needs_brief(sid, resume_slot(engine, is_local), built["brief_sha"])
-        prompt = prompt_builder.compose(built, include_brief=include_brief)
+        slot = resume_slot(engine, is_local)
+        state = _brief_state(sid, slot)
+        mode = engine_opts.brief_mode(engine)
+        delivery = prompt_builder.plan_delivery(built, sent=state["sections"], fresh=state["fresh"], mode=mode)
+        system_file = await asyncio.to_thread(_system_file_for, root, cid, delivery, state)
+        prompt = delivery["prompt"]
 
         dchats.upsert_turn(pid, cid, user_turn)
         dchats.upsert_turn(pid, cid, turn)
@@ -314,8 +346,9 @@ async def start_turn(pid: str, cid: str, body: Dict[str, Any], *, auto: Optional
         store.set_project_fields(pid, active_chat_id=cid)
         events.publish(pid, "turn", {**user_turn, "chat_id": cid})
 
-        ctx = {"pid": pid, "cid": cid, "sid": sid, "engine": engine, "slot": resume_slot(engine, is_local),
-               "brief_sha": built["brief_sha"],
+        ctx = {"pid": pid, "cid": cid, "sid": sid, "engine": engine, "slot": slot,
+               "brief_sha": built["brief_sha"], "brief_mode": mode, "sections": delivery["sections"],
+               "system_file": system_file, "effort": effort, "permission_mode": permission_mode,
                "project_turns": project_turns, "user_text": body.get("text", ""), "built": built,
                "retried": False}
         ctx["baseline"] = await asyncio.to_thread(_mtimes, root)
@@ -329,20 +362,44 @@ async def start_turn(pid: str, cid: str, body: Dict[str, Any], *, auto: Optional
         raise
 
 
-def _needs_brief(sid: str, engine: str, brief_sha: str) -> bool:
+def _brief_state(sid: str, slot: str) -> Dict[str, Any]:
+    """What the chat's CLI conversation already holds, per resume slot:
+    ``fresh`` (no conversation to resume), ``sections`` (brief section id → sha
+    it has seen; empty when unknown), ``system_file`` (the file its system prompt
+    came from, passed again on every launch)."""
     from services.session import session_store
     data = (session_store.get(sid, namespace=dchats.SESSION_NAMESPACE) or {}).get("data") or {}
-    resume = data.get(RESUME_KEYS.get(engine, ""))
-    sent = (data.get("design_brief") or {}).get(engine) or {}
-    return not resume or sent.get("sha") != brief_sha or sent.get("resume") != resume
+    resume = data.get(RESUME_KEYS.get(slot, ""))
+    rec = (data.get("design_brief") or {}).get(slot) or {}
+    same = bool(resume) and rec.get("resume") == resume
+    return {"fresh": not resume,
+            "sections": dict(rec.get("sections") or {}) if same else {},
+            "system_file": rec.get("system_file") if same else None}
 
 
-def _mark_brief_sent(sid: str, engine: str, brief_sha: str) -> None:
+def _system_file_for(root: Path, cid: str, delivery: Dict[str, Any], state: Dict[str, Any]) -> Optional[str]:
+    """Project-relative path of the ``--append-system-prompt-file`` for this launch:
+    rewritten when a fresh conversation starts in system mode, else the file the
+    conversation started with (same bytes → same system prompt → cache hit)."""
+    if delivery.get("system"):
+        rel = f".td/system-{cid}.md"
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_name(p.name + ".tmp")
+        tmp.write_text(delivery["system"], encoding="utf-8")
+        tmp.replace(p)
+        return rel
+    rel = state.get("system_file")
+    return rel if rel and (root / rel).is_file() else None
+
+
+def _mark_brief_sent(sid: str, slot: str, sections: Dict[str, str], system_file: Optional[str]) -> None:
     from services.session import session_store
     data = (session_store.get(sid, namespace=dchats.SESSION_NAMESPACE) or {}).get("data") or {}
-    resume = data.get(RESUME_KEYS.get(engine, ""))
+    resume = data.get(RESUME_KEYS.get(slot, ""))
     if resume:
-        session_store.patch_data(sid, {"design_brief": {engine: {"sha": brief_sha, "resume": resume}}},
+        session_store.patch_data(sid, {"design_brief": {slot: {"resume": resume, "sections": sections,
+                                                               "system_file": system_file}}},
                                  namespace=dchats.SESSION_NAMESPACE)
 
 
@@ -351,8 +408,12 @@ def _submit(turn: Dict[str, Any], ctx: Dict[str, Any], prompt: str) -> None:
     task_id = get_task_queue().submit_task(
         TASK_TYPE,
         params={"pid": ctx["pid"], "chat_id": ctx["cid"], "turn_id": turn["id"], "engine": ctx["engine"],
-                "prompt": prompt, "is_local": bool(turn.get("is_local")), "model": turn.get("model")},
-        metadata={"source": "design", "project_id": ctx["pid"], "chat_id": ctx["cid"], "turn_id": turn["id"]},
+                "prompt": prompt, "is_local": bool(turn.get("is_local")), "model": turn.get("model"),
+                "system_file": ctx.get("system_file")},
+        metadata={"source": "design", "project_id": ctx["pid"], "chat_id": ctx["cid"], "turn_id": turn["id"],
+                  # -> EngineRequest.permission_mode / effort (services.engine.task_bridge)
+                  "permission_mode": ctx.get("permission_mode") or dchats.default_permission_mode(),
+                  **({"effort": ctx["effort"]} if ctx.get("effort") else {})},
         session_id=ctx["sid"],
         session_namespace=dchats.SESSION_NAMESPACE,
         session_idle_timeout_seconds=dchats.SESSION_IDLE_SECONDS,
@@ -604,7 +665,11 @@ async def _finish(turn: Dict[str, Any], ctx: Dict[str, Any], task: Any, usage: D
         session_store.patch_data(ctx["sid"], {RESUME_KEYS[ctx["slot"]]: None},
                                  namespace=dchats.SESSION_NAMESPACE)
         ctx["retried"] = True
-        _submit(turn, ctx, prompt_builder.compose(ctx["built"], include_brief=True))
+        root = store.project_dir(pid)
+        delivery = prompt_builder.plan_delivery(ctx["built"], sent=None, fresh=True, mode=ctx["brief_mode"])
+        ctx["sections"] = delivery["sections"]
+        ctx["system_file"] = await asyncio.to_thread(_system_file_for, root, cid, delivery, {}) if root else None
+        _submit(turn, ctx, delivery["prompt"])
         _drivers[turn["id"]] = asyncio.get_running_loop().create_task(_drive(turn, ctx))
         return
 
@@ -623,6 +688,8 @@ async def _finish(turn: Dict[str, Any], ctx: Dict[str, Any], task: Any, usage: D
         "input": tokens.get("total_input_incl_cache") or usage.get("input_tokens") or 0,
         "output": tokens.get("output") or usage.get("output_tokens") or 0,
         "cache_read": tokens.get("cache_read") or usage.get("cache_read_tokens") or 0,
+        # Already the turn's own cost: the Engine Runner subtracts a resumed
+        # Claude session's earlier total (services.engine.cost).
         "cost_usd": result.get("cost_usd") or usage.get("cost_usd") or 0,
         "duration_ms": result.get("duration_ms") or 0,
     }
@@ -658,7 +725,7 @@ async def _finish(turn: Dict[str, Any], ctx: Dict[str, Any], task: Any, usage: D
 
     if turn["status"] == "done":
         try:
-            _mark_brief_sent(ctx["sid"], ctx["slot"], ctx["brief_sha"])
+            _mark_brief_sent(ctx["sid"], ctx["slot"], ctx.get("sections") or {}, ctx.get("system_file"))
         except Exception:
             logger.exception("design: could not record brief for %s", ctx["sid"])
     elif turn.get("comment_ids"):
@@ -707,7 +774,8 @@ async def _post_turn(turn: Dict[str, Any], ctx: Dict[str, Any]) -> None:
         logger.exception("design: done gate failed")
     if not fixing:
         try:
-            await _verifier(turn, ctx, html_changed)
+            canvas_changed = "doc.fig" in (turn.get("changed_files") or [])
+            await _verifier(turn, ctx, html_changed, canvas_changed=canvas_changed)
         except Exception:
             logger.exception("design: verifier failed")
     if turn.get("changed_files"):
@@ -806,16 +874,22 @@ async def _local_complete(prompt: str, max_tokens: int = 512, timeout: float = 1
 _VERIFIER_RE = re.compile(r'<verifier-result\s+status="(pass|fail)"\s*/?>(.*?)(?:</verifier-result>|$)', re.S)
 
 
-async def _verifier(turn: Dict[str, Any], ctx: Dict[str, Any], html_changed: List[str]) -> None:
+async def _verifier(turn: Dict[str, Any], ctx: Dict[str, Any], html_changed: List[str],
+                    canvas_changed: bool = False) -> None:
+    """Render checks on changed HTML boards, plus layer-board checks (overlaps,
+    typography, clipping via the live editor) when the canvas changed too — a
+    canvas-only turn used to get no automatic check at all."""
     pid, cid = ctx["pid"], ctx["cid"]
-    if not html_changed or not config.get_nested("design.verifier.enabled", True):
+    if not (html_changed or canvas_changed) or not config.get_nested("design.verifier.enabled", True):
         return
     verify = _optional("render", "verify")
     if not verify:
         return
     _check(turn, cid, pid, "verifier", "running")
     try:
-        res = await asyncio.wait_for(verify(pid, html_changed, screenshots=True), RENDER_TIMEOUT * 2)
+        res = await asyncio.wait_for(verify(pid, html_changed, screenshots=True,
+                                            layers=True if canvas_changed else None),
+                                     RENDER_TIMEOUT * 2)
     except asyncio.TimeoutError:
         _check(turn, cid, pid, "verifier", "timeout")
         return
@@ -836,7 +910,7 @@ async def _verifier(turn: Dict[str, Any], ctx: Dict[str, Any], html_changed: Lis
             console_log=json.dumps(res.get("console") or {}, ensure_ascii=False)[:20000],
             screenshots="\n".join(res.get("screenshots") or [])[:4000],
             lint_findings=json.dumps(findings, ensure_ascii=False, default=str)[:20000] if findings else "",
-            pen_problems="",
+            pen_problems=str(res.get("pen_problems") or "")[:20000],
             verifier_task="",
         ) + ("\n\nRender checks already found (confirm, don't repeat):\n" + json.dumps(issues)[:10000]
              if issues else "")

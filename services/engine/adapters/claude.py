@@ -57,6 +57,15 @@ def permission_args(permission_mode: Optional[str], *, approve_mcp_config=None) 
     return ["--permission-mode", str(permission_mode), "--permission-prompts", "none"]
 
 
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
+def effort_args(effort: Optional[str]) -> List[str]:
+    """``--effort <level>`` (claude 2.1.282: low, medium, high, xhigh, max);
+    None / unknown = the CLI's default."""
+    return ["--effort", effort] if effort in EFFORTS else []
+
+
 def approve_mcp_config(correlation: Optional[Dict[str, Any]], mcp_url: str) -> Dict[str, Any]:
     """``--mcp-config`` JSON for ``ask`` mode: telecode's MCP server over HTTP,
     with the run's ids as headers so ``approve_tool`` knows whose call it is."""
@@ -69,7 +78,8 @@ def approve_mcp_config(correlation: Optional[Dict[str, Any]], mcp_url: str) -> D
 def build_argv(*, resume_id: Optional[str], model: Optional[str], is_local: bool,
                append_system_prompt_file=None, schema: Optional[Dict[str, Any]] = None,
                add_dirs=(), fork: bool = False, max_budget_usd: Optional[float] = None,
-               permission_mode: Optional[str] = None, approve_mcp_config_path=None) -> List[str]:
+               permission_mode: Optional[str] = None, approve_mcp_config_path=None,
+               effort: Optional[str] = None) -> List[str]:
     cmd = [
         "claude", "-p",
         *permission_args(permission_mode, approve_mcp_config=approve_mcp_config_path),
@@ -87,6 +97,7 @@ def build_argv(*, resume_id: Optional[str], model: Optional[str], is_local: bool
     # model travels as ANTHROPIC_MODEL instead.
     if model and not is_local:
         cmd += ["--model", model]
+    cmd += effort_args(effort)
     if append_system_prompt_file:
         cmd += ["--append-system-prompt-file", str(append_system_prompt_file)]
     if schema:
@@ -134,6 +145,7 @@ class ClaudeAdapter(Adapter):
     engine = "claude_code"
     label = "claude"
     resume_start_key = "resumed_claude_session_id"
+    cumulative_cost = True     # total_cost_usd sums a resumed session's invocations
 
     def build(self, req: EngineRequest) -> Launch:
         env: Optional[Dict[str, str]] = None
@@ -173,7 +185,17 @@ class ClaudeAdapter(Adapter):
                           append_system_prompt_file=req.system_append_file, schema=req.schema,
                           add_dirs=req.add_dirs, fork=req.fork,
                           max_budget_usd=None if req.is_local else req.max_usd,
-                          permission_mode=mode, approve_mcp_config_path=cfg_path)
+                          permission_mode=mode, approve_mcp_config_path=cfg_path, effort=req.effort)
+        extra = [str(a) for a in (req.extra_args or ())]
+        if cfg_path is not None and "--mcp-config" in extra:
+            # The caller has its own --mcp-config (TeleDesign's --strict-mcp-config
+            # file): one variadic flag naming both files, so strict mode keeps
+            # telecode_safety's approve_tool.
+            i = argv.index("--mcp-config")
+            del argv[i:i + 2]
+            j = extra.index("--mcp-config") + 2
+            extra[j:j] = [str(cfg_path)]
+        argv += extra
         return Launch(argv=argv, stdin=req.prompt, env=env, cleanup=cleanup, warnings=warnings)
 
     def parse(self, evt: Dict[str, Any], st: ParseState) -> List[Dict[str, Any]]:
@@ -223,6 +245,10 @@ class ClaudeAdapter(Adapter):
         if not st.final and st.raw_lines:
             return [{"kind": "narrative", "text": t} for t in st.raw_lines]
         return []
+
+    def reported_total_cost(self, st: ParseState) -> Optional[float]:
+        v = (st.final or {}).get("total_cost_usd")
+        return float(v) if isinstance(v, (int, float)) else None
 
     def _tokens(self, st: ParseState) -> Dict[str, int]:
         usage = (st.final or {}).get("usage")

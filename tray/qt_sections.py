@@ -6765,6 +6765,34 @@ def _teledesign(window) -> QWidget:
                                "Post a message with the thumbnail when a turn started from the web UI finishes."))
     layout.addWidget(card)
 
+    # ── Turn cost (Claude Code) — services/design/engine_opts.py ─────
+    card, body = _card("Turn cost (Claude Code)",
+                       "What each design turn's CLI loads besides TeleDesign's own brief. Every API call of "
+                       "a turn re-sends it, so the defaults keep only what design needs (measured: ~99k → "
+                       "~37k tokens per call on a trivial turn).")
+    body.addWidget(_toggle_row("design.claude.strict_mcp", "Only telecode's MCP server",
+                               "--strict-mcp-config: your other MCP servers and claude.ai connectors are not "
+                               "loaded into design turns.", default=True))
+    body.addWidget(_enum_row("design.claude.setting_sources", "Settings files",
+                             [("User only (skip the project's CLAUDE.md chain)", "user"),
+                              ("All (CLI default)", "all"), ("None", "")],
+                             "--setting-sources. Design projects live inside telecode's folder, so 'All' "
+                             "loads telecode's developer CLAUDE.md into every turn.", max_width=360))
+    body.addWidget(_toggle_row("design.claude.claude_md", "Load your CLAUDE.md",
+                               "Your global CLAUDE.md in design turns.", default=False))
+    body.addWidget(_toggle_row("design.claude.auto_memory", "Auto-memory", "Claude Code's auto-memory.",
+                               default=False))
+    body.addWidget(_toggle_row("design.claude.skills", "Skills", "Your skills listing in design turns.",
+                               default=False))
+    body.addWidget(_enum_row("design.brief_mode", "Brief delivery",
+                             [("System prompt", "system"), ("First message", "message")],
+                             "Where a new chat's brief goes (Claude Code only; the others always use the "
+                             "message).", max_width=260))
+    body.addWidget(_toggle_row("design.brief_select", "Lean brief for edits",
+                               "Comment, mention, auto-fix and short change turns skip the kind skill, tweaks "
+                               "and craft rules (still in .td/brief.md).", default=True))
+    layout.addWidget(card)
+
     card, body = _card("Preview & sharing")
     body.addWidget(_number_row("design.preview_port", "Preview port", 1024, 65535, 1, 0,
                                "Separate origin for generated pages, so they can never call the API. Restart required."))
@@ -6778,6 +6806,18 @@ def _teledesign(window) -> QWidget:
                        "and the /design prompt work inside these CLIs.")
     rows: dict[str, tuple[QLabel, QPushButton]] = {}
     from services.design import mcp_registration as _reg
+    # Server reachability + "Re-check connection": re-probes the MCP endpoint and every client.
+    srv_state = QLabel("checking…")
+    srv_state.setStyleSheet(f"color: {FG_MUTE};")
+    recheck = QPushButton("Re-check connection")
+    srv_right = QWidget()
+    srl = QHBoxLayout(srv_right)
+    srl.setContentsMargins(0, 0, 0, 0)
+    srl.addWidget(srv_state)
+    srl.addStretch(1)
+    srl.addWidget(recheck)
+    body.addWidget(_row(row_label("MCP server", "Whether anything answers at the URL the CLIs are given.", ""),
+                        srv_right))
     for client, info in _reg.CLIENTS.items():
         state = QLabel("checking…")
         state.setStyleSheet(f"color: {FG_MUTE};")
@@ -6802,6 +6842,13 @@ def _teledesign(window) -> QWidget:
     layout.addStretch(1)
 
     def _show(client: str, res: dict) -> None:
+        if client == "__server__":
+            ok = bool(res.get("reachable"))
+            srv_state.setText(f"reachable at {res.get('url')}" if ok else
+                              f"not reachable at {res.get('url', '')} — {str(res.get('error') or '')[:60]}")
+            srv_state.setStyleSheet(f"color: {OK if ok else ERR};")
+            recheck.setEnabled(True)
+            return
         state, btn = rows[client]
         if res.get("error") and not res.get("registered"):
             state.setText(f"failed: {str(res['error'])[:80]}")
@@ -6821,11 +6868,27 @@ def _teledesign(window) -> QWidget:
     bridge.reg.connect(_show)
 
     def _probe_all() -> None:
+        try:
+            _emit(bridge.reg, "__server__", _reg.server_status())
+        except Exception as exc:
+            _emit(bridge.reg, "__server__", {"reachable": False, "error": str(exc)})
         for c in _reg.CLIENTS:
             try:
                 _emit(bridge.reg, c, _reg.client_status(c))
             except Exception as exc:
                 _emit(bridge.reg, c, {"error": str(exc)})
+
+    def _recheck(_=False) -> None:
+        recheck.setEnabled(False)
+        srv_state.setText("checking…")
+        srv_state.setStyleSheet(f"color: {FG_MUTE};")
+        for state, btn in rows.values():
+            state.setText("checking…")
+            state.setStyleSheet(f"color: {FG_MUTE};")
+            btn.setEnabled(False)
+        threading.Thread(target=_probe_all, daemon=True).start()
+    recheck.clicked.connect(_recheck)
+    recheck.setEnabled(False)
     threading.Thread(target=_probe_all, daemon=True).start()
     return scroll
 

@@ -230,6 +230,57 @@ def _truncate_design_md(text: str, ds_path: str) -> str:
     return "\n".join(out).strip()
 
 
+BRAND_FONT_STATUS = ("provided", "substituted", "missing")
+
+
+def brand_fonts(man: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The manifest's `brandFonts`, normalised to
+    [{family, status: provided|substituted|missing, substitute?, tokens: [css var…], note?}].
+
+    Accepts the list form, and the Claude-Design object form
+    ``{"status": …, "tokens": {"--font-display": "Newsreader", …}}`` / ``{family: {status, …}}``.
+    It records what happened to the brand's own typefaces — shipped with the
+    system, swapped for a stand-in (and which), or unavailable — so the agent and
+    the fonts view can say so instead of silently using a fallback.
+    """
+    raw = man.get("brandFonts") if isinstance(man, dict) else None
+    items: List[Dict[str, Any]] = []
+    if isinstance(raw, dict):
+        if "tokens" in raw or "status" in raw:
+            toks = raw.get("tokens") or {}
+            by_family: Dict[str, List[str]] = {}
+            if isinstance(toks, dict):
+                for tok, fam in toks.items():
+                    if isinstance(fam, str):
+                        by_family.setdefault(fam.split(",")[0].strip().strip("'\""), []).append(str(tok))
+            for fam, tlist in (by_family or {"": []}).items():
+                items.append({"family": fam, "status": raw.get("status"), "tokens": tlist,
+                              "substitute": raw.get("substitute"), "note": raw.get("note")})
+        else:
+            for fam, v in raw.items():
+                if isinstance(v, dict):
+                    items.append({"family": fam, **v})
+                elif isinstance(v, str):
+                    items.append({"family": fam, "status": v})
+    elif isinstance(raw, list):
+        items = [x for x in raw if isinstance(x, dict)]
+    out: List[Dict[str, Any]] = []
+    for it in items[:40]:
+        fam = str(it.get("family") or "").strip()[:120]
+        st = str(it.get("status") or "").lower()
+        st = st if st in BRAND_FONT_STATUS else ("substituted" if it.get("substitute") else "provided")
+        toks = it.get("tokens")
+        toks = [str(t)[:80] for t in toks][:20] if isinstance(toks, list) else             ([str(t)[:80] for t in toks.keys()][:20] if isinstance(toks, dict) else [])
+        rec = {"family": fam, "status": st, "tokens": toks}
+        if it.get("substitute"):
+            rec["substitute"] = str(it["substitute"])[:120]
+        if it.get("note"):
+            rec["note"] = str(it["note"])[:400]
+        if fam or toks:
+            out.append(rec)
+    return out
+
+
 def compact_manifest(man: Dict[str, Any]) -> str:
     comps = []
     for c in man.get("components") or []:
@@ -250,8 +301,12 @@ def compact_manifest(man: Dict[str, Any]) -> str:
         "name": man.get("name"), "namespace": man.get("namespace"), "version": man.get("version"),
         "runtime": man.get("runtime"), "components": comps,
         "cards": [{"path": c.get("path"), "group": c.get("group")} for c in man.get("cards") or [] if isinstance(c, dict)],
-        "fonts": [{"family": f.get("family"), "weights": f.get("weights"), "css": f.get("css") or f.get("cssPath"),
-                   "files": f.get("files")} for f in man.get("fonts") or [] if isinstance(f, dict)],
+        "fonts": [{k: v for k, v in {"family": f.get("family"), "weights": f.get("weights"),
+                                     "style": f.get("style"), "css": f.get("css") or f.get("cssPath"),
+                                     "files": f.get("files"), "remoteSrc": f.get("remoteSrc")}.items()
+                   if v not in (None, [], "")}
+                  for f in man.get("fonts") or [] if isinstance(f, dict)],
+        "brandFonts": brand_fonts(man),
         "fontsCss": man.get("fontsCss"),
         "icons": man.get("icons"),
         "themes": [t.get("id") if isinstance(t, dict) else t for t in man.get("themes") or []],
@@ -698,6 +753,9 @@ def _convert_claude_design(d: Path, man: Dict[str, Any]) -> Dict[str, Any]:
             fonts.append(ff)
     if fonts:
         new_man["fonts"] = fonts
+    bf = brand_fonts(man)
+    if bf:
+        new_man["brandFonts"] = bf
     if not new_man.get("cards"):
         cards = []
         for p in sorted(d.rglob("*.html")):
