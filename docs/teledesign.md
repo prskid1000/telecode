@@ -6,7 +6,7 @@ prototypes / decks / one-pagers, design systems, comments, tweaks, export, Claud
 **single canvas**, driven by the CLIs telecode already runs (Claude Code / Codex / Antigravity / local
 models through the proxy).
 
-- Entry: tray → **Open TeleDesign** → `http://127.0.0.1:1235/design` (also linked from Agent Manager).
+- Entry: tray → **Open Web UI** → `http://127.0.0.1:1235/design`; the shared top bar switches to Team (`/team`) and Tasks (`/tasks`).
 - Feature-by-feature checklist: **[teledesign-parity.md](teledesign-parity.md)** — every Claude Design and
   pen.dev feature, with the phase it lands in. This file is the architecture; that one is the scope.
 - Research sources (2026-09-25): Claude Design support/admin docs, a real handoff bundle and the leaked

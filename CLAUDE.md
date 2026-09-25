@@ -381,7 +381,7 @@ To use: `llamacpp.enabled` + `proxy.enabled`, fill `llamacpp.binary` + `llamacpp
 
 ## TeleDesign (`services/design/`, `proxy/api_design*.py`, `/design`)
 
-Claude Design + pen.dev on **one canvas**, driven by the existing CLIs. Tray → **Open TeleDesign** →
+Claude Design + pen.dev on **one canvas**, driven by the existing CLIs. Tray → **Open Web UI** (lands here) →
 `http://127.0.0.1:<proxy.port>/design`. Architecture: [docs/teledesign.md](docs/teledesign.md); the
 interface every module codes against: [docs/teledesign-contract.md](docs/teledesign-contract.md); scope:
 [docs/teledesign-parity.md](docs/teledesign-parity.md).

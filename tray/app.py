@@ -216,13 +216,10 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
         port = get_path(settings, "proxy.port", 1235)
         webbrowser.open(f"http://{host}:{port}{path}")
 
-    open_ui_action = QAction("Open Agent Manager", menu)
-    open_ui_action.triggered.connect(lambda: _open_proxy_page("/team"))
+    # One entry, landing on TeleDesign; the shared top bar switches Team · Tasks · Design.
+    open_ui_action = QAction("Open Web UI", menu)
+    open_ui_action.triggered.connect(lambda: _open_proxy_page("/design"))
     menu.addAction(open_ui_action)
-
-    open_design_action = QAction("Open TeleDesign", menu)
-    open_design_action.triggered.connect(lambda: _open_proxy_page("/design"))
-    menu.addAction(open_design_action)
 
     def _open_docgraph_ui():
         import webbrowser

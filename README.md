@@ -129,7 +129,7 @@ The manager thread starts inside `start_proxy_background()` (proxy process). **R
 
 ### TeleDesign (design canvas)
 
-**Tray → Open TeleDesign** (or `http://127.0.0.1:1235/design`) opens a design tool that works like Claude Design and pen.dev on a single canvas, with your own CLIs doing the designing.
+**Tray → Open Web UI** (lands on `http://127.0.0.1:1235/design`; the top bar switches to Team and Tasks) opens a design tool that works like Claude Design and pen.dev on a single canvas, with your own CLIs doing the designing.
 
 - **Describe what you want** — the agent asks a few clarifying questions (a form), then builds. Pick the engine per chat: **Claude Code**, **Codex** or **Antigravity**, with **local mode** routing it to your llama.cpp model through the proxy.
 - **One canvas, two kinds of board** — *HTML boards* are live generated prototypes, decks and animations; *layer boards* are native vector frames with auto-layout, components and variables (an embedded [open-pencil](https://github.com/open-pencil/open-pencil) editor, saved as `.fig`). Every board has **Canvas / Code / Preview** views, and can be converted either way.
