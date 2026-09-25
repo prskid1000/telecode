@@ -19,7 +19,6 @@ Supported clients (binary via `shutil.which`):
 |---------------|----------|---------------------------------------------------------------|
 | `claude_code` | `claude` | `claude mcp add --transport http --scope user telecode <url>`  |
 | `codex`       | `codex`  | `codex mcp add telecode --url <url>`                           |
-| `gemini`      | `gemini` | `gemini mcp add --transport http --scope user telecode <url>`  |
 | `antigravity` | `agy`    | `agy mcp add --type http telecode <url>`                       |
 
 The URL is `http://127.0.0.1:<mcp_server.port>/mcp`, read from settings each call.
@@ -44,7 +43,6 @@ logger = logging.getLogger("telecode.services.design.mcp_registration")
 CLIENTS: Dict[str, Dict[str, Any]] = {
     "claude_code": {"label": "Claude Code", "binaries": ["claude"]},
     "codex":       {"label": "Codex CLI", "binaries": ["codex"]},
-    "gemini":      {"label": "Gemini CLI", "binaries": ["gemini"]},
     "antigravity": {"label": "Antigravity", "binaries": ["agy", "antigravity"]},
 }
 
@@ -75,8 +73,6 @@ def add_argv(client: str, binary: str, name: str, url: str) -> List[str]:
         return [binary, "mcp", "add", "--transport", "http", "--scope", "user", name, url]
     if client == "codex":
         return [binary, "mcp", "add", name, "--url", url]
-    if client == "gemini":
-        return [binary, "mcp", "add", "--transport", "http", "--scope", "user", name, url]
     if client == "antigravity":
         # agy: flags must come before <name>.
         return [binary, "mcp", "add", "--type", "http", name, url]
@@ -84,7 +80,7 @@ def add_argv(client: str, binary: str, name: str, url: str) -> List[str]:
 
 
 def remove_argv(client: str, binary: str, name: str) -> List[str]:
-    if client in ("claude_code", "gemini"):
+    if client == "claude_code":
         return [binary, "mcp", "remove", "--scope", "user", name]
     return [binary, "mcp", "remove", name]
 
@@ -137,7 +133,7 @@ def parse_probe(client: str, name: str, res: Dict[str, Any]) -> Dict[str, Any]:
         except ValueError:
             m = _URL_RE.search(out)
             return {"registered": True, "url": m.group(0) if m else None}
-    # gemini / antigravity: scan `mcp list` for a line naming our server.
+    # antigravity: scan `mcp list` for a line naming our server.
     for line in out.splitlines():
         if re.search(rf"(^|[\s:*✓✗•-]){re.escape(name)}([\s:(]|$)", line):
             m = _URL_RE.search(line)

@@ -41,6 +41,7 @@ SECTIONS: list[tuple[str, str, str]] = [
     ("models",   "Models",     "📦"),
     ("proxy",    "Proxy",      "🔀"),
     ("mcp",      "MCP",        "🧩"),
+    ("teledesign", "TeleDesign", "🎨"),
     ("managed",  "Managed",    "🛠"),
     ("docgraph", "DocGraph",   "🧠"),
     ("tools",    "Tools",      "🧰"),

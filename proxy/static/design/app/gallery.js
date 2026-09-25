@@ -54,7 +54,7 @@ export async function renderHome(root, tab) {
     navBtn("systems", "palette", "Design systems", S.systems.length || null),
     navBtn("archived", "archive", "Archived"),
     h("div", { class: "spacer" }),
-    h("a", { class: "nav-btn", href: "/ui" }, icon("agents"), "Agent Manager"));
+    h("a", { class: "nav-btn", href: "/team" }, icon("agents"), "Agent Manager"));
   const main = h("main", { class: "home-main", id: "home-main" });
   mount(root, h("div", { class: "home" }, nav, main));
   if (tab === "systems") { const m = await import("./systems.js"); return m.renderSystems(main); }

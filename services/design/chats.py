@@ -11,6 +11,7 @@ Each chat is one permanent direct task session in namespace `design`
 
 from __future__ import annotations
 
+import re
 import json
 import logging
 import os
@@ -28,6 +29,27 @@ logger = logging.getLogger("telecode.services.design.chats")
 SESSION_NAMESPACE = "design"
 ENGINES = ("claude_code", "codex", "antigravity")
 EFFORTS = (None, "low", "medium", "high", "xhigh", "max")
+# A model is passed to the CLI as a single argv value on a shell=True spawn, so
+# only characters that need no quoting: Claude aliases/full names, Codex slugs,
+# agy ids, llama model keys.
+_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,99}$")
+
+
+def clean_model(value: Any) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str) or not _MODEL_RE.match(value):
+        raise ValueError("invalid model")
+    return value
+
+
+def default_model(engine: str, is_local: bool) -> Optional[str]:
+    """`design.models.local` for local runs, `design.models.<engine>` for cloud; None = CLI default."""
+    key = "local" if is_local else engine
+    try:
+        return clean_model(config.get_nested(f"design.models.{key}", None))
+    except ValueError:
+        return None
 MAX_CHATS = 100
 # A project chat is permanent: effectively no idle expiry.
 SESSION_IDLE_SECONDS = 10 * 365 * 24 * 3600
@@ -68,6 +90,8 @@ def _clean_opts(data: Dict[str, Any], base: Dict[str, Any]) -> Dict[str, Any]:
         if data["effort"] not in EFFORTS:
             raise ValueError("invalid effort")
         out["effort"] = data["effort"]
+    if "model" in data:
+        out["model"] = clean_model(data["model"])
     return out
 
 
@@ -107,6 +131,7 @@ def create_chat(pid: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "engine": default_engine(),
             "is_local": bool(config.get_nested("design.default_is_local", False)),
             "effort": None,
+            "model": None,          # None = design.models.* default, then the CLI's own
             "session_id": session_id_for(pid, cid),
             "created_at": now,
             "updated_at": now,

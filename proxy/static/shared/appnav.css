@@ -1,0 +1,56 @@
+/* <tc-appnav> — the cross-app switcher shared by Team Mode (/team), Task Mode
+   (/tasks) and TeleDesign (/design). Uses the host page's tokens (TeleDesign's
+   names) with fallbacks, so it looks right on any of the three pages. */
+
+tc-appnav { display: flex; align-items: center; gap: 10px; min-width: 0; font-family: var(--sans, "Inter", "Segoe UI", system-ui, sans-serif); }
+tc-appnav:not(:defined) { visibility: hidden; }
+tc-appnav[variant="bar"], tc-appnav:not([variant]) {
+  height: var(--topbar-h, 46px); flex-shrink: 0; padding: 0 10px 0 12px; position: relative; z-index: 20;
+  background: var(--panel, #171a21); border-bottom: 1px solid var(--border, #2a2f3a);
+}
+tc-appnav[variant="switch"] { display: inline-flex; }
+
+tc-appnav .tc-brand { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 13.5px; letter-spacing: -.01em;
+  color: var(--text, #e6e8eb); text-decoration: none; padding: 4px 6px 4px 2px; border-radius: 6px; white-space: nowrap; }
+tc-appnav .tc-brand:hover { background: var(--hover, #232833); }
+tc-appnav .tc-brand small { font-weight: 500; font-size: 12px; color: var(--faint, #6b7483); }
+tc-appnav .tc-mark { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; color: var(--accent-ink, #052034);
+  background: conic-gradient(from 210deg, #7cc4ff, #b69cff, #ffb454, #7cc4ff); flex-shrink: 0; }
+tc-appnav .tc-ic { display: inline-flex; width: 15px; height: 15px; flex-shrink: 0; }
+tc-appnav .tc-ic svg { width: 100%; height: 100%; }
+tc-appnav .tc-mark .tc-ic { width: 13px; height: 13px; }
+
+tc-appnav .tc-switch { position: relative; display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; flex-shrink: 0;
+  background: var(--panel2, #1f232c); border: 1px solid var(--border, #2a2f3a); view-transition-name: tc-appnav-switch; }
+tc-appnav .tc-ind { position: absolute; top: 2px; bottom: 2px; left: 2px; width: 0; border-radius: 6px; pointer-events: none;
+  background: var(--raised, #252a35); box-shadow: 0 0 0 1px var(--border-strong, #3a4150), 0 1px 2px rgba(0,0,0,.18);
+  transition: left .24s cubic-bezier(.3,.7,.2,1), width .24s cubic-bezier(.3,.7,.2,1); view-transition-name: tc-appnav-ind; }
+tc-appnav .tc-ind.no-anim { transition: none; }
+tc-appnav .tc-ind::after { content: ""; position: absolute; left: 30%; right: 30%; bottom: -1px; height: 2px; border-radius: 2px;
+  background: var(--accent, #7cc4ff); opacity: .9; }
+tc-appnav .tc-app { position: relative; z-index: 1; height: 26px; padding: 0 11px; display: inline-flex; align-items: center; gap: 6px;
+  border-radius: 6px; color: var(--muted, #9aa3b2); text-decoration: none; font-size: 12.5px; font-weight: 500; white-space: nowrap;
+  transition: color .15s; outline: none; }
+tc-appnav .tc-app:hover { color: var(--text, #e6e8eb); }
+tc-appnav .tc-app:focus-visible { box-shadow: 0 0 0 2px var(--accent, #7cc4ff); }
+tc-appnav .tc-app[aria-current="page"] { color: var(--text, #e6e8eb); }
+tc-appnav .tc-app[aria-current="page"] .tc-ic { color: var(--accent, #7cc4ff); }
+tc-appnav[compact] .tc-app { padding: 0 8px; }
+tc-appnav[compact] .tc-app .tc-lbl { display: none; }
+
+tc-appnav .tc-actions { margin-left: auto; display: flex; gap: 6px; align-items: center; min-width: 0; }
+tc-appnav[variant="switch"] .tc-actions { display: none; }
+
+:root[data-theme="light"] tc-appnav .tc-ind { box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 0 0 1px var(--border, #e1e4ea); }
+
+/* Same-origin cross-document transitions (Edge/Chrome 126+): the switcher's
+   indicator slides to the new app while the page content cross-fades. Browsers
+   without support simply navigate. */
+@view-transition { navigation: auto; }
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: .16s; }
+::view-transition-group(tc-appnav-ind) { animation-duration: .28s; animation-timing-function: cubic-bezier(.3,.7,.2,1); }
+::view-transition-group(tc-appnav-switch) { animation-duration: .28s; }
+@media (prefers-reduced-motion: reduce) {
+  tc-appnav .tc-ind { transition: none; }
+  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+}

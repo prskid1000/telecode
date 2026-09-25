@@ -57,7 +57,15 @@ RESUME_KEYS = {
     "claude_code": "last_claude_session_id",
     "codex": "last_codex_session_id",
     "antigravity": "last_antigravity_conversation_id",
+    # agy local runs in an isolated home, so its conversations are separate.
+    "antigravity_local": "last_antigravity_local_conversation_id",
 }
+
+
+def resume_slot(engine: str, is_local: bool) -> str:
+    """Key into RESUME_KEYS (and the per-slot brief record). Claude and Codex keep
+    their session files in the user's home either way; agy local does not."""
+    return "antigravity_local" if engine == "antigravity" and is_local else engine
 BINARIES = {"claude_code": "claude", "codex": "codex", "antigravity": "agy"}
 
 
@@ -185,7 +193,7 @@ def _kill_task_process(task_id: str) -> None:
 # ── DESIGN_TURN handler (runs in a task-queue thread) ────────────────────
 
 def design_turn_handler(pid: str, chat_id: str, turn_id: str, engine: str, prompt: str,
-                        is_local: bool = False) -> Dict[str, Any]:
+                        is_local: bool = False, model: Optional[str] = None) -> Dict[str, Any]:
     from services.session import session_store
     from services.task.task_utils import get_session_id, get_session_namespace, get_task_id
 
@@ -200,23 +208,26 @@ def design_turn_handler(pid: str, chat_id: str, turn_id: str, engine: str, promp
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"{task_id}.jsonl"
     data = (session_store.get(sid, namespace=ns) or {}).get("data") or {}
-    resume_id = data.get(RESUME_KEYS.get(engine, ""))
+    resume_id = data.get(RESUME_KEYS.get(resume_slot(engine, is_local), ""))
 
     watch = _begin_spawn_watch(task_id)
     try:
         if engine == "claude_code":
             from services.task.handlers.claude_code import _run_claude_subprocess
             return _run_claude_subprocess(prompt=prompt, work_dir=root, sid=sid, ns=ns,
-                                          resume_id=resume_id, is_local=is_local, log_path=log_path)
+                                          resume_id=resume_id, is_local=is_local, log_path=log_path,
+                                          model=model)
         if engine == "codex":
             from services.task.handlers.codex import _run_codex_subprocess
             return _run_codex_subprocess(prompt=prompt, work_dir=root, sid=sid, ns=ns,
                                          resume_id=resume_id, is_local=is_local, log_path=log_path,
-                                         last_msg_path=log_dir / f"{task_id}.codex_last_message.txt")
+                                         last_msg_path=log_dir / f"{task_id}.codex_last_message.txt",
+                                         model=model)
         if engine == "antigravity":
             from services.task.handlers.antigravity import _run_antigravity_subprocess
             return _run_antigravity_subprocess(prompt=prompt, work_dir=root, sid=sid, ns=ns,
-                                               resume_id=resume_id, log_path=log_path)
+                                               resume_id=resume_id, log_path=log_path,
+                                               is_local=is_local, model=model)
         raise RuntimeError(f"Unknown engine {engine!r}")
     finally:
         if watch:
@@ -231,7 +242,8 @@ def register_task_type() -> None:
         description="TeleDesign chat turn: runs the chat's CLI in the design project folder",
         params_schema={"type": "object", "properties": {
             "pid": {"type": "string"}, "chat_id": {"type": "string"}, "turn_id": {"type": "string"},
-            "engine": {"type": "string"}, "prompt": {"type": "string"}, "is_local": {"type": "boolean"}},
+            "engine": {"type": "string"}, "prompt": {"type": "string"}, "is_local": {"type": "boolean"},
+            "model": {"type": "string"}},
             "required": ["pid", "chat_id", "turn_id", "engine", "prompt"]},
     )
 
@@ -267,7 +279,7 @@ def list_turns(pid: str, cid: str, after: Optional[str] = None) -> List[Dict[str
 
 def _new_record(cid: str, role: str, **kw: Any) -> Dict[str, Any]:
     rec = {"id": uuid.uuid4().hex, "chat_id": cid, "role": role, "text": "", "status": "done",
-           "task_id": None, "engine": None, "is_local": False, "effort": None, "attachments": [],
+           "task_id": None, "engine": None, "is_local": False, "model": None, "effort": None, "attachments": [],
            "comment_ids": [], "form": None, "todos": [], "tools": [], "changed_files": [],
            "version": None, "usage": None, "error": None, "created_at": _now_iso(), "finished_at": None}
     rec.update(kw)
@@ -337,6 +349,8 @@ async def start_turn(pid: str, cid: str, body: Dict[str, Any], *, auto: Optional
         raise ValueError(f"engine {engine} is not installed (no `{BINARIES[engine]}` on PATH)")
     is_local = bool(body["is_local"]) if "is_local" in body else bool(chat.get("is_local"))
     effort = body.get("effort", chat.get("effort"))
+    model = (dchats.clean_model(body["model"]) if "model" in body else chat.get("model")) \
+        or dchats.default_model(engine, is_local)
 
     comment_recs: List[Dict[str, Any]] = []
     cids = body.get("comment_ids") or []
@@ -349,13 +363,13 @@ async def start_turn(pid: str, cid: str, body: Dict[str, Any], *, auto: Optional
 
     _chat_running[key] = "reserved"
     try:
-        user_turn = _new_record(cid, "user", text=body.get("text", ""), engine=engine, is_local=is_local,
+        user_turn = _new_record(cid, "user", text=body.get("text", ""), engine=engine, is_local=is_local, model=model,
                                 effort=effort, attachments=body.get("attachments") or [],
                                 comment_ids=cids, form_answers=body.get("form_answers"),
                                 selection=body.get("selection"))
         if auto:
             user_turn["auto"] = auto
-        turn = _new_record(cid, "assistant", status="queued", engine=engine, is_local=is_local,
+        turn = _new_record(cid, "assistant", status="queued", engine=engine, is_local=is_local, model=model,
                            effort=effort, attachments=user_turn["attachments"], comment_ids=cids,
                            reply_to=user_turn["id"])
         if auto:
@@ -386,7 +400,7 @@ async def start_turn(pid: str, cid: str, body: Dict[str, Any], *, auto: Optional
             return {"turn": turn, "user_turn": user_turn}
 
         sid = chat.get("session_id") or dchats.session_id_for(pid, cid)
-        include_brief = _needs_brief(sid, engine, built["brief_sha"])
+        include_brief = _needs_brief(sid, resume_slot(engine, is_local), built["brief_sha"])
         prompt = prompt_builder.compose(built, include_brief=include_brief)
 
         dchats.upsert_turn(pid, cid, user_turn)
@@ -396,7 +410,8 @@ async def start_turn(pid: str, cid: str, body: Dict[str, Any], *, auto: Optional
         store.set_project_fields(pid, active_chat_id=cid)
         events.publish(pid, "turn", {**user_turn, "chat_id": cid})
 
-        ctx = {"pid": pid, "cid": cid, "sid": sid, "engine": engine, "brief_sha": built["brief_sha"],
+        ctx = {"pid": pid, "cid": cid, "sid": sid, "engine": engine, "slot": resume_slot(engine, is_local),
+               "brief_sha": built["brief_sha"],
                "project_turns": project_turns, "user_text": body.get("text", ""), "built": built,
                "retried": False}
         ctx["baseline"] = await asyncio.to_thread(_mtimes, root)
@@ -432,7 +447,7 @@ def _submit(turn: Dict[str, Any], ctx: Dict[str, Any], prompt: str) -> None:
     task_id = get_task_queue().submit_task(
         TASK_TYPE,
         params={"pid": ctx["pid"], "chat_id": ctx["cid"], "turn_id": turn["id"], "engine": ctx["engine"],
-                "prompt": prompt, "is_local": bool(turn.get("is_local"))},
+                "prompt": prompt, "is_local": bool(turn.get("is_local")), "model": turn.get("model")},
         metadata={"source": "design", "project_id": ctx["pid"], "chat_id": ctx["cid"], "turn_id": turn["id"]},
         session_id=ctx["sid"],
         session_namespace=dchats.SESSION_NAMESPACE,
@@ -689,7 +704,7 @@ async def _finish(turn: Dict[str, Any], ctx: Dict[str, Any], task: Any, usage: D
             and _STALE_RESUME_RE.search(task.error or ""):
         from services.session import session_store
         logger.info("design: stale resume id for %s — retrying fresh", ctx["sid"])
-        session_store.patch_data(ctx["sid"], {RESUME_KEYS[ctx["engine"]]: None},
+        session_store.patch_data(ctx["sid"], {RESUME_KEYS[ctx["slot"]]: None},
                                  namespace=dchats.SESSION_NAMESPACE)
         ctx["retried"] = True
         _submit(turn, ctx, prompt_builder.compose(ctx["built"], include_brief=True))
@@ -746,7 +761,7 @@ async def _finish(turn: Dict[str, Any], ctx: Dict[str, Any], task: Any, usage: D
 
     if turn["status"] == "done":
         try:
-            _mark_brief_sent(ctx["sid"], ctx["engine"], ctx["brief_sha"])
+            _mark_brief_sent(ctx["sid"], ctx["slot"], ctx["brief_sha"])
         except Exception:
             logger.exception("design: could not record brief for %s", ctx["sid"])
     elif turn.get("comment_ids"):
@@ -1007,25 +1022,67 @@ def _version_of(binary: str) -> Optional[str]:
         return None
 
 
+CLAUDE_MODELS = [("fable", "Fable (latest)"), ("opus", "Opus (latest)"),
+                 ("sonnet", "Sonnet (latest)"), ("haiku", "Haiku (latest)")]
+
+
+def _run_quiet(cmd: str, timeout: float = 20) -> str:
+    try:
+        out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout,
+                             encoding="utf-8", errors="replace",
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return out.stdout or ""
+    except Exception:
+        return ""
+
+
+def _models_for(eid: str, binary: str) -> List[Dict[str, str]]:
+    """Models the CLI itself says it accepts. Claude has no list command; its
+    aliases always resolve to the latest model of that family."""
+    if eid == "claude_code":
+        return [{"id": m, "label": l} for m, l in CLAUDE_MODELS]
+    if eid == "codex":
+        try:
+            data = json.loads(_run_quiet(f'"{binary}" debug models') or "{}")
+        except json.JSONDecodeError:
+            return []
+        items = data.get("models", data) if isinstance(data, dict) else data
+        return [{"id": m["slug"], "label": m.get("display_name") or m["slug"]}
+                for m in items or [] if isinstance(m, dict) and m.get("slug") and m.get("visibility") == "list"]
+    if eid == "antigravity":
+        out = []
+        for line in _run_quiet(f'"{binary}" models').splitlines():
+            parts = line.strip().split("\t")
+            if len(parts) >= 2 and parts[0] and " " not in parts[0]:
+                out.append({"id": parts[0], "label": parts[1].strip()})
+        return out
+    return []
+
+
 def _probe_engines() -> Dict[str, Any]:
     engines = []
     for eid, binname in BINARIES.items():
         path = shutil.which(binname)
-        rec: Dict[str, Any] = {"id": eid, "available": bool(path)}
+        rec: Dict[str, Any] = {"id": eid, "available": bool(path),
+                               "default_model": dchats.default_model(eid, False)}
         if path:
             v = _version_of(path)
             if v:
                 rec["version"] = v
+            rec["models"] = _models_for(eid, path)
         engines.append(rec)
     local: Dict[str, Any] = {"available": bool(config.get_nested("proxy.enabled", False)
-                                               and config.get_nested("llamacpp.enabled", False))}
+                                               and config.get_nested("llamacpp.enabled", False)),
+                             "models": [{"id": m, "label": m} for m in (config.get_nested("llamacpp.models", {}) or {})],
+                             "default_model": dchats.default_model("", True)}
     if local["available"]:
         try:
             import llamacpp.state as llama_state
             local["model"] = llama_state.last_active_model() or config.get_nested("llamacpp.default_model")
         except Exception:
             pass
-    return {"engines": engines, "local": local, "default_engine": dchats.default_engine()}
+    return {"engines": engines, "local": local, "default_engine": dchats.default_engine(),
+            "default_is_local": bool(config.get_nested("design.default_is_local", False))}
 
 
 async def engines_status() -> Dict[str, Any]:

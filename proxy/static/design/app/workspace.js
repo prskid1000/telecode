@@ -158,7 +158,7 @@ function projectMore(anchor) {
     { label: "Check design-system adherence", icon: "checkCircle", hint: "Hard-coded colours, fonts, off-system components", onClick: () => lintDialog() },
     { label: "Import a .pen file", icon: "upload", hint: "Lossy: no gradients, image fills or prompt nodes", onClick: () => importPen() },
     { label: "Save as template", icon: "template", onClick: () => import("./gallery.js").then((m) => m.saveAsTemplate(p)) },
-    { label: "Engines and integrations", icon: "settings", onClick: () => import("./exporter.js").then((m) => m.settingsDialog()) },
+    { label: "Preferences", icon: "settings", onClick: () => import("./exporter.js").then((m) => m.settingsDialog()) },
     { label: "Copy link to this view", icon: "link", onClick: () => navigator.clipboard?.writeText(location.href).then(() => toast("Link copied", { kind: "success" })) },
     "-",
     { label: "Archive project", icon: "archive", onClick: async () => { await api("PATCH", P_(p.id), { archived: true }).catch(toastError); bus.emit("navigate", { route: "home" }); toast("Archived", { kind: "success" }); } },

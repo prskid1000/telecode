@@ -2670,6 +2670,25 @@ async def handle_ui(request: web.Request) -> web.FileResponse:
     return web.FileResponse(path)
 
 
+def _redirect_to(target: str):
+    async def _handler(request: web.Request) -> web.Response:
+        qs = request.query_string
+        raise web.HTTPMovedPermanently(target + (f"?{qs}" if qs else ""))
+    return _handler
+
+
+_SHARED_STATIC = Path(__file__).parent / "static" / "shared"
+
+
+async def handle_shared_static(request: web.Request) -> web.StreamResponse:
+    """Assets shared by /team, /tasks and /design (the app navbar)."""
+    rel = request.match_info["path"]
+    target = (_SHARED_STATIC / rel).resolve()
+    if not rel or ".." in rel.split("/") or not target.is_file() or _SHARED_STATIC.resolve() not in target.parents:
+        raise web.HTTPNotFound()
+    return web.FileResponse(target, headers={"Cache-Control": "no-cache"})
+
+
 async def handle_legacy_ui(request: web.Request) -> web.FileResponse:
     """Serve the legacy session management UI."""
     path = Path(__file__).parent / "static" / "index.html"
@@ -2779,7 +2798,11 @@ def create_app() -> web.Application:
     # Embeddings + health forwarded to llama.cpp
     app.router.add_post("/v1/embeddings", handle_embeddings)
     app.router.add_get("/health", handle_health)
-    app.router.add_get("/ui", handle_ui)
+    # Clean URLs for the three apps; the old ones redirect so bookmarks keep working.
+    app.router.add_get("/team", handle_ui)
+    app.router.add_get("/tasks", handle_legacy_ui)
+    app.router.add_get("/ui", _redirect_to("/team"))
+    app.router.add_get("/shared/{path:.*}", handle_shared_static)
 
     # Session and Task Management (pythonmagic-style)
     api_sessions.register_routes(app)
@@ -2795,7 +2818,7 @@ def create_app() -> web.Application:
     api_design_editor.register_routes(app)
     api_design_agents.register_routes(app)
 
-    app.router.add_get("/ui/legacy", handle_legacy_ui)
+    app.router.add_get("/ui/legacy", _redirect_to("/tasks"))
     app.on_cleanup.append(_stop_design_services)
 
     return app

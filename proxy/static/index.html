@@ -1,279 +1,281 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8" />
-<title>Telecode-Task</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'><path d='M13 10V3L4 14h7v7l9-11h-7z'/></svg>">
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Task Mode · Telecode</title>
+<meta name="description" content="Telecode Task Mode: sessions, uploads, one-off tasks on Claude Code / Codex / Antigravity, skills and routines." />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' rx='6' fill='%237cc4ff'/><path d='M13 4L6 13.5h5L10 20l7-9.5h-5z' fill='%23052034'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" />
+<link rel="stylesheet" href="/shared/appnav.css" />
+<link rel="stylesheet" href="/shared/manager.css" />
+<script>
+  // Apply the saved theme (shared with TeleDesign) before first paint.
+  try {
+    var p = JSON.parse(localStorage.getItem("td:theme") || '"system"');
+    document.documentElement.dataset.theme = p === "system" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : p;
+  } catch (e) {}
+</script>
 <style>
-  :root {
-    color-scheme: dark;
-    --bg: #0f1115; --panel: #171a21; --panel2: #1f232c; --border: #2a2f3a;
-    --text: #e6e8eb; --muted: #9aa3b2; --accent: #7cc4ff; --ok: #4ade80;
-    --warn: #fbbf24; --err: #f87171; --mono: ui-monospace, Menlo, Consolas, monospace;
-  }
-  * { box-sizing: border-box; }
-  select { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font: 13px var(--mono); }
-  select option { background: var(--panel2); color: var(--text); font: 13px var(--mono); padding: 4px 8px; }
-  html, body { height: 100%; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif; display: flex; flex-direction: column; }
-  header { padding: 14px 20px; background: var(--panel); border-bottom: 1px solid var(--border); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; flex: 0 0 auto; }
-  .grow { flex-grow: 1; }
-  h1 { margin: 0; font-size: 16px; font-weight: 600; flex-shrink: 0; }
-  header label { color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: center; }
-  input[type=text], input[type=number], textarea { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font: 13px var(--mono); }
-  textarea { width: 100%; min-height: 90px; resize: vertical; }
-  button { background: var(--accent); color: #052034; border: 0; padding: 7px 14px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px; }
-  button.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); font-weight: 500; }
-  button.danger { background: var(--err); color: #3a0b0b; }
-  button.icon { font-size: 15px; padding: 5px 10px; line-height: 1; }
-  button.icon.danger-hover:hover { background: var(--err); color: #3a0b0b; border-color: var(--err); }
-  button:disabled { opacity: 0.45; cursor: not-allowed; }
-  main { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 14px; flex: 1 1 auto; min-height: 0; }
-  .tabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
-  .tabs .tab { background: transparent; color: var(--muted); border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 6px 14px; font-weight: 500; font-size: 13px; cursor: pointer; }
-  .tabs .tab:hover { color: var(--text); }
-  .tabs .tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
-  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px; overflow: auto; display: flex; flex-direction: column; min-height: 0; }
-  .panel > .events { flex: 1 1 auto; max-height: none; }
-  .panel h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
-  .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
-  .row label { color: var(--muted); font-size: 12px; min-width: 82px; }
-  .drop { border: 2px dashed var(--border); border-radius: 8px; padding: 18px; text-align: center; color: var(--muted); cursor: pointer; transition: border-color 0.15s; }
-  .drop.over { border-color: var(--accent); color: var(--accent); }
-  .files { margin-top: 10px; font-family: var(--mono); font-size: 12px; }
-  .files .f { display: flex; justify-content: space-between; padding: 4px 8px; border-radius: 4px; background: var(--panel2); margin-bottom: 4px; }
-  .files .f button { padding: 0 6px; font-size: 11px; background: transparent; color: var(--muted); }
-  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; }
-  .pill.pending { background: #3a3a1a; color: var(--warn); }
-  .pill.running { background: #10324f; color: var(--accent); }
-  .pill.completed { background: #113b1f; color: var(--ok); }
-  .pill.failed, .pill.cancelled { background: #3b1414; color: var(--err); }
-  .pill.resumed { background: #1b2d3a; color: var(--accent); }
-  .bar { height: 6px; border-radius: 3px; background: var(--panel2); overflow: hidden; margin: 6px 0; }
-  .bar > span { display: block; height: 100%; background: var(--accent); transition: width 0.3s; }
-  .events { font-family: var(--mono); font-size: 12px; max-height: 320px; overflow: auto; background: var(--panel2); border-radius: 6px; padding: 8px; }
-  .ev { padding: 4px 0; border-bottom: 1px dashed var(--border); }
-  .ev:last-child { border: 0; }
-  .ev .k { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; margin-right: 8px; }
-  .ev.narrative { color: var(--text); }
-  .ev.tool { color: var(--accent); }
-  .ev.retry { color: var(--warn); }
-  .ev.start, .ev.done { color: var(--ok); }
-  pre { margin: 0; font-family: var(--mono); font-size: 12px; color: var(--text); white-space: pre-wrap; word-break: break-word; background: var(--panel2); padding: 8px; border-radius: 6px; max-height: 200px; overflow: auto; }
-  .stat { background: var(--panel2); border-radius: 6px; padding: 6px 10px; font-family: var(--mono); font-size: 13px; }
-  .stat .muted { font-family: system-ui, sans-serif; font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; }
-  .muted { color: var(--muted); font-size: 12px; }
-  .task-list .task { padding: 8px; background: var(--panel2); border-radius: 6px; margin-bottom: 6px; font-size: 12px; cursor: pointer; }
-  .task-list .task:hover { outline: 1px solid var(--accent); }
-  .task-list .task.active { outline: 2px solid var(--accent); }
+  /* Task Mode — page-specific pieces (kit: /shared/manager.css) */
+  .work { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding: 16px; height: 100%; min-height: 0; }
+  .pane { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .pane > .tabs { flex-shrink: 0; }
+  .pane-scroll { flex: 1; overflow: auto; min-height: 0; padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+  .sect { display: flex; flex-direction: column; gap: 10px; }
+  .sect + .sect { border-top: 1px solid var(--border); padding-top: 14px; }
+  .sect-h { display: flex; align-items: center; gap: 8px; }
+  .sect-h h3 { margin: 0; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 7px; flex: 1; }
+  .sect-h h3 .ic { width: 15px; height: 15px; color: var(--faint); }
+  .sect-h .hint { font-weight: 400; color: var(--faint); font-size: 12px; }
+  .msg { font-size: 12px; color: var(--muted); min-height: 16px; }
+  .msg.ok { color: var(--ok); } .msg.err { color: var(--err); }
+  .session-bar { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) auto; gap: 8px; align-items: end; }
+  .session-bar .field { margin: 0; }
+  #sessionBadge { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; min-height: 19px; font-size: 12px; color: var(--faint); }
+  .filelist { border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+  .staged .frow { background: var(--accent-soft); }
+  .rail .tasks-filter { display: flex; }
+  .rail .tasks-filter button { flex: 1; justify-content: center; padding: 0 4px; }
+  .tk { align-items: flex-start; padding: 6px 6px 6px 8px; }
+  .tk .item-2 .l1 { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
+  .tk .item-2 .l1 > * { flex-shrink: 0; } .tk .item-2 .l1 .eng { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .tk .item-2 .l1 .mono { color: var(--text); }
+  .tk .item-2 .sub { white-space: nowrap; }
+  .tk .tdot { margin-top: 6px; }
+  .rgroup { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--panel); }
+  .rgroup + .rgroup { margin-top: 8px; }
+  .rgroup-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; cursor: pointer; border: 0; background: none; width: 100%; text-align: left; }
+  .rgroup-head:hover { background: var(--hover); }
+  .rgroup-head .chev { transition: transform .12s; width: 14px; height: 14px; color: var(--faint); }
+  .rgroup.open .rgroup-head .chev { transform: rotate(90deg); }
+  .rgroup-runs { border-top: 1px solid var(--border); }
+  .rrun { display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 34px; cursor: pointer; font-size: 12px; border-bottom: 1px solid var(--border); }
+  .rrun:last-child { border-bottom: 0; }
+  .rrun:hover { background: var(--hover); }
+  .rrun.on { background: var(--accent-soft); }
+  .act-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .act-prog { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
+  .act-prog .bar { flex: 1; }
+  @media (max-width: 1280px) { :root { --rail-w: 244px; } .work { gap: 12px; padding: 12px; } .sect-h .hint { display: none; } }
+  @media (max-width: 1100px) { :root { --rail-w: 224px; } }
 </style>
 </head>
 <body>
-
-<header>
-  <h1>Telecode-Task</h1>
-  <button class="ghost" onclick="window.location.href='/ui'">Team Mode</button>
-  <div class="grow"></div>
-  <label>session_id <input type="text" id="sid" placeholder="(blank = auto)" style="width:260px"/></label>
-  <label>namespace <input type="text" id="ns" placeholder="(blank = legacy)" style="width:140px"/></label>
-  <span id="sessionBadge" class="muted"></span>
-  <button class="ghost icon" id="pullSession" title="Refresh session">↻</button>
-  <button class="ghost icon danger-hover" id="deleteSession" title="Delete session">🗑</button>
-</header>
-
-<main>
-  <section class="panel">
-    <div class="tabs">
-      <button class="tab active" data-tab="session">Session</button>
-      <button class="tab" data-tab="skills">Skills</button>
-      <button class="tab" data-tab="routines">Routines</button>
-    </div>
-
-    <div id="tabSession">
-    <h2>Upload context files</h2>
-    <div id="drop" class="drop">Drop files here or click to pick — they go into the session folder</div>
-    <input type="file" id="picker" multiple style="display:none"/>
-    <div class="files" id="staged"></div>
-    <div class="row"><button id="upload">Upload to session</button><span id="uploadMsg" class="muted"></span></div>
-
-    <h2 style="margin-top:20px;display:flex;align-items:center;gap:6px">
-      <span>Session files</span>
-      <span class="grow"></span>
-      <button class="ghost" id="downloadAll" style="font-size:11px;padding:3px 10px">Download all</button>
-    </h2>
-    <div id="fileList" class="files"><span class="muted">No session yet.</span></div>
-
-    <h2 style="margin-top:20px">Submit task</h2>
-    <div class="row">
-      <label>prompt</label>
-      <textarea id="prompt" placeholder="Follow CLAUDE.md.">Follow CLAUDE.md.</textarea>
-    </div>
-    <div class="row">
-      <label>task type</label>
-      <select id="taskType" style="width:200px">
-        <option value="CLAUDE_CODE">CLAUDE_CODE</option>
-        <option value="CODEX">CODEX</option>
-        <option value="ANTIGRAVITY">ANTIGRAVITY</option>
-      </select>
-      <label style="min-width:auto;margin-left:10px">
-        <input type="checkbox" id="isLocal"/> local mode
-      </label>
-    </div>
-    <div class="row">
-      <label>session idle</label>
-      <input type="number" id="sessTimeout" value="86400" style="width:120px"/><span class="muted">seconds</span>
-    </div>
-    <div class="row">
-      <button id="submit">Submit task</button>
-      <span id="submitMsg" class="muted"></span>
-    </div>
-    </div><!-- /tabSession -->
-
-    <div id="tabSkills" style="display:none">
-      <div class="row" style="margin-bottom:6px">
-        <label>skill</label>
-        <select id="skillPicker" style="min-width:240px;max-width:520px">
-          <option value="">— select a skill —</option>
-        </select>
-        <button class="ghost icon" id="skillRefresh" title="Refresh skills">↻</button>
-        <button id="skillNew" style="font-size:12px;padding:6px 12px">+ New</button>
-        <span class="grow"></span>
-        <button class="ghost danger-hover" id="skillDelete" disabled style="font-size:12px;padding:6px 12px">Delete skill</button>
+<div id="app">
+  <div id="topbar"></div>
+  <div class="shell">
+    <aside class="rail" aria-label="Recent tasks">
+      <div class="rail-top">
+        <div class="row"><span class="grow" style="font-weight:600;font-size:12.5px">Recent tasks <span class="count" id="count-tasks">0</span></span><span id="newTaskHost"></span></div>
+        <label class="search" title="Filter tasks by id, engine, session or prompt  (/)">
+          <span class="ic" aria-hidden="true"></span>
+          <input class="input" id="task-search" type="search" placeholder="Filter tasks…" autocomplete="off" spellcheck="false" aria-label="Filter tasks" />
+          <kbd>/</kbd>
+        </label>
+        <div class="seg sm tasks-filter" id="task-filter" role="tablist" aria-label="Task status"></div>
       </div>
-      <div id="skillBadge" class="muted" style="margin-bottom:14px">Skills mirror to <span style="font-family:var(--mono)">~/.claude/skills/</span> — auto-discovered by Claude Code on every task.</div>
+      <div class="rail-body"><div id="taskList" class="task-list"></div></div>
+    </aside>
 
-      <h2>Upload reference file</h2>
-      <div id="skillDrop" class="drop">Drop a file here or click to pick — goes into the selected skill's folder</div>
-      <input type="file" id="skillFilePicker" style="display:none"/>
-      <div class="row" style="margin-top:8px">
-        <input type="text" id="skillFileRel" placeholder="rel/path.md (blank = use filename)" style="flex:1"/>
-        <button id="skillFileUpload" disabled>Upload</button>
-        <span id="skillUploadMsg" class="muted"></span>
+    <main class="main">
+      <div class="work">
+        <!-- Left pane: Session / Skills / Routines -->
+        <section class="pane" aria-label="Task setup">
+          <div class="tabs" role="tablist">
+            <button class="tab on" data-tab="session" role="tab"><span class="ti" data-ic="terminal"></span>Session</button>
+            <button class="tab" data-tab="skills" role="tab"><span class="ti" data-ic="sparkle"></span>Skills <span class="count" id="count-skills">·</span></button>
+            <button class="tab" data-tab="routines" role="tab"><span class="ti" data-ic="clock"></span>Routines <span class="count" id="count-routines">·</span></button>
+          </div>
+
+          <div id="tabSession" class="pane-scroll">
+            <div class="sect">
+              <div class="sect-h"><h3><span class="ti" data-ic="folder"></span>Session <span class="hint">where the task runs; resumed across tasks</span></h3>
+                <span id="pullSessionHost"></span><span id="deleteSessionHost"></span></div>
+              <div class="session-bar">
+                <label class="field"><span class="field-label">Session ID</span>
+                  <input class="input mono" type="text" id="sid" placeholder="blank = create a new session" autocomplete="off" spellcheck="false" /></label>
+                <label class="field"><span class="field-label">Namespace</span>
+                  <input class="input mono" type="text" id="ns" placeholder="blank = legacy" autocomplete="off" spellcheck="false" /></label>
+                <div></div>
+              </div>
+              <div id="sessionBadge"></div>
+            </div>
+
+            <div class="sect" data-submit="submit">
+              <div class="sect-h"><h3><span class="ti" data-ic="send"></span>Submit task</h3></div>
+              <label class="field"><span class="field-label">Prompt <span class="req">*</span></span>
+                <textarea class="input" id="prompt" rows="5" placeholder="Follow CLAUDE.md.">Follow CLAUDE.md.</textarea>
+                <span class="field-hint"><kbd>Ctrl</kbd> <kbd>Enter</kbd> submits. Upload context files below first if the task needs them.</span></label>
+              <div class="field"><span class="field-label">Engine</span><div id="engineHost"></div></div>
+              <label class="field" style="max-width: 260px"><span class="field-label">Session idle timeout</span>
+                <span class="suffix"><input class="input" type="number" min="1" id="sessTimeout" value="86400" /><span>sec</span></span>
+                <span class="field-hint">Used when a new session is created.</span></label>
+              <div class="row"><span id="submitHost"></span><span id="submitMsg" class="msg"></span></div>
+            </div>
+
+            <div class="sect">
+              <div class="sect-h"><h3><span class="ti" data-ic="upload"></span>Context files <span class="hint">go into the session folder</span></h3></div>
+              <div id="drop" class="dropzone" tabindex="0" role="button"><span class="ti" data-ic="upload"></span><span>Drop files here or click to pick</span></div>
+              <input type="file" id="picker" multiple style="display:none" />
+              <div class="filelist staged hidden" id="staged"></div>
+              <div class="row"><span id="uploadHost"></span><span id="uploadMsg" class="msg"></span></div>
+            </div>
+
+            <div class="sect">
+              <div class="sect-h"><h3><span class="ti" data-ic="file"></span>Session files <span class="hint" id="fileCount"></span></h3><span id="downloadAllHost"></span></div>
+              <div id="fileList"></div>
+            </div>
+          </div><!-- /tabSession -->
+
+          <div id="tabSkills" class="pane-scroll" style="display:none">
+            <div class="sect">
+              <div class="sect-h"><h3><span class="ti" data-ic="sparkle"></span>Skills</h3><span id="skillRefreshHost"></span><span id="skillNewHost"></span></div>
+              <div class="row">
+                <select class="select" id="skillPicker" aria-label="Skill"><option value="">— select a skill —</option></select>
+                <span id="skillDeleteHost"></span>
+              </div>
+              <div id="skillBadge" class="field-hint">Skills mirror to <code>~/.claude/skills/</code> — auto-discovered by Claude Code on every task.</div>
+            </div>
+            <div class="sect" data-submit="skillSave">
+              <div class="sect-h"><h3><span class="ti" data-ic="edit"></span>SKILL.md</h3></div>
+              <textarea class="input code" id="skillContent" rows="14" spellcheck="false" placeholder="---&#10;name: my-skill&#10;description: One-line summary that triggers activation&#10;---&#10;&#10;# Body…"></textarea>
+              <div class="row"><span id="skillSaveHost"></span><span id="skillMsg" class="msg"></span></div>
+            </div>
+            <div class="sect">
+              <div class="sect-h"><h3><span class="ti" data-ic="file"></span>Reference files</h3></div>
+              <div id="skillFileList"></div>
+              <div id="skillDrop" class="dropzone" tabindex="0" role="button"><span class="ti" data-ic="upload"></span><span id="skillDropText">Drop a file here or click to pick — goes into the selected skill's folder</span></div>
+              <input type="file" id="skillFilePicker" style="display:none" />
+              <div class="row">
+                <input class="input mono" type="text" id="skillFileRel" placeholder="rel/path.md (blank = use filename)" />
+                <span id="skillFileUploadHost"></span>
+              </div>
+              <span id="skillUploadMsg" class="msg"></span>
+            </div>
+          </div><!-- /tabSkills -->
+
+          <div id="tabRoutines" class="pane-scroll" style="display:none">
+            <div class="sect">
+              <div class="sect-h"><h3><span class="ti" data-ic="clock"></span>Routines</h3><span id="routineStatus" class="pill" style="display:none"></span><span id="routineRefreshHost"></span><span id="routineNewHost"></span></div>
+              <select class="select" id="routinePicker" aria-label="Routine"><option value="">— select a routine —</option></select>
+              <div class="info-box"><span class="ti" data-ic="info"></span><span>Routines fire a task on a fixed interval against one permanent session. The manager checks every 60 s, so fire times can drift by up to a minute.</span></div>
+            </div>
+            <div class="sect" data-submit="routineSave">
+              <div class="field-row">
+                <label class="field"><span class="field-label">Name <span class="req">*</span></span><input class="input" type="text" id="routineName" placeholder="Daily digest" /></label>
+                <label class="field"><span class="field-label">Description</span><input class="input" type="text" id="routineDesc" placeholder="(optional)" /></label>
+              </div>
+              <label class="field"><span class="field-label">Prompt <span class="req">*</span></span>
+                <textarea class="input" id="routinePrompt" rows="6" placeholder="Read outputs/ for last run, then write outputs/<date>_digest.md ..."></textarea>
+                <span class="field-hint">A heartbeat preface (tick number, cadence, time since last fire) is prepended on every fire.</span></label>
+              <div class="field-row">
+                <label class="field"><span class="field-label">Every</span><span class="suffix"><input class="input" type="number" id="routineEverySec" min="60" value="3600" /><span>sec</span></span><span class="field-hint" id="routineEveryHint">seconds between fires (min 60)</span></label>
+                <label class="field"><span class="field-label">Task timeout</span><span class="suffix"><input class="input" type="number" id="routineTaskTimeout" min="1" value="1800" /><span>sec</span></span><span class="field-hint">per fire</span></label>
+              </div>
+              <div class="field"><span class="field-label">Engine</span><div id="routineEngineHost"></div></div>
+              <div class="field-row">
+                <label class="field"><span class="field-label">Namespace</span><input class="input mono" type="text" id="routineNamespace" placeholder="(optional)" /><span class="field-hint">Fixed once the routine is created.</span></label>
+                <div class="field"><span class="field-label">Output</span>
+                  <label class="switch-field" for="routineOutputsOnly" title="Pass outputs_only to the engine"><span class="switch"><input type="checkbox" id="routineOutputsOnly" role="switch" /><span></span></span><span>outputs_only</span></label></div>
+              </div>
+              <div class="field"><span class="field-label">Session</span><span id="routineSessionId" class="mono faint">— (created on save)</span></div>
+              <div class="row wrap">
+                <span id="routineSaveHost"></span><span id="routinePauseHost"></span><span id="routineResumeHost"></span><span id="routineRunNowHost"></span>
+                <span class="grow"></span><span id="routineDeleteHost"></span>
+              </div>
+              <span id="routineMsg" class="msg"></span>
+            </div>
+            <div class="sect">
+              <div class="sect-h"><h3><span class="ti" data-ic="pulse"></span>Counters</h3></div>
+              <div class="stats">
+                <div class="stat"><div class="k">Next fire</div><div class="v" id="routineNextFire">—</div></div>
+                <div class="stat"><div class="k">Last fire</div><div class="v" id="routineLastFire">—</div></div>
+                <div class="stat"><div class="k">Last completed</div><div class="v" id="routineLastCompleted">—</div></div>
+                <div class="stat"><div class="k">Total</div><div class="v" id="routineTotalRuns">0</div></div>
+                <div class="stat"><div class="k">Skipped</div><div class="v" id="routineSkipped">0</div></div>
+              </div>
+            </div>
+          </div><!-- /tabRoutines -->
+        </section>
+
+        <!-- Right pane: Active task / By routine -->
+        <section class="pane" aria-label="Task output">
+          <div class="tabs" role="tablist">
+            <button class="tab on" data-rtab="active" role="tab"><span class="ti" data-ic="pulse"></span>Active task</button>
+            <button class="tab" data-rtab="byroutine" role="tab"><span class="ti" data-ic="history"></span>By routine</button>
+          </div>
+          <div id="rtabActive" class="pane-scroll">
+            <div id="active"></div>
+          </div>
+          <div id="rtabByRoutine" class="pane-scroll" style="display:none">
+            <div class="row"><span class="muted grow" style="font-size:12px">Click a routine to see its task history.</span><span id="byRoutineRefreshHost"></span></div>
+            <div id="byRoutineList"></div>
+          </div>
+        </section>
       </div>
+    </main>
+  </div>
+</div>
 
-      <h2 style="margin-top:18px">Skill files</h2>
-      <div id="skillFileList" class="files"><span class="muted">No skill selected.</span></div>
-
-      <h2 style="margin-top:18px">SKILL.md</h2>
-      <textarea id="skillContent" placeholder="---&#10;name: my-skill&#10;description: One-line summary that triggers activation&#10;---&#10;&#10;# Body…" style="min-height:220px;font-family:var(--mono);font-size:12px"></textarea>
-      <div class="row" style="margin-top:8px">
-        <button id="skillSave" disabled>Save SKILL.md</button>
-        <span id="skillMsg" class="muted"></span>
-      </div>
-    </div><!-- /tabSkills -->
-
-    <div id="tabRoutines" style="display:none">
-      <div class="row">
-        <label>routine</label>
-        <select id="routinePicker" style="min-width:240px">
-          <option value="">— select a routine —</option>
-        </select>
-        <button class="ghost icon" id="routineRefresh" title="Refresh routines">↻</button>
-        <button id="routineNew" style="font-size:12px;padding:6px 12px">+ New</button>
-        <span class="grow"></span>
-        <span id="routineStatus" class="pill" style="display:none"></span>
-      </div>
-      <div class="muted" style="margin-bottom:10px">Routines fire tasks on a regular interval against a permanent session. The manager heartbeat checks every 60s — actual fire timing has up to 1 min drift.</div>
-
-      <div class="row"><label>name</label><input type="text" id="routineName" placeholder="Daily digest" style="flex:1"/></div>
-      <div class="row"><label>description</label><input type="text" id="routineDesc" placeholder="(optional)" style="flex:1"/></div>
-      <div class="row">
-        <label>prompt</label>
-        <textarea id="routinePrompt" placeholder="Read outputs/ for last run, then write outputs/&lt;date&gt;_digest.md ..." style="min-height:120px"></textarea>
-      </div>
-      <div class="row">
-        <label>every</label>
-        <input type="number" id="routineEverySec" min="60" value="3600" style="width:120px"/>
-        <span class="muted">seconds between fires (min 60)</span>
-      </div>
-      <div class="row">
-        <label>task timeout</label>
-        <input type="number" id="routineTaskTimeout" value="1800" style="width:120px"/>
-        <span class="muted">seconds per fire</span>
-      </div>
-      <div class="row">
-        <label>task type</label>
-        <select id="routineTaskType" style="width:160px">
-          <option value="CLAUDE_CODE">CLAUDE_CODE</option>
-          <option value="CODEX">CODEX</option>
-          <option value="ANTIGRAVITY">ANTIGRAVITY</option>
-        </select>
-        <label style="min-width:auto;margin-left:10px"><input type="checkbox" id="routineIsLocal"/> local mode</label>
-      </div>
-      <div class="row">
-        <label>namespace</label>
-        <input type="text" id="routineNamespace" placeholder="(optional)" style="width:200px"/>
-        <label style="min-width:auto;margin-left:14px"><input type="checkbox" id="routineOutputsOnly"/> outputs_only</label>
-      </div>
-      <div class="row"><label>session</label><span id="routineSessionId" class="muted" style="font-family:var(--mono);font-size:12px">— (created on save)</span></div>
-
-      <div class="row" style="margin-top:8px">
-        <button id="routineSave">Save</button>
-        <button class="ghost" id="routinePause" disabled>Pause</button>
-        <button class="ghost" id="routineResume" disabled>Resume</button>
-        <button class="ghost" id="routineRunNow" disabled>Run now</button>
-        <span class="grow"></span>
-        <button class="ghost danger-hover" id="routineDelete" disabled style="font-size:12px;padding:6px 12px">Delete</button>
-        <span id="routineMsg" class="muted"></span>
-      </div>
-
-      <h2 style="margin-top:18px">Counters</h2>
-      <div class="row" style="gap:14px">
-        <div class="stat"><div class="muted">Next fire</div><div id="routineNextFire">—</div></div>
-        <div class="stat"><div class="muted">Last fire</div><div id="routineLastFire">—</div></div>
-        <div class="stat"><div class="muted">Last completed</div><div id="routineLastCompleted">—</div></div>
-        <div class="stat"><div class="muted">Total</div><div id="routineTotalRuns">0</div></div>
-        <div class="stat"><div class="muted">Skipped</div><div id="routineSkipped">0</div></div>
-      </div>
-    </div><!-- /tabRoutines -->
-  </section>
-
-  <section class="panel">
-    <div class="tabs">
-      <button class="tab active" data-rtab="active">Active task</button>
-      <button class="tab" data-rtab="byroutine">By routine</button>
-    </div>
-
-    <div id="rtabActive">
-      <h2>Active task</h2>
-      <div id="active"><span class="muted">No task yet. Submit one on the left.</span></div>
-
-      <h2 style="margin-top:20px">Recent tasks</h2>
-      <div id="taskList" class="task-list"></div>
-    </div>
-
-    <div id="rtabByRoutine" style="display:none">
-      <div class="row" style="margin-bottom:10px">
-        <span class="muted">Click a routine to see its task history.</span>
-        <span class="grow"></span>
-        <button class="ghost icon" id="byRoutineRefresh" title="Refresh">↻</button>
-      </div>
-      <div id="byRoutineList"><span class="muted">Loading…</span></div>
-    </div>
-  </section>
-</main>
-
+<script src="/shared/appnav.js"></script>
+<script src="/shared/manager.js"></script>
 <script>
-const $ = (id) => document.getElementById(id);
+"use strict";
+// ═══ Task Mode ═══════════════════════════════════════════════════════════
+// Endpoints, payloads and polling are unchanged from the previous page:
+//   1s  GET /api/tasks/{id} while the active task is pending/running
+//   5s  GET /api/tasks; GET /api/routines/{id} while the Routines tab is open;
+//       GET /api/routines (+ /runs of expanded groups) while "By routine" is open
 const base = () => location.origin;
 
 let staged = [];   // [{file, rel}]
 let activeTaskId = null;
 let pollTimer = null;
 let lastFiles = [];
+let taskFilter = "all", taskQuery = "", lastTaskGroups = null;
 
-function badge(text, cls) {
-  return `<span class="pill ${cls}">${text}</span>`;
+// ── Chrome: icons, buttons ─────────────────────────────────────────────
+renderTopbar($("topbar"), "tasks");
+document.querySelectorAll(".ti[data-ic]").forEach(el => el.replaceWith(icon(el.dataset.ic)));
+document.querySelector(".rail .search .ic").replaceWith(icon("search"));
+const host = (id, node) => { $(id).replaceWith(node); return node; };
+host("newTaskHost", btn(null, { icon: "plus", kind: "quiet", size: "sm", title: "New task  (N)", onClick: () => focusNewTask() }));
+host("pullSessionHost", btn(null, { icon: "refresh", kind: "quiet", size: "sm", id: "pullSession", title: "Refresh session" }));
+host("deleteSessionHost", btn(null, { icon: "trash", kind: "quiet", size: "sm", id: "deleteSession", title: "Delete session" }));
+host("submitHost", btn("Submit task", { icon: "send", kind: "primary", id: "submit", kbd: "Ctrl ⏎" }));
+host("uploadHost", btn("Upload to session", { icon: "upload", id: "upload" }));
+host("downloadAllHost", btn("Download all", { icon: "download", kind: "ghost", size: "sm", id: "downloadAll" }));
+host("skillRefreshHost", btn(null, { icon: "refresh", kind: "quiet", size: "sm", id: "skillRefresh", title: "Refresh skills" }));
+host("skillNewHost", btn("New", { icon: "plus", kind: "ghost", size: "sm", id: "skillNew" }));
+host("skillDeleteHost", btn(null, { icon: "trash", kind: "danger", id: "skillDelete", title: "Delete skill", disabled: true }));
+host("skillSaveHost", btn("Save SKILL.md", { icon: "save", kind: "primary", id: "skillSave", kbd: "Ctrl S", disabled: true }));
+host("skillFileUploadHost", btn("Upload", { icon: "upload", id: "skillFileUpload", disabled: true }));
+host("routineRefreshHost", btn(null, { icon: "refresh", kind: "quiet", size: "sm", id: "routineRefresh", title: "Refresh routines" }));
+host("routineNewHost", btn("New", { icon: "plus", kind: "ghost", size: "sm", id: "routineNew" }));
+host("routineSaveHost", btn("Save", { icon: "save", kind: "primary", id: "routineSave", kbd: "Ctrl S" }));
+host("routinePauseHost", btn("Pause", { icon: "pause", kind: "ghost", id: "routinePause", disabled: true }));
+host("routineResumeHost", btn("Resume", { icon: "play", kind: "ghost", id: "routineResume", disabled: true }));
+host("routineRunNowHost", btn("Run now", { icon: "bolt", kind: "ghost", id: "routineRunNow", disabled: true }));
+host("routineDeleteHost", btn("Delete", { icon: "trash", kind: "danger", id: "routineDelete", disabled: true }));
+host("byRoutineRefreshHost", btn(null, { icon: "refresh", kind: "quiet", size: "sm", id: "byRoutineRefresh", title: "Refresh" }));
+const taskEngine = engineControl({ selectId: "taskType", localId: "isLocal", value: "CLAUDE_CODE" });
+$("engineHost").replaceWith(taskEngine.el);
+const routineEngine = engineControl({ selectId: "routineTaskType", localId: "routineIsLocal", value: "CLAUDE_CODE" });
+$("routineEngineHost").replaceWith(routineEngine.el);
+const outSw = $("routineOutputsOnly");
+outSw.addEventListener("change", () => outSw.closest(".switch-field").classList.toggle("on", outSw.checked));
+function setEngine(ctl, value, local) {
+  if (value && ![...ctl.select.options].some(o => o.value === value)) ctl.select.appendChild(engineOption(value));
+  ctl.select.value = value || "CLAUDE_CODE";
+  ctl.local.checked = !!local;
+  ctl.sync();
 }
+function setMsg(id, text, tone) { const el = $(id); el.textContent = text || ""; el.className = "msg" + (tone ? " " + tone : ""); }
 
-function fmtTime(s) { if (!s) return ""; return new Date(s).toLocaleTimeString(); }
-
-async function api(path, opts = {}) {
-  const r = await fetch(base() + path, opts);
-  const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(body.error || r.statusText);
-  return body;
-}
+function badge(text, cls) { return statusPill(text, { tone: STATUS_TONE[cls] ?? "" }); }
 
 function withNs(url) {
   const n = $("ns").value.trim();
@@ -281,329 +283,318 @@ function withNs(url) {
   return url + (url.includes("?") ? "&" : "?") + "namespace=" + encodeURIComponent(n);
 }
 
+// ── Session ────────────────────────────────────────────────────────────
 $("pullSession").onclick = () => { refreshSession(); refreshTasks(); };
 $("ns").onchange = () => { refreshSession(); };
+$("sid").onchange = () => { refreshSession(); };
 
 $("deleteSession").onclick = async () => {
   const sid = $("sid").value.trim();
-  if (!sid) return;
-  if (!confirm(`Delete session ${sid}?`)) return;
+  if (!sid) return toast("No session selected", { kind: "error" });
+  if (!(await confirmDialog("Delete session?", h("p", { class: "muted" }, "Delete session ", h("code", null, sid), " and its folder? This can't be undone."), { confirm: "Delete session", danger: true }))) return;
   try { await api(withNs(`/api/sessions/${encodeURIComponent(sid)}`), { method: "DELETE" }); }
-  catch(e) { alert(e.message); return; }
+  catch (e) { toast(e.message, { kind: "error" }); return; }
   $("sid").value = "";
-  $("sessionBadge").textContent = "deleted";
+  mount($("sessionBadge"), h("span", { class: "pill" }, "deleted"));
+  refreshFiles();
+  toast("Session deleted", { kind: "success" });
 };
 
 $("downloadAll").onclick = async () => {
-  if (!lastFiles || !lastFiles.length) return alert("No files to download");
+  if (!lastFiles || !lastFiles.length) return toast("No files to download", { kind: "error" });
   const sid = $("sid").value.trim();
   if (!sid) return;
-
   for (const f of lastFiles) {
     const p = encodeURIComponent(f.path);
-    const dlUrl = base() + withNs(`/api/sessions/${encodeURIComponent(sid)}/files/${p}`);
-    const a = document.createElement("a");
-    a.href = dlUrl;
-    a.download = f.path.split("/").pop();
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    triggerDownload(base() + withNs(`/api/sessions/${encodeURIComponent(sid)}/files/${p}`), f.path.split("/").pop());
     await new Promise(r => setTimeout(r, 150));
   }
 };
 
 async function refreshSession() {
   const sid = $("sid").value.trim();
-  if (!sid) { $("sessionBadge").textContent = ""; refreshFiles(); return; }
+  const b = $("sessionBadge");
+  if (!sid) { mount(b, h("span", null, "No session yet — one is created when you upload or submit.")); refreshFiles(); return; }
   try {
     const r = await api(withNs(`/api/sessions/${encodeURIComponent(sid)}`));
     const s = r.session;
     const claudeSid = (s.data || {}).last_claude_session_id;
-    const parts = [
-      `tasks=${(s.task_ids || []).length}`,
-      `last_used=${fmtTime(s.last_used_at)}`,
-    ];
-    if (s.namespace) parts.unshift(`ns=${escapeHtml(s.namespace)}`);
-    if (claudeSid) parts.push(`<span class="pill resumed">resumable</span> claude=${claudeSid.slice(0, 8)}…`);
-    $("sessionBadge").innerHTML = parts.join(" · ");
+    mount(b,
+      s.namespace ? h("span", { class: "pill" }, "ns " + s.namespace) : null,
+      h("span", { class: "pill" }, icon("history"), `${(s.task_ids || []).length} task${(s.task_ids || []).length === 1 ? "" : "s"}`),
+      s.last_used_at ? h("span", { class: "pill", title: fmtDateTime(s.last_used_at) }, icon("clock"), "last used " + fmtTime(s.last_used_at)) : null,
+      claudeSid ? h("span", { class: "pill accent", title: "Claude session " + claudeSid }, icon("refresh"), "resumable · claude=" + claudeSid.slice(0, 8) + "…") : null);
   } catch (e) {
-    $("sessionBadge").innerHTML = `<span class="pill failed">${e.message}</span>`;
+    mount(b, h("span", { class: "pill err" }, icon("alert"), e.message));
   }
   refreshFiles();
 }
 
 const drop = $("drop");
 drop.onclick = () => $("picker").click();
-$("picker").onchange = (e) => addFiles(e.target.files);
-["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
-["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
-drop.addEventListener("drop", (e) => addFiles(e.dataTransfer.files));
+drop.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("picker").click(); } };
+$("picker").onchange = (e) => { addFiles(e.target.files); e.target.value = ""; };
+wireDrop(drop, (fl) => addFiles(fl));
 
 function addFiles(fl) {
   for (const f of fl) staged.push({ file: f, rel: f.name });
   renderStaged();
 }
 function renderStaged() {
-  $("staged").innerHTML = staged.map((s, i) =>
-    `<div class="f"><span>${s.rel} <span style="color:var(--muted)">(${s.file.size}b)</span></span>
-     <button onclick="removeStaged(${i})">✕</button></div>`
-  ).join("");
+  const el = $("staged");
+  el.classList.toggle("hidden", !staged.length);
+  mount(el, staged.map((s, i) => h("div", { class: "frow" }, icon("file"), h("span", { class: "nm" }, s.rel), h("span", { class: "meta" }, formatBytes(s.file.size)),
+    h("span", { class: "acts" }, btn(null, { icon: "x", kind: "quiet", size: "sm", title: "Remove", onClick: () => removeStaged(i) })))));
+  setMsg("uploadMsg", staged.length ? `${staged.length} file${staged.length === 1 ? "" : "s"} staged` : "");
 }
-window.removeStaged = (i) => { staged.splice(i, 1); renderStaged(); };
+function removeStaged(i) { staged.splice(i, 1); renderStaged(); }
 
 async function refreshFiles() {
   const sid = $("sid").value.trim();
-  if (!sid) { $("fileList").innerHTML = '<span class="muted">No session yet.</span>'; lastFiles = []; return; }
+  const list = $("fileList");
+  if (!sid) { mount(list, emptyState("folder", "No session yet", "Files you upload land in the session folder.", null, true)); lastFiles = []; $("fileCount").textContent = ""; return; }
   try {
     const r = await api(withNs(`/api/sessions/${encodeURIComponent(sid)}/files`));
     lastFiles = r.files;
-    if (!r.files.length) { $("fileList").innerHTML = '<span class="muted">(empty)</span>'; return; }
-    $("fileList").innerHTML = r.files.map(f => {
+    $("fileCount").textContent = r.files.length ? `${r.files.length}` : "";
+    if (!r.files.length) { mount(list, emptyState("file", "(empty)", "This session has no files yet.", null, true)); return; }
+    mount(list, h("div", { class: "filelist" }, h("div", { class: "files" }, r.files.map(f => {
       const p = encodeURIComponent(f.path);
       const dlUrl = base() + withNs(`/api/sessions/${encodeURIComponent(sid)}/files/${p}`);
-      const viewUrl = dlUrl;
-      return `
-        <div class="f">
-          <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-            ${escapeHtml(f.path)} <span style="color:var(--muted)">${f.bytes}b</span>
-          </span>
-          <span>
-            <a href="${viewUrl}" target="_blank" style="color:var(--accent);text-decoration:none;margin-right:10px">view</a>
-            <button class="icon danger-hover ghost" title="Delete" onclick="deleteFile('${escapeHtml(f.path).replace(/'/g, "\\'")}')">✕</button>
-          </span>
-        </div>`;
-    }).join("");
-  } catch (e) { $("fileList").innerHTML = `<span class="muted">${e.message}</span>`; lastFiles = []; }
+      return h("div", { class: "frow" }, icon("file"), h("span", { class: "nm", title: f.path }, f.path), h("span", { class: "meta" }, formatBytes(f.bytes)),
+        h("span", { class: "acts" },
+          h("a", { class: "btn quiet sm btn-icon", href: dlUrl, target: "_blank", rel: "noopener", title: "View" }, icon("eye")),
+          btn(null, { icon: "trash", kind: "quiet", size: "sm", title: "Delete", onClick: () => deleteFile(f.path) })));
+    }))));
+  } catch (e) { mount(list, errorBox(e.message, refreshFiles)); lastFiles = []; }
 }
 
-window.deleteFile = async (path) => {
+async function deleteFile(path) {
   const sid = $("sid").value.trim();
   if (!sid) return;
-  if (!confirm(`Delete ${path}?`)) return;
+  if (!(await confirmDialog("Delete file?", h("p", { class: "muted" }, "Delete ", h("code", null, path), " from the session?"), { confirm: "Delete", danger: true }))) return;
   try {
     await api(withNs(`/api/sessions/${encodeURIComponent(sid)}/files/${encodeURIComponent(path)}`), { method: "DELETE" });
     refreshFiles();
-  } catch (e) { alert(e.message); }
-};
+    toast("File deleted", { kind: "success" });
+  } catch (e) { toast(e.message, { kind: "error" }); }
+}
 
 $("upload").onclick = async () => {
-  if (!staged.length) { $("uploadMsg").textContent = "no files staged"; return; }
+  if (!staged.length) { setMsg("uploadMsg", "No files staged — drop some above first.", "err"); return; }
   let sid = $("sid").value.trim();
   if (!sid) {
+    const t = posInt($("sessTimeout").value);
+    if (!fieldError($("sessTimeout"), t ? "" : "Whole seconds, > 0")) return;
     try {
       const body = { session_idle_timeout_seconds: +$("sessTimeout").value };
       const ns = $("ns").value.trim();
       if (ns) body.namespace = ns;
-      const r = await api("/api/sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      const r = await api("/api/sessions", jsonOpts("POST", body));
       sid = r.session.session_id;
       $("sid").value = sid;
-    } catch (e) { $("uploadMsg").textContent = "create failed: " + e.message; return; }
+    } catch (e) { setMsg("uploadMsg", "Create failed: " + e.message, "err"); return; }
   }
   const fd = new FormData();
-  for (const s of staged) { fd.append("files", s.file); }
-  $("uploadMsg").textContent = "uploading...";
+  for (const s of staged) fd.append("files", s.file);
+  setMsg("uploadMsg", "Uploading…");
+  $("upload").disabled = true;
   try {
-    const r = await api(withNs(`/api/sessions/${encodeURIComponent(sid)}/files`), { method: "POST", body: fd });
-    $("uploadMsg").textContent = `✓ uploaded`;
+    await api(withNs(`/api/sessions/${encodeURIComponent(sid)}/files`), { method: "POST", body: fd });
+    const n = staged.length;
     staged = []; renderStaged();
+    setMsg("uploadMsg", `Uploaded ${n} file${n === 1 ? "" : "s"}`, "ok");
     refreshSession();
-  } catch (e) { $("uploadMsg").textContent = "✗ " + e.message; }
+  } catch (e) { setMsg("uploadMsg", "Upload failed: " + e.message, "err"); }
+  finally { $("upload").disabled = false; }
 };
 
+// ── Submit ─────────────────────────────────────────────────────────────
 $("submit").onclick = async () => {
   const sid = $("sid").value.trim() || undefined;
   const taskType = $("taskType").value.trim();
   const isLocal = $("isLocal").checked;
-  
-  const params = taskType === "ECHO" ? { text: $("prompt").value } : { prompt: $("prompt").value };
-  // is_local is honored by CLAUDE_CODE + CODEX (proxy redirect); ANTIGRAVITY
-  // accepts but currently ignores it — forwarded so the field round-trips
-  // when agy gains a base-url flag in a future release.
-  if (["CLAUDE_CODE", "CODEX", "ANTIGRAVITY"].includes(taskType)) {
-    params.is_local = isLocal;
-  }
+  if (!fieldError($("prompt"), $("prompt").value.trim() ? "" : "Write a prompt for the task")) return;
+  if (!fieldError($("sessTimeout"), posInt($("sessTimeout").value) ? "" : "Whole seconds, > 0")) return;
 
-  const body = {
-    task_type: taskType,
-    params: params,
-    session_idle_timeout_seconds: +$("sessTimeout").value,
-  };
+  const params = taskType === "ECHO" ? { text: $("prompt").value } : { prompt: $("prompt").value };
+  // is_local is honored by CLAUDE_CODE, CODEX and ANTIGRAVITY (proxy redirect).
+  if (["CLAUDE_CODE", "CODEX", "ANTIGRAVITY"].includes(taskType)) params.is_local = isLocal;
+
+  const body = { task_type: taskType, params: params, session_idle_timeout_seconds: +$("sessTimeout").value };
   if (sid) body.session_id = sid;
   const taskNs = $("ns").value.trim();
   if (taskNs) body.session_namespace = taskNs;
 
-  $("submitMsg").textContent = "submitting...";
+  setMsg("submitMsg", "Submitting…");
+  $("submit").disabled = true;
   try {
-    const r = await api("/api/tasks", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    const r = await api("/api/tasks", jsonOpts("POST", body));
     if (!$("sid").value.trim()) $("sid").value = r.task.session_id;
-    $("submitMsg").textContent = `✓ ${r.task_id}`;
+    setMsg("submitMsg", "Submitted " + shortId(r.task_id), "ok");
+    toast(`Task ${shortId(r.task_id)} submitted`, { kind: "success" });
+    showRightTab("active");
     watchTask(r.task_id);
     refreshSession();
     refreshTasks();
-  } catch (e) { $("submitMsg").textContent = "✗ " + e.message; }
+  } catch (e) { setMsg("submitMsg", e.message, "err"); toast(e.message, { kind: "error" }); }
+  finally { $("submit").disabled = false; }
 };
+function focusNewTask() { showLeftTab("session"); $("prompt").focus(); $("prompt").select(); }
 
+// ── Active task ────────────────────────────────────────────────────────
 function watchTask(id) {
   activeTaskId = id;
   if (pollTimer) clearInterval(pollTimer);
+  markActiveInLists();
   const tick = async () => {
     try {
       const r = await api(`/api/tasks/${encodeURIComponent(id)}`);
+      if (activeTaskId !== id) return;
       renderActive(r);
       if (["completed", "failed", "cancelled"].includes(r.status)) {
         clearInterval(pollTimer); pollTimer = null;
         refreshSession(); refreshTasks();
       }
-    } catch (e) { }
+    } catch (e) {
+      if (activeTaskId === id && !$("active").querySelector(".act-head")) mount($("active"), errorBox(e.message));
+    }
   };
+  if (!$("active").querySelector(".act-head") || $("active")._taskId !== id) mount($("active"), skeleton(5));
   tick();
   pollTimer = setInterval(tick, 1000);
 }
-
-function fmtNum(n) { return (n == null) ? "—" : Number(n).toLocaleString(); }
-function fmtCost(n) { return (n == null) ? "—" : "$" + Number(n).toFixed(4); }
-function fmtMs(n) { if (n == null) return "—"; return n < 1000 ? `${n}ms` : `${(n/1000).toFixed(1)}s`; }
-
-function renderResult(r) {
-  if (typeof r === "string") return `<h2 style="margin-top:12px">Result</h2><pre>${escapeHtml(r)}</pre>`;
-  const text = r.result || "";
-  const tok = r.tokens || {};
-  const stats = `
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-top:6px">
-      <div class="stat"><div class="muted">cost</div><div>${fmtCost(r.cost_usd)}</div></div>
-      <div class="stat"><div class="muted">duration</div><div>${fmtMs(r.duration_ms)}</div></div>
-      <div class="stat"><div class="muted">turns</div><div>${fmtNum(r.num_turns)}</div></div>
-      <div class="stat"><div class="muted">input tok</div><div>${fmtNum(tok.input)}</div></div>
-      <div class="stat"><div class="muted">output tok</div><div>${fmtNum(tok.output)}</div></div>
-    </div>`;
-  const textBlock = text ? `<pre style="margin-top:8px">${escapeHtml(text)}</pre>` : "";
-  return `<h2 style="margin-top:12px">Result</h2>${stats}${textBlock}`;
+function renderActiveEmpty() {
+  mount($("active"), emptyState("send", "No task yet", "Submit one on the left, or pick a recent task from the sidebar.",
+    btn("New task", { icon: "plus", kind: "ghost", size: "sm", onClick: () => focusNewTask() })));
 }
-
 function renderActive(t) {
+  const root = $("active");
+  if (root._taskId !== t.task_id || !root.querySelector(".act-head")) {
+    root._taskId = t.task_id;
+    mount(root, h("div", { class: "col", style: { gap: "12px" } },
+      h("div", { class: "act-head", id: "act-head" }), h("div", { class: "act-prog", id: "act-prog" }),
+      h("div", { id: "act-stream" }), h("div", { id: "act-result" })));
+  }
   const pct = Math.round((t.progress || 0) * 100);
-  const evList = (t.metadata && t.metadata.events) || [];
-  const events = evList.slice(-200).map(e => {
-    const k = e.kind || "info";
-    const body = e.text || e.summary || JSON.stringify(e);
-    return `<div class="ev ${k}"><span class="k">${k}</span>${escapeHtml(body)}</div>`;
-  }).join("");
-  const progressMsg = (t.metadata && t.metadata.progress_message) || "";
-  const result = t.result ? renderResult(t.result) : "";
-  const err = t.error ? `<h2 style="margin-top:12px">Error</h2><pre style="color:var(--err)">${escapeHtml(t.error)}</pre>` : "";
-  $("active").innerHTML = `
-    <div class="row">
-      ${badge(t.status, t.status)}
-      <span class="muted">${t.task_id}</span>
-      <span class="grow"></span>
-      <button class="danger" ${["pending","running"].includes(t.status) ? "" : "disabled"} onclick="cancelActive()">cancel</button>
-    </div>
-    <div class="bar"><span style="width:${pct}%"></span></div>
-    <div class="muted">${escapeHtml(progressMsg)} · ${pct}%</div>
-    <div class="events">${events || '<span class="muted">no events</span>'}</div>
-    ${result}${err}
-  `;
+  const live = ["pending", "running"].includes(t.status);
+  const dur = durationBetween(t.started_at || t.created_at, t.completed_at);
+  const md = t.metadata || {};
+  mount($("act-head"), badge(t.status, t.status), h("b", null, ENGINE_LABELS[t.task_type] || t.task_type), idChip(t.task_id, 13, "Task " + t.task_id),
+    t.session_id ? h("a", { href: "#", title: "Use this session: " + t.session_id, onclick: (e) => { e.preventDefault(); $("sid").value = t.session_id; if (t.session_namespace != null) $("ns").value = t.session_namespace || ""; showLeftTab("session"); refreshSession(); } }, icon("folder"), " ", shortId(t.session_id)) : null,
+    md.routine_name ? h("span", { class: "pill" }, icon("clock"), md.routine_name) : null,
+    h("span", { class: "faint", style: { fontSize: "12px" } }, fmtTime(t.created_at), dur != null ? " · " + fmtMs(dur) : ""),
+    h("span", { class: "grow" }),
+    h("button", { type: "button", class: "btn danger sm", disabled: live ? null : true, onclick: () => cancelActive() }, icon("stop"), h("span", null, "Cancel")));
+  const progressMsg = md.progress_message || "";
+  mount($("act-prog"), h("div", { class: "bar" + (t.status === "completed" ? " ok" : ["failed", "cancelled"].includes(t.status) ? " err" : "") }, h("i", { style: { width: pct + "%" } })),
+    h("span", null, `${progressMsg ? progressMsg + " · " : ""}${pct}%`));
+  updateStream($("act-stream"), md.events || [], { key: t.task_id, limit: 200, status: t.status, tall: true, emptyText: live ? "Waiting for events…" : "no events" });
+  const res = $("act-result");
+  const rsig = JSON.stringify([t.result ?? null, t.error ?? null]).length + t.status;
+  if (res._sig !== rsig) {
+    res._sig = rsig;
+    mount(res, h("div", { class: "col", style: { gap: "10px" } }, t.result ? renderResultBlock(t.result) : null, t.error ? renderErrorBlock(t.error) : null));
+  }
+}
+async function cancelActive() {
+  if (!activeTaskId) return;
+  if (!(await confirmDialog("Cancel this task?", "The engine process is stopped; partial output stays in the session folder.", { confirm: "Cancel task", danger: true }))) return;
+  try { await api(`/api/tasks/${encodeURIComponent(activeTaskId)}/cancel`, { method: "POST" }); toast("Task cancelled"); }
+  catch (e) { toast(e.message, { kind: "error" }); }
 }
 
-window.cancelActive = async () => {
-  if (!activeTaskId) return;
-  await api(`/api/tasks/${encodeURIComponent(activeTaskId)}/cancel`, { method: "POST" });
-};
-
-function escapeHtml(s) { return (s || "").replace(/[&<>]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c])); }
-
+// ── Recent tasks (sidebar) ─────────────────────────────────────────────
+const FILTERS = [["all", "All"], ["live", "Live"], ["completed", "Done"], ["failed", "Failed"]];
+function filterCount(g, f) {
+  if (!g) return 0;
+  return f === "all" ? g.all.length : f === "live" ? g.running.length + g.pending.length : f === "completed" ? g.completed.length : g.failed.length + g.cancelled.length;
+}
+function renderFilterSeg() {
+  mount($("task-filter"), FILTERS.map(([f, label]) => h("button", { type: "button", role: "tab", class: taskFilter === f ? "on" : "", "aria-selected": String(taskFilter === f),
+    onclick: () => { taskFilter = f; renderTaskList(); } }, label, " ", h("span", { class: "faint" }, filterCount(lastTaskGroups, f)))));
+}
+function taskPrompt(t) { const ev = ((t.metadata || {}).events || []).find(e => e && e.kind === "start"); return ev && typeof ev.prompt === "string" ? ev.prompt : ""; }
+function renderTaskList() {
+  renderFilterSeg();
+  const g = lastTaskGroups;
+  const list = $("taskList");
+  if (!g) { mount(list, skeleton(6, "sk-row")); return; }
+  $("count-tasks").textContent = g.all.length;
+  let pool = taskFilter === "all" ? g.all : taskFilter === "live" ? [...g.running, ...g.pending] : taskFilter === "completed" ? g.completed : [...g.failed, ...g.cancelled];
+  if (taskQuery) pool = pool.filter(t => [t.task_id, t.task_type, ENGINE_LABELS[t.task_type], t.session_id, (t.metadata || {}).routine_name, taskPrompt(t)].some(x => String(x || "").toLowerCase().includes(taskQuery)));
+  const all = pool.slice(0, 40);
+  if (!all.length) {
+    mount(list, emptyState("history", taskQuery || taskFilter !== "all" ? "No matching tasks" : "No tasks yet", taskQuery || taskFilter !== "all" ? "Try a different filter." : "Tasks you submit show up here.", null, true));
+    return;
+  }
+  mount(list, all.map(t => {
+    const tone = STATUS_TONE[t.status] || "";
+    const pr = taskPrompt(t), rn = (t.metadata || {}).routine_name;
+    return h("div", { class: "item tk task" + (t.task_id === activeTaskId ? " on active" : ""), tabindex: "0", role: "button", "data-tid": t.task_id,
+      title: `${t.status} · ${t.task_type}\n${t.task_id}\nsession ${t.session_id || "—"}`,
+      onclick: () => { showRightTab("active"); watchTask(t.task_id); }, onkeydown: (e) => { if (e.key === "Enter") { showRightTab("active"); watchTask(t.task_id); } } },
+      h("span", { class: "dot tdot " + tone + (t.status === "running" ? " pulse" : "") }),
+      h("div", { class: "item-2" },
+        h("span", { class: "l1" }, h("span", { class: "mono" }, t.task_id.slice(0, 8) + "…"), h("span", { class: "faint eng" }, ENGINE_LABELS[t.task_type] || t.task_type), h("span", { class: "grow" }), h("span", { class: "faint", style: { fontSize: "11px" } }, fmtTime(t.created_at))),
+        h("span", { class: "sub" }, rn ? "⟳ " + rn + " · " : "", pr ? pr.replace(/\s+/g, " ").slice(0, 80) : `sid=${(t.session_id || "").slice(0, 8)}…`)));
+  }));
+}
+function markActiveInLists() {
+  document.querySelectorAll("[data-tid]").forEach(el => el.classList.toggle("on", el.dataset.tid === activeTaskId));
+  document.querySelectorAll(".rrun[data-tid]").forEach(el => el.classList.toggle("on", el.dataset.tid === activeTaskId));
+}
 async function refreshTasks() {
   try {
     const r = await api("/api/tasks");
-    const all = [].concat(r.running, r.pending, r.completed, r.failed, r.cancelled).slice(0, 40);
-    $("taskList").innerHTML = all.map(t => `
-      <div class="task ${t.task_id === activeTaskId ? 'active' : ''}" onclick="watchTask('${t.task_id}')">
-        ${badge(t.status, t.status)}
-        <span style="font-family:var(--mono)">${t.task_id.slice(0,8)}…</span>
-        <span class="muted">· ${t.task_type} · sid=${(t.session_id || '').slice(0,8)}…</span>
-        <span class="muted"> · ${fmtTime(t.created_at)}</span>
-      </div>
-    `).join("");
-  } catch (e) { }
+    setConn(true);
+    lastTaskGroups = { running: r.running || [], pending: r.pending || [], completed: r.completed || [], failed: r.failed || [], cancelled: r.cancelled || [] };
+    lastTaskGroups.all = [].concat(lastTaskGroups.running, lastTaskGroups.pending, lastTaskGroups.completed, lastTaskGroups.failed, lastTaskGroups.cancelled);
+    renderTaskList();
+  } catch (e) { setConn(false); if (!lastTaskGroups) mount($("taskList"), h("div", { style: { padding: "8px" } }, errorBox(e.message, refreshTasks))); }
 }
+$("task-search").addEventListener("input", (e) => { taskQuery = e.target.value.trim().toLowerCase(); renderTaskList(); });
+$("task-search").addEventListener("keydown", (e) => { if (e.key === "Escape") { e.target.value = ""; taskQuery = ""; renderTaskList(); e.target.blur(); } });
 
-refreshTasks();
-setInterval(refreshTasks, 5000);
+// ── Tabs ───────────────────────────────────────────────────────────────
+function showLeftTab(t) {
+  document.querySelectorAll(".tab[data-tab]").forEach(b => { b.classList.toggle("on", b.dataset.tab === t); b.setAttribute("aria-selected", String(b.dataset.tab === t)); });
+  $("tabSession").style.display = t === "session" ? "" : "none";
+  $("tabSkills").style.display = t === "skills" ? "" : "none";
+  $("tabRoutines").style.display = t === "routines" ? "" : "none";
+  if (t === "skills") refreshSkills();
+  if (t === "routines") refreshRoutines();
+}
+function showRightTab(t) {
+  document.querySelectorAll(".tab[data-rtab]").forEach(b => { b.classList.toggle("on", b.dataset.rtab === t); b.setAttribute("aria-selected", String(b.dataset.rtab === t)); });
+  $("rtabActive").style.display = t === "active" ? "" : "none";
+  $("rtabByRoutine").style.display = t === "byroutine" ? "" : "none";
+  if (t === "byroutine") refreshByRoutine();
+}
+document.querySelectorAll(".tab[data-tab]").forEach(b => b.onclick = () => showLeftTab(b.dataset.tab));
+document.querySelectorAll(".tab[data-rtab]").forEach(b => b.onclick = () => showRightTab(b.dataset.rtab));
 
-// ===== Tabs =====
-// Each .tabs group manages its own active state and its own panels. Two
-// groups today: left (data-tab → tabSession/tabSkills/tabRoutines) and
-// right (data-rtab → rtabActive/rtabByRoutine).
-document.querySelectorAll(".tabs").forEach(group => {
-  group.querySelectorAll(".tab").forEach(btn => {
-    btn.onclick = () => {
-      group.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b === btn));
-      if (btn.dataset.tab) {
-        const t = btn.dataset.tab;
-        $("tabSession").style.display = t === "session" ? "" : "none";
-        $("tabSkills").style.display = t === "skills" ? "" : "none";
-        $("tabRoutines").style.display = t === "routines" ? "" : "none";
-        if (t === "skills") refreshSkills();
-        if (t === "routines") refreshRoutines();
-      } else if (btn.dataset.rtab) {
-        const t = btn.dataset.rtab;
-        $("rtabActive").style.display = t === "active" ? "" : "none";
-        $("rtabByRoutine").style.display = t === "byroutine" ? "" : "none";
-        if (t === "byroutine") refreshByRoutine();
-      }
-    };
-  });
-});
-
-// ===== Skills =====
+// ── Skills ─────────────────────────────────────────────────────────────
 let skillCache = [];
 let activeSkill = null;   // {name, content, files, roots}
-
-function setSkillMsg(text, isErr) {
-  const el = $("skillMsg");
-  el.textContent = text || "";
-  el.style.color = isErr ? "var(--err)" : "var(--muted)";
-}
-
-function setSkillUploadMsg(text, isErr) {
-  const el = $("skillUploadMsg");
-  el.textContent = text || "";
-  el.style.color = isErr ? "var(--err)" : "var(--muted)";
-}
-
+function setSkillMsg(text, isErr) { setMsg("skillMsg", text, isErr ? "err" : ""); }
+function setSkillUploadMsg(text, isErr) { setMsg("skillUploadMsg", text, isErr ? "err" : ""); }
 function renderSkillOptions() {
   const sel = $("skillPicker");
   const cur = sel.value;
-  sel.innerHTML = '<option value="">— select a skill —</option>' +
-    skillCache.map(s => {
-      const tag = (s.roots || []).join("+") || "?";
-      const desc = s.description || "";
-      return `<option value="${escapeHtml(s.name)}" title="${escapeHtml(desc)}">${escapeHtml(s.name)} [${escapeHtml(tag)}]</option>`;
-    }).join("");
+  mount(sel, h("option", { value: "" }, skillCache.length ? "— select a skill —" : "— no skills yet —"),
+    skillCache.map(s => h("option", { value: s.name, title: s.description || "" }, `${s.name}  [${(s.roots || []).join("+") || "?"}]`)));
   if (cur && skillCache.some(s => s.name === cur)) sel.value = cur;
+  $("count-skills").textContent = skillCache.length;
 }
-
 function renderSkillFiles() {
   const el = $("skillFileList");
-  if (!activeSkill) { el.innerHTML = '<span class="muted">No skill selected.</span>'; return; }
+  if (!activeSkill) { mount(el, emptyState("sparkle", "No skill selected", "Pick one above or create a new skill.", null, true)); return; }
   const refs = (activeSkill.files || []).filter(f => f.path !== "SKILL.md");
-  if (!refs.length) { el.innerHTML = '<span class="muted">No reference files.</span>'; return; }
-  el.innerHTML = refs.map(f => `
-    <div class="f">
-      <span>${escapeHtml(f.path)} <span class="muted">· ${f.bytes}b</span></span>
-      <button class="icon danger-hover ghost" title="Delete" onclick="deleteSkillFile('${escapeHtml(f.path).replace(/'/g, "\\'")}')">✕</button>
-    </div>
-  `).join("");
+  if (!refs.length) { mount(el, h("div", { class: "field-hint" }, "No reference files.")); return; }
+  mount(el, h("div", { class: "filelist" }, h("div", { class: "files" }, refs.map(f => h("div", { class: "frow" }, icon("file"), h("span", { class: "nm" }, f.path), h("span", { class: "meta" }, formatBytes(f.bytes)),
+    h("span", { class: "acts" }, btn(null, { icon: "trash", kind: "quiet", size: "sm", title: "Delete", onClick: () => deleteSkillFile(f.path) })))))));
 }
-
 async function refreshSkills() {
   try {
     const r = await api("/api/skills");
@@ -611,14 +602,12 @@ async function refreshSkills() {
     renderSkillOptions();
   } catch (e) { setSkillMsg("List failed: " + e.message, true); }
 }
-
+function setSkillEnabled(on) { $("skillSave").disabled = !on; $("skillDelete").disabled = !on; $("skillFileUpload").disabled = !on; }
 async function loadSkill(name) {
   if (!name) {
     activeSkill = null;
     $("skillContent").value = "";
-    $("skillSave").disabled = true;
-    $("skillDelete").disabled = true;
-    $("skillFileUpload").disabled = true;
+    setSkillEnabled(false);
     renderSkillFiles();
     return;
   }
@@ -626,86 +615,64 @@ async function loadSkill(name) {
     const s = await api(`/api/skills/${encodeURIComponent(name)}`);
     activeSkill = s;
     $("skillContent").value = s.content || "";
-    $("skillSave").disabled = false;
-    $("skillDelete").disabled = false;
-    $("skillFileUpload").disabled = false;
+    setSkillEnabled(true);
     renderSkillFiles();
     const roots = (s.roots || []).join(", ") || "?";
-    const desc = s.description ? ` · ${s.description}` : "";
-    setSkillMsg(`Loaded — roots: ${roots}${desc}`);
+    setSkillMsg(`Loaded — roots: ${roots}${s.description ? ` · ${s.description}` : ""}`);
   } catch (e) { setSkillMsg("Load failed: " + e.message, true); }
 }
-
 $("skillPicker").onchange = (e) => loadSkill(e.target.value);
 $("skillRefresh").onclick = refreshSkills;
-
 $("skillNew").onclick = async () => {
-  const name = (window.prompt("New skill name (lowercase, digits, _ or -)") || "").trim();
+  const name = await promptDialog("New skill", { label: "Skill name", hint: "Lowercase letters, digits, _ or - (max 41 chars). Becomes the folder name.", placeholder: "my-skill",
+    validate: (v) => !v ? "Name is required" : /^[a-z0-9][a-z0-9_-]{0,40}$/.test(v) ? null : "Use lowercase letters, digits, _ or -" });
   if (!name) return;
   const tpl = `---\nname: ${name}\ndescription: One-line summary that triggers activation\n---\n\n# ${name}\n\nWrite the SKILL.md body here. Claude Code auto-discovers skills on every task.\n`;
   try {
-    await api(`/api/skills/${encodeURIComponent(name)}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: tpl }),
-    });
+    await api(`/api/skills/${encodeURIComponent(name)}`, jsonOpts("PUT", { content: tpl }));
     await refreshSkills();
     $("skillPicker").value = name;
     await loadSkill(name);
+    toast(`Skill “${name}” created`, { kind: "success" });
   } catch (e) { setSkillMsg("Create failed: " + e.message, true); }
 };
-
 $("skillDelete").onclick = async () => {
   if (!activeSkill) return;
-  if (!confirm(`Delete skill "${activeSkill.name}" from all roots?`)) return;
+  if (!(await confirmDialog("Delete skill?", h("p", { class: "muted" }, "Delete ", h("b", null, activeSkill.name), " from all roots, including its reference files?"), { confirm: "Delete skill", danger: true }))) return;
   try {
     await api(`/api/skills/${encodeURIComponent(activeSkill.name)}`, { method: "DELETE" });
     activeSkill = null;
     $("skillPicker").value = "";
     $("skillContent").value = "";
-    $("skillSave").disabled = true;
-    $("skillDelete").disabled = true;
-    $("skillFileUpload").disabled = true;
+    setSkillEnabled(false);
     renderSkillFiles();
     await refreshSkills();
     setSkillMsg("Deleted.");
   } catch (e) { setSkillMsg("Delete failed: " + e.message, true); }
 };
-
 $("skillSave").onclick = async () => {
   if (!activeSkill) return;
   const content = $("skillContent").value;
+  if (!fieldError($("skillContent"), content.trim() ? "" : "SKILL.md can't be empty")) return;
   try {
-    await api(`/api/skills/${encodeURIComponent(activeSkill.name)}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content }),
-    });
+    await api(`/api/skills/${encodeURIComponent(activeSkill.name)}`, jsonOpts("PUT", { content }));
     await loadSkill(activeSkill.name);
     await refreshSkills();
-    setSkillMsg("Saved to " + (activeSkill.roots || []).join(", "));
+    setMsg("skillMsg", "Saved to " + (activeSkill.roots || []).join(", "), "ok");
+    toast("SKILL.md saved", { kind: "success" });
   } catch (e) { setSkillMsg("Save failed: " + e.message, true); }
 };
-
-// File drop / pick / upload
 const skillDrop = $("skillDrop");
 let skillStaged = null;   // File
-
 function setSkillStaged(file) {
   skillStaged = file || null;
-  skillDrop.textContent = file ? `Ready: ${file.name} (${file.size}b)` : "Drop a file here or click to pick — goes into the selected skill's folder";
+  $("skillDropText").textContent = file ? `Ready: ${file.name} (${formatBytes(file.size)})` : "Drop a file here or click to pick — goes into the selected skill's folder";
+  skillDrop.classList.toggle("on", !!file);
 }
-
 skillDrop.onclick = () => $("skillFilePicker").click();
-$("skillFilePicker").onchange = (e) => setSkillStaged(e.target.files[0]);
-skillDrop.ondragover = (e) => { e.preventDefault(); skillDrop.classList.add("over"); };
-skillDrop.ondragleave = () => skillDrop.classList.remove("over");
-skillDrop.ondrop = (e) => {
-  e.preventDefault();
-  skillDrop.classList.remove("over");
-  setSkillStaged(e.dataTransfer.files[0]);
-};
-
+skillDrop.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("skillFilePicker").click(); } };
+$("skillFilePicker").onchange = (e) => { setSkillStaged(e.target.files[0]); e.target.value = ""; };
+wireDrop(skillDrop, (fl) => setSkillStaged(fl[0]));
 $("skillFileUpload").onclick = async () => {
   if (!activeSkill) { setSkillUploadMsg("Select a skill first.", true); return; }
   if (!skillStaged) { setSkillUploadMsg("No file staged.", true); return; }
@@ -713,40 +680,39 @@ $("skillFileUpload").onclick = async () => {
   try {
     const buf = await skillStaged.arrayBuffer();
     const r = await fetch(base() + `/api/skills/${encodeURIComponent(activeSkill.name)}/files/${rel.split("/").map(encodeURIComponent).join("/")}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/octet-stream" },
-      body: buf,
+      method: "PUT", headers: { "Content-Type": "application/octet-stream" }, body: buf,
     });
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
     await loadSkill(activeSkill.name);
-    setSkillUploadMsg(`Uploaded ${rel}`);
+    setMsg("skillUploadMsg", `Uploaded ${rel}`, "ok");
     setSkillStaged(null);
     $("skillFileRel").value = "";
   } catch (e) { setSkillUploadMsg("Upload failed: " + e.message, true); }
 };
-
 async function deleteSkillFile(rel) {
   if (!activeSkill) return;
-  if (!confirm(`Delete ${rel} from "${activeSkill.name}"?`)) return;
+  if (!(await confirmDialog("Delete file?", h("p", { class: "muted" }, "Delete ", h("code", null, rel), " from ", h("b", null, activeSkill.name), "?"), { confirm: "Delete", danger: true }))) return;
   try {
     await api(`/api/skills/${encodeURIComponent(activeSkill.name)}/files/${rel.split("/").map(encodeURIComponent).join("/")}`, { method: "DELETE" });
     await loadSkill(activeSkill.name);
   } catch (e) { setSkillMsg("Delete file failed: " + e.message, true); }
 }
-window.deleteSkillFile = deleteSkillFile;
 
-refreshSkills();
-
-// ===== Routines =====
+// ── Routines ───────────────────────────────────────────────────────────
 let routineCache = [];
 let activeRoutine = null;
-
-function setRoutineMsg(text, isErr = false) {
-  const el = $("routineMsg");
-  el.textContent = text || "";
-  el.style.color = isErr ? "var(--err)" : "var(--muted)";
+function setRoutineMsg(text, isErr = false, ok = false) { setMsg("routineMsg", text, isErr ? "err" : ok ? "ok" : ""); }
+const routineTone = (s) => s === "active" ? "running" : s === "paused" ? "pending" : "cancelled";
+function fmtEvery(sec) {
+  sec = +sec || 0;
+  if (!sec) return "";
+  if (sec % 86400 === 0) return `every ${sec / 86400} day${sec === 86400 ? "" : "s"}`;
+  if (sec % 3600 === 0) return `every ${sec / 3600} hour${sec === 3600 ? "" : "s"}`;
+  if (sec % 60 === 0) return `every ${sec / 60} min`;
+  return `every ${sec} s`;
 }
-
+$("routineEverySec").addEventListener("input", () => { const v = +$("routineEverySec").value; $("routineEveryHint").textContent = v >= 60 ? fmtEvery(v) + " (min 60 s)" : "seconds between fires (min 60)"; });
+function timeCell(iso) { return iso ? h("span", { title: iso }, relTime(iso)) : "—"; }
 function renderRoutineForm() {
   const r = activeRoutine;
   const have = !!r;
@@ -755,60 +721,50 @@ function renderRoutineForm() {
   $("routinePrompt").value = have ? (r.prompt || "") : "";
   const sched = (have ? r.schedule : null) || { every_seconds: 3600 };
   $("routineEverySec").value = sched.every_seconds || 3600;
+  $("routineEverySec").dispatchEvent(new Event("input"));
   $("routineTaskTimeout").value = have ? (r.task_timeout_seconds || 1800) : 1800;
   $("routineNamespace").value = have ? (r.session_namespace || "") : "";
-  $("routineTaskType").value = have ? (r.task_type || "CLAUDE_CODE") : "CLAUDE_CODE";
-  $("routineIsLocal").checked = have ? !!r.is_local : false;
+  setEngine(routineEngine, have ? (r.task_type || "CLAUDE_CODE") : "CLAUDE_CODE", have ? !!r.is_local : false);
   $("routineOutputsOnly").checked = have ? !!r.outputs_only : false;
+  $("routineOutputsOnly").dispatchEvent(new Event("change"));
   $("routineSessionId").textContent = have ? r.session_id : "— (created on save)";
   $("routineNamespace").disabled = have;
+  ["routineName", "routinePrompt", "routineEverySec", "routineTaskTimeout"].forEach(id => fieldError($(id), ""));
 
-  $("routineNextFire").textContent = have ? (r.next_fire_at || "—") : "—";
-  $("routineLastFire").textContent = have ? (r.last_fire_at || "—") : "—";
-  const lc = have && r.last_completed_at ? r.last_completed_at : "—";
+  mount($("routineNextFire"), have ? timeCell(r.next_fire_at) : "—");
+  mount($("routineLastFire"), have ? timeCell(r.last_fire_at) : "—");
   const lcStatus = have ? (r.last_completion_status || "") : "";
-  $("routineLastCompleted").innerHTML = lcStatus
-    ? `${escapeHtml(lc)} <span class="pill ${lcStatus}">${escapeHtml(lcStatus)}</span>`
-    : escapeHtml(lc);
+  mount($("routineLastCompleted"), have && r.last_completed_at ? timeCell(r.last_completed_at) : "—", lcStatus ? [" ", badge(lcStatus, lcStatus)] : null);
   $("routineTotalRuns").textContent = have ? (r.total_runs || 0) : 0;
   $("routineSkipped").textContent = have ? (r.skipped_runs || 0) : 0;
 
   const status = $("routineStatus");
   if (have) {
     status.style.display = "";
-    status.textContent = r.status;
-    status.className = "pill " + (r.status === "active" ? "running"
-                                 : r.status === "paused" ? "pending"
-                                 : "cancelled");
-  } else {
-    status.style.display = "none";
-  }
+    status.replaceWith(Object.assign(badge(r.status, routineTone(r.status)), { id: "routineStatus" }));
+  } else status.style.display = "none";
   $("routinePause").disabled = !have || r.status !== "active";
   $("routineResume").disabled = !have || r.status === "active" || r.status === "cancelled";
   $("routineRunNow").disabled = !have || r.status !== "active";
   $("routineDelete").disabled = !have;
 }
-
 async function refreshRoutines() {
   try {
     const body = await api("/api/routines");
     routineCache = body.routines || [];
+    $("count-routines").textContent = routineCache.length;
     const sel = $("routinePicker");
     const keep = sel.value;
-    sel.innerHTML = '<option value="">— select a routine —</option>' +
-      routineCache.map(r => `<option value="${escapeHtml(r.routine_id)}">${escapeHtml(r.name)} (${r.status})</option>`).join("");
+    mount(sel, h("option", { value: "" }, routineCache.length ? "— select a routine —" : "— no routines yet —"),
+      routineCache.map(r => h("option", { value: r.routine_id }, `${r.name} (${r.status})`)));
     if (keep && routineCache.find(r => r.routine_id === keep)) {
       sel.value = keep;
       activeRoutine = routineCache.find(r => r.routine_id === keep);
-    } else {
-      activeRoutine = null;
-    }
+    } else activeRoutine = null;
     renderRoutineForm();
   } catch (e) { setRoutineMsg(e.message, true); }
 }
-
 $("routineRefresh").onclick = refreshRoutines;
-
 $("routinePicker").onchange = async (e) => {
   const id = e.target.value;
   if (!id) { activeRoutine = null; renderRoutineForm(); return; }
@@ -816,9 +772,9 @@ $("routinePicker").onchange = async (e) => {
     const body = await api("/api/routines/" + encodeURIComponent(id));
     activeRoutine = body.routine;
     renderRoutineForm();
+    setRoutineMsg("");
   } catch (err) { setRoutineMsg(err.message, true); }
 };
-
 $("routineNew").onclick = () => {
   activeRoutine = null;
   $("routinePicker").value = "";
@@ -826,7 +782,6 @@ $("routineNew").onclick = () => {
   $("routineName").focus();
   setRoutineMsg("New routine — fill in and click Save");
 };
-
 function readRoutineForm() {
   return {
     name: $("routineName").value.trim(),
@@ -840,48 +795,38 @@ function readRoutineForm() {
     session_namespace: $("routineNamespace").value.trim() || null,
   };
 }
-
+function validateRoutine(p) {
+  return fieldError($("routineName"), p.name ? "" : "Name is required")
+    && fieldError($("routinePrompt"), p.prompt.trim() ? "" : "Prompt is required")
+    && fieldError($("routineEverySec"), p.schedule.every_seconds >= 60 ? "" : "At least 60 seconds")
+    && fieldError($("routineTaskTimeout"), posInt($("routineTaskTimeout").value) ? "" : "Whole seconds, > 0");
+}
 $("routineSave").onclick = async () => {
   const payload = readRoutineForm();
-  setRoutineMsg("saving…");
+  if (!validateRoutine(payload)) return;
+  setRoutineMsg("Saving…");
   try {
     let saved;
     if (activeRoutine && activeRoutine.routine_id) {
-      const body = await api("/api/routines/" + encodeURIComponent(activeRoutine.routine_id), {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: payload.name,
-          description: payload.description,
-          prompt: payload.prompt,
-          schedule: payload.schedule,
-          task_timeout_seconds: payload.task_timeout_seconds,
-          task_type: payload.task_type,
-          is_local: payload.is_local,
-          outputs_only: payload.outputs_only,
-        }),
-      });
+      const body = await api("/api/routines/" + encodeURIComponent(activeRoutine.routine_id), jsonOpts("PATCH", {
+        name: payload.name, description: payload.description, prompt: payload.prompt, schedule: payload.schedule,
+        task_timeout_seconds: payload.task_timeout_seconds, task_type: payload.task_type, is_local: payload.is_local, outputs_only: payload.outputs_only,
+      }));
       saved = body.routine;
     } else {
-      const body = await api("/api/routines", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      const body = await api("/api/routines", jsonOpts("POST", payload));
       saved = body.routine;
     }
     await refreshRoutines();
     if (saved && saved.routine_id) {
       $("routinePicker").value = saved.routine_id;
       activeRoutine = routineCache.find(r => r.routine_id === saved.routine_id) || saved;
-    } else {
-      activeRoutine = null;
-    }
+    } else activeRoutine = null;
     renderRoutineForm();
-    setRoutineMsg("saved");
+    setRoutineMsg("Saved", false, true);
+    toast("Routine saved", { kind: "success" });
   } catch (e) { setRoutineMsg(e.message, true); }
 };
-
 $("routinePause").onclick = async () => {
   if (!activeRoutine) return;
   try {
@@ -889,10 +834,9 @@ $("routinePause").onclick = async () => {
     activeRoutine = body.routine;
     await refreshRoutines();
     renderRoutineForm();
-    setRoutineMsg("paused");
+    setRoutineMsg("Paused", false, true);
   } catch (e) { setRoutineMsg(e.message, true); }
 };
-
 $("routineResume").onclick = async () => {
   if (!activeRoutine) return;
   try {
@@ -900,51 +844,49 @@ $("routineResume").onclick = async () => {
     activeRoutine = body.routine;
     await refreshRoutines();
     renderRoutineForm();
-    setRoutineMsg("resumed");
+    setRoutineMsg("Resumed", false, true);
   } catch (e) { setRoutineMsg(e.message, true); }
 };
-
 $("routineRunNow").onclick = async () => {
   if (!activeRoutine) return;
   try {
     const body = await api("/api/routines/" + encodeURIComponent(activeRoutine.routine_id) + "/run-now", { method: "POST" });
     if (body.skipped) {
-      setRoutineMsg("skipped (" + (body.error || "previous task still running") + ")");
+      setRoutineMsg("Skipped (" + (body.error || "previous task still running") + ")");
     } else {
-      setRoutineMsg("fired → task " + (body.task_id || ""));
+      setRoutineMsg("Fired → task " + (body.task_id || ""), false, true);
+      toast("Routine fired", { kind: "success" });
       refreshTasks();
     }
   } catch (e) { setRoutineMsg(e.message, true); }
 };
-
 $("routineDelete").onclick = async () => {
   if (!activeRoutine) return;
-  const dropSession = confirm(
-    `Delete routine "${activeRoutine.name}"?\n\n` +
-    `OK = also drop its session folder (history lost)\n` +
-    `Cancel = keep session folder for forensics`
-  );
-  if (!dropSession) {
-    if (!confirm(`Delete routine but keep session folder?`)) return;
-  }
+  const choice = await confirmDialog("Delete routine?",
+    h("div", { class: "col" }, h("p", { class: "muted", style: { margin: 0 } }, "Delete ", h("b", null, activeRoutine.name), "?"),
+      h("p", { class: "field-hint", style: { margin: 0 } }, "Its session folder holds the task history. Keep it for forensics, or delete it too.")),
+    { confirm: "Delete + session folder", danger: true, extra: { label: "Delete, keep session", value: "keep", kind: "danger" } });
+  if (!choice) return;
+  const dropSession = choice === true;
   try {
-    await api(
-      "/api/routines/" + encodeURIComponent(activeRoutine.routine_id)
-      + (dropSession ? "?delete_session=true" : ""),
-      { method: "DELETE" }
-    );
+    await api("/api/routines/" + encodeURIComponent(activeRoutine.routine_id) + (dropSession ? "?delete_session=true" : ""), { method: "DELETE" });
     activeRoutine = null;
     await refreshRoutines();
     renderRoutineForm();
-    setRoutineMsg("deleted");
+    setRoutineMsg("Deleted", false, true);
   } catch (e) { setRoutineMsg(e.message, true); }
 };
-
-// Poll the active routine every 5s while the Routines tab is visible
-// so counters / next_fire_at stay live.
+// Poll the active routine every 5s while the Routines tab is visible so counters stay live.
 setInterval(async () => {
   if ($("tabRoutines").style.display === "none") return;
   if (!activeRoutine || !activeRoutine.routine_id) return;
+  if (document.activeElement && document.activeElement.closest && document.activeElement.closest("#tabRoutines [data-submit]")) {
+    // Don't clobber a half-edited form: refresh counters only.
+    try { const body = await api("/api/routines/" + encodeURIComponent(activeRoutine.routine_id)); const r = body.routine;
+      mount($("routineNextFire"), timeCell(r.next_fire_at)); mount($("routineLastFire"), timeCell(r.last_fire_at));
+      $("routineTotalRuns").textContent = r.total_runs || 0; $("routineSkipped").textContent = r.skipped_runs || 0; } catch { /* transient */ }
+    return;
+  }
   try {
     const body = await api("/api/routines/" + encodeURIComponent(activeRoutine.routine_id));
     activeRoutine = body.routine;
@@ -952,99 +894,84 @@ setInterval(async () => {
   } catch (e) { /* silent — survives transient errors */ }
 }, 5000);
 
-// ===== By-routine task browser (right-panel tab) =====
+// ── By-routine task browser ────────────────────────────────────────────
 const expandedRoutines = new Set();
-
 $("byRoutineRefresh").onclick = () => refreshByRoutine(true);
-
 async function refreshByRoutine(force = false) {
+  const box = $("byRoutineList");
+  if (!box.childNodes.length) mount(box, skeleton(3, "sk-block"));
   try {
     const body = await api("/api/routines");
     const list = body.routines || [];
+    $("count-routines").textContent = list.length;
     if (!list.length) {
-      $("byRoutineList").innerHTML = '<span class="muted">No routines yet. Create one on the left.</span>';
+      mount(box, emptyState("clock", "No routines yet", "Create one in the Routines tab on the left.", btn("New routine", { icon: "plus", kind: "ghost", size: "sm", onClick: () => { showLeftTab("routines"); $("routineNew").click(); } })));
       return;
     }
-    $("byRoutineList").innerHTML = list.map(r => {
+    mount(box, list.map(r => {
       const open = expandedRoutines.has(r.routine_id);
-      const statusCls = r.status === "active" ? "running"
-                      : r.status === "paused" ? "pending"
-                      : "cancelled";
-      return `
-        <div class="task" style="cursor:default" data-rid="${escapeHtml(r.routine_id)}">
-          <div class="routine-head" style="display:flex;gap:8px;align-items:center;cursor:pointer" onclick="toggleRoutineGroup('${escapeHtml(r.routine_id)}')">
-            <span style="width:12px;display:inline-block">${open ? "▼" : "▶"}</span>
-            ${badge(r.status, statusCls)}
-            <span style="font-weight:600">${escapeHtml(r.name || r.routine_id.slice(0,8))}</span>
-            <span class="muted">· runs=${r.total_runs || 0} · skipped=${r.skipped_runs || 0}</span>
-            <span class="grow"></span>
-            <span class="muted" style="font-size:11px">next: ${escapeHtml(r.next_fire_at || "—")}</span>
-          </div>
-          <div class="routine-runs" id="runs-${escapeHtml(r.routine_id)}" style="margin-top:8px;display:${open ? "" : "none"}">
-            ${open ? '<span class="muted">Loading…</span>' : ""}
-          </div>
-        </div>`;
-    }).join("");
+      return h("div", { class: "rgroup" + (open ? " open" : ""), "data-rid": r.routine_id },
+        h("button", { type: "button", class: "rgroup-head", "aria-expanded": String(open), onclick: () => toggleRoutineGroup(r.routine_id) },
+          icon("chevronRight", "chev"), badge(r.status, routineTone(r.status)), h("b", { class: "ellipsis" }, r.name || r.routine_id.slice(0, 8)),
+          h("span", { class: "faint", style: { fontSize: "12px" } }, `${ENGINE_LABELS[r.task_type] || r.task_type || ""} · ${fmtEvery((r.schedule || {}).every_seconds)}`),
+          h("span", { class: "grow" }),
+          h("span", { class: "faint", style: { fontSize: "11.5px" } }, `runs ${r.total_runs || 0} · skipped ${r.skipped_runs || 0} · next `, r.next_fire_at ? timeCell(r.next_fire_at) : "—")),
+        h("div", { class: "rgroup-runs", id: "runs-" + r.routine_id, style: { display: open ? "" : "none" } }));
+    }));
     expandedRoutines.forEach(rid => loadRoutineRuns(rid));
-  } catch (e) {
-    $("byRoutineList").innerHTML = `<span class="muted">${escapeHtml(e.message)}</span>`;
-  }
+  } catch (e) { mount(box, errorBox(e.message, () => refreshByRoutine(true))); }
 }
-
-window.toggleRoutineGroup = (rid) => {
-  const head = document.querySelector(`[data-rid="${rid}"] .routine-head span`);
+function toggleRoutineGroup(rid) {
+  const grp = document.querySelector(`.rgroup[data-rid="${CSS.escape(rid)}"]`);
   const box = $("runs-" + rid);
-  if (!box) return;
+  if (!box || !grp) return;
   if (expandedRoutines.has(rid)) {
-    expandedRoutines.delete(rid);
-    box.style.display = "none";
-    if (head) head.textContent = "▶";
+    expandedRoutines.delete(rid); box.style.display = "none"; grp.classList.remove("open");
   } else {
-    expandedRoutines.add(rid);
-    box.style.display = "";
-    if (head) head.textContent = "▼";
+    expandedRoutines.add(rid); box.style.display = ""; grp.classList.add("open");
     loadRoutineRuns(rid);
   }
-};
-
+  grp.querySelector(".rgroup-head").setAttribute("aria-expanded", String(expandedRoutines.has(rid)));
+}
 async function loadRoutineRuns(rid) {
   const box = $("runs-" + rid);
   if (!box) return;
-  box.innerHTML = '<span class="muted">Loading…</span>';
+  if (!box.childNodes.length) mount(box, h("div", { style: { padding: "8px 12px" } }, skeleton(2)));
   try {
     const body = await api("/api/routines/" + encodeURIComponent(rid) + "/runs?limit=50");
     const runs = body.runs || [];
-    if (!runs.length) {
-      box.innerHTML = '<span class="muted">No runs yet.</span>';
-      return;
-    }
-    box.innerHTML = runs.map(t => `
-      <div class="task ${t.task_id === activeTaskId ? 'active' : ''}" style="margin-left:18px"
-           onclick="openRunFromGroup('${t.task_id}')">
-        ${badge(t.status, t.status)}
-        <span style="font-family:var(--mono)">${t.task_id.slice(0,8)}…</span>
-        <span class="muted"> · ${fmtTime(t.created_at)}</span>
-        ${t.metadata && t.metadata.fire_source ? `<span class="muted"> · ${escapeHtml(t.metadata.fire_source)}</span>` : ""}
-      </div>
-    `).join("");
-  } catch (e) {
-    box.innerHTML = `<span class="muted">${escapeHtml(e.message)}</span>`;
-  }
+    if (!runs.length) { mount(box, h("div", { class: "field-hint", style: { padding: "8px 12px 8px 34px" } }, "No runs yet.")); return; }
+    mount(box, runs.map(t => h("div", { class: "rrun" + (t.task_id === activeTaskId ? " on" : ""), "data-tid": t.task_id, tabindex: "0", role: "button",
+      onclick: () => openRunFromGroup(t.task_id), onkeydown: (e) => { if (e.key === "Enter") openRunFromGroup(t.task_id); } },
+      badge(t.status, t.status), h("span", { class: "mono" }, t.task_id.slice(0, 8) + "…"), h("span", { class: "faint" }, fmtTime(t.created_at)),
+      t.metadata && t.metadata.fire_source ? h("span", { class: "pill" }, t.metadata.fire_source) : null)));
+  } catch (e) { mount(box, h("div", { style: { padding: "8px 12px" } }, errorBox(e.message))); }
 }
-
-window.openRunFromGroup = (tid) => {
-  document.querySelectorAll('.tabs .tab[data-rtab]').forEach(b => {
-    b.classList.toggle("active", b.dataset.rtab === "active");
-  });
-  $("rtabActive").style.display = "";
-  $("rtabByRoutine").style.display = "none";
-  watchTask(tid);
-};
-
+function openRunFromGroup(tid) { showRightTab("active"); watchTask(tid); }
 setInterval(() => {
   if ($("rtabByRoutine").style.display === "none") return;
   refreshByRoutine();
 }, 5000);
+
+// ── Shortcuts ──────────────────────────────────────────────────────────
+stdShortcuts();
+addShortcut({ group: "Task Mode", desc: "Filter tasks", keys: ["/"], match: e => e.key === "/" && !e.ctrlKey, run: () => { $("task-search").focus(); $("task-search").select(); } });
+addShortcut({ group: "Task Mode", desc: "New task (focus prompt)", keys: ["N"], match: e => e.key.toLowerCase() === "n" && !e.ctrlKey && !e.altKey && !e.metaKey, run: focusNewTask });
+addShortcut({ group: "Task Mode", desc: "Submit task / save routine / save skill", keys: ["Ctrl", "Enter"], match: () => false, run() {} });
+addShortcut({ group: "Task Mode", desc: "Save skill or routine", keys: ["Ctrl", "S"], whileTyping: true, match: e => (e.ctrlKey || e.metaKey) && e.code === "KeyS",
+  run: () => { if ($("tabSkills").style.display !== "none" && !$("skillSave").disabled) $("skillSave").click(); else if ($("tabRoutines").style.display !== "none") $("routineSave").click(); } });
+addShortcut({ group: "Task Mode", desc: "Session / Skills / Routines tab", keys: ["1", "2", "3"], match: e => ["1", "2", "3"].includes(e.key) && !e.ctrlKey && !e.altKey && !e.metaKey,
+  run: (e) => showLeftTab(["session", "skills", "routines"][+e.key - 1]) });
+
+// ── Boot ───────────────────────────────────────────────────────────────
+loadTaskTypes();
+renderActiveEmpty();
+renderTaskList();
+refreshSession();
+refreshTasks();
+setInterval(refreshTasks, 5000);
+refreshSkills();
+refreshRoutines();
 </script>
 </body>
 </html>

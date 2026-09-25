@@ -287,64 +287,18 @@ export async function agentsDialog() {
     } }] });
 }
 
-// ── Engines & integrations ───────────────────────────────────────────────
+// ── Preferences (per browser) ────────────────────────────────────────────
+// Engine defaults, models, local helpers and MCP registration live in
+// telecode's Settings window → TeleDesign (the one writer of settings.json).
+// Each chat still picks its own engine / model / local / effort in the composer.
 export async function settingsDialog() {
-  const engHost = h("div", null, h("div", { class: "sk sk-line" }), h("div", { class: "sk sk-line" }));
-  const mcpHost = h("div");
   const author = h("input", { class: "input", value: prefs.get("author", "You"), style: { width: "200px" } });
   author.addEventListener("change", () => prefs.set("author", author.value.trim() || "You"));
   const theme = h("select", { class: "select", style: { width: "160px" } }, [["system", "Match system"], ["dark", "Dark"], ["light", "Light"]].map(([v, l]) => h("option", { value: v, selected: prefs.get("theme", "system") === v || null }, l)));
   theme.addEventListener("change", () => { prefs.set("theme", theme.value); applyTheme(); });
-  async function drawEngines(force) {
-    mount(engHost, h("div", { class: "sk sk-line" }));
-    const e = await loadEngines(force);
-    if (!e) { mount(engHost, h("p", { class: "muted", style: { fontSize: "12.5px" } }, "Engine status isn't available on this server yet.")); return; }
-    mount(engHost, (e.engines || []).map((x) => h("div", { class: "eng-row" }, h("span", { class: "dot " + (x.available ? "ok" : "err") }), h("span", { class: "nm" }, ENG[x.id] || x.id),
-      h("span", { class: "v" }, x.available ? x.version || "installed" : "not found on PATH"))),
-      h("div", { class: "eng-row" }, h("span", { class: "dot " + (e.local?.available ? "ok" : "") }), h("span", { class: "nm" }, "Local model (proxy)"), h("span", { class: "v" }, e.local?.available ? e.local.model || "running" : "not running")));
-  }
-  async function drawMcp() {
-    const st = await tryApi("GET", "/api/design/mcp/status", undefined, { feature: "mcp" }).catch(() => null);
-    if (!st) { mount(mcpHost, h("p", { class: "muted", style: { fontSize: "12.5px", margin: 0 } }, "One-click MCP registration isn't available on this server yet. Manually: ", h("code", { class: "mono" }, "claude mcp add telecode --transport streamable-http --url http://127.0.0.1:1236/mcp"))); return; }
-    const raw = st.clients || [];
-    const clients = Array.isArray(raw) ? raw : Object.entries(raw).map(([client, v]) => ({ client, ...v }));
-    const srv = st.server || {};
-    mount(mcpHost,
-      srv.url ? h("div", { class: "faint", style: { fontSize: "11.5px", marginBottom: "4px" } }, "Server ", h("span", { class: "mono" }, `${srv.name || "telecode"} at ${srv.url}`),
-        srv.enabled === false ? h("span", { class: "pill warn", style: { marginLeft: "6px" } }, "mcp_server.enabled is off") : null) : null,
-      clients.map((info) => {
-        const c = info.client;
-        const label = info.label || ENG[c] || c;
-        const state = !info.available ? "not installed" : info.matches ? "registered" : info.registered ? "registered elsewhere" : "not registered";
-        const reg = async (force) => {
-          let r;
-          try { r = await api("POST", "/api/design/mcp/register", { client: c, force: !!force }); }
-          catch (e) {
-            const b = e.body || {};
-            if (b.conflict && !force) { if (await confirmDialog("Replace the existing entry?", b.error || "An MCP server with this name is already configured.", { confirm: "Replace" })) return reg(true); return; }
-            toastError(e); return;
-          }
-          if (r.conflict && !force) { if (await confirmDialog("Replace the existing entry?", r.error || "An MCP server with this name is already configured.", { confirm: "Replace" })) return reg(true); return; }
-          toast(r.already ? `${label} was already registered` : `Registered with ${label}`, { kind: "success" });
-          drawMcp();
-        };
-        const preview = async () => {
-          const r = await api("POST", "/api/design/mcp/register", { client: c, dry_run: true }).catch((e) => ({ error: e.message, ...(e.body || {}) }));
-          const cmds = (r.commands || []).map((a) => a.join(" ")).join("\n") || r.error || (r.already ? "Already registered; nothing to run." : "Nothing to run.");
-          modal({ title: `Commands for ${label}`, width: "560px", body: h("pre", { class: "md-code", style: { whiteSpace: "pre-wrap" } }, cmds) });
-        };
-        return h("div", { class: "eng-row" }, h("span", { class: "dot " + (info.matches ? "ok" : info.registered ? "warn" : "") }), h("span", { class: "nm" }, label),
-          h("span", { class: "v" }, state),
-          btn("", { kind: "quiet", icon: "terminal", cls: "sm", title: "Show the commands (dry run)", disabled: !info.available, onClick: preview }),
-          btn(info.matches ? "Re-register" : "Register", { cls: "sm", disabled: !info.available, onClick: () => reg(false) }));
-      }));
-  }
-  modal({ title: "Engines and integrations", width: "560px",
+  modal({ title: "Preferences", width: "460px",
     body: h("div", null,
-      h("div", { class: "section-h" }, h("h3", null, "Engines"), h("span", { class: "grow" }), btn("Re-check connection", { icon: "refresh", cls: "sm", onClick: () => drawEngines(true) })), engHost,
-      h("div", { class: "section-h", style: { marginTop: "20px" } }, h("h3", null, "Use TeleDesign from other CLIs")),
-      h("p", { class: "muted", style: { fontSize: "12px", marginTop: "-6px" } }, "Registers telecode's MCP server so the design_* tools and the /design prompt work there."), mcpHost,
-      h("div", { class: "section-h", style: { marginTop: "20px" } }, h("h3", null, "You")),
-      h("div", { class: "row", style: { gap: "18px" } }, field("Name on comments", author), field("Theme", theme))) });
-  drawEngines(); drawMcp();
+      h("div", { class: "row", style: { gap: "18px" } }, field("Name on comments", author), field("Theme", theme)),
+      h("p", { class: "faint", style: { fontSize: "12px", marginTop: "16px", marginBottom: 0 } },
+        "Default engine, cloud or local, default models and MCP registration are in telecode's Settings window → TeleDesign (tray icon → Open Settings Window).")) });
 }

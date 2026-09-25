@@ -6649,7 +6649,187 @@ def _docgraph(window) -> QWidget:
     return build_docgraph_tabs(window)
 
 
+# ══════════════════════════════════════════════════════════════════════
+# TeleDesign
+# ══════════════════════════════════════════════════════════════════════
+
+_TD_ENGINES = [("Claude Code", "claude_code"), ("Codex", "codex"), ("Antigravity", "antigravity")]
+
+
+def _teledesign(window) -> QWidget:
+    """Defaults for TeleDesign chats (per-chat pickers in the web UI override
+    them), post-turn helpers, the preview origin, and MCP registration for the
+    CLIs so they can drive designs with the design_* tools."""
+    import shutil
+    import threading
+    from PySide6.QtCore import QObject, Signal as _Signal
+
+    scroll, _, layout = _page()
+
+    class _Bridge(QObject):
+        models = _Signal(str, list)        # engine id | "local", [(id, label)]
+        reg = _Signal(str, dict)           # client, status/result
+
+    bridge = _Bridge(scroll)
+    scroll._td_bridge = bridge  # keep the QObject alive with the page
+
+    # ── Defaults ─────────────────────────────────────────────────────
+    card, body = _card("New chat defaults",
+                       "What a new TeleDesign chat starts with. Every chat can change engine, model, "
+                       "local mode and effort from its composer; switching engine starts a fresh session.")
+    body.addWidget(_enum_row("design.default_engine", "Engine", _TD_ENGINES,
+                             "The CLI that does the designing.", max_width=260))
+    body.addWidget(_enum_row("design.default_is_local", "Run on",
+                             [("Cloud (the engine's own provider)", False),
+                              ("Local model (llama.cpp through the proxy)", True)],
+                             "Local routes Claude Code → /v1/messages, Codex → /v1/responses, "
+                             "Antigravity → the Gemini endpoint, all on your llama.cpp model.",
+                             max_width=360))
+
+    body.addWidget(_section_header("Default model"))
+    combos: dict[str, QComboBox] = {}
+
+    def _model_row(key: str, label: str, help_text: str) -> QWidget:
+        path = f"design.models.{key}"
+        cb = QComboBox()
+        cb.setEditable(True)
+        cb.setMinimumWidth(300)
+        cb.setMaximumWidth(420)
+        cb.lineEdit().setPlaceholderText("CLI default")
+        cur = str(get_path(read_settings(), path, "") or "")
+        cb.addItem("", "")
+        if cur:
+            cb.addItem(cur, cur)
+        cb.setCurrentText(cur)
+
+        def _commit() -> None:
+            val = cb.currentText().strip()
+            if val and not re.match(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,99}$", val):
+                cb.setStyleSheet(f"border: 1px solid {ERR};")
+                return
+            cb.setStyleSheet("")
+            if val != str(get_path(read_settings(), path, "") or ""):
+                patch_settings(path, val or None)
+        cb.lineEdit().editingFinished.connect(_commit)
+        cb.activated.connect(lambda _i: _commit())
+        combos[key] = cb
+        return _row(row_label(label, help_text, path), _wrap_align(cb, Qt.AlignmentFlag.AlignLeft))
+
+    body.addWidget(_model_row("claude_code", "Claude Code", "Alias (fable / opus / sonnet / haiku) or a full model name."))
+    body.addWidget(_model_row("codex", "Codex", "From `codex debug models`."))
+    body.addWidget(_model_row("antigravity", "Antigravity", "From `agy models`."))
+    body.addWidget(_model_row("local", "Local", "A model from llama.cpp → Models. Empty = the loaded / last active one."))
+    layout.addWidget(card)
+
+    def _fill(key: str, items: list) -> None:
+        cb = combos.get(key)
+        if not cb:
+            return
+        cur = cb.currentText()
+        cb.blockSignals(True)
+        cb.clear()
+        cb.addItem("", "")
+        for mid, lab in items:
+            cb.addItem(mid if lab == mid else f"{mid}", mid)
+            cb.setItemData(cb.count() - 1, lab, Qt.ItemDataRole.ToolTipRole)
+        if cur and cb.findText(cur) < 0:
+            cb.addItem(cur, cur)
+        cb.setCurrentText(cur)
+        cb.blockSignals(False)
+    bridge.models.connect(_fill)
+
+    def _load_models() -> None:
+        try:
+            from services.design import generate as _gen
+            for key, binname in (("claude_code", "claude"), ("codex", "codex"), ("antigravity", "agy")):
+                path = shutil.which(binname)
+                items = [(m["id"], m["label"]) for m in _gen._models_for(key, path)] if path else []
+                bridge.models.emit(key, items)
+            llama = get_path(read_settings(), "llamacpp.models", {}) or {}
+            bridge.models.emit("local", [(m, m) for m in llama])
+        except Exception as exc:  # the tray must never die on a CLI probe
+            logging.getLogger("telecode.tray").warning("teledesign: model probe failed: %s", exc)
+    threading.Thread(target=_load_models, daemon=True).start()
+
+    # ── Behaviour ────────────────────────────────────────────────────
+    card, body = _card("After each turn")
+    body.addWidget(_toggle_row("design.verifier.enabled", "Verifier",
+                               "Render every changed page in headless Edge and report console errors, overflow, "
+                               "tiny text and small hit targets.", default=True))
+    body.addWidget(_toggle_row("design.local_helpers", "Use the local model for helpers",
+                               "Lets the verifier's review pass, auto-title and jury critics call the local model. "
+                               "Off by default: with it off, a cloud turn never loads llama.cpp.", default=False))
+    body.addWidget(_toggle_row("design.telegram_notify", "Telegram notification",
+                               "Post a message with the thumbnail when a turn started from the web UI finishes."))
+    layout.addWidget(card)
+
+    card, body = _card("Preview & sharing")
+    body.addWidget(_number_row("design.preview_port", "Preview port", 1024, 65535, 1, 0,
+                               "Separate origin for generated pages, so they can never call the API. Restart required."))
+    body.addWidget(_toggle_row("design.share.enabled", "Share links",
+                               "Allow view / comment / edit links. They only reach other machines if the proxy is bound beyond 127.0.0.1."))
+    layout.addWidget(card)
+
+    # ── MCP registration ─────────────────────────────────────────────
+    card, body = _card("Use TeleDesign from other CLIs",
+                       "Registers telecode's MCP server (mcp_server.* — enable it in MCP) so the design_* tools "
+                       "and the /design prompt work inside these CLIs.")
+    rows: dict[str, tuple[QLabel, QPushButton]] = {}
+    from services.design import mcp_registration as _reg
+    for client, info in _reg.CLIENTS.items():
+        state = QLabel("checking…")
+        state.setStyleSheet(f"color: {FG_MUTE};")
+        btn = QPushButton("Register")
+        btn.setEnabled(False)
+
+        def _do(_=False, c=client, b=btn, s=state) -> None:
+            b.setEnabled(False)
+            s.setText("registering…")
+            threading.Thread(target=lambda: bridge.reg.emit(c, _reg.register_sync(c, force=True)),
+                             daemon=True).start()
+        btn.clicked.connect(_do)
+        right = QWidget()
+        rl = QHBoxLayout(right)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.addWidget(state)
+        rl.addStretch(1)
+        rl.addWidget(btn)
+        body.addWidget(_row(row_label(info["label"], "", ""), right))
+        rows[client] = (state, btn)
+    layout.addWidget(card)
+    layout.addStretch(1)
+
+    def _show(client: str, res: dict) -> None:
+        state, btn = rows[client]
+        if res.get("error") and not res.get("registered"):
+            state.setText(f"failed: {str(res['error'])[:80]}")
+            state.setStyleSheet(f"color: {ERR};")
+            btn.setEnabled(True)
+            return
+        if not res.get("available", True) and not res.get("binary"):
+            state.setText("not installed")
+            state.setStyleSheet(f"color: {FG_MUTE};")
+            btn.setEnabled(False)
+            return
+        ok = res.get("matches") or res.get("registered") or res.get("ok")
+        state.setText("registered" if ok else "not registered")
+        state.setStyleSheet(f"color: {OK if ok else FG_DIM};")
+        btn.setText("Re-register" if ok else "Register")
+        btn.setEnabled(True)
+    bridge.reg.connect(_show)
+
+    def _probe_all() -> None:
+        for c in _reg.CLIENTS:
+            try:
+                bridge.reg.emit(c, _reg.client_status(c))
+            except Exception as exc:
+                bridge.reg.emit(c, {"error": str(exc)})
+    threading.Thread(target=_probe_all, daemon=True).start()
+    return scroll
+
+
 _BUILDERS: dict[str, Callable[[Any], QWidget]] = {
+    "teledesign": _teledesign,
     "status":   _status,
     "llama":    _llama,
     "models":   _models,

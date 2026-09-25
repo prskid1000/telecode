@@ -217,7 +217,7 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
         webbrowser.open(f"http://{host}:{port}{path}")
 
     open_ui_action = QAction("Open Agent Manager", menu)
-    open_ui_action.triggered.connect(lambda: _open_proxy_page("/ui"))
+    open_ui_action.triggered.connect(lambda: _open_proxy_page("/team"))
     menu.addAction(open_ui_action)
 
     open_design_action = QAction("Open TeleDesign", menu)

@@ -1,1670 +1,1386 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8" />
-<title>Telecode-Team</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'><path d='M13 10V3L4 14h7v7l9-11h-7z'/></svg>">
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Team Mode · Telecode</title>
+<meta name="description" content="Telecode Team Mode: workspaces, agents and their internal files, jobs, pipelines, runs and heartbeat." />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' rx='6' fill='%237cc4ff'/><path d='M13 4L6 13.5h5L10 20l7-9.5h-5z' fill='%23052034'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" />
+<link rel="stylesheet" href="/shared/appnav.css" />
+<link rel="stylesheet" href="/shared/manager.css" />
+<script>
+  // Apply the saved theme (shared with TeleDesign) before first paint.
+  try {
+    var p = JSON.parse(localStorage.getItem("td:theme") || '"system"');
+    document.documentElement.dataset.theme = p === "system" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : p;
+  } catch (e) {}
+</script>
 <style>
-  :root {
-    --bg: #0f1115; --panel: #171a21; --panel2: #1f232c; --border: #2a2f3a;
-    --text: #e6e8eb; --muted: #9aa3b2; --accent: #7cc4ff; --accent-dark: #052034; --ok: #4ade80;
-    --warn: #fbbf24; --err: #f87171; --mono: ui-monospace, Menlo, Consolas, monospace;
-    --sidebar-w: 280px;
+  /* Team Mode — page-specific pieces (kit: /shared/manager.css) */
+  .overview { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .ov-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .ov-card .top { display: flex; align-items: center; gap: 10px; }
+  .ov-card .badge { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+  .ov-card .badge .ic { width: 17px; height: 17px; }
+  .ov-card .n { font-size: 22px; font-weight: 650; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .ov-card p { margin: 0; color: var(--muted); font-size: 12.5px; flex: 1; }
+  .steps-how { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; }
+  .steps-how > div { padding: 12px 14px; display: flex; gap: 10px; align-items: flex-start; border-right: 1px solid var(--border); }
+  .steps-how > div:last-child { border-right: 0; }
+  .steps-how b { width: 22px; height: 22px; border-radius: 50%; background: var(--panel2); border: 1px solid var(--border); display: grid; place-items: center; font-size: 11px; flex-shrink: 0; }
+  .steps-how div div { font-size: 12.5px; color: var(--muted); } .steps-how div div strong { color: var(--text); display: block; font-weight: 600; margin-bottom: 2px; }
+  .runrow { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--border); cursor: pointer; }
+  .runrow:last-child { border-bottom: 0; } .runrow:hover { background: var(--hover); }
+  .runrow .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+
+  /* Internal files editor */
+  .ifiles .tabs { padding: 0 8px; }
+  .ifiles textarea { border: 0; border-radius: 0; background: var(--well); min-height: 340px; height: 44vh; resize: vertical; box-shadow: none !important; padding: 12px 14px; }
+  .ifiles .foot { border-top: 1px solid var(--border); padding: 9px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .hb-result { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+  .hb-result .line { font: 11.5px var(--mono); display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .hb-result .line.bad { color: var(--err); } .hb-result .line.good { color: var(--text); }
+  .hb-result .line .ic { width: 12px; height: 12px; align-self: center; }
+
+  /* Pipeline lanes */
+  .mode-pick { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .mode-opt { border: 1px solid var(--border); border-radius: 9px; background: var(--panel2); padding: 9px 10px; cursor: pointer; text-align: left; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .mode-opt:hover { border-color: var(--border-strong); }
+  .mode-opt.on { border-color: var(--accent); background: var(--accent-soft); }
+  .mode-opt:disabled { cursor: not-allowed; opacity: .6; }
+  .mode-opt b { font-size: 12.5px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .mode-opt b .ic { width: 14px; height: 14px; color: var(--faint); } .mode-opt.on b .ic { color: var(--accent); }
+  .mode-opt span { font-size: 11.5px; color: var(--faint); }
+  .lanes { display: flex; flex-direction: column; }
+  .lane { border: 1px solid var(--border); border-radius: 12px; background: var(--panel2); }
+  .lane.parallel { border-color: var(--accent-line); background: linear-gradient(0deg, var(--accent-soft), var(--accent-soft)), var(--panel2); }
+  .lane-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 12px; }
+  .lane-head .lbl { font-weight: 600; font-size: 12.5px; display: flex; align-items: center; gap: 7px; }
+  .lane-head .num { width: 20px; height: 20px; border-radius: 6px; background: var(--raised); border: 1px solid var(--border-strong); display: grid; place-items: center; font: 600 11px var(--mono); }
+  .lane-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px; padding: 0 10px 10px; }
+  .connector { display: flex; align-items: center; justify-content: center; gap: 8px; height: 34px; color: var(--faint); font-size: 11.5px; position: relative; }
+  .connector::before { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--border-strong); }
+  .connector > span { position: relative; background: var(--bg); padding: 1px 8px; border-radius: 99px; border: 1px solid var(--border); display: inline-flex; align-items: center; gap: 5px; }
+  .connector > span.feeds { color: var(--accent); border-color: var(--accent-line); background: var(--panel); }
+  .connector .ic { width: 12px; height: 12px; }
+  .step { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px 12px; min-width: 0; }
+  .step-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; min-width: 0; }
+  .step-head .t { font: 600 11.5px var(--mono); color: var(--faint); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .step .field { margin-bottom: 8px; }
+  .step textarea { min-height: 58px; }
+  .add-step { margin-top: 12px; }
+
+  .team-engine .select { flex: 1.1; } .team-engine .input { flex: 1; min-width: 0; }
+  .eng-tag { font: 11px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
+  details.adv { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 4px; }
+  details.adv summary { cursor: pointer; color: var(--muted); font-size: 12.5px; font-weight: 500; list-style: none; display: inline-flex; align-items: center; gap: 5px; }
+  details.adv summary::-webkit-details-marker { display: none; }
+  details.adv summary .ic { width: 13px; height: 13px; transition: transform .12s; }
+  details.adv[open] summary .ic { transform: rotate(90deg); }
+
+  /* Runs */
+  .run-chips { display: flex; gap: 8px; overflow-x: auto; padding: 12px 14px; border-bottom: 1px solid var(--border); scrollbar-width: thin; }
+  .run-chip { flex-shrink: 0; min-width: 150px; border: 1px solid var(--border); border-radius: 9px; padding: 7px 9px; background: var(--panel2); cursor: pointer; display: flex; flex-direction: column; gap: 5px; text-align: left; }
+  .run-chip:hover { border-color: var(--border-strong); }
+  .run-chip.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .run-chip .l1 { display: flex; gap: 6px; align-items: center; font-size: 11.5px; }
+  .run-chip .l2 { display: flex; gap: 3px; align-items: center; }
+  .run-chip .sd { width: 14px; height: 5px; border-radius: 3px; background: var(--border-strong); }
+  .run-chip .sd.ok { background: var(--ok); } .run-chip .sd.err { background: var(--err); } .run-chip .sd.accent { background: var(--accent); } .run-chip .sd.warn { background: var(--warn); }
+  .monitor { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+  .mon-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .stepblock { border: 1px solid var(--border); border-radius: 11px; background: var(--panel); overflow: hidden; }
+  .stepblock > .sb-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; cursor: pointer; border: 0; background: none; width: 100%; text-align: left; }
+  .stepblock > .sb-head:hover { background: var(--hover); }
+  .stepblock > .sb-head .chev { transition: transform .12s; width: 14px; height: 14px; color: var(--faint); }
+  .stepblock.open > .sb-head .chev { transform: rotate(90deg); }
+  .stepblock .sb-body { display: none; padding: 0 12px 12px; flex-direction: column; gap: 10px; }
+  .stepblock.open .sb-body { display: flex; }
+  .sb-prog { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
+  .sb-prog .bar { flex: 1; }
+
+  @media (max-width: 1100px) { :root { --rail-w: 240px; } }
+  @media (max-width: 1180px) {
+    .overview { grid-template-columns: 1fr 1fr 1fr; }
+    .mode-pick { grid-template-columns: 1fr 1fr; }
+    .page { padding: 18px 20px 56px; }
   }
-
-  * { box-sizing: border-box; }
-  html, body { height: 100%; margin: 0; }
-  body {
-    background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif;
-    display: flex; overflow: hidden;
-  }
-
-  /* Sidebar */
-  #sidebar {
-    width: var(--sidebar-w); background: var(--panel); border-right: 1px solid var(--border);
-    display: flex; flex-direction: column; flex-shrink: 0; height: 100vh;
-  }
-  .sidebar-header { padding: 14px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
-  .sidebar-header h1 { margin: 0; font-size: 16px; font-weight: 600; color: var(--text); font-family: inherit; }
-  
-  .sidebar-section { padding: 14px; border-bottom: 1px solid var(--border); flex: 1; display: flex; flex-direction: column; min-height: 0; }
-  .sidebar-title { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; font-family: inherit; flex-shrink: 0; }
-  
-  .nav-list, #ws-list, #agent-list, #job-list { flex: 1; overflow-y: auto; padding-right: 4px; min-height: 0; }
-  
-  .nav-item {
-    padding: 8px 12px; cursor: pointer; border-radius: 6px; font-size: 12px;
-    transition: all 0.15s; color: var(--text); display: flex; align-items: center; justify-content: space-between; gap: 8px;
-    margin-bottom: 6px; background: var(--panel2); font-family: inherit; border: 1px solid transparent;
-  }
-  .nav-item:hover { border-color: var(--accent); }
-  .nav-item.active { border-color: var(--accent); background: var(--accent-dark); }
-  .nav-item .uid { font-size: 10px; color: var(--muted); font-family: var(--mono); margin-left: auto; flex-shrink: 0; }
-  .nav-item-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-grow: 1; }
-
-  /* Main Content */
-  #main { flex-grow: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); padding: 14px; }
-  #viewer { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; flex-grow: 1; display: flex; flex-direction: column; overflow-y: auto; padding: 14px; }
-
-  /* Typography */
-  h1, h2 { font-family: inherit; }
-  h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
-  .field-group { margin-bottom: 16px; }
-  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; font-family: inherit; }
-  .uid-large { font-family: var(--mono); font-size: 13px; color: var(--text); background: var(--panel2); padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); }
-
-  /* Inputs & Buttons */
-  input, textarea, select {
-    background: var(--panel2); border: 1px solid var(--border); color: var(--text);
-    padding: 6px 10px; border-radius: 6px; width: 100%; font: 13px var(--mono);
-    outline: none; transition: border-color 0.2s;
-  }
-  textarea { resize: none; }
-  textarea#agent-instr, textarea#job-prompt { height: 200px; }
-  textarea.internal-editor { height: 360px; min-height: 240px; }
-
-  /* Internal-files tab editor */
-  .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 0; }
-  .tab {
-    padding: 8px 14px; cursor: pointer; font-size: 12px;
-    color: var(--muted); border-bottom: 2px solid transparent;
-    font-family: var(--mono); transition: color 0.15s, border-color 0.15s;
-    display: inline-flex; align-items: center; gap: 6px;
-    user-select: none;
-  }
-  .tab:hover { color: var(--text); }
-  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-  .tab-dot {
-    width: 6px; height: 6px; border-radius: 50%;
-    background: var(--warn); opacity: 0; transition: opacity 0.15s;
-  }
-  .tab.dirty .tab-dot { opacity: 1; }
-  .internal-wrap { border: 1px solid var(--border); border-top: 0; border-radius: 0 0 6px 6px; background: var(--panel2); padding: 0; }
-  .internal-wrap textarea { border: 0; border-radius: 0 0 6px 6px; background: transparent; }
-  input:focus, textarea:focus, select:focus { border-color: var(--accent); }
-  
-  button {
-    background: var(--accent); color: var(--accent-dark); border: 0; padding: 7px 14px; border-radius: 6px;
-    cursor: pointer; font-weight: 600; font-size: 13px; transition: opacity 0.15s;
-    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-    font-family: inherit;
-  }
-  button:hover { opacity: 0.85; }
-  
-  button.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); font-weight: 500; }
-  button.ghost:hover { border-color: var(--muted); background: rgba(255,255,255,0.05); opacity: 1; }
-  
-  button.danger { background: var(--err); color: #3a0b0b; }
-  button.danger.ghost { background: transparent; color: var(--err); border-color: var(--border); }
-  button.danger.ghost:hover { background: var(--err); color: #3a0b0b; border-color: var(--err); opacity: 1; }
-
-  button.icon { padding: 6px; min-width: 32px; min-height: 32px; background: transparent; color: var(--text); border: 1px solid var(--border); }
-  button.icon:hover { border-color: var(--accent); color: var(--accent); background: rgba(124, 196, 255, 0.1); opacity: 1; }
-  button.icon.small { min-width: 28px; min-height: 28px; padding: 4px; }
-  button svg { width: 16px; height: 16px; fill: currentColor; }
-
-  /* Scrollbar */
-  ::-webkit-scrollbar { width: 6px; height: 6px; }
-  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-  ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
-  ::-webkit-scrollbar-track { background: transparent; }
-
-  /* File List */
-  .files { margin-top: 10px; font-family: var(--mono); font-size: 12px; max-height: 300px; overflow-y: auto; padding-right: 4px; }
-
-  .f { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; border-radius: 6px; background: var(--panel2); margin-bottom: 6px; border: 1px solid var(--border); }
-  .f:hover { border-color: var(--accent); }
-  .f-info { flex-grow: 1; display: flex; flex-direction: column; gap: 2px; }
-  .f-name { color: var(--text); }
-  .f-meta { font-size: 10px; color: var(--muted); font-family: system-ui, sans-serif; text-transform: uppercase; letter-spacing: 0.4px; }
-  .f-actions { display: flex; gap: 8px; }
-
-  /* Execution UI */
-  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; }
-  .pill.pending { background: #3a3a1a; color: var(--warn); }
-  .pill.running { background: #10324f; color: var(--accent); }
-  .pill.completed { background: #113b1f; color: var(--ok); }
-  .pill.failed, .pill.cancelled { background: #3b1414; color: var(--err); }
-  
-  .bar { height: 6px; border-radius: 3px; background: var(--panel2); overflow: hidden; margin: 8px 0; }
-  .bar > span { display: block; height: 100%; background: var(--accent); transition: width 0.3s; }
-  
-  .events { font-family: var(--mono); font-size: 11px; max-height: 400px; overflow: auto; background: var(--panel2); border-radius: 6px; padding: 10px; border: 1px solid var(--border); }
-  .ev { padding: 4px 0; border-bottom: 1px dashed var(--border); line-height: 1.4; }
-  .ev:last-child { border: 0; }
-  .ev .k { color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; margin-right: 8px; font-weight: bold; }
-  .ev.narrative { color: var(--text); }
-  .ev.tool { color: var(--accent); }
-  .ev.retry { color: var(--warn); }
-  .ev.start, .ev.done { color: var(--ok); }
-  .ev.error { color: var(--err); }
-
-  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 10px; margin-top: 10px; }
-  .stat-card { background: var(--panel2); padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); }
-  .stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; margin-bottom: 2px; }
-  .stat-value { font-family: var(--mono); font-size: 13px; color: var(--accent); }
-
-  /* Modal */
-  #modal-overlay {
-    position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8);
-    display: none; align-items: center; justify-content: center; z-index: 1000; padding: 20px;
-  }
-  .modal {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-    width: 900px; max-width: 100%; max-height: 100%; display: flex; flex-direction: column;
-  }
-  .modal-header { padding: 14px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
-  .modal-body { padding: 0; flex-grow: 1; overflow: auto; background: var(--panel2); }
-  .modal-body pre { margin: 0; padding: 14px; font-family: var(--mono); font-size: 12px; line-height: 1.45; color: var(--text); white-space: pre-wrap; word-break: break-word; }
-
-  /* Utils */
-  .flex { display: flex; align-items: center; gap: 10px; }
-  .flex-col { display: flex; flex-direction: column; gap: 20px; }
-  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-  .mt-auto { margin-top: auto; }
-  .grow { flex: 1 1 auto; }
-  .muted { color: var(--muted); font-size: 12px; }
-
-  /* Toast */
-  #toast-container {
-    position: fixed; bottom: 20px; right: 20px; z-index: 2000;
-    display: flex; flex-direction: column; gap: 10px;
-  }
-  .toast {
-    background: var(--panel); border: 1px solid var(--border); border-left: 4px solid var(--accent);
-    padding: 12px 20px; border-radius: 6px; color: var(--text); font-size: 13px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.3); min-width: 200px;
-    animation: slideIn 0.3s ease-out;
-  }
-  .toast.error { border-left-color: var(--err); }
-  @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 </style>
 </head>
 <body>
-
-<div id="toast-container"></div>
-
-<div id="sidebar">
-  <div class="sidebar-header">
-    <h1>Telecode-Team</h1>
-    <button class="ghost" onclick="window.location.href='/ui/legacy'" title="Switch to Task Mode">Task Mode</button>
-  </div>
-
-  <div class="sidebar-section">
-    <div class="sidebar-title">
-      <span>Workspaces</span>
-      <button onclick="createWorkspacePrompt()" title="Add Workspace" class="icon" id="sidebar-add-ws"></button>
-    </div>
-    <div id="ws-list"></div>
-  </div>
-
-  <div class="sidebar-section">
-    <div class="sidebar-title">
-      <span>Agents</span>
-      <button onclick="createAgentPrompt()" title="Add Agent" class="icon" id="sidebar-add-agent"></button>
-    </div>
-    <div id="agent-list"></div>
-  </div>
-
-  <div class="sidebar-section">
-    <div class="sidebar-title">
-      <span>Jobs</span>
-      <button onclick="createJobPrompt()" title="Add Job" class="icon" id="sidebar-add-job"></button>
-    </div>
-    <div id="job-tabs" class="tabs" style="margin-bottom: 8px;">
-      <div class="tab active" onclick="selectJobTab('user')" id="job-tab-user">USER</div>
-      <div class="tab" onclick="selectJobTab('heartbeat')" id="job-tab-heartbeat">HEARTBEAT</div>
-    </div>
-    <div id="job-list"></div>
-  </div>
-</div>
-
-<div id="main">
-  <div id="viewer">
-    <!-- Welcome screen -->
-    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--muted);">
-      <h2 style="font-size: 16px;">Telecode Team Mode</h2>
-      <p>Select a workspace, agent, or job from the sidebar to manage.</p>
-    </div>
+<div id="app">
+  <div id="topbar"></div>
+  <div class="shell">
+    <aside class="rail" id="sidebar" aria-label="Team Mode navigation">
+      <div class="rail-top">
+        <label class="search" title="Filter workspaces, agents and jobs  (/)">
+          <span class="ic" aria-hidden="true"></span>
+          <input class="input" id="rail-search" type="search" placeholder="Filter…" autocomplete="off" spellcheck="false" aria-label="Filter sidebar" />
+          <kbd>/</kbd>
+        </label>
+      </div>
+      <div class="rail-body" id="rail-body">
+        <section data-group="ws">
+          <div class="rail-group"><span class="t" data-toggle="ws"><span class="gi"></span>Workspaces <span class="count" id="count-ws">0</span></span><span id="sidebar-add-ws-host"></span></div>
+          <div class="rail-sub" id="ws-list"></div>
+        </section>
+        <section data-group="agent">
+          <div class="rail-group"><span class="t" data-toggle="agent"><span class="gi"></span>Agents <span class="count" id="count-agent">0</span></span><span id="sidebar-add-agent-host"></span></div>
+          <div class="rail-sub" id="agent-list"></div>
+        </section>
+        <section data-group="job">
+          <div class="rail-group"><span class="t" data-toggle="job"><span class="gi"></span>Jobs <span class="count" id="count-job">0</span></span><span id="sidebar-add-job-host"></span></div>
+          <div class="rail-sub">
+            <div class="seg full sm" id="job-tabs" role="tablist" aria-label="Job kind" style="margin: 2px 2px 6px">
+              <button type="button" role="tab" id="job-tab-user" class="on">User <span class="count" id="count-job-user">0</span></button>
+              <button type="button" role="tab" id="job-tab-heartbeat">Heartbeat <span class="count" id="count-job-hb">0</span></button>
+            </div>
+            <div id="job-list"></div>
+          </div>
+        </section>
+      </div>
+    </aside>
+    <main class="main" id="main">
+      <div id="viewer" class="page"></div>
+    </main>
   </div>
 </div>
 
-<div id="modal-overlay" onclick="if(event.target===this) closeModal()">
-  <div class="modal">
-    <div class="modal-header">
-      <h2 id="modal-title" style="margin:0; font-family: var(--mono); font-size: 16px; font-weight: 600;">Dialog</h2>
-      <button class="icon small" onclick="closeModal()" title="Close" id="modal-close-icon"></button>
-    </div>
-    <div id="modal-body" class="modal-body">
-      <!-- Content injected here -->
-    </div>
-    <div id="modal-footer" style="padding: 14px 20px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; background: var(--panel);">
-      <button class="ghost" onclick="closeModal()">Cancel</button>
-      <button id="modal-confirm">Confirm</button>
-    </div>
-  </div>
-</div>
-
+<script src="/shared/appnav.js"></script>
+<script src="/shared/manager.js"></script>
 <script>
-  const SVGS = {
-    plus: `<svg viewBox="0 0 24 24"><path d="M19,13h-6v6h-2v-6H5v-2h6V5h2v6h6V13z"/></svg>`,
-    save: `<svg viewBox="0 0 24 24"><path d="M17,3H5C3.89,3,3,3.9,3,5v14c0,1.1,0.89,2,2,2h14c1.1,0,2-0.9,2-2V7L17,3z M12,19c-1.66,0-3-1.34-3-3s1.34-3,3-3s3,1.34,3,3 S13.66,19,12,19z M15,9H5V5h10V9z"/></svg>`,
-    delete: `<svg viewBox="0 0 24 24"><path d="M6,19c0,1.1,0.9,2,2,2h8c1.1,0,2-0.9,2-2V7H6V19z M19,4h-3.5l-1-1h-5l-1,1H5v2h14V4z"/></svg>`,
-    download: `<svg viewBox="0 0 24 24"><path d="M5,20h14v-2H5V20z M19,9h-4V3H9v6H5l7,7L19,9z"/></svg>`,
-    upload: `<svg viewBox="0 0 24 24"><path d="M5,20h14v-2H5V20z M5,10h4v6h6v-6h4l-7-7L5,10z"/></svg>`,
-    view: `<svg viewBox="0 0 24 24"><path d="M12,4.5C7,4.5,2.73,7.61,1,12c1.73,4.39,6,7.5,11,7.5s9.27-3.11,11-7.5C21.27,7.61,17,4.5,12,4.5z M12,17c-2.76,0-5-2.24-5-5 s2.24-5,5-5s5,2.24,5,5S14.76,17,12,17z M12,9c-1.66,0-3,1.34-3,3s1.34,3,3,3s3-1.34,3-3S13.66,9,12,9z"/></svg>`,
-    close: `<svg viewBox="0 0 24 24"><path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41z"/></svg>`,
-    play: `<svg viewBox="0 0 24 24"><path d="M8,5.14V19.14L19,12.14L8,5.14Z"/></svg>`,
-    stop: `<svg viewBox="0 0 24 24"><path d="M6,6h12v12H6V6z"/></svg>`
+"use strict";
+// ═══ Team Mode ═══════════════════════════════════════════════════════════
+// Every endpoint, payload and polling interval below is unchanged from the
+// previous page; only the rendering changed (DOM-built, no untrusted innerHTML).
+//   5s  GET /api/sessions, /api/agents, /api/jobs  (+ /api/runs on the overview)
+//   1s  GET /api/runs/{id} + /api/tasks/{step.task_id} while a run is live
+
+const INTERNAL_FILES = ["SOUL.md", "USER.md", "AGENT.md", "MEMORY.md", "HEARTBEAT.md"];
+const INTERNAL_HINTS = {
+  "SOUL.md": "Core identity, purpose and values. Staged into every run's workspace.",
+  "USER.md": "Who the agent works for — preferences, context, constraints.",
+  "AGENT.md": "Operating instructions. Staged as CLAUDE.md / AGENTS.md for the engine.",
+  "MEMORY.md": "Long-term memory. Written back after each run.",
+  "HEARTBEAT.md": "Schedules as YAML inside ```yaml fences — each entry becomes a heartbeat job. Not staged into runs.",
+};
+
+let state = {
+  workspaces: [], agents: [], jobs: [],
+  loaded: { ws: false, agent: false, job: false }, loadError: null,
+  activeType: null, activeId: null,
+  executionTaskId: null, executionTimer: null,
+  internalContent: {}, internalDirty: {}, activeInternalFile: INTERNAL_FILES[0],
+  activeJobTab: "user",
+  pipelineDraft: { mode: "single", steps: [] },
+  activeRunId: null, heartbeatValid: null,
+  jobDirty: false, wsDirty: false, filter: "",
+  watchedLive: false, recentRuns: null,
+};
+
+// ── Chrome ─────────────────────────────────────────────────────────────
+renderTopbar($("topbar"), "team");
+document.querySelector("#sidebar .search .ic").replaceWith(icon("search"));
+$("sidebar-add-ws-host").replaceWith(btn(null, { icon: "plus", kind: "quiet", size: "sm", id: "sidebar-add-ws", title: "New workspace  (W)", onClick: () => createWorkspacePrompt() }));
+$("sidebar-add-agent-host").replaceWith(btn(null, { icon: "plus", kind: "quiet", size: "sm", id: "sidebar-add-agent", title: "New agent  (A)", onClick: () => createAgentPrompt() }));
+$("sidebar-add-job-host").replaceWith(btn(null, { icon: "plus", kind: "quiet", size: "sm", id: "sidebar-add-job", title: "New job  (J)", onClick: () => createJobPrompt() }));
+document.querySelectorAll(".rail-group .gi").forEach(g => g.replaceWith(icon("chevronDown")));
+const collapsedGroups = new Set(prefs.get("mgr:railCollapsed", []));
+document.querySelectorAll("[data-toggle]").forEach(t => {
+  const sec = t.closest("section"), key = t.dataset.toggle;
+  const apply = () => { sec.querySelector(".rail-group").classList.toggle("collapsed", collapsedGroups.has(key)); sec.querySelector(".rail-sub").classList.toggle("hidden", collapsedGroups.has(key)); };
+  t.addEventListener("click", () => { collapsedGroups.has(key) ? collapsedGroups.delete(key) : collapsedGroups.add(key); prefs.set("mgr:railCollapsed", [...collapsedGroups]); apply(); });
+  apply();
+});
+$("job-tab-user").onclick = () => selectJobTab("user");
+$("job-tab-heartbeat").onclick = () => selectJobTab("heartbeat");
+$("rail-search").addEventListener("input", (e) => { state.filter = e.target.value.trim().toLowerCase(); renderSidebar(true); });
+$("rail-search").addEventListener("keydown", (e) => { if (e.key === "Escape") { e.target.value = ""; state.filter = ""; renderSidebar(true); e.target.blur(); } });
+
+function selectJobTab(tab) {
+  state.activeJobTab = tab;
+  $("job-tab-user").classList.toggle("on", tab === "user");
+  $("job-tab-heartbeat").classList.toggle("on", tab === "heartbeat");
+  $("job-tab-user").setAttribute("aria-selected", String(tab === "user"));
+  $("job-tab-heartbeat").setAttribute("aria-selected", String(tab === "heartbeat"));
+  renderSidebar(true);
+}
+
+// ── Engines (Team Mode speaks engine ids; the executor maps them to task types) ─
+const TEAM_ENGINES = [["claude_code", "Claude Code"], ["codex", "Codex"], ["antigravity", "Antigravity"]];
+const engineLabel = (id) => (TEAM_ENGINES.find(e => e[0] === id) || [id, id])[1];
+let engineInfo = null;   // GET /api/design/engines → {engines:[{id, models:[{id,label}]}], local:{models}}
+async function loadEngineInfo() {
+  try { engineInfo = await api("/api/design/engines"); } catch { engineInfo = { engines: [], local: { models: [] } }; }
+  document.querySelectorAll("input[data-model-for]").forEach(fillModelList);
+}
+function modelsFor(engine, local) {
+  if (!engineInfo) return [];
+  if (local) return (engineInfo.local && engineInfo.local.models) || [];
+  const e = (engineInfo.engines || []).find(x => x.id === engine);
+  return (e && e.models) || [];
+}
+let modelListSeq = 0;
+function fillModelList(input) {
+  const dl = document.getElementById(input.getAttribute("list")); if (!dl) return;
+  mount(dl, modelsFor(input.dataset.modelFor, input.dataset.local === "1").map(m => h("option", { value: m.id }, m.label && m.label !== m.id ? m.label : null)));
+}
+// teamEngine({ids, engine, model, local, inherit, disabled, onChange}) → {el, get()}
+// inherit=true adds "Run default"; model + local are then inherited too.
+function teamEngine(o) {
+  const sel = h("select", { class: "select", id: o.ids && o.ids.engine, disabled: o.disabled || null, title: "Engine" },
+    o.inherit ? h("option", { value: "" }, "Run default") : null,
+    TEAM_ENGINES.map(([id, label]) => h("option", { value: id }, label)));
+  sel.value = o.engine || (o.inherit ? "" : "claude_code");
+  const listId = "models-" + (++modelListSeq);
+  const model = h("input", { class: "input", id: o.ids && o.ids.model, list: listId, value: o.model || "", placeholder: o.inherit ? "inherit model" : "default model",
+    autocomplete: "off", spellcheck: "false", disabled: o.disabled || null, title: "Model (blank = the engine's default)" });
+  const local = h("input", { type: "checkbox", id: o.ids && o.ids.local, role: "switch", disabled: o.disabled || null });
+  local.checked = !!o.local;
+  const sw = h("label", { class: "switch-field", title: LOCAL_TIP }, h("span", { class: "switch" }, local, h("span")), h("span", null, "Local"), icon("info"));
+  const get = () => ({ engine: sel.value, model: model.value.trim(), is_local: local.checked });
+  const sync = () => {
+    const inherit = !sel.value;
+    model.disabled = !!o.disabled || inherit; local.disabled = !!o.disabled || inherit;
+    if (inherit) { model.value = ""; local.checked = false; }
+    sw.classList.toggle("on", local.checked);
+    sw.style.opacity = inherit ? ".5" : "";
+    sw.title = inherit ? "Inherits the run's local-mode setting — pick an engine to override" : LOCAL_TIP;
+    model.dataset.modelFor = sel.value || "claude_code"; model.dataset.local = local.checked ? "1" : "0";
+    fillModelList(model);
   };
+  const changed = () => { sync(); if (o.onChange) o.onChange(get()); };
+  sel.addEventListener("change", changed); local.addEventListener("change", changed);
+  model.addEventListener("input", () => { if (o.onChange) o.onChange(get()); });
+  const el = h("div", { class: "engine-row team-engine" }, sel, model, h("datalist", { id: listId }), sw);
+  queueMicrotask(sync);
+  return { el, get, select: sel, model, local, sync };
+}
 
-  document.getElementById('sidebar-add-ws').innerHTML = SVGS.plus;
-  document.getElementById('sidebar-add-agent').innerHTML = SVGS.plus;
-  document.getElementById('sidebar-add-job').innerHTML = SVGS.plus;
-  document.getElementById('modal-close-icon').innerHTML = SVGS.close;
+// ── Helpers ────────────────────────────────────────────────────────────
+function wsName(ws) { return (ws && ws.data && ws.data.name) || (ws && ws.session_id) || ""; }
+function agentName(id) { const a = state.agents.find(x => x.id === id); return a ? a.name : null; }
+function anyInternalDirty() { return Object.values(state.internalDirty).some(Boolean); }
+function hasUnsaved() {
+  return (state.activeType === "agent" && anyInternalDirty()) || (state.activeType === "job" && state.jobDirty) || (state.activeType === "ws" && state.wsDirty);
+}
+async function guardLeave() {
+  if (!hasUnsaved()) return true;
+  const ok = await confirmDialog("Discard unsaved changes?", "You have edits on this page that haven't been saved.", { confirm: "Discard", danger: true });
+  if (ok) { state.internalDirty = {}; state.jobDirty = false; state.wsDirty = false; }
+  return ok;
+}
+addEventListener("beforeunload", (e) => { if (hasUnsaved()) { e.preventDefault(); e.returnValue = ""; } });
+function setHash() {
+  const h_ = state.activeType ? `#/${state.activeType}/${encodeURIComponent(state.activeId)}` : "";
+  try { history.replaceState(null, "", location.pathname + location.search + h_); } catch { /* ignore */ }
+}
+function stopExecTimer() { if (state.executionTimer) clearInterval(state.executionTimer); state.executionTimer = null; }
+function pageHead({ title, icon: ic, pills = [], sub = [], tools = [] }) {
+  return h("div", { class: "page-head" },
+    h("div", { class: "ttl" }, h("h1", null, title, pills), h("div", { class: "sub" }, sub)),
+    h("div", { class: "tools" }, tools));
+}
+function card(title, ic, opts = {}, ...body) {
+  return h("section", { class: "card", id: opts.id || null },
+    h("div", { class: "card-head" }, h("h3", null, icon(ic), title, opts.hint ? h("span", { class: "hint" }, opts.hint) : null), opts.actions || null),
+    h("div", { class: "card-body" + (opts.flush ? " flush" : "") }, body));
+}
+function field(label, input, hint, o = {}) {
+  return h("label", { class: "field", style: o.style || null }, h("span", { class: "field-label" }, label, o.req ? h("span", { class: "req" }, "*") : null, o.extra || null),
+    input, o.err || null, hint ? h("span", { class: "field-hint" }, hint) : null);
+}
 
-  const INTERNAL_FILES = ['SOUL.md', 'USER.md', 'AGENT.md', 'MEMORY.md', 'HEARTBEAT.md'];
+// ── Welcome / overview ─────────────────────────────────────────────────
+function showDefaultView() {
+  state.activeId = null; state.activeType = null;
+  stopExecTimer(); setHash();
+  renderSidebar(true);
+  renderOverview();
+}
+function renderOverview() {
+  const v = $("viewer");
+  const tile = (ic, n, label, text, act) => h("div", { class: "ov-card" },
+    h("div", { class: "top" }, h("span", { class: "badge" }, icon(ic)), h("div", { class: "grow" }, h("div", { class: "n" }, n), h("div", { class: "muted" }, label))),
+    h("p", null, text), act);
+  const userJobs = state.jobs.filter(j => (j.kind || "user") === "user").length;
+  mount(v,
+    pageHead({ title: "Team Mode", sub: [h("span", null, "Agents with persistent identity and memory, running jobs as pipelines inside workspaces.")],
+      tools: [btn("New job", { icon: "plus", kind: "primary", onClick: () => createJobPrompt(), title: "New job  (J)" })] }),
+    h("div", { class: "overview" },
+      tile("folder", state.workspaces.length, "Workspaces", "Folders a job runs in. Files you add here are visible to every step.", btn("New workspace", { icon: "plus", kind: "ghost", size: "sm", onClick: () => createWorkspacePrompt() })),
+      tile("agents", state.agents.length, "Agents", "Each agent owns SOUL, USER, AGENT, MEMORY and HEARTBEAT files.", btn("New agent", { icon: "plus", kind: "ghost", size: "sm", onClick: () => createAgentPrompt() })),
+      tile("workflow", state.jobs.length, "Jobs", `${userJobs} user · ${state.jobs.length - userJobs} heartbeat. A job is a pipeline of agent steps.`, btn("New job", { icon: "plus", kind: "ghost", size: "sm", onClick: () => createJobPrompt() }))),
+    h("section", { class: "card" }, h("div", { class: "card-head" }, h("h3", null, icon("sparkle"), "How it fits together")),
+      h("div", { class: "steps-how" },
+        h("div", null, h("b", null, "1"), h("div", null, h("strong", null, "Create a workspace"), "The folder a job's steps read and write.")),
+        h("div", null, h("b", null, "2"), h("div", null, h("strong", null, "Create agents"), "Give each one a SOUL and instructions in its internal files.")),
+        h("div", null, h("b", null, "3"), h("div", null, h("strong", null, "Build a job and run it"), "Chain agents sequentially, fan out in parallel, or mix both in phases.")))),
+    h("section", { class: "card" }, h("div", { class: "card-head" }, h("h3", null, icon("history"), "Recent runs"),
+      btn(null, { icon: "refresh", kind: "quiet", size: "sm", title: "Refresh", onClick: () => refreshRecentRuns(true) })),
+      h("div", { class: "card-body flush", id: "recent-runs" }, state.recentRuns ? null : skeleton(3, "sk-row"))));
+  if (state.recentRuns) renderRecentRuns(); else refreshRecentRuns();
+}
+async function refreshRecentRuns() {
+  try { const r = await api("/api/runs"); state.recentRuns = r.runs || []; }
+  catch (e) { const host = $("recent-runs"); if (host) mount(host, h("div", { class: "card-body" }, errorBox(e.message, () => refreshRecentRuns()))); return; }
+  renderRecentRuns();
+}
+function renderRecentRuns() {
+  const host = $("recent-runs"); if (!host) return;
+  const runs = (state.recentRuns || []).slice(0, 8);
+  if (!runs.length) { mount(host, emptyState("play", "No runs yet", "Open a job and press Run to see live progress here.", null, true)); return; }
+  mount(host, runs.map(r => {
+    const job = state.jobs.find(j => j.id === r.job_id);
+    return h("div", { class: "runrow", tabindex: "0", role: "button", onclick: () => openRun(r.job_id, r.run_id),
+      onkeydown: (e) => { if (e.key === "Enter") openRun(r.job_id, r.run_id); } },
+      statusPill(r.status), h("span", { class: "nm" }, job ? job.title : "(deleted job)"),
+      h("span", { class: "pill" }, r.mode || "single"), h("span", { class: "faint mono" }, shortId(r.run_id)),
+      h("span", { class: "faint", style: { fontSize: "11.5px", minWidth: "80px", textAlign: "right" } }, relTime(r.started_at)));
+  }));
+}
+async function openRun(jobId, runId) {
+  if (!state.jobs.find(j => j.id === jobId)) return toast("That job no longer exists", { kind: "error" });
+  if (!(await guardLeave())) return;
+  state.activeType = "job"; state.activeId = jobId; state.activeRunId = runId;
+  stopExecTimer(); setHash(); renderSidebar(true);
+  await renderJobViewer(jobId);
+}
 
-  let state = {
-    workspaces: [],
-    agents: [],
-    jobs: [],
-    activeType: null,
-    activeId: null,
-    executionTaskId: null,
-    executionTimer: null,
-    internalContent: {},
-    internalDirty: {},
-    activeInternalFile: INTERNAL_FILES[0],
-    activeJobTab: 'user',
-    pipelineDraft: { mode: 'single', steps: [] },
-    activeRunId: null
-  };
+// ── Sidebar ────────────────────────────────────────────────────────────
+async function refreshWorkspaces() {
+  try { const res = await api("/api/sessions"); state.workspaces = res.sessions || []; state.loaded.ws = true; setConn(true); renderSidebar(); }
+  catch (e) { setConn(false); state.loadError = e.message; renderSidebar(); }
+}
+async function refreshAgents() {
+  try { const res = await api("/api/agents"); state.agents = res.agents || []; state.loaded.agent = true; setConn(true); renderSidebar(); }
+  catch (e) { setConn(false); state.loadError = e.message; renderSidebar(); }
+}
+async function refreshJobs() {
+  try { const res = await api("/api/jobs"); state.jobs = res.jobs || []; state.loaded.job = true; setConn(true); renderSidebar(); }
+  catch (e) { setConn(false); state.loadError = e.message; renderSidebar(); }
+}
+const matches = (...xs) => !state.filter || xs.some(x => String(x || "").toLowerCase().includes(state.filter));
+function railItem({ ic, name, meta, sub, on, onClick, onDelete, delTitle, title }) {
+  const del = onDelete ? btn(null, { icon: "trash", kind: "quiet", title: delTitle, onClick: (e) => { e.stopPropagation(); onDelete(); } }) : null;
+  return h("div", { class: "item" + (on ? " on" : ""), tabindex: "0", role: "button", title: title || null, "aria-current": on ? "true" : null,
+    onclick: onClick, onkeydown: (e) => { if (e.key === "Enter" && e.target === e.currentTarget) onClick(); } },
+    icon(ic), sub ? h("div", { class: "item-2" }, h("span", { class: "nm" }, name), h("span", { class: "sub" }, sub)) : h("span", { class: "nm" }, name),
+    meta || null, del ? h("span", { class: "act" }, del) : null);
+}
+let lastSidebarSig = "";
+function renderSidebar(force) {
+  const sig = JSON.stringify([state.workspaces.map(w => [w.session_id, wsName(w)]), state.agents.map(a => [a.id, a.name]),
+    state.jobs.map(j => [j.id, j.title, j.kind, (j.heartbeat_entry || {}).cron, (j.pipeline || {}).mode, (j.pipeline || {}).steps && j.pipeline.steps.length, j.agent_id]),
+    state.activeType, state.activeId, state.activeJobTab, state.filter, state.loaded, state.loadError]);
+  if (!force && sig === lastSidebarSig) return;
+  lastSidebarSig = sig;
+  const loading = (k) => !state.loaded[k] && !state.loadError;
+  const errorLine = () => h("div", { class: "empty sm" }, h("div", { class: "empty-title" }, "Couldn't load"), h("p", null, state.loadError));
 
-  async function goToAgentHeartbeat(agentId) {
-    if (!agentId) return;
-    state.activeInternalFile = 'HEARTBEAT.md';
-    await selectAgent(agentId);
+  const wss = state.workspaces.filter(ws => matches(wsName(ws), ws.session_id));
+  $("count-ws").textContent = state.filter ? `${wss.length}/${state.workspaces.length}` : state.workspaces.length;
+  mount($("ws-list"), loading("ws") ? skeleton(3, "sk-row") : !state.loaded.ws ? errorLine()
+    : wss.length ? wss.map(ws => railItem({ ic: "folder", name: wsName(ws), title: ws.session_id,
+        meta: h("span", { class: "meta" }, ws.session_id.slice(0, 4)),
+        on: state.activeType === "ws" && state.activeId === ws.session_id,
+        onClick: () => selectWorkspace(ws.session_id), onDelete: () => deleteWorkspacePrompt(ws.session_id), delTitle: "Delete workspace" }))
+    : h("div", { class: "empty sm" }, h("p", null, state.filter ? "No matching workspaces" : "No workspaces yet"),
+        state.filter ? null : btn("New workspace", { icon: "plus", kind: "ghost", size: "sm", onClick: () => createWorkspacePrompt() })));
+
+  const ags = state.agents.filter(a => matches(a.name, a.id));
+  $("count-agent").textContent = state.filter ? `${ags.length}/${state.agents.length}` : state.agents.length;
+  mount($("agent-list"), loading("agent") ? skeleton(3, "sk-row") : !state.loaded.agent ? errorLine()
+    : ags.length ? ags.map(a => {
+        const n = state.jobs.filter(j => j.agent_id === a.id || ((j.pipeline || {}).steps || []).some(s => s.agent_id === a.id)).length;
+        return railItem({ ic: "agent", name: a.name, sub: n ? `${n} job${n === 1 ? "" : "s"}` : "no jobs", title: a.id,
+          on: state.activeType === "agent" && state.activeId === a.id,
+          onClick: () => selectAgent(a.id), onDelete: () => deleteAgentPrompt(a.id), delTitle: "Delete agent" });
+      })
+    : h("div", { class: "empty sm" }, h("p", null, state.filter ? "No matching agents" : "No agents yet"),
+        state.filter ? null : btn("New agent", { icon: "plus", kind: "ghost", size: "sm", onClick: () => createAgentPrompt() })));
+
+  const kindOf = (j) => j.kind || "user";
+  const userN = state.jobs.filter(j => kindOf(j) === "user").length, hbN = state.jobs.length - userN;
+  $("count-job-user").textContent = userN; $("count-job-hb").textContent = hbN;
+  const filteredJobs = state.jobs.filter(j => kindOf(j) === state.activeJobTab && matches(j.title, j.id, agentName(j.agent_id)));
+  $("count-job").textContent = state.filter ? `${state.jobs.filter(j => matches(j.title, j.id, agentName(j.agent_id))).length}/${state.jobs.length}` : state.jobs.length;
+  mount($("job-list"), loading("job") ? skeleton(3, "sk-row") : !state.loaded.job ? errorLine()
+    : filteredJobs.length ? filteredJobs.map(j => {
+        const hb = j.kind === "heartbeat", he = j.heartbeat_entry || {};
+        const steps = ((j.pipeline || {}).steps || []).length;
+        return railItem({ ic: hb ? "heart" : "workflow", name: j.title, title: j.id,
+          sub: hb ? `${he.cron || ""}${he.enabled === false ? " · disabled" : ""}` : `${(j.pipeline || {}).mode || "single"} · ${steps} step${steps === 1 ? "" : "s"}`,
+          meta: hb ? h("span", { class: "dot " + (he.enabled === false ? "" : "ok"), title: he.enabled === false ? "disabled" : "enabled" }) : null,
+          on: state.activeType === "job" && state.activeId === j.id,
+          onClick: () => selectJob(j.id), onDelete: () => deleteJobPrompt(j.id), delTitle: "Delete job" });
+      })
+    : h("div", { class: "empty sm" }, h("p", null, state.filter ? "No matching jobs" : state.activeJobTab === "user" ? "No user jobs yet" : "No heartbeat jobs — add ```yaml schedules to an agent's HEARTBEAT.md"),
+        state.filter || state.activeJobTab !== "user" ? null : btn("New job", { icon: "plus", kind: "ghost", size: "sm", onClick: () => createJobPrompt() })));
+  if (!state.activeType && $("viewer").querySelector(".overview")) {
+    const ns = $("viewer").querySelectorAll(".ov-card .n");
+    if (ns.length === 3) { ns[0].textContent = state.workspaces.length; ns[1].textContent = state.agents.length; ns[2].textContent = state.jobs.length; }
   }
+}
 
-  function selectJobTab(tab) {
-    state.activeJobTab = tab;
-    document.getElementById('job-tab-user').classList.toggle('active', tab === 'user');
-    document.getElementById('job-tab-heartbeat').classList.toggle('active', tab === 'heartbeat');
-    renderSidebar();
-  }
+// ── Selection ──────────────────────────────────────────────────────────
+async function selectWorkspace(id) {
+  if (!(state.activeType === "ws" && state.activeId === id) && !(await guardLeave())) return;
+  state.activeType = "ws"; state.activeId = id; state.wsDirty = false;
+  stopExecTimer(); setHash(); renderSidebar(true);
+  renderWorkspaceViewer(id);
+}
+async function selectAgent(id, openFile) {
+  if (!(state.activeType === "agent" && state.activeId === id) && !(await guardLeave())) return;
+  state.activeType = "agent"; state.activeId = id;
+  stopExecTimer(); setHash(); renderSidebar(true);
+  renderAgentViewer(id, openFile);
+}
+async function selectJob(id) {
+  if (!(state.activeType === "job" && state.activeId === id) && !(await guardLeave())) return;
+  state.activeType = "job"; state.activeId = id; state.activeRunId = null; state.jobDirty = false;
+  stopExecTimer(); setHash(); renderSidebar(true);
+  renderJobViewer(id);
+}
+async function goToAgentHeartbeat(agentId) {
+  if (!agentId) return;
+  state.activeInternalFile = "HEARTBEAT.md";
+  await selectAgent(agentId, "HEARTBEAT.md");
+}
+function loadingView(label) {
+  mount($("viewer"), h("div", { class: "page-head" }, h("div", { class: "ttl" }, h("div", { class: "sk", style: { height: "24px", width: "240px" } }),
+    h("div", { class: "sk", style: { height: "12px", width: "160px", marginTop: "10px" } }))), h("div", { class: "sk sk-block", style: { height: "140px" }, "aria-label": label }), h("div", { class: "sk sk-block", style: { height: "220px" } }));
+}
+function errorView(msg, retry) {
+  mount($("viewer"), emptyState("alert", "Something went wrong", msg, h("div", { class: "row" }, retry ? btn("Retry", { icon: "refresh", onClick: retry }) : null, btn("Back to overview", { kind: "ghost", onClick: () => showDefaultView() }))));
+}
 
-  function escapeHtml(s) {
-    return (s || "").toString().replace(/[&<>]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c]));
-  }
+// ── File lists ─────────────────────────────────────────────────────────
+function fileUrl(type, id, path) {
+  return type === "ws" ? `/api/sessions/${encodeURIComponent(id)}/files/${encodeURIComponent(path)}`
+    : type === "agent" ? `/api/agents/${id}/files/${encodeURIComponent(path)}`
+    : `/api/jobs/${id}/files/${encodeURIComponent(path)}`;
+}
+function fileRows(type, id, files, { canDelete = false, canDownload = true, emptyText = "No files" } = {}) {
+  if (!files.length) return emptyState("file", emptyText, null, null, true);
+  return h("div", { class: "files" }, files.map(f => h("div", { class: "frow" },
+    icon("file"), h("span", { class: "nm", title: f.path }, f.path),
+    h("span", { class: "meta" }, formatBytes(f.bytes)), h("span", { class: "meta", title: fmtDateTime(f.modified_at) }, relTime(f.modified_at)),
+    h("span", { class: "acts" },
+      btn(null, { icon: "eye", kind: "quiet", size: "sm", title: "View", onClick: () => viewFile(type, id, f.path) }),
+      canDownload ? h("a", { class: "btn quiet sm btn-icon", href: fileUrl(type, id, f.path), download: f.path.split("/").pop(), title: "Download" }, icon("download")) : null,
+      canDelete ? btn(null, { icon: "trash", kind: "quiet", size: "sm", title: type === "job" ? "Remove" : "Delete", onClick: () => deleteFile(type, id, f.path) }) : null))));
+}
 
-  async function api(path, opts = {}) {
-    const r = await fetch(path, opts);
-    const body = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(body.error || r.statusText);
-    return body;
-  }
+// ── Workspace viewer ───────────────────────────────────────────────────
+async function renderWorkspaceViewer(id) {
+  loadingView("Loading workspace…");
+  try {
+    const ws = state.workspaces.find(w => w.session_id === id);
+    if (!ws) throw new Error("Workspace not found — it may have expired or been deleted.");
+    const fileRes = await api(`/api/sessions/${encodeURIComponent(id)}/files`);
+    if (state.activeType !== "ws" || state.activeId !== id) return;
+    const files = fileRes.files || [];
+    const idle = h("input", { class: "input", type: "number", min: "1", id: "ws-idle", value: ws.session_idle_timeout_seconds || "", placeholder: "none" });
+    const abs = h("input", { class: "input", type: "number", min: "1", id: "ws-abs", value: ws.absolute_ttl_seconds || "", placeholder: "none" });
+    const expires = !!(ws.session_idle_timeout_seconds || ws.absolute_ttl_seconds);
+    const expire = h("input", { type: "checkbox", id: "ws-expire", role: "switch", checked: expires });
+    const expSw = h("label", { class: "switch-field" + (expires ? " on" : ""), for: "ws-expire" }, h("span", { class: "switch" }, expire, h("span")), h("span", null, "Auto-delete when expired"));
+    const syncExp = () => { idle.disabled = abs.disabled = !expire.checked; expSw.classList.toggle("on", expire.checked); };
+    expire.addEventListener("change", () => { state.wsDirty = true; syncExp(); });
+    syncExp();
+    [idle, abs].forEach(i => i.addEventListener("input", () => { state.wsDirty = true; }));
+    const jobs = state.jobs.filter(j => j.workspace_id === id);
+    mount($("viewer"),
+      pageHead({ title: wsName(ws), sub: [h("span", null, "Workspace"), idChip(ws.session_id, 13), ws.namespace ? h("span", { class: "pill" }, "ns " + ws.namespace) : null,
+          ws.last_used_at ? h("span", null, "last used " + relTime(ws.last_used_at)) : null],
+        tools: [btn("Save", { icon: "save", kind: "primary", kbd: "Ctrl S", id: "ws-save", onClick: () => updateWorkspaceTimeouts(id) }),
+          btn(null, { icon: "trash", kind: "danger", title: "Delete workspace", onClick: () => deleteWorkspacePrompt(id) })] }),
+      h("div", { class: "grid-2" },
+        card("Lifetime", "clock", { hint: expires ? "auto-deletes" : "permanent" },
+          h("div", { "data-submit": "ws-save" },
+            h("div", { style: { marginBottom: "10px" } }, expSw,
+              h("div", { class: "field-hint", style: { marginTop: "6px" } }, expires ? "An expired workspace is deleted with all its files — turn off and save to keep it." : "Never deleted automatically.")),
+            h("div", { class: "field-row" },
+              field("Idle timeout", h("div", { class: "suffix" }, idle, h("span", null, "sec")), "Deleted after this long unused."),
+              field("Max lifetime", h("div", { class: "suffix" }, abs, h("span", null, "sec")), "Deleted this long after creation.")))),
+        card("Used by", "workflow", { hint: `${jobs.length} job${jobs.length === 1 ? "" : "s"}`, flush: true },
+          jobs.length ? h("div", { class: "files" }, jobs.map(j => h("div", { class: "frow", style: { cursor: "pointer" }, onclick: () => selectJob(j.id) },
+            icon(j.kind === "heartbeat" ? "heart" : "workflow"), h("span", { class: "nm", style: { fontFamily: "var(--sans)" } }, j.title), h("span", { class: "pill" }, (j.pipeline || {}).mode || "single"), icon("chevronRight"))))
+            : emptyState("workflow", "No jobs use this workspace", null, btn("New job", { icon: "plus", size: "sm", kind: "ghost", onClick: () => createJobPrompt(id) }), true))),
+      card(`Files`, "folder", { hint: `${files.length}`, flush: true,
+          actions: btn("Download all", { icon: "download", kind: "ghost", size: "sm", onClick: () => downloadAllFiles("ws", id) }) },
+        fileRows("ws", id, files, { emptyText: "No files in this workspace" })));
+  } catch (e) { errorView(e.message, () => renderWorkspaceViewer(id)); }
+}
 
-  function formatBytes(bytes) {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  }
+// ── Agent viewer ───────────────────────────────────────────────────────
+async function renderAgentViewer(id, openFile) {
+  loadingView("Loading agent…");
+  try {
+    const [agentRes, fileRes, internalRes] = await Promise.all([
+      api(`/api/agents/${id}`), api(`/api/agents/${id}/files`), api(`/api/agents/${id}/internal`),
+    ]);
+    if (state.activeType !== "agent" || state.activeId !== id) return;
+    const agent = agentRes.agent;
+    const files = fileRes.files || [];
+    state.internalContent = {}; state.internalDirty = {}; state.heartbeatValid = null;
+    state.activeInternalFile = INTERNAL_FILES.includes(openFile) ? openFile : INTERNAL_FILES[0];
+    const loaded = internalRes.files || {};
+    for (const f of INTERNAL_FILES) state.internalContent[f] = loaded[f] || "";
 
-  function fmtNum(n) { return (n == null) ? "—" : Number(n).toLocaleString(); }
-  function fmtCost(n) { return (n == null) ? "—" : "$" + Number(n).toFixed(4); }
-  function fmtMs(n) { if (n == null) return "—"; return n < 1000 ? `${n}ms` : `${(n/1000).toFixed(1)}s`; }
+    const nameIn = h("input", { class: "input", id: "agent-name", value: agent.name || "", autocomplete: "off" });
+    nameIn.addEventListener("input", () => { state.internalDirty.__name = nameIn.value !== agent.name; renderInternalTabs(); });
+    const ta = h("textarea", { class: "input code", id: "agent-internal-content", spellcheck: "false", oninput: () => markInternalDirty() });
+    const upload = h("input", { type: "file", id: "file-upload", multiple: true, style: { display: "none" }, onchange: () => uploadFiles(id) });
+    const drop = h("div", { class: "dropzone", style: { margin: "12px" }, onclick: () => upload.click() }, icon("upload"), h("span", null, "Drop files here or click to upload agent context files"));
+    wireDrop(drop, (fl) => uploadFiles(id, fl));
+    const jobs = state.jobs.filter(j => j.agent_id === id || ((j.pipeline || {}).steps || []).some(s => s.agent_id === id));
 
-  // --- Modal Controls ---
-
-  function openModal(title, bodyHtml, confirmLabel, onConfirm) {
-    document.getElementById('modal-title').innerText = title;
-    document.getElementById('modal-body').innerHTML = bodyHtml;
-    const confirmBtn = document.getElementById('modal-confirm');
-    confirmBtn.innerText = confirmLabel;
-    confirmBtn.style.display = confirmLabel ? 'inline-flex' : 'none';
-    confirmBtn.onclick = onConfirm;
-    document.getElementById('modal-overlay').style.display = 'flex';
-    
-    const firstInput = document.getElementById('modal-body').querySelector('input, textarea, select');
-    if (firstInput) setTimeout(() => firstInput.focus(), 50);
-  }
-
-  function closeModal() {
-    document.getElementById('modal-overlay').style.display = 'none';
-  }
-
-  function showToast(message, isError = false) {
-    const container = document.getElementById('toast-container');
-    const toast = document.createElement('div');
-    toast.className = `toast ${isError ? 'error' : ''}`;
-    toast.innerText = message;
-    container.appendChild(toast);
-    setTimeout(() => {
-      toast.style.opacity = '0';
-      toast.style.transform = 'translateX(20px)';
-      toast.style.transition = 'all 0.3s ease-in';
-      setTimeout(() => toast.remove(), 300);
-    }, 3000);
-  }
-
-  function showDefaultView() {
-    state.activeId = null;
-    state.activeType = null;
-    if (state.executionTimer) clearInterval(state.executionTimer);
-    renderSidebar();
-    document.getElementById('viewer').innerHTML = `
-      <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--muted);">
-        <h2 style="font-size: 16px;">Telecode Team Mode</h2>
-        <p>Select a workspace, agent, or job from the sidebar to manage.</p>
-      </div>
-    `;
-  }
-
-  // --- Sidebar Logic ---
-
-  async function refreshWorkspaces() {
-    try {
-      const res = await api('/api/sessions');
-      state.workspaces = res.sessions || [];
-      renderSidebar();
-    } catch (e) { }
-  }
-
-  async function refreshAgents() {
-    try {
-      const res = await api('/api/agents');
-      state.agents = res.agents || [];
-      renderSidebar();
-    } catch (e) { }
-  }
-
-  async function refreshJobs() {
-    try {
-      const res = await api('/api/jobs');
-      state.jobs = res.jobs || [];
-      renderSidebar();
-    } catch (e) { }
-  }
-
-  function renderSidebar() {
-    const wsList = document.getElementById('ws-list');
-    wsList.innerHTML = state.workspaces.map(ws => {
-      const name = (ws.data || {}).name || ws.session_id;
-      return `
-        <div class="nav-item ${state.activeType === 'ws' && state.activeId === ws.session_id ? 'active' : ''}" 
-             onclick="selectWorkspace('${ws.session_id}')">
-          <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(name)}</span>
-          <span class="uid">${ws.session_id.slice(0, 4)}</span>
-          <button class="icon small danger ghost sidebar-del" onclick="event.stopPropagation(); deleteWorkspacePrompt('${ws.session_id}')" title="Delete Workspace">${SVGS.delete}</button>
-        </div>
-      `;
-    }).join('') || '<div class="muted" style="padding:8px;">No workspaces</div>';
-
-    const agentList = document.getElementById('agent-list');
-    agentList.innerHTML = state.agents.map(a => `
-      <div class="nav-item ${state.activeType === 'agent' && state.activeId === a.id ? 'active' : ''}" 
-           onclick="selectAgent('${a.id}')">
-        <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(a.name)}</span>
-        <button class="icon small danger ghost sidebar-del" onclick="event.stopPropagation(); deleteAgentPrompt('${a.id}')" title="Delete Agent">${SVGS.delete}</button>
-      </div>
-    `).join('') || '<div class="muted" style="padding:8px;">No agents</div>';
-
-    const jobList = document.getElementById('job-list');
-    const filteredJobs = state.jobs.filter(j => (j.kind || 'user') === state.activeJobTab);
-    jobList.innerHTML = filteredJobs.map(j => {
-      const hbBadge = j.kind === 'heartbeat'
-        ? `<span class="uid" title="${escapeHtml((j.heartbeat_entry||{}).cron||'')}">⏱ ${escapeHtml((j.heartbeat_entry||{}).cron||'')}</span>`
-        : '';
-      return `
-        <div class="nav-item ${state.activeType === 'job' && state.activeId === j.id ? 'active' : ''}"
-             onclick="selectJob('${j.id}')">
-          <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(j.title)}</span>
-          ${hbBadge}
-          <button class="icon small danger ghost sidebar-del" onclick="event.stopPropagation(); deleteJobPrompt('${j.id}')" title="Delete Job">${SVGS.delete}</button>
-        </div>`;
-    }).join('') || `<div class="muted" style="padding:8px;">No ${state.activeJobTab === 'user' ? 'user jobs' : 'heartbeat jobs'}</div>`;
-  }
-
-  // --- Selection Logic ---
-
-  async function selectWorkspace(id) {
-    state.activeType = 'ws';
-    state.activeId = id;
-    if (state.executionTimer) clearInterval(state.executionTimer);
-    renderSidebar();
-    renderWorkspaceViewer(id);
-  }
-
-  async function selectAgent(id) {
-    state.activeType = 'agent';
-    state.activeId = id;
-    if (state.executionTimer) clearInterval(state.executionTimer);
-    renderSidebar();
-    renderAgentViewer(id);
-  }
-
-  async function selectJob(id) {
-    state.activeType = 'job';
-    state.activeId = id;
-    state.activeRunId = null;
-    if (state.executionTimer) clearInterval(state.executionTimer);
-    renderSidebar();
-    renderJobViewer(id);
-  }
-
-  // --- Workspace Viewer ---
-
-  async function renderWorkspaceViewer(id) {
-    const viewer = document.getElementById('viewer');
-    viewer.innerHTML = '<div class="muted">Loading workspace...</div>';
-    
-    try {
-      const ws = state.workspaces.find(w => w.session_id === id);
-      const name = (ws.data || {}).name || ws.session_id;
-      const fileRes = await api(`/api/sessions/${encodeURIComponent(id)}/files`);
-      const files = fileRes.files || [];
-
-      viewer.innerHTML = `
-        <div class="flex-col">
-          <div class="flex" style="justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 14px;">
-            <div>
-              <h1 style="margin:0; font-size: 18px; font-weight: 600;">${escapeHtml(name)}</h1>
-              <div class="muted" style="font-family: var(--mono); font-size: 11px; margin-top: 4px;">UID: ${ws.session_id}</div>
-            </div>
-            <div class="flex">
-               <button class="icon" onclick="updateWorkspaceTimeouts('${id}')" title="Update">${SVGS.save}</button>
-               <button class="icon danger ghost" onclick="deleteWorkspacePrompt('${id}')" title="Delete">${SVGS.delete}</button>
-            </div>
-          </div>
-
-          <div class="grid-2">
-            <div class="field-group">
-              <label>Idle Timeout (Unused)</label>
-              <div class="flex">
-                <input type="number" id="ws-idle" value="${ws.session_idle_timeout_seconds}">
-                <span class="muted">SEC</span>
-              </div>
-            </div>
-            <div class="field-group">
-              <label>Max Timeout (Max-Validating)</label>
-              <div class="flex">
-                <input type="number" id="ws-abs" value="${ws.absolute_ttl_seconds}">
-                <span class="muted">SEC</span>
-              </div>
-            </div>
-          </div>
-          
-          <div style="border-top: 1px solid var(--border); padding-top: 20px;">
-            <div class="sidebar-title">
-               <span>Files (${files.length})</span>
-               <button onclick="downloadAllFiles('ws', '${id}')" title="Download All" class="icon small">${SVGS.download}</button>
-            </div>
-            <div class="files">
-              ${files.map(f => `
-                <div class="f">
-                  <div class="f-info">
-                    <div class="f-name">${escapeHtml(f.path)}</div>
-                    <div class="f-meta">${formatBytes(f.bytes)} · ${new Date(f.modified_at).toLocaleString()}</div>
-                  </div>
-                  <div class="f-actions">
-                    <button onclick="viewFile('ws', '${id}', '${escapeHtml(f.path).replace(/'/g, "\\'")}')" title="View" class="icon small">${SVGS.view}</button>
-                    <a href="/api/sessions/${encodeURIComponent(id)}/files/${encodeURIComponent(f.path)}" download style="text-decoration:none">
-                      <button title="Download" class="icon small">${SVGS.download}</button>
-                    </a>
-                  </div>
-                </div>
-              `).join('') || '<div style="padding:20px; text-align:center;" class="muted">No files in this workspace</div>'}
-            </div>
-          </div>
-        </div>
-      `;
-    } catch (e) {
-      viewer.innerHTML = `<div style="color:var(--err)">Error: ${e.message}</div>`;
-    }
-  }
-
-  // --- Agent Viewer ---
-
-  async function renderAgentViewer(id) {
-    const viewer = document.getElementById('viewer');
-    viewer.innerHTML = '<div class="muted">Loading agent...</div>';
-
-    try {
-      const [agentRes, fileRes, internalRes] = await Promise.all([
-        api(`/api/agents/${id}`),
-        api(`/api/agents/${id}/files`),
-        api(`/api/agents/${id}/internal`),
-      ]);
-      const agent = agentRes.agent;
-      const files = fileRes.files || [];
-
-      state.internalContent = {};
-      state.internalDirty = {};
-      state.activeInternalFile = INTERNAL_FILES[0];
-      const loaded = internalRes.files || {};
-      for (const f of INTERNAL_FILES) state.internalContent[f] = loaded[f] || '';
-
-      viewer.innerHTML = `
-        <div class="flex-col">
-          <div class="flex" style="justify-content: space-between; align-items: flex-start;">
-            <div class="grow">
-               <h1 style="margin:0; font-size: 18px; font-weight: 600;">${escapeHtml(agent.name)}</h1>
-               <div class="muted" style="font-family: var(--mono); font-size: 11px; margin-top: 4px;">AGENT ID: ${agent.id}</div>
-            </div>
-            <div class="flex">
-              <button class="icon" onclick="saveAgent('${id}')" title="Update">${SVGS.save}</button>
-              <button class="icon danger ghost" onclick="deleteAgentPrompt('${id}')" title="Delete Agent">${SVGS.delete}</button>
-            </div>
-          </div>
-
-          <div class="field-group">
-            <label>Agent Name</label>
-            <input id="agent-name" value="${escapeHtml(agent.name)}">
-          </div>
-
-          <div class="field-group">
-            <label>Internal Files</label>
-            <div id="agent-internal-tabs" class="tabs"></div>
-            <div class="internal-wrap">
-              <textarea id="agent-internal-content" class="internal-editor"
-                        oninput="markInternalDirty()"
-                        spellcheck="false"
-                        placeholder=""></textarea>
-            </div>
-            <div id="agent-internal-footer" style="display:none; margin-top:8px; padding:10px; background:var(--panel2); border:1px solid var(--border); border-radius:6px; flex-direction:column; gap:6px;">
-              <div class="flex" style="gap:10px;">
-                <button class="ghost" onclick="validateHeartbeat()">Validate</button>
-                <span class="muted" style="font-size:11px;">YAML schedule entries inside <code>\`\`\`yaml</code> fences. Free text outside fences is ignored.</span>
-              </div>
-              <div id="hb-validate-status" style="font-size:12px;"></div>
-            </div>
-          </div>
-
-          <div style="border-top: 1px solid var(--border); padding-top: 20px;">
-            <div class="sidebar-title">
-              <span>Agent Context Files (${files.length})</span>
-              <div class="flex">
-                <button onclick="document.getElementById('file-upload').click()" title="Upload" class="icon small">${SVGS.upload}</button>
-                <button onclick="downloadAllFiles('agent', '${id}')" title="Download All" class="icon small">${SVGS.download}</button>
-              </div>
-            </div>
-            <input type="file" id="file-upload" multiple style="display:none" onchange="uploadFiles('${id}')">
-            
-            <div class="files">
-              ${files.map(f => `
-                <div class="f">
-                  <div class="f-info">
-                    <div class="f-name">${escapeHtml(f.path)}</div>
-                    <div class="f-meta">${formatBytes(f.bytes)} · ${new Date(f.modified_at).toLocaleString()}</div>
-                  </div>
-                  <div class="f-actions">
-                    <button onclick="viewFile('agent', '${id}', '${escapeHtml(f.path).replace(/'/g, "\\'")}')" title="View" class="icon small">${SVGS.view}</button>
-                    <a href="/api/agents/${id}/files/${encodeURIComponent(f.path)}" download style="text-decoration:none">
-                      <button title="Download" class="icon small">${SVGS.download}</button>
-                    </a>
-                    <button onclick="deleteFile('agent', '${id}', '${escapeHtml(f.path).replace(/'/g, "\\'")}')" title="Delete" class="icon small danger ghost">${SVGS.delete}</button>
-                  </div>
-                </div>
-              `).join('') || '<div style="padding:20px; text-align:center;" class="muted">No files uploaded</div>'}
-            </div>
-          </div>
-        </div>
-      `;
-
-      renderInternalTabs();
-      const ta = document.getElementById('agent-internal-content');
-      if (ta) ta.value = state.internalContent[state.activeInternalFile] || '';
-    } catch (e) {
-      viewer.innerHTML = `<div style="color:var(--err)">Error: ${e.message}</div>`;
-    }
-  }
-
-  // --- Pipeline editor (used inside Job viewer) ---
-
-  function genStepId() {
-    return 'step-' + Math.random().toString(36).slice(2, 10);
-  }
-
-  // Group steps by phase (preserves first-seen order). Returns
-  // [{phase, steps:[{step,idx}]}] sorted by phase.
-  function groupStepsByPhase() {
-    const map = new Map();
-    state.pipelineDraft.steps.forEach((s, idx) => {
-      const p = (s.phase ?? idx);
-      if (!map.has(p)) map.set(p, []);
-      map.get(p).push({ step: s, idx });
+    mount($("viewer"),
+      pageHead({ title: agent.name, sub: [h("span", null, "Agent"), idChip(agent.id, 13), jobs.length ? h("span", null, `${jobs.length} job${jobs.length === 1 ? "" : "s"}`) : null],
+        tools: [btn("Save", { icon: "save", kind: "primary", kbd: "Ctrl S", id: "agent-save", onClick: () => saveAgent(id) }),
+          btn(null, { icon: "trash", kind: "danger", title: "Delete agent", onClick: () => deleteAgentPrompt(id) })] }),
+      card("Identity", "agent", {}, field("Agent name", nameIn, null, { req: true })),
+      h("section", { class: "card ifiles" },
+        h("div", { class: "card-head" }, h("h3", null, icon("file"), "Internal files", h("span", { class: "hint" }, "copied into each run's workspace; changes are written back")),
+          h("span", { class: "faint", id: "agent-dirty-note", style: { fontSize: "11.5px" } })),
+        h("div", { id: "agent-internal-tabs", class: "tabs", role: "tablist", "aria-label": "Internal files" }),
+        h("div", { class: "field-hint", id: "agent-internal-hint", style: { padding: "8px 14px 0" } }),
+        h("div", { style: { padding: "8px 0 0" } }, ta),
+        h("div", { id: "agent-internal-footer", class: "foot", style: { display: "none" } },
+          h("div", { class: "row" }, btn("Validate", { icon: "checkCircle", kind: "ghost", size: "sm", id: "hb-validate", onClick: () => validateHeartbeat() }),
+            h("span", { class: "field-hint" }, "YAML schedule entries inside ", h("code", null, "```yaml"), " fences. Free text outside fences is ignored. Saving validates first.")),
+          h("div", { id: "hb-validate-status", class: "hb-result" }))),
+      card("Agent context files", "folder", { hint: `${files.length}`, flush: true,
+          actions: h("div", { class: "row" },
+            btn("Upload", { icon: "upload", kind: "ghost", size: "sm", onClick: () => upload.click() }),
+            btn("Download all", { icon: "download", kind: "ghost", size: "sm", onClick: () => downloadAllFiles("agent", id) })) },
+        upload, fileRows("agent", id, files, { canDelete: true, emptyText: "No files uploaded" }), drop),
+      jobs.length ? card("Jobs using this agent", "workflow", { flush: true }, h("div", { class: "files" }, jobs.map(j => h("div", { class: "frow", style: { cursor: "pointer" }, onclick: () => selectJob(j.id) },
+        icon(j.kind === "heartbeat" ? "heart" : "workflow"), h("span", { class: "nm", style: { fontFamily: "var(--sans)" } }, j.title), j.kind === "heartbeat" ? h("span", { class: "pill violet" }, "heartbeat") : h("span", { class: "pill" }, (j.pipeline || {}).mode || "single"), icon("chevronRight"))))) : null);
+    renderInternalTabs();
+    ta.value = state.internalContent[state.activeInternalFile] || "";
+    if (openFile === "HEARTBEAT.md") ta.focus();
+  } catch (e) { errorView(e.message, () => renderAgentViewer(id, openFile)); }
+}
+function renderInternalTabs() {
+  const host = $("agent-internal-tabs");
+  if (!host) return;
+  mount(host, INTERNAL_FILES.map(name => {
+    const t = h("button", { type: "button", role: "tab", class: "tab" + (state.activeInternalFile === name ? " on" : "") + (state.internalDirty[name] ? " is-dirty" : ""),
+      "aria-selected": String(state.activeInternalFile === name), onclick: () => selectInternalTab(name), title: INTERNAL_HINTS[name] },
+      icon(name === "HEARTBEAT.md" ? "heart" : "file"), name, name === "HEARTBEAT.md" ? h("span", { class: "tag" }, "YAML") : null, h("span", { class: "dirty", title: "Unsaved" }));
+    return t;
+  }));
+  const hint = $("agent-internal-hint"); if (hint) hint.textContent = INTERNAL_HINTS[state.activeInternalFile] || "";
+  const note = $("agent-dirty-note");
+  if (note) { const n = Object.entries(state.internalDirty).filter(([, v]) => v).length; note.textContent = n ? `${n} unsaved change${n === 1 ? "" : "s"}` : ""; }
+  const ta = $("agent-internal-content");
+  if (ta) ta.placeholder = state.activeInternalFile === "HEARTBEAT.md"
+    ? "# Heartbeat\n\n```yaml\n- name: nightly-digest\n  cron: \"0 3 * * *\"\n  prompt: Summarise yesterday's outputs.\n  enabled: true\n```"
+    : `${state.activeInternalFile} is empty.`;
+  renderHeartbeatFooter();
+}
+function renderHeartbeatFooter() {
+  const footer = $("agent-internal-footer");
+  if (!footer) return;
+  footer.style.display = state.activeInternalFile === "HEARTBEAT.md" ? "flex" : "none";
+}
+async function validateHeartbeat() {
+  const ta = $("agent-internal-content");
+  if (!ta) return;
+  const text = ta.value;
+  state.internalContent["HEARTBEAT.md"] = text;
+  const agentId = state.activeId;
+  if (!agentId) return;
+  const status = $("hb-validate-status");
+  if (status) mount(status, h("span", { class: "faint" }, "Validating…"));
+  try {
+    const r = await fetch(`/api/agents/${agentId}/heartbeat/validate`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }),
     });
-    return Array.from(map.entries())
-      .sort((a, b) => a[0] - b[0])
-      .map(([phase, items]) => ({ phase, items }));
+    const data = await r.json();
+    renderHeartbeatValidationResult(data);
+  } catch (e) {
+    if (status) mount(status, h("span", { style: { color: "var(--err)" } }, e.message));
   }
-
-  function renderPipelineSteps(isHb) {
-    const host = document.getElementById('pipeline-steps');
-    if (!host) return;
-    const steps = state.pipelineDraft.steps;
-    const mode = state.pipelineDraft.mode;
-
-    if (steps.length === 0) {
-      host.innerHTML = `<div class="muted" style="padding: 10px;">No steps. ${isHb ? '' : 'Click <strong>+ Add step</strong> below to define one.'}</div>`;
-      return;
-    }
-
-    if (mode === 'custom') {
-      renderPipelineCustom(host, isHb);
-    } else {
-      renderPipelineFlat(host, isHb, mode);
-    }
+}
+function renderHeartbeatValidationResult(data) {
+  const status = $("hb-validate-status");
+  if (!status) return;
+  const ent = (data.entries || []).length;
+  if (!data.ok) {
+    const errs = data.errors || [];
+    mount(status, h("div", null, h("span", { class: "pill err" }, `${errs.length} error${errs.length === 1 ? "" : "s"}`), " ", h("span", { class: "faint" }, `${ent} valid entr${ent === 1 ? "y" : "ies"}`)),
+      errs.map(e => h("div", { class: "line bad" }, icon("alert"), e.name ? `[${e.name}]` : `[block ${e.block ?? "?"}]`, " ", e.msg || "error")));
+    state.heartbeatValid = false;
+  } else {
+    mount(status, h("div", null, h("span", { class: "pill ok" }, icon("check"), `${ent} entr${ent === 1 ? "y" : "ies"}`)),
+      (data.entries || []).map(e => {
+        const next = (e.next_fires || []).slice(0, 2).map(s => new Date(s).toLocaleString()).join(", ") || "—";
+        return h("div", { class: "line good" }, icon("check"), h("b", null, e.name), h("span", { class: "faint" }, e.cron), h("span", { class: "muted" }, "→ next: " + next));
+      }));
+    state.heartbeatValid = true;
   }
-
-  function renderStepCard(s, idx, opts) {
-    // opts: { isHb, showFeed, controlsHtml, label }
-    return `
-      <div class="step-card" style="border:1px solid var(--border); border-radius:6px; padding:10px; margin-bottom:8px; background:var(--panel2);">
-        <div class="flex" style="justify-content: space-between; align-items: center; margin-bottom: 6px;">
-          <div class="muted" style="font-family:var(--mono); font-size:11px;">${opts.label || ''}${s.name ? ' — ' + escapeHtml(s.name) : ''}</div>
-          <div class="flex" style="gap: 4px;">${opts.controlsHtml || ''}</div>
-        </div>
-        <div class="grid-2">
-          <div class="field-group" style="margin-bottom: 6px;">
-            <label>Agent</label>
-            <select onchange="updatePipelineStep(${idx}, 'agent_id', this.value)" ${opts.isHb ? 'disabled' : ''}>
-              ${state.agents.map(a => `<option value="${a.id}" ${a.id === s.agent_id ? 'selected' : ''}>${escapeHtml(a.name)}</option>`).join('')}
-              ${state.agents.length === 0 ? '<option value="">(no agents)</option>' : ''}
-            </select>
-          </div>
-          <div class="field-group" style="margin-bottom: 6px;">
-            <label>Step name (optional)</label>
-            <input value="${escapeHtml(s.name || '')}" oninput="updatePipelineStep(${idx}, 'name', this.value)" placeholder="e.g. Reviewer" ${opts.isHb ? 'readonly' : ''}>
-          </div>
-        </div>
-        <div class="field-group" style="margin-bottom: 6px;">
-          <label>Prompt override <span class="muted">(blank = use job's default prompt below)</span></label>
-          <textarea rows="3" oninput="updatePipelineStep(${idx}, 'prompt_override', this.value)" placeholder="" ${opts.isHb ? 'readonly' : ''}>${escapeHtml(s.prompt_override || '')}</textarea>
-        </div>
-        ${opts.showFeed ? `
-          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size: 12px;">
-            <input type="checkbox" ${s.depends_on_text ? 'checked' : ''} onchange="updatePipelineStep(${idx}, 'depends_on_text', this.checked)" style="width:auto;margin:0;" ${opts.isHb ? 'disabled' : ''}>
-            Feed previous phase's reply as <code>&lt;previous_output&gt;</code>
-          </label>` : ''}
-      </div>`;
-  }
-
-  function renderPipelineFlat(host, isHb, mode) {
-    const steps = state.pipelineDraft.steps;
-    host.innerHTML = steps.map((s, idx) => {
-      const showFeed = mode === 'sequential' && idx > 0;
-      const upBtn = (mode === 'sequential' && !isHb && idx > 0)
-        ? `<button class="icon small ghost" onclick="movePipelineStep(${idx}, -1)" title="Move up">▲</button>` : '';
-      const downBtn = (mode === 'sequential' && !isHb && idx < steps.length - 1)
-        ? `<button class="icon small ghost" onclick="movePipelineStep(${idx}, 1)" title="Move down">▼</button>` : '';
-      const delBtn = (!isHb && (mode !== 'single' || steps.length > 1))
-        ? `<button class="icon small danger ghost" onclick="removePipelineStep(${idx})" title="Remove">${SVGS.delete}</button>` : '';
-      return renderStepCard(s, idx, {
-        isHb, showFeed,
-        controlsHtml: `${upBtn}${downBtn}${delBtn}`,
-        label: `step ${idx + 1}`,
-      });
-    }).join('');
-  }
-
-  function renderPipelineCustom(host, isHb) {
-    const groups = groupStepsByPhase();
-    const totalPhases = groups.length;
-    host.innerHTML = groups.map((g, gi) => {
-      const phaseLabel = totalPhases > 1
-        ? `Phase ${gi + 1} ${g.items.length > 1 ? `<span class="muted">(${g.items.length} steps in parallel)</span>` : ''}`
-        : `Phase 1`;
-      const phaseControls = isHb ? '' : `
-        ${gi > 0 ? `<button class="icon small ghost" onclick="movePhase(${gi}, -1)" title="Move phase up">▲</button>` : ''}
-        ${gi < totalPhases - 1 ? `<button class="icon small ghost" onclick="movePhase(${gi}, 1)" title="Move phase down">▼</button>` : ''}
-        <button class="ghost" onclick="addParallelStepInPhase(${gi})" style="font-size:11px; padding:4px 10px;">+ parallel step</button>
-      `;
-      const stepCards = g.items.map(({ step, idx }) => {
-        const showFeed = gi > 0;
-        const removable = !isHb;
-        const delBtn = removable
-          ? `<button class="icon small danger ghost" onclick="removePipelineStep(${idx})" title="Remove">${SVGS.delete}</button>` : '';
-        return renderStepCard(step, idx, {
-          isHb, showFeed,
-          controlsHtml: delBtn,
-          label: `step ${idx + 1}`,
-        });
-      }).join('');
-      return `
-        <div class="phase-card" style="border:1px solid var(--accent); border-radius:8px; padding:12px; margin-bottom:14px; background:rgba(124,196,255,0.04);">
-          <div class="flex" style="justify-content:space-between; align-items:center; margin-bottom:10px;">
-            <strong style="font-family:var(--mono); font-size:12px; color:var(--accent);">${phaseLabel}</strong>
-            <div class="flex" style="gap:6px;">${phaseControls}</div>
-          </div>
-          ${stepCards}
-        </div>`;
-    }).join('');
-  }
-
-  function updatePipelineStep(idx, field, value) {
-    const s = state.pipelineDraft.steps[idx];
-    if (!s) return;
-    s[field] = value;
-  }
-
-  function _newStep(phase) {
-    return {
-      step_id: genStepId(),
-      agent_id: (state.agents[0] || {}).id || '',
-      name: '',
-      prompt_override: '',
-      depends_on_text: false,
-      phase
-    };
-  }
-
-  // "+ Add step" at bottom of pipeline. Behaviour by mode:
-  //   single     → no-op when already 1 step (button hidden anyway)
-  //   sequential → append a step (own phase)
-  //   parallel   → append to phase 0
-  //   custom     → add a NEW phase with one step (use "+ parallel step" inside a phase to add to it)
-  function addPipelineStep() {
-    const mode = state.pipelineDraft.mode;
-    const steps = state.pipelineDraft.steps;
-    let phase;
-    if (mode === 'single') {
-      // Promote to sequential when adding a 2nd step
-      if (steps.length >= 1) {
-        state.pipelineDraft.mode = 'sequential';
-        const sel = document.getElementById('pipeline-mode');
-        if (sel) sel.value = 'sequential';
-      }
-      phase = steps.length;
-    } else if (mode === 'parallel') {
-      phase = 0;
-    } else if (mode === 'custom') {
-      const maxPhase = steps.reduce((m, s) => Math.max(m, s.phase ?? 0), -1);
-      phase = maxPhase + 1;
-    } else { // sequential
-      phase = steps.length;
-    }
-    steps.push(_newStep(phase));
-    renderPipelineSteps(false);
-  }
-
-  function addParallelStepInPhase(groupIndex) {
-    const groups = groupStepsByPhase();
-    if (groupIndex < 0 || groupIndex >= groups.length) return;
-    const phaseValue = groups[groupIndex].phase;
-    state.pipelineDraft.steps.push(_newStep(phaseValue));
-    renderPipelineSteps(false);
-  }
-
-  function removePipelineStep(idx) {
-    state.pipelineDraft.steps.splice(idx, 1);
-    renumberPhases();
-    renderPipelineSteps(false);
-  }
-
-  function movePipelineStep(idx, delta) {
-    const target = idx + delta;
-    const steps = state.pipelineDraft.steps;
-    if (target < 0 || target >= steps.length) return;
-    const tmp = steps[idx]; steps[idx] = steps[target]; steps[target] = tmp;
-    // For sequential mode, phases are tied to index — re-derive on save (server normalises).
-    if (state.pipelineDraft.mode === 'sequential') {
-      steps.forEach((s, i) => { s.phase = i; });
-    }
-    renderPipelineSteps(false);
-  }
-
-  // Custom-mode only: swap two phases by their group index.
-  function movePhase(groupIndex, delta) {
-    const groups = groupStepsByPhase();
-    const target = groupIndex + delta;
-    if (target < 0 || target >= groups.length) return;
-    const a = groups[groupIndex].phase;
-    const b = groups[target].phase;
-    state.pipelineDraft.steps.forEach(s => {
-      if (s.phase === a) s.phase = b;
-      else if (s.phase === b) s.phase = a;
-    });
-    renumberPhases();
-    renderPipelineSteps(false);
-  }
-
-  // Renumber phases to contiguous 0..N-1 preserving relative order.
-  function renumberPhases() {
-    const phases = Array.from(new Set(state.pipelineDraft.steps.map(s => s.phase ?? 0))).sort((a,b)=>a-b);
-    const remap = new Map(phases.map((p, i) => [p, i]));
-    state.pipelineDraft.steps.forEach(s => { s.phase = remap.get(s.phase ?? 0) ?? 0; });
-  }
-
-  function onPipelineModeChange() {
-    const sel = document.getElementById('pipeline-mode');
-    if (!sel) return;
-    const newMode = sel.value;
-    const steps = state.pipelineDraft.steps;
-    state.pipelineDraft.mode = newMode;
-
-    if (newMode === 'single' && steps.length > 1) {
-      state.pipelineDraft.steps = steps.slice(0, 1);
-      state.pipelineDraft.steps[0].phase = 0;
-    } else if (newMode === 'sequential') {
-      steps.forEach((s, i) => { s.phase = i; });
-    } else if (newMode === 'parallel') {
-      steps.forEach(s => { s.phase = 0; });
-    } else if (newMode === 'custom') {
-      // Preserve current phase values; if none had explicit phases, the
-      // existing assignment from the previous mode is already valid.
-      renumberPhases();
-    }
-    renderPipelineSteps(false);
-  }
-
-  // --- Job Viewer ---
-
-  async function renderJobViewer(id) {
-    const viewer = document.getElementById('viewer');
-    viewer.innerHTML = '<div class="muted">Loading job...</div>';
-
-    try {
-      const res = await api(`/api/jobs/${id}`);
-      const job = res.job;
-      const fileRes = await api(`/api/jobs/${id}/files`);
-      const files = fileRes.files || [];
-
-      const ws = state.workspaces.find(w => w.session_id === job.workspace_id);
-
-      // Pipeline draft state — editable copy of job.pipeline.
-      const pipeline = job.pipeline || { mode: 'single', steps: [] };
-      state.pipelineDraft = {
-        mode: pipeline.mode || 'single',
-        steps: (pipeline.steps || []).map(s => ({...s})),
-      };
-      const pipeMode = state.pipelineDraft.mode;
-      const isHb = job.kind === 'heartbeat';
-
-      viewer.innerHTML = `
-        <div class="flex-col">
-          <div class="flex" style="justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 14px;">
-            <div>
-              <h1 style="margin:0; font-size: 18px; font-weight: 600;">${escapeHtml(job.title)}</h1>
-              <div class="muted" style="font-family: var(--mono); font-size: 11px; margin-top: 4px;">JOB ID: ${job.id}</div>
-            </div>
-            <div class="flex">
-               <button class="icon" onclick="openRunModal('${id}')" title="Run Job">${SVGS.play}</button>
-               <button class="icon" onclick="updateJob('${id}')" title="Update">${SVGS.save}</button>
-               <button class="icon danger ghost" onclick="deleteJobPrompt('${id}')" title="Delete">${SVGS.delete}</button>
-            </div>
-          </div>
-
-          <div id="execution-area" style="display:none; border: 1px solid var(--border); border-radius: 8px; padding: 14px; background: var(--panel2); margin-bottom: 10px;">
-             <!-- Live monitor injected here -->
-          </div>
-
-          <div id="task-history-area" style="display:none; margin-bottom: 20px;">
-            <h2 style="font-size: 12px; margin-bottom: 8px;">Recent Runs</h2>
-            <div id="task-history-list" class="flex" style="flex-wrap: wrap; gap: 8px;"></div>
-          </div>
-
-          <div class="grid-2">
-            <div class="field-group">
-              <label>Linked Workspace</label>
-              <div class="uid-large">${ws ? escapeHtml((ws.data || {}).name || ws.session_id) : 'Missing Workspace'}</div>
-            </div>
-            <div class="field-group">
-              <label>Pipeline mode</label>
-              <select id="pipeline-mode" ${isHb ? 'disabled' : ''} onchange="onPipelineModeChange()">
-                <option value="single" ${pipeMode === 'single' ? 'selected' : ''}>Single — one agent</option>
-                <option value="sequential" ${pipeMode === 'sequential' ? 'selected' : ''}>Sequential — feed step → step</option>
-                <option value="parallel" ${pipeMode === 'parallel' ? 'selected' : ''}>Parallel — fan-out, ephemeral</option>
-                <option value="custom" ${pipeMode === 'custom' ? 'selected' : ''}>Custom — phases (mix sequential + parallel)</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="field-group">
-            <label>Pipeline ${isHb ? '<span class="muted">(read-only — edit via HEARTBEAT.md)</span>' : ''}</label>
-            <div id="pipeline-steps"></div>
-            ${isHb ? '' : `<button class="ghost" onclick="addPipelineStep()" style="margin-top: 6px;">+ Add step</button>`}
-          </div>
-
-          <div class="field-group">
-            <label>Job Title</label>
-            <input id="job-title" value="${escapeHtml(job.title)}" ${isHb ? 'readonly' : ''}>
-          </div>
-
-          ${isHb ? `
-          <div class="field-group">
-            <label>Heartbeat schedule</label>
-            <div class="flex" style="gap:10px; padding:8px 12px; background:var(--panel2); border:1px solid var(--border); border-radius:6px; font-family:var(--mono); font-size:12px;">
-              <span>cron: <strong>${escapeHtml((job.heartbeat_entry||{}).cron||'')}</strong></span>
-              <span class="muted">|</span>
-              <span>workspace: <strong>${escapeHtml((job.heartbeat_entry||{}).workspace||'ephemeral')}</strong></span>
-              <span class="muted">|</span>
-              <span>${(job.heartbeat_entry||{}).enabled === false ? '⊘ disabled' : '✓ enabled'}</span>
-              <button class="ghost small" style="margin-left:auto;" onclick="goToAgentHeartbeat('${(job.agent_id)||''}')">Edit in HEARTBEAT.md</button>
-            </div>
-          </div>` : ''}
-
-          <div class="field-group">
-            <label>${isHb ? 'Heartbeat prompt (read-only — edit via HEARTBEAT.md)' : 'Job Prompt (Execution Plan)'}</label>
-            <textarea id="job-prompt" rows="8" ${isHb ? 'readonly' : ''}>${escapeHtml(job.task_description || '')}</textarea>
-          </div>
-
-          ${isHb ? '' : `
-          <div style="border-top: 1px solid var(--border); padding-top: 20px;">
-            <div class="sidebar-title">
-              <span>Resources & Files</span>
-              <div class="flex">
-                <button onclick="document.getElementById('job-file-upload').click()" title="Upload File" class="icon small">${SVGS.upload}</button>
-                <button onclick="addJobFilePrompt('${id}')" title="Add via URL" class="icon small">${SVGS.plus}</button>
-              </div>
-            </div>
-            <input type="file" id="job-file-upload" multiple style="display:none" onchange="uploadJobFiles('${id}')">
-            <div class="files">
-              ${files.map(f => `
-                <div class="f">
-                  <div class="f-info">
-                    <div class="f-name">${escapeHtml(f.path)}</div>
-                    <div class="f-meta">${formatBytes(f.bytes)} · ${new Date(f.modified_at).toLocaleString()}</div>
-                  </div>
-                  <div class="f-actions">
-                    <button onclick="viewFile('job', '${id}', '${escapeHtml(f.path).replace(/'/g, "\\'")}')" title="View" class="icon small">${SVGS.view}</button>
-                    <button onclick="deleteFile('job', '${id}', '${escapeHtml(f.path).replace(/'/g, "\\'")}')" title="Remove" class="icon small danger ghost">${SVGS.delete}</button>
-                  </div>
-                </div>
-              `).join('') || '<div style="padding:20px; text-align:center;" class="muted">No resources linked</div>'}
-            </div>
-          </div>`}
-        </div>
-      `;
-
-      renderPipelineSteps(isHb);
-
-      // Restore Run history for this job
-      const runsRes = await api(`/api/jobs/${encodeURIComponent(id)}/runs`);
-      const runs = runsRes.runs || [];
-      if (runs.length > 0) {
-        document.getElementById('task-history-area').style.display = 'block';
-        renderRunHistoryList(runs);
-
-        if (!state.activeRunId) {
-          const latest = runs[0];
-          state.activeRunId = latest.run_id;
-          document.getElementById('execution-area').style.display = 'block';
-          await pollRun(id);
-          if (!['completed','failed','partial','cancelled'].includes(latest.status)) {
-            if (state.executionTimer) clearInterval(state.executionTimer);
-            state.executionTimer = setInterval(() => pollRun(id), 1000);
-          }
-        }
-      }
-
-    } catch (e) {
-      viewer.innerHTML = `<div style="color:var(--err)">Error: ${e.message}</div>`;
-    }
-  }
-
-  function renderRunHistoryList(runs) {
-    const list = document.getElementById('task-history-list');
-    if (!list) return;
-    list.innerHTML = runs.slice(0, 10).map(r => {
-      const stepDots = (r.steps || []).map(s => {
-        const cls = s.status || 'pending';
-        return `<span class="pill ${cls}" style="font-size:8px; padding:1px 6px;" title="${escapeHtml(s.agent_name || s.agent_id || '')}: ${cls}">${(s.name||s.agent_name||'?').slice(0,1).toUpperCase()}</span>`;
-      }).join(' ');
-      return `
-        <div class="nav-item ${state.activeRunId === r.run_id ? 'active' : ''}"
-             style="background:var(--panel2); margin:0; padding: 6px 10px; font-size: 11px; flex-direction: column; align-items: flex-start; gap: 4px;"
-             onclick="switchRun('${r.run_id}', '${r.job_id}')">
-          <div class="flex" style="gap:6px; width:100%;">
-            <span class="pill ${r.status}" style="font-size:8px; padding: 1px 6px;">${r.status}</span>
-            <span style="font-family:var(--mono);">${r.run_id.slice(0,8)}…</span>
-            <span class="muted" style="margin-left:auto;">${r.mode}</span>
-          </div>
-          <div class="flex" style="gap:4px;">${stepDots}</div>
-        </div>`;
-    }).join('') || '<div class="muted">No runs yet</div>';
-  }
-
-  async function switchRun(runId, jobId) {
-    const area = document.getElementById('execution-area');
-    if (state.activeRunId === runId) {
-      area.style.display = area.style.display === 'none' ? 'block' : 'none';
-      return;
-    }
-    state.activeRunId = runId;
-    area.style.display = 'block';
-    if (state.executionTimer) clearInterval(state.executionTimer);
-
-    await pollRun(jobId);
-    const r = await api(`/api/runs/${encodeURIComponent(runId)}`);
-    if (!['completed','failed','partial','cancelled'].includes(r.run.status)) {
-      state.executionTimer = setInterval(() => pollRun(jobId), 1000);
-    }
-    const runsRes = await api(`/api/jobs/${encodeURIComponent(jobId)}/runs`);
-    renderRunHistoryList(runsRes.runs || []);
-  }
-
-  // --- Actions ---
-
-  async function updateWorkspaceTimeouts(id) {
-    try {
-      const idle = parseInt(document.getElementById('ws-idle').value);
-      const abs = parseInt(document.getElementById('ws-abs').value);
-      await api(`/api/sessions/${encodeURIComponent(id)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session_idle_timeout_seconds: idle,
-          absolute_ttl_seconds: abs
-        })
-      });
-      await refreshWorkspaces();
-      showToast('Workspace updated');
-    } catch (e) { showToast(e.message, true); }
-  }
-
-  async function createWorkspacePrompt() {
-    const body = `
-      <div class="flex-col" style="padding: 20px;">
-        <div class="field-group">
-          <label>Workspace Name</label>
-          <input id="new-ws-name" placeholder="e.g. My Research Project">
-        </div>
-        <div class="grid-2">
-          <div class="field-group">
-            <label>Idle Timeout (Unused)</label>
-            <input type="number" id="new-ws-idle" value="3600">
-          </div>
-          <div class="field-group">
-            <label>Max Timeout (Max-Validating)</label>
-            <input type="number" id="new-ws-abs" value="86400">
-          </div>
-        </div>
-      </div>
-    `;
-    openModal('Create Workspace', body, 'Create Workspace', async () => {
-      const name = document.getElementById('new-ws-name').value || 'Untitled Workspace';
-      const idle = parseInt(document.getElementById('new-ws-idle').value);
-      const abs = parseInt(document.getElementById('new-ws-abs').value);
-      try {
-        const res = await api('/api/sessions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            data: { name: name },
-            session_idle_timeout_seconds: idle,
-            absolute_ttl_seconds: abs
-          })
-        });
-        closeModal();
-        await refreshWorkspaces();
-        selectWorkspace(res.session.session_id);
-        showToast('Workspace created');
-      } catch (e) { showToast(e.message, true); }
-    });
-  }
-
-  async function createAgentPrompt() {
-    const body = `
-      <div class="flex-col" style="padding: 20px;">
-        <div class="field-group">
-          <label>Agent Name</label>
-          <input id="new-agent-name" placeholder="e.g. Code Reviewer">
-        </div>
-        <div class="field-group">
-          <label>SOUL.md <span class="muted">(optional — core identity, purpose, values)</span></label>
-          <textarea id="new-agent-soul" class="internal-editor" rows="12" placeholder="Define the agent's core identity, purpose, and values..." spellcheck="false"></textarea>
-        </div>
-      </div>
-    `;
-    openModal('Create Agent', body, 'Create Agent', async () => {
-      const name = document.getElementById('new-agent-name').value;
-      const soul = document.getElementById('new-agent-soul').value;
-      if (!name) return showToast('Name is required', true);
-      try {
-        const res = await api('/api/agents', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, soul })
-        });
-        closeModal();
-        await refreshAgents();
-        selectAgent(res.agent.id);
-        showToast('Agent created');
-      } catch (e) { showToast(e.message, true); }
-    });
-  }
-
-  async function createJobPrompt() {
-    const wsOptions = state.workspaces.map(w => `<option value="${w.session_id}">${escapeHtml((w.data || {}).name || w.session_id)}</option>`).join('');
-    const agentOptions = state.agents.map(a => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('');
-
-    const body = `
-      <div class="flex-col" style="padding: 20px;">
-        <div class="field-group">
-          <label>Job Title</label>
-          <input id="new-job-title" placeholder="e.g. Weekly Code Sync">
-        </div>
-        <div class="grid-2">
-          <div class="field-group">
-            <label>Select Workspace</label>
-            <select id="new-job-ws">${wsOptions}</select>
-          </div>
-          <div class="field-group">
-            <label>Select Agent</label>
-            <select id="new-job-agent">${agentOptions}</select>
-          </div>
-        </div>
-      </div>
-    `;
-    openModal('Create Job', body, 'Create Job', async () => {
-      const title = document.getElementById('new-job-title').value;
-      const workspace_id = document.getElementById('new-job-ws').value;
-      const agent_id = document.getElementById('new-job-agent').value;
-      if (!title) return showToast('Title is required', true);
-      try {
-        const res = await api('/api/jobs', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title, workspace_id, agent_id })
-        });
-        closeModal();
-        await refreshJobs();
-        selectJob(res.job.id);
-        showToast('Job created');
-      } catch (e) { showToast(e.message, true); }
-    });
-  }
-
-  function renderInternalTabs() {
-    const host = document.getElementById('agent-internal-tabs');
-    if (!host) return;
-    host.innerHTML = INTERNAL_FILES.map(name => {
-      const active = state.activeInternalFile === name ? 'active' : '';
-      const dirty = state.internalDirty[name] ? 'dirty' : '';
-      const badge = name === 'HEARTBEAT.md' ? '<span style="font-size:9px; padding:1px 5px; border:1px solid var(--border); border-radius:3px; color:var(--accent); margin-left:4px;">YAML</span>' : '';
-      return `<div class="tab ${active} ${dirty}" onclick="selectInternalTab('${name}')">${name}${badge}<span class="tab-dot"></span></div>`;
-    }).join('');
-    renderHeartbeatFooter();
-  }
-
-  function renderHeartbeatFooter() {
-    const footer = document.getElementById('agent-internal-footer');
-    if (!footer) return;
-    const isHb = state.activeInternalFile === 'HEARTBEAT.md';
-    footer.style.display = isHb ? 'flex' : 'none';
-  }
-
-  async function validateHeartbeat() {
-    const ta = document.getElementById('agent-internal-content');
-    if (!ta) return;
-    const text = ta.value;
-    state.internalContent['HEARTBEAT.md'] = text;
-    const agentId = state.activeId;
-    if (!agentId) return;
-    const status = document.getElementById('hb-validate-status');
-    if (status) status.textContent = 'validating…';
-    try {
-      const r = await fetch(`/api/agents/${agentId}/heartbeat/validate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text })
+}
+function selectInternalTab(name) {
+  if (!INTERNAL_FILES.includes(name)) return;
+  const ta = $("agent-internal-content");
+  if (ta) state.internalContent[state.activeInternalFile] = ta.value;
+  state.activeInternalFile = name;
+  renderInternalTabs();
+  if (ta) { ta.value = state.internalContent[name] || ""; ta.focus(); }
+}
+function markInternalDirty() {
+  const cur = state.activeInternalFile;
+  if (!state.internalDirty[cur]) { state.internalDirty[cur] = true; renderInternalTabs(); }
+}
+async function saveAgent(id) {
+  try {
+    const nameIn = $("agent-name");
+    const name = nameIn.value;
+    if (!name.trim()) { fieldError(nameIn, "Name is required"); return; }
+    fieldError(nameIn, "");
+    const ta = $("agent-internal-content");
+    if (ta) state.internalContent[state.activeInternalFile] = ta.value;
+    // Server-side guard: validate HEARTBEAT.md before saving so we never persist a broken schedule.
+    const hbText = state.internalContent["HEARTBEAT.md"] || "";
+    if (hbText.trim()) {
+      const r = await fetch(`/api/agents/${id}/heartbeat/validate`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: hbText }),
       });
       const data = await r.json();
-      renderHeartbeatValidationResult(data);
-    } catch (e) {
-      if (status) status.innerHTML = `<span style="color:var(--err)">${escapeHtml(e.message)}</span>`;
+      if (!data.ok) {
+        if (state.activeInternalFile !== "HEARTBEAT.md") selectInternalTab("HEARTBEAT.md");
+        renderHeartbeatValidationResult(data);
+        showToast("HEARTBEAT.md has errors — fix before saving", true);
+        return;
+      }
     }
-  }
-
-  function renderHeartbeatValidationResult(data) {
-    const status = document.getElementById('hb-validate-status');
-    if (!status) return;
-    if (!data.ok) {
-      const errs = (data.errors || []).map(e => {
-        const where = e.name ? `[${escapeHtml(e.name)}]` : `[block ${e.block ?? '?'}]`;
-        return `<div style="color:var(--err); font-family:var(--mono); font-size:11px;">${where} ${escapeHtml(e.msg||'error')}</div>`;
-      }).join('');
-      const ent = (data.entries||[]).length;
-      status.innerHTML = `<div><strong style="color:var(--err)">${(data.errors||[]).length} error(s)</strong> · ${ent} valid entr${ent===1?'y':'ies'}</div>${errs}`;
-      state.heartbeatValid = false;
-    } else {
-      const lines = (data.entries || []).map(e => {
-        const next = (e.next_fires || []).slice(0, 2).map(s => new Date(s).toLocaleString()).join(', ') || '—';
-        return `<div style="font-family:var(--mono); font-size:11px;">✓ <strong>${escapeHtml(e.name)}</strong> <span class="muted">${escapeHtml(e.cron)}</span> → next: ${escapeHtml(next)}</div>`;
-      }).join('');
-      const total = (data.entries||[]).length;
-      status.innerHTML = `<div style="color:var(--ok); margin-bottom:4px;">✓ ${total} entr${total===1?'y':'ies'}</div>${lines}`;
-      state.heartbeatValid = true;
-    }
-  }
-
-  function selectInternalTab(name) {
-    if (!INTERNAL_FILES.includes(name)) return;
-    const ta = document.getElementById('agent-internal-content');
-    if (ta) state.internalContent[state.activeInternalFile] = ta.value;
-    state.activeInternalFile = name;
+    await api(`/api/agents/${id}`, jsonOpts("PUT", { name }));
+    await api(`/api/agents/${id}/internal`, jsonOpts("PUT", { files: state.internalContent }));
+    state.internalDirty = {};
     renderInternalTabs();
-    if (ta) {
-      ta.value = state.internalContent[name] || '';
-      ta.focus();
+    await refreshAgents();
+    await refreshJobs();  // HB Job sidebar reflects reconciliation
+    const h1 = $("viewer").querySelector(".page-head h1"); if (h1) h1.textContent = name;
+    showToast("Agent saved");
+  } catch (e) { showToast(e.message, true); }
+}
+
+// ── Pipeline editor ────────────────────────────────────────────────────
+const MODES = [
+  { id: "single", ic: "agent", label: "Single", desc: "One agent" },
+  { id: "sequential", ic: "arrowDown", label: "Sequential", desc: "Feed step → step" },
+  { id: "parallel", ic: "layers", label: "Parallel", desc: "Fan-out, ephemeral" },
+  { id: "custom", ic: "workflow", label: "Custom", desc: "Phases: mix both" },
+];
+function genStepId() { return "step-" + Math.random().toString(36).slice(2, 10); }
+// Group steps by phase (preserves first-seen order). Returns [{phase, items:[{step,idx}]}] sorted by phase.
+function groupStepsByPhase() {
+  const map = new Map();
+  state.pipelineDraft.steps.forEach((s, idx) => {
+    const p = (s.phase ?? idx);
+    if (!map.has(p)) map.set(p, []);
+    map.get(p).push({ step: s, idx });
+  });
+  return Array.from(map.entries()).sort((a, b) => a[0] - b[0]).map(([phase, items]) => ({ phase, items }));
+}
+function markJobDirty() { state.jobDirty = true; const n = $("job-dirty-note"); if (n) n.textContent = "Unsaved changes"; }
+function renderModePicker(isHb) {
+  const host = $("pipeline-mode");
+  if (!host) return;
+  host.value = state.pipelineDraft.mode;
+  mount(host, MODES.map(m => h("button", { type: "button", class: "mode-opt" + (state.pipelineDraft.mode === m.id ? " on" : ""), disabled: isHb || null,
+    "aria-pressed": String(state.pipelineDraft.mode === m.id), "data-mode": m.id, onclick: () => onPipelineModeChange(m.id) },
+    h("b", null, icon(m.ic), m.label), h("span", null, m.desc))));
+}
+function renderPipelineSteps(isHb) {
+  const host = $("pipeline-steps");
+  if (!host) return;
+  isHb = !!isHb;
+  renderModePicker(isHb);
+  const steps = state.pipelineDraft.steps;
+  const mode = state.pipelineDraft.mode;
+  const addBtn = $("pipeline-add");
+  if (addBtn) {
+    mount(addBtn, icon("plus"), h("span", null, mode === "single" ? (steps.length ? "Add step (switches to sequential)" : "Add step") : mode === "parallel" ? "Add parallel step" : mode === "custom" ? "Add phase" : "Add step"));
+  }
+  if (steps.length === 0) {
+    mount(host, emptyState("workflow", "No steps", isHb ? "This heartbeat job has no steps." : "Add a step to choose which agent runs this job.", null, true));
+    return;
+  }
+  const groups = groupStepsByPhase();
+  const total = groups.length;
+  const nodes = [];
+  groups.forEach((g, gi) => {
+    if (gi > 0) {
+      const feeds = g.items.some(({ step }) => step.depends_on_text);
+      nodes.push(h("div", { class: "connector" }, h("span", { class: feeds ? "feeds" : "" }, icon("arrowDown"),
+        feeds ? `previous reply → <previous_output${groups[gi - 1].items.length > 1 ? "s" : ""}>` : "then")));
+    }
+    const parallel = g.items.length > 1 || mode === "parallel";
+    const laneTools = [];
+    if (mode === "custom" && !isHb) {
+      if (gi > 0) laneTools.push(btn(null, { icon: "chevronUp", kind: "quiet", size: "sm", title: "Move phase up", onClick: () => movePhase(gi, -1) }));
+      if (gi < total - 1) laneTools.push(btn(null, { icon: "chevronDown", kind: "quiet", size: "sm", title: "Move phase down", onClick: () => movePhase(gi, 1) }));
+      laneTools.push(btn("Parallel step", { icon: "plus", kind: "ghost", size: "sm", onClick: () => addParallelStepInPhase(gi), title: "Add a step that runs alongside this phase" }));
+    }
+    const cards = g.items.map(({ step, idx }) => {
+      const showFeed = mode === "custom" ? gi > 0 : (mode === "sequential" && idx > 0);
+      const ctl = [];
+      if (!isHb) {
+        if (mode === "sequential" && idx > 0) ctl.push(btn(null, { icon: "chevronUp", kind: "quiet", size: "sm", title: "Move up", onClick: () => movePipelineStep(idx, -1) }));
+        if (mode === "sequential" && idx < steps.length - 1) ctl.push(btn(null, { icon: "chevronDown", kind: "quiet", size: "sm", title: "Move down", onClick: () => movePipelineStep(idx, 1) }));
+        if (mode === "custom" || mode !== "single" || steps.length > 1) ctl.push(btn(null, { icon: "trash", kind: "quiet", size: "sm", title: "Remove step", onClick: () => removePipelineStep(idx) }));
+      }
+      return renderStepCard(step, idx, { isHb, showFeed, controls: ctl, label: `step ${idx + 1}` });
+    });
+    nodes.push(h("div", { class: "lane" + (parallel ? " parallel" : "") },
+      h("div", { class: "lane-head" }, h("span", { class: "lbl" }, h("span", { class: "num" }, gi + 1), `Phase ${gi + 1}`),
+        parallel ? h("span", { class: "pill accent" }, icon("layers"), `${g.items.length} in parallel`) : h("span", { class: "pill" }, "1 step"),
+        h("span", { class: "grow" }), laneTools),
+      h("div", { class: "lane-body" }, cards)));
+  });
+  mount(host, h("div", { class: "lanes" }, nodes));
+}
+function renderStepCard(s, idx, o) {
+  const agentSel = h("select", { class: "select", disabled: o.isHb || null, onchange: (e) => { updatePipelineStep(idx, "agent_id", e.target.value); markJobDirty(); } },
+    state.agents.map(a => h("option", { value: a.id, selected: a.id === s.agent_id || null }, a.name)),
+    state.agents.length === 0 ? h("option", { value: "" }, "(no agents)") : null,
+    s.agent_id && !state.agents.some(a => a.id === s.agent_id) ? h("option", { value: s.agent_id, selected: true }, "(missing agent)") : null);
+  const nameIn = h("input", { class: "input", value: s.name || "", placeholder: "e.g. Reviewer", readonly: o.isHb || null,
+    oninput: (e) => { updatePipelineStep(idx, "name", e.target.value); markJobDirty(); const t = e.target.closest(".step").querySelector(".step-head .t"); if (t) t.textContent = o.label + (e.target.value ? " — " + e.target.value : ""); } });
+  const promptIn = h("textarea", { class: "input", rows: "3", placeholder: "Blank = use the job prompt below", readonly: o.isHb || null,
+    oninput: (e) => { updatePipelineStep(idx, "prompt_override", e.target.value); markJobDirty(); } }, s.prompt_override || "");
+  const feed = o.showFeed ? h("label", { class: "check" }, h("input", { type: "checkbox", checked: !!s.depends_on_text, disabled: o.isHb || null,
+    onchange: (e) => { updatePipelineStep(idx, "depends_on_text", e.target.checked); markJobDirty(); renderPipelineSteps(o.isHb); } }),
+    h("span", null, "Feed previous phase's reply as ", h("code", null, "<previous_output>"))) : null;
+  const eng = teamEngine({ engine: s.engine || "", model: s.model || "", local: !!s.is_local, inherit: true, disabled: o.isHb,
+    onChange: (v) => {
+      const st = state.pipelineDraft.steps[idx]; if (!st) return;
+      // Blank = inherit the run default: omit the keys entirely.
+      if (v.engine) { st.engine = v.engine; st.is_local = v.is_local; if (v.model) st.model = v.model; else delete st.model; }
+      else { delete st.engine; delete st.model; delete st.is_local; }
+      markJobDirty();
+      const tag = eng.el.closest(".step") && eng.el.closest(".step").querySelector(".eng-tag"); if (tag) tag.textContent = engTagText(st);
+    } });
+  return h("div", { class: "step" },
+    h("div", { class: "step-head" }, icon("agent"), h("span", { class: "t" }, o.label + (s.name ? " — " + s.name : "")), h("span", { class: "eng-tag faint" }, engTagText(s)), o.controls),
+    h("div", { class: "field-row" }, field("Agent", agentSel), field("Step name", nameIn, null, { extra: h("span", { class: "faint" }, "optional") })),
+    h("div", { class: "field" }, h("span", { class: "field-label" }, "Engine", h("span", { class: "faint" }, "override — “Run default” inherits")), eng.el),
+    field("Prompt override", promptIn, null, { extra: h("span", { class: "faint" }, "optional") }),
+    feed);
+}
+function engTagText(st) { return st && st.engine ? `${engineLabel(st.engine)}${st.model ? " · " + st.model : ""}${st.is_local ? " · local" : ""}` : ""; }
+function updatePipelineStep(idx, fieldName, value) {
+  const s = state.pipelineDraft.steps[idx];
+  if (!s) return;
+  s[fieldName] = value;
+}
+function _newStep(phase) {
+  return { step_id: genStepId(), agent_id: (state.agents[0] || {}).id || "", name: "", prompt_override: "", depends_on_text: false, phase };
+}
+// "+ Add step": single → promote to sequential when adding a 2nd; sequential → own phase;
+// parallel → phase 0; custom → a NEW phase (use "Parallel step" inside a phase to add to it).
+function addPipelineStep() {
+  const mode = state.pipelineDraft.mode;
+  const steps = state.pipelineDraft.steps;
+  let phase;
+  if (mode === "single") {
+    if (steps.length >= 1) state.pipelineDraft.mode = "sequential";
+    phase = steps.length;
+  } else if (mode === "parallel") {
+    phase = 0;
+  } else if (mode === "custom") {
+    phase = steps.reduce((m, s) => Math.max(m, s.phase ?? 0), -1) + 1;
+  } else {
+    phase = steps.length;
+  }
+  steps.push(_newStep(phase));
+  markJobDirty();
+  renderPipelineSteps(false);
+}
+function addParallelStepInPhase(groupIndex) {
+  const groups = groupStepsByPhase();
+  if (groupIndex < 0 || groupIndex >= groups.length) return;
+  state.pipelineDraft.steps.push(_newStep(groups[groupIndex].phase));
+  markJobDirty();
+  renderPipelineSteps(false);
+}
+function removePipelineStep(idx) {
+  state.pipelineDraft.steps.splice(idx, 1);
+  renumberPhases();
+  markJobDirty();
+  renderPipelineSteps(false);
+}
+function movePipelineStep(idx, delta) {
+  const target = idx + delta;
+  const steps = state.pipelineDraft.steps;
+  if (target < 0 || target >= steps.length) return;
+  const tmp = steps[idx]; steps[idx] = steps[target]; steps[target] = tmp;
+  if (state.pipelineDraft.mode === "sequential") steps.forEach((s, i) => { s.phase = i; });
+  markJobDirty();
+  renderPipelineSteps(false);
+}
+function movePhase(groupIndex, delta) {
+  const groups = groupStepsByPhase();
+  const target = groupIndex + delta;
+  if (target < 0 || target >= groups.length) return;
+  const a = groups[groupIndex].phase, b = groups[target].phase;
+  state.pipelineDraft.steps.forEach(s => { if (s.phase === a) s.phase = b; else if (s.phase === b) s.phase = a; });
+  renumberPhases();
+  markJobDirty();
+  renderPipelineSteps(false);
+}
+function renumberPhases() {
+  const phases = Array.from(new Set(state.pipelineDraft.steps.map(s => s.phase ?? 0))).sort((a, b) => a - b);
+  const remap = new Map(phases.map((p, i) => [p, i]));
+  state.pipelineDraft.steps.forEach(s => { s.phase = remap.get(s.phase ?? 0) ?? 0; });
+}
+function onPipelineModeChange(newMode) {
+  const steps = state.pipelineDraft.steps;
+  if (!MODES.some(m => m.id === newMode) || newMode === state.pipelineDraft.mode) return;
+  state.pipelineDraft.mode = newMode;
+  if (newMode === "single" && steps.length > 1) {
+    state.pipelineDraft.steps = steps.slice(0, 1);
+    state.pipelineDraft.steps[0].phase = 0;
+  } else if (newMode === "sequential") {
+    steps.forEach((s, i) => { s.phase = i; });
+  } else if (newMode === "parallel") {
+    steps.forEach(s => { s.phase = 0; });
+  } else if (newMode === "custom") {
+    renumberPhases();
+  }
+  markJobDirty();
+  renderPipelineSteps(false);
+}
+
+// ── Job viewer ─────────────────────────────────────────────────────────
+async function renderJobViewer(id) {
+  loadingView("Loading job…");
+  try {
+    const res = await api(`/api/jobs/${id}`);
+    const job = res.job;
+    const fileRes = await api(`/api/jobs/${id}/files`);
+    if (state.activeType !== "job" || state.activeId !== id) return;
+    const files = fileRes.files || [];
+    const ws = state.workspaces.find(w => w.session_id === job.workspace_id);
+    const pipeline = job.pipeline || { mode: "single", steps: [] };
+    state.pipelineDraft = { mode: pipeline.mode || "single", steps: (pipeline.steps || []).map(s => ({ ...s })) };
+    state.jobDirty = false;
+    const isHb = job.kind === "heartbeat";
+    const he = job.heartbeat_entry || {};
+
+    const titleIn = h("input", { class: "input", id: "job-title", value: job.title || "", readonly: isHb || null, oninput: () => markJobDirty() });
+    const promptIn = h("textarea", { class: "input code", id: "job-prompt", rows: "8", readonly: isHb || null, oninput: () => markJobDirty(),
+      placeholder: "What should the agents do? Each step gets this unless it has a prompt override." }, job.task_description || "");
+    const upload = h("input", { type: "file", id: "job-file-upload", multiple: true, style: { display: "none" }, onchange: () => uploadJobFiles(id) });
+    const drop = h("div", { class: "dropzone", style: { margin: "12px" }, onclick: () => upload.click() }, icon("upload"), h("span", null, "Drop files here or click to attach resources"));
+    wireDrop(drop, (fl) => uploadJobFiles(id, fl));
+
+    mount($("viewer"),
+      pageHead({ title: job.title,
+        pills: [isHb ? h("span", { class: "pill violet" }, icon("heart"), "heartbeat") : null],
+        sub: [h("span", null, "Job"), idChip(job.id, 13),
+          ws ? h("a", { href: "#", onclick: (e) => { e.preventDefault(); selectWorkspace(ws.session_id); } }, icon("folder"), " ", wsName(ws)) : (isHb ? h("span", null, "workspace: " + (he.workspace || "ephemeral")) : h("span", { class: "pill warn" }, "missing workspace")),
+          h("span", { class: "faint", id: "job-dirty-note" })],
+        tools: [btn("Run", { icon: "play", kind: "primary", kbd: "Ctrl ⏎", title: "Run this job (saves first)", onClick: () => openRunModal(id) }),
+          btn("Save", { icon: "save", kbd: "Ctrl S", id: "job-save", onClick: () => updateJob(id) }),
+          btn(null, { icon: "trash", kind: "danger", title: "Delete job", onClick: () => deleteJobPrompt(id) })] }),
+      h("section", { class: "card", id: "runs-card" },
+        h("div", { class: "card-head" }, h("h3", null, icon("pulse"), "Runs", h("span", { class: "hint", id: "runs-hint" })),
+          btn(null, { icon: "refresh", kind: "quiet", size: "sm", title: "Refresh runs", onClick: () => refreshJobRuns(id) })),
+        h("div", { id: "task-history-area", style: { display: "none" } }, h("div", { id: "task-history-list", class: "run-chips" })),
+        h("div", { id: "execution-area", style: { display: "none" } }),
+        h("div", { id: "runs-empty" }, emptyState("play", "No runs yet", isHb ? "Heartbeat runs appear here when the schedule fires — or run it now." : "Run this job to watch each step live: events, tool calls, tokens and cost.",
+          btn("Run now", { icon: "play", kind: "primary", size: "sm", onClick: () => openRunModal(id) }), true))),
+      isHb ? card("Heartbeat schedule", "heart", { actions: btn("Edit in HEARTBEAT.md", { icon: "edit", kind: "ghost", size: "sm", onClick: () => goToAgentHeartbeat(job.agent_id || "") }) },
+        h("div", { class: "row wrap", style: { gap: "10px" } },
+          h("span", { class: "pill accent mono" }, icon("clock"), he.cron || "—"),
+          h("span", { class: "pill" }, icon("folder"), "workspace: " + (he.workspace || "ephemeral")),
+          he.engine ? h("span", { class: "pill" }, icon("cpu"), "engine: " + he.engine) : null,
+          he.enabled === false ? h("span", { class: "pill warn" }, "disabled") : h("span", { class: "pill ok" }, icon("check"), "enabled"),
+          h("span", { class: "field-hint" }, "Read-only here — this job is generated from the agent's HEARTBEAT.md."))) : null,
+      card("Configuration", "edit", { hint: isHb ? "read-only" : null },
+        h("div", { "data-submit": "job-save" },
+          h("div", { class: "field-row" },
+            field("Job title", titleIn, null, { req: !isHb }),
+            field("Linked workspace", h("input", { class: "input", readonly: true, value: ws ? wsName(ws) : (isHb ? (he.workspace || "ephemeral") : "Missing Workspace") }), isHb ? null : "Set when the job was created.")),
+          field(isHb ? "Heartbeat prompt" : "Job prompt", promptIn, isHb ? "Read-only — edit via HEARTBEAT.md." : "The execution plan. Ctrl+Enter saves."))),
+      card("Pipeline", "workflow", { hint: isHb ? "read-only — edit via HEARTBEAT.md" : "how agents are chained" },
+        h("div", { id: "pipeline-mode", class: "mode-pick", role: "group", "aria-label": "Pipeline mode" }),
+        h("div", { style: { height: "14px" } }),
+        h("div", { id: "pipeline-steps" }),
+        isHb ? null : h("button", { type: "button", class: "btn ghost add-step", id: "pipeline-add", onclick: () => addPipelineStep() })),
+      isHb ? null : card("Resources & files", "link", { hint: `${files.length}`, flush: true,
+          actions: h("div", { class: "row" },
+            btn("Upload", { icon: "upload", kind: "ghost", size: "sm", onClick: () => upload.click() }),
+            btn("Add via URL", { icon: "link", kind: "ghost", size: "sm", onClick: () => addJobFilePrompt(id) })) },
+        upload, fileRows("job", id, files, { canDelete: true, canDownload: false, emptyText: "No resources linked" }), drop));
+
+    renderPipelineSteps(isHb);
+    await refreshJobRuns(id, true);
+  } catch (e) { errorView(e.message, () => renderJobViewer(id)); }
+}
+async function refreshJobRuns(id, initial) {
+  const runsRes = await api(`/api/jobs/${encodeURIComponent(id)}/runs`);
+  if (state.activeType !== "job" || state.activeId !== id) return;
+  const runs = runsRes.runs || [];
+  const hint = $("runs-hint"); if (hint) hint.textContent = runs.length ? `${runs.length}` : "";
+  if (!runs.length) return;
+  $("runs-empty").style.display = "none";
+  $("task-history-area").style.display = "block";
+  renderRunHistoryList(runs);
+  if (initial) {
+    let target = runs.find(r => r.run_id === state.activeRunId);
+    if (!target) { target = runs[0]; state.activeRunId = target.run_id; }
+    $("execution-area").style.display = "block";
+    state.watchedLive = !TERMINAL_RUN.includes(target.status);
+    await pollRun(id);
+    if (!TERMINAL_RUN.includes(target.status)) {
+      stopExecTimer();
+      state.executionTimer = setInterval(() => pollRun(id), 1000);
     }
   }
-
-  function markInternalDirty() {
-    const cur = state.activeInternalFile;
-    if (!state.internalDirty[cur]) {
-      state.internalDirty[cur] = true;
-      renderInternalTabs();
-    }
+}
+function renderRunHistoryList(runs) {
+  const list = $("task-history-list");
+  if (!list) return;
+  mount(list, runs.slice(0, 10).map(r => {
+    const dots = (r.steps || []).map(s => h("span", { class: "sd " + (STATUS_TONE[s.status || "pending"] || ""), title: `${s.name || s.agent_name || s.agent_id || "?"}: ${s.status || "pending"}` }));
+    const dur = durationBetween(r.started_at, r.completed_at);
+    return h("button", { type: "button", class: "run-chip" + (state.activeRunId === r.run_id ? " on" : ""), onclick: () => switchRun(r.run_id, r.job_id),
+      title: `${r.run_id}\n${fmtDateTime(r.started_at)}${r.source ? "\nsource: " + r.source : ""}` },
+      h("span", { class: "l1" }, statusPill(r.status), h("span", { class: "mono faint" }, shortId(r.run_id, 6))),
+      h("span", { class: "l1 faint" }, relTime(r.started_at), dur != null && r.completed_at ? " · " + fmtMs(dur) : "", h("span", { class: "grow" }), r.mode),
+      h("span", { class: "l2" }, dots));
+  }));
+}
+async function switchRun(runId, jobId) {
+  const area = $("execution-area");
+  if (state.activeRunId === runId) {
+    area.style.display = area.style.display === "none" ? "block" : "none";
+    return;
   }
+  state.activeRunId = runId;
+  area.style.display = "block";
+  stopExecTimer();
+  state.watchedLive = false;
+  mount(area, h("div", { class: "monitor" }, skeleton(4)));
+  await pollRun(jobId);
+  const r = await api(`/api/runs/${encodeURIComponent(runId)}`);
+  if (!TERMINAL_RUN.includes(r.run.status)) {
+    state.watchedLive = true;
+    state.executionTimer = setInterval(() => pollRun(jobId), 1000);
+  }
+  const runsRes = await api(`/api/jobs/${encodeURIComponent(jobId)}/runs`);
+  renderRunHistoryList(runsRes.runs || []);
+}
 
-  async function saveAgent(id) {
-    try {
-      const name = document.getElementById('agent-name').value;
-      const ta = document.getElementById('agent-internal-content');
-      if (ta) state.internalContent[state.activeInternalFile] = ta.value;
-
-      // Server-side guard: validate HEARTBEAT.md before saving so we
-      // never persist a broken schedule.
-      const hbText = state.internalContent['HEARTBEAT.md'] || '';
-      if (hbText.trim()) {
-        const r = await fetch(`/api/agents/${id}/heartbeat/validate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: hbText })
-        });
-        const data = await r.json();
-        if (!data.ok) {
-          renderHeartbeatValidationResult(data);
-          showToast('HEARTBEAT.md has errors — fix before saving', true);
-          // Switch tab so the user sees the footer status
-          if (state.activeInternalFile !== 'HEARTBEAT.md') selectInternalTab('HEARTBEAT.md');
-          return;
+// ── Actions ────────────────────────────────────────────────────────────
+async function updateWorkspaceTimeouts(id) {
+  const idleIn = $("ws-idle"), absIn = $("ws-abs");
+  let idle = 0, abs = 0;   // 0 = never expire
+  if ($("ws-expire").checked) {
+    idle = idleIn.value.trim() ? posInt(idleIn.value) : 0;
+    abs = absIn.value.trim() ? posInt(absIn.value) : 0;
+    if (!fieldError(idleIn, idle === null ? "Whole seconds, > 0" : "")) return;
+    if (!fieldError(absIn, abs === null ? "Whole seconds, > 0" : "")) return;
+    if (!idle && !abs) { fieldError(idleIn, "Set an idle timeout or a max lifetime — or turn auto-delete off"); return; }
+  } else { fieldError(idleIn, ""); fieldError(absIn, ""); }
+  try {
+    await api(`/api/sessions/${encodeURIComponent(id)}`, jsonOpts("PUT", { session_idle_timeout_seconds: idle, absolute_ttl_seconds: abs }));
+    state.wsDirty = false;
+    await refreshWorkspaces();
+    renderWorkspaceViewer(id);
+    showToast("Workspace updated");
+  } catch (e) { showToast(e.message, true); }
+}
+function modalField(label, input, hint, req) {
+  return h("label", { class: "field" }, h("span", { class: "field-label" }, label, req ? h("span", { class: "req" }, "*") : null), input, hint ? h("span", { class: "field-hint" }, hint) : null);
+}
+async function createWorkspacePrompt() {
+  const name = h("input", { class: "input", id: "new-ws-name", placeholder: "e.g. My Research Project", autofocus: true });
+  const idle = h("input", { class: "input", type: "number", min: "1", id: "new-ws-idle", value: "604800" });
+  const abs = h("input", { class: "input", type: "number", min: "1", id: "new-ws-abs", placeholder: "none" });
+  const expire = h("input", { type: "checkbox", id: "new-ws-expire", role: "switch" });
+  const expSw = h("label", { class: "switch-field", for: "new-ws-expire", title: "Workspaces are permanent unless you opt in" }, h("span", { class: "switch" }, expire, h("span")), h("span", null, "Auto-delete this workspace"));
+  const ttlBox = h("div", { class: "field-row hidden", style: { marginTop: "10px" } },
+    modalField("Idle timeout (sec)", idle, "Deleted after this long unused."), modalField("Max lifetime (sec)", abs, "Deleted this long after creation. Blank = no cap."));
+  expire.addEventListener("change", () => { ttlBox.classList.toggle("hidden", !expire.checked); expSw.classList.toggle("on", expire.checked); });
+  modal({ title: "New workspace", subtitle: "A folder that jobs run in. Files you drop here are visible to every step.",
+    body: h("div", null, modalField("Name", name, "Blank = “Untitled Workspace”."),
+      h("details", { class: "adv" }, h("summary", null, icon("chevronRight"), "Advanced — expiry"),
+        h("div", { style: { paddingTop: "10px" } }, expSw,
+          h("div", { class: "field-hint", style: { marginTop: "6px" } }, "Off by default. An expired workspace is deleted with all its files."),
+          ttlBox))),
+    actions: [{ label: "Cancel", kind: "ghost" }, { label: "Create workspace", kind: "primary", id: "modal-confirm", onClick: async (close) => {
+      const body = { data: { name: name.value || "Untitled Workspace" } };
+      if (expire.checked) {
+        const i = posInt(idle.value);
+        if (!fieldError(idle, i ? "" : "Whole seconds, > 0")) return false;
+        body.session_idle_timeout_seconds = i;
+        if (abs.value.trim()) {
+          const a = posInt(abs.value);
+          if (!fieldError(abs, a ? "" : "Whole seconds, > 0 (or blank)")) return false;
+          body.absolute_ttl_seconds = a;
         }
       }
-
-      await api(`/api/agents/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name })
-      });
-      await api(`/api/agents/${id}/internal`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ files: state.internalContent })
-      });
-      state.internalDirty = {};
-      renderInternalTabs();
-      await refreshAgents();
-      await refreshJobs();  // HB Job sidebar reflects reconciliation
-      showToast('Agent saved');
-    } catch (e) { showToast(e.message, true); }
-  }
-
-  async function updateJob(id) {
-    const title = document.getElementById('job-title').value;
-    const task_description = document.getElementById('job-prompt').value;
-    const payload = { title, task_description };
-    if (state.pipelineDraft) {
-      payload.pipeline = state.pipelineDraft;
-    }
-    try {
-      await api(`/api/jobs/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      await refreshJobs();
-      showToast('Job updated');
-    } catch (e) { showToast(e.message, true); }
-  }
-
-  async function uploadFiles(id) {
-    const input = document.getElementById('file-upload');
-    const formData = new FormData();
-    for (const file of input.files) {
-      formData.append('files', file);
-    }
-    try {
-      await api(`/api/agents/${id}/files`, { method: 'POST', body: formData });
-      renderAgentViewer(id);
-      showToast('Files uploaded');
-    } catch (e) { showToast(e.message, true); }
-  }
-
-  async function uploadJobFiles(id) {
-    const input = document.getElementById('job-file-upload');
-    const formData = new FormData();
-    for (const file of input.files) {
-      formData.append('files', file);
-    }
-    try {
-      await api(`/api/jobs/${id}/files`, { method: 'POST', body: formData });
-      renderJobViewer(id);
-      showToast('Files uploaded');
-    } catch (e) { showToast(e.message, true); }
-  }
-
-  async function viewFile(type, id, path) {
-    const url = type === 'ws' 
-      ? `/api/sessions/${encodeURIComponent(id)}/files/${encodeURIComponent(path)}`
-      : type === 'agent'
-        ? `/api/agents/${id}/files/${encodeURIComponent(path)}`
-        : `/api/jobs/${id}/files/${encodeURIComponent(path)}`;
-    
-    try {
-      const resp = await fetch(url);
-      const text = await resp.text();
-      const body = `<pre style="margin: 0; padding: 14px; font-family: var(--mono); font-size: 12px; line-height: 1.45; color: var(--text); white-space: pre-wrap; word-break: break-word;">${escapeHtml(text)}</pre>`;
-      openModal(path, body, 'Close', closeModal);
-    } catch (e) { showToast(e.message, true); }
-  }
-
-  function closeModal() { document.getElementById('modal-overlay').style.display = 'none'; }
-
-  async function deleteFile(type, id, path) {
-    openModal('Delete File', `<div style="padding:20px;">Delete <strong>${path}</strong>?</div>`, 'Delete', async () => {
-      const url = type === 'agent' 
-        ? `/api/agents/${id}/files/${encodeURIComponent(path)}`
-        : type === 'job'
-          ? `/api/jobs/${id}/files/${encodeURIComponent(path)}`
-          : null;
-      if (!url) return;
       try {
-        await api(url, { method: 'DELETE' });
-        closeModal();
-        if (type === 'agent') renderAgentViewer(id);
-        else if (type === 'job') renderJobViewer(id);
-        showToast('File deleted');
-      } catch (e) { showToast(e.message, true); }
-    });
-  }
-
-  async function deleteWorkspacePrompt(id) {
-    openModal('Delete Workspace', `<div style="padding:20px;">Delete workspace <strong>${id}</strong>?</div>`, 'Delete Workspace', async () => {
+        const res = await api("/api/sessions", jsonOpts("POST", body));
+        close();
+        await refreshWorkspaces();
+        selectWorkspace(res.session.session_id);
+        showToast("Workspace created");
+      } catch (e) { showToast(e.message, true); return false; }
+    } }] });
+}
+async function createAgentPrompt() {
+  const name = h("input", { class: "input", id: "new-agent-name", placeholder: "e.g. Code Reviewer", autofocus: true });
+  const soul = h("textarea", { class: "input code", id: "new-agent-soul", rows: "10", spellcheck: "false", placeholder: "Define the agent's core identity, purpose, and values…" });
+  modal({ title: "New agent", subtitle: "You can fill in USER, AGENT, MEMORY and HEARTBEAT after creating it.",
+    body: h("div", null, modalField("Name", name, null, true), modalField("SOUL.md", soul, "Optional — core identity, purpose, values.")),
+    actions: [{ label: "Cancel", kind: "ghost" }, { label: "Create agent", kind: "primary", id: "modal-confirm", onClick: async (close) => {
+      if (!fieldError(name, name.value ? "" : "Name is required")) return false;
       try {
-        await api(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
-        closeModal();
-        showDefaultView();
-        showToast('Workspace deleted');
-      } catch (e) { showToast(e.message, true); }
-    });
-  }
-
-  async function deleteAgentPrompt(id) {
-    openModal('Delete Agent', `<div style="padding:20px;">Delete agent?</div>`, 'Delete Agent', async () => {
+        const res = await api("/api/agents", jsonOpts("POST", { name: name.value, soul: soul.value }));
+        close();
+        await refreshAgents();
+        selectAgent(res.agent.id);
+        showToast("Agent created");
+      } catch (e) { showToast(e.message, true); return false; }
+    } }] });
+}
+async function createJobPrompt(preselectWs) {
+  const title = h("input", { class: "input", id: "new-job-title", placeholder: "e.g. Weekly Code Sync", autofocus: true });
+  const wsSel = h("select", { class: "select", id: "new-job-ws" }, state.workspaces.map(w => h("option", { value: w.session_id, selected: w.session_id === preselectWs || null }, wsName(w))));
+  const agSel = h("select", { class: "select", id: "new-job-agent" }, state.agents.map(a => h("option", { value: a.id }, a.name)));
+  const missing = [!state.workspaces.length ? "a workspace" : null, !state.agents.length ? "an agent" : null].filter(Boolean);
+  modal({ title: "New job", subtitle: "Starts as a single-agent pipeline; add steps and phases afterwards.",
+    body: h("div", null,
+      missing.length ? h("div", { class: "warn-box", style: { marginBottom: "12px" } }, icon("alert"), h("span", null, `Create ${missing.join(" and ")} first — a job needs both.`)) : null,
+      modalField("Title", title, null, true),
+      h("div", { class: "field-row" }, modalField("Workspace", wsSel), modalField("First agent", agSel))),
+    actions: [{ label: "Cancel", kind: "ghost" }, { label: "Create job", kind: "primary", id: "modal-confirm", onClick: async (close) => {
+      if (!fieldError(title, title.value ? "" : "Title is required")) return false;
       try {
-        await api(`/api/agents/${id}`, { method: 'DELETE' });
-        closeModal();
-        showDefaultView();
-        showToast('Agent deleted');
-      } catch (e) { showToast(e.message, true); }
-    });
+        const res = await api("/api/jobs", jsonOpts("POST", { title: title.value, workspace_id: wsSel.value, agent_id: agSel.value }));
+        close();
+        await refreshJobs();
+        selectJobTab("user");
+        selectJob(res.job.id);
+        showToast("Job created");
+      } catch (e) { showToast(e.message, true); return false; }
+    } }] });
+}
+async function updateJob(id, opts = {}) {
+  const titleIn = $("job-title");
+  const title = titleIn.value;
+  const task_description = $("job-prompt").value;
+  const job = state.jobs.find(j => j.id === id);
+  if (!(job && job.kind === "heartbeat")) {
+    if (!fieldError(titleIn, title.trim() ? "" : "Title is required")) return false;
+    const orphan = state.pipelineDraft.steps.findIndex(s => !s.agent_id);
+    if (orphan >= 0) { showToast(`Step ${orphan + 1} has no agent — create an agent first`, true); return false; }
   }
-
-  async function deleteJobPrompt(id) {
-    openModal('Delete Job', `<div style="padding:20px;">Delete job?</div>`, 'Delete Job', async () => {
+  const payload = { title, task_description };
+  if (state.pipelineDraft) payload.pipeline = state.pipelineDraft;
+  try {
+    await api(`/api/jobs/${id}`, jsonOpts("PUT", payload));
+    state.jobDirty = false;
+    const n = $("job-dirty-note"); if (n) n.textContent = "";
+    const h1 = $("viewer").querySelector(".page-head h1"); if (h1 && h1.firstChild) h1.firstChild.textContent = title;
+    await refreshJobs();
+    if (!opts.silent) showToast("Job updated");
+    return true;
+  } catch (e) { showToast(e.message, true); return false; }
+}
+async function uploadFiles(id, fileList) {
+  const input = $("file-upload");
+  const formData = new FormData();
+  for (const file of (fileList || input.files)) formData.append("files", file);
+  try {
+    await api(`/api/agents/${id}/files`, { method: "POST", body: formData });
+    renderAgentViewer(id, state.activeInternalFile);
+    showToast("Files uploaded");
+  } catch (e) { showToast(e.message, true); }
+}
+async function uploadJobFiles(id, fileList) {
+  const input = $("job-file-upload");
+  const formData = new FormData();
+  for (const file of (fileList || input.files)) formData.append("files", file);
+  try {
+    await api(`/api/jobs/${id}/files`, { method: "POST", body: formData });
+    renderJobViewer(id);
+    showToast("Files uploaded");
+  } catch (e) { showToast(e.message, true); }
+}
+async function viewFile(type, id, path) {
+  try {
+    const resp = await fetch(fileUrl(type, id, path));
+    const text = await resp.text();
+    openTextViewer(path, text, `${type === "ws" ? "Workspace" : type === "agent" ? "Agent" : "Job"} file`);
+  } catch (e) { showToast(e.message, true); }
+}
+async function deleteFile(type, id, path) {
+  const url = type === "agent" ? `/api/agents/${id}/files/${encodeURIComponent(path)}` : type === "job" ? `/api/jobs/${id}/files/${encodeURIComponent(path)}` : null;
+  if (!url) return;
+  if (!(await confirmDialog("Delete file?", h("p", { class: "muted" }, "Delete ", h("code", null, path), "? This can't be undone."), { confirm: "Delete", danger: true }))) return;
+  try {
+    await api(url, { method: "DELETE" });
+    if (type === "agent") renderAgentViewer(id, state.activeInternalFile);
+    else if (type === "job") renderJobViewer(id);
+    showToast("File deleted");
+  } catch (e) { showToast(e.message, true); }
+}
+async function deleteWorkspacePrompt(id) {
+  const ws = state.workspaces.find(w => w.session_id === id);
+  if (!(await confirmDialog("Delete workspace?", h("p", { class: "muted" }, "Delete ", h("b", null, ws ? wsName(ws) : id), " and all its files? Jobs linked to it will lose their workspace."), { confirm: "Delete workspace", danger: true }))) return;
+  try {
+    await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+    state.workspaces = state.workspaces.filter(w => w.session_id !== id);
+    if (state.activeType === "ws" && state.activeId === id) { state.wsDirty = false; showDefaultView(); } else renderSidebar(true);
+    showToast("Workspace deleted");
+    refreshWorkspaces();
+  } catch (e) { showToast(e.message, true); }
+}
+async function deleteAgentPrompt(id) {
+  const a = state.agents.find(x => x.id === id);
+  if (!(await confirmDialog("Delete agent?", h("p", { class: "muted" }, "Delete ", h("b", null, a ? a.name : id), " and its internal files? Heartbeat jobs generated from it go too."), { confirm: "Delete agent", danger: true }))) return;
+  try {
+    await api(`/api/agents/${id}`, { method: "DELETE" });
+    state.agents = state.agents.filter(x => x.id !== id);
+    if (state.activeType === "agent" && state.activeId === id) { state.internalDirty = {}; showDefaultView(); } else renderSidebar(true);
+    showToast("Agent deleted");
+    refreshAgents(); refreshJobs();
+  } catch (e) { showToast(e.message, true); }
+}
+async function deleteJobPrompt(id) {
+  const j = state.jobs.find(x => x.id === id);
+  if (!(await confirmDialog("Delete job?", h("p", { class: "muted" }, "Delete ", h("b", null, j ? j.title : id), "? Its run history stays on disk."), { confirm: "Delete job", danger: true }))) return;
+  try {
+    await api(`/api/jobs/${id}`, { method: "DELETE" });
+    state.jobs = state.jobs.filter(x => x.id !== id);
+    if (state.activeType === "job" && state.activeId === id) { state.jobDirty = false; showDefaultView(); } else renderSidebar(true);
+    showToast("Job deleted");
+    refreshJobs();
+  } catch (e) { showToast(e.message, true); }
+}
+async function addJobFilePrompt(id) {
+  const name = h("input", { class: "input", id: "res-name", placeholder: "e.g. Documentation PDF", autofocus: true });
+  const url = h("input", { class: "input", id: "res-url", placeholder: "https://…", type: "url" });
+  modal({ title: "Add resource via URL", subtitle: "The proxy fetches it (public http/https only) and stores it with the job.",
+    body: h("div", null, modalField("Resource name", name, null, true), modalField("External URL", url, null, true)),
+    actions: [{ label: "Cancel", kind: "ghost" }, { label: "Fetch resource", kind: "primary", id: "modal-confirm", onClick: async (close) => {
+      if (!fieldError(name, name.value ? "" : "Name is required")) return false;
+      if (!fieldError(url, /^https?:\/\/\S+$/i.test(url.value) ? "" : "Enter an http(s) URL")) return false;
       try {
-        await api(`/api/jobs/${id}`, { method: 'DELETE' });
-        closeModal();
-        showDefaultView();
-        showToast('Job deleted');
-      } catch (e) { showToast(e.message, true); }
-    });
-  }
-
-  async function addJobFilePrompt(id) {
-    const body = `
-      <div class="flex-col" style="padding: 20px;">
-        <div class="field-group">
-          <label>Resource Name</label>
-          <input id="res-name" placeholder="e.g. Documentation PDF">
-        </div>
-        <div class="field-group">
-          <label>External URL</label>
-          <input id="res-url" placeholder="https://...">
-        </div>
-      </div>
-    `;
-    openModal('Add Resource via URL', body, 'Fetch Resource', async () => {
-      const name = document.getElementById('res-name').value;
-      const url = document.getElementById('res-url').value;
-      if (!name || !url) return showToast('Name and URL required', true);
-      
-      try {
-        showToast('Fetching resource...');
-        await api(`/api/jobs/${id}/files/fetch`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, url })
-        });
-        closeModal();
+        toast("Fetching resource…");
+        await api(`/api/jobs/${id}/files/fetch`, jsonOpts("POST", { name: name.value, url: url.value }));
+        close();
         renderJobViewer(id);
-        showToast('Resource fetched and added');
-      } catch (e) { showToast(e.message, true); }
-    });
+        showToast("Resource fetched and added");
+      } catch (e) { showToast(e.message, true); return false; }
+    } }] });
+}
+
+// ── Execution ──────────────────────────────────────────────────────────
+function openRunModal(jobId) {
+  const job = state.jobs.find(j => j.id === jobId);
+  const steps = ((state.activeType === "job" && state.activeId === jobId) ? state.pipelineDraft : ((job && job.pipeline) || {})).steps || [];
+  const overridden = steps.filter(st => st.engine).length;
+  const eng = teamEngine({ ids: { engine: "run-type", model: "run-model", local: "run-local" }, engine: "claude_code" });
+  modal({ title: "Run job", subtitle: job ? job.title : null, width: "560px",
+    body: h("div", null,
+      h("div", { class: "field" }, h("span", { class: "field-label" }, "Engine"), eng.el,
+        h("span", { class: "field-hint" }, "The run default. ", overridden ? `${overridden} step${overridden === 1 ? " has its" : "s have their"} own override and keep${overridden === 1 ? "s" : ""} it. ` : "", "Model blank = the engine's default.")),
+      h("div", { class: "info-box" }, icon("info"), h("span", null, `Saves the job first, then runs ${steps.length} step${steps.length === 1 ? "" : "s"} (${(state.pipelineDraft || {}).mode || "single"}).`))),
+    actions: [{ label: "Cancel", kind: "ghost" }, { label: "Start run", kind: "primary", icon: "play", id: "modal-confirm", onClick: () => { runJob(jobId, eng.get()); } }] });
+}
+async function runJob(jobId, choice) {
+  choice = choice || { engine: "claude_code", model: "", is_local: false };
+  const isLocal = !!choice.is_local;
+  const runBody = { is_local: isLocal, source: "user", engine: choice.engine || "claude_code" };
+  if (choice.model) runBody.model = choice.model;
+  // Auto-save the job (title, prompt, pipeline) before running
+  if (state.activeType === "job" && state.activeId === jobId) {
+    let ok = true;
+    try { ok = await updateJob(jobId, { silent: true }); } catch (e) { /* toast shown */ }
+    if (ok === false) return;
   }
-
-  // --- Execution Flow ---
-
-  function escXml(s) {
-    return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const execArea = $("execution-area");
+  if (execArea) { execArea.style.display = "block"; mount(execArea, h("div", { class: "monitor" }, h("div", { class: "row muted" }, h("span", { class: "dot accent pulse" }), "Starting run…"))); }
+  const empty = $("runs-empty"); if (empty) empty.style.display = "none";
+  try {
+    const runRes = await api(`/api/jobs/${jobId}/runs`, jsonOpts("POST", runBody));
+    state.activeRunId = runRes.run.run_id;
+    showToast(`Run started: ${state.activeRunId.slice(0, 8)}…`);
+    state.jobDirty = false;
+    await renderJobViewer(jobId);
+    stopExecTimer();
+    state.watchedLive = true;
+    state.executionTimer = setInterval(() => pollRun(jobId), 1000);
+    pollRun(jobId);
+  } catch (e) {
+    if (execArea) mount(execArea, h("div", { class: "monitor" }, errorBox("Execution error: " + e.message)));
+    showToast(e.message, true);
   }
-
-  function buildAgentPromptXml(agent, job, agentFiles, jobFiles) {
-    const paths = [...(agentFiles || []), ...(jobFiles || [])].map(f => f.path);
-    const filesBlock = paths.length
-      ? `  <context_files>\n${paths.map(p => `    <file>${escXml(p)}</file>`).join('\n')}\n  </context_files>`
-      : `  <context_files/>`;
-    return [
-      `<agent_task version="1">`,
-      `  <agent id="${escXml(agent.id)}" name="${escXml(agent.name)}"/>`,
-      `  <workspace id="${escXml(job.workspace_id)}"/>`,
-      `  <instructions>`,
-      escXml(agent.instructions || ''),
-      `  </instructions>`,
-      `  <task_description>`,
-      escXml(job.task_description || ''),
-      `  </task_description>`,
-      filesBlock,
-      `</agent_task>`,
-    ].join('\n');
-  }
-
-  function openRunModal(jobId) {
-    const body = `
-      <div class="flex-col" style="padding: 20px;">
-        <div class="field-group">
-          <label>Task Engine</label>
-          <select id="run-type">
-            <option value="CLAUDE_CODE">CLAUDE_CODE</option>
-            <option value="CODEX">CODEX</option>
-            <option value="ANTIGRAVITY">ANTIGRAVITY</option>
-          </select>
-        </div>
-        <div class="field-group">
-          <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
-             <input type="checkbox" id="run-local" style="width:auto; margin:0;"> Local Mode
-          </label>
-        </div>
-      </div>
-    `;
-    openModal('Execute Job', body, 'Start Execution', () => runJob(jobId));
-  }
-
-  async function runJob(jobId) {
-    const isLocal = document.getElementById('run-local').checked;
-    closeModal();
-
-    // Auto-save the job (title, prompt, pipeline) before running
-    if (state.activeType === 'job' && state.activeId === jobId) {
-      try { await updateJob(jobId); } catch (e) {}
+}
+async function pollRun(jobId) {
+  if (!state.activeRunId) return;
+  try {
+    const r = await api(`/api/runs/${encodeURIComponent(state.activeRunId)}`);
+    const run = r.run;
+    // Pull live task state for each step so the monitor reflects events
+    const stepTasks = await Promise.all(run.steps.map(async s => {
+      if (!s.task_id) return null;
+      try { return await api(`/api/tasks/${encodeURIComponent(s.task_id)}`); } catch { return null; }
+    }));
+    if (state.activeType !== "job" || state.activeId !== jobId || state.activeRunId !== run.run_id) return;
+    renderRunMonitor(run, stepTasks);
+    if (TERMINAL_RUN.includes(run.status)) {
+      const wasLive = state.executionTimer != null;
+      stopExecTimer();
+      if (wasLive && state.watchedLive) showToast(`Run ${run.status}`, run.status !== "completed");
+      state.watchedLive = false;
+      const runsRes = await api(`/api/jobs/${encodeURIComponent(jobId)}/runs`);
+      renderRunHistoryList(runsRes.runs || []);
     }
-
-    const execArea = document.getElementById('execution-area');
-    execArea.style.display = 'block';
-    execArea.innerHTML = '<div class="muted">Starting run…</div>';
-
-    try {
-      const runRes = await api(`/api/jobs/${jobId}/runs`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ is_local: isLocal, source: 'user' })
-      });
-
-      state.activeRunId = runRes.run.run_id;
-      showToast(`Run started: ${state.activeRunId.slice(0,8)}…`);
-
-      await renderJobViewer(jobId);
-      if (state.executionTimer) clearInterval(state.executionTimer);
-      state.executionTimer = setInterval(() => pollRun(jobId), 1000);
-      pollRun(jobId);
-
-    } catch (e) {
-      execArea.innerHTML = `<div style="color:var(--err)">Execution Error: ${e.message}</div>`;
-      showToast(e.message, true);
+  } catch (e) { stopExecTimer(); }
+}
+const openSteps = new Map(); // step_id → bool (user's choice)
+function renderRunMonitor(run, stepTasks) {
+  const area = $("execution-area");
+  if (!area) return;
+  const isActive = !TERMINAL_RUN.includes(run.status);
+  if (area._runId !== run.run_id || !area.querySelector(".monitor")) {
+    area._runId = run.run_id; area._steps = {};
+    mount(area, h("div", { class: "monitor" }, h("div", { class: "mon-head", id: "mon-head" }), h("div", { class: "bar", id: "mon-bar" }, h("i")), h("div", { class: "col", id: "mon-steps", style: { gap: "10px" } })));
+  }
+  const done = run.steps.filter(s => ["completed", "failed", "cancelled", "skipped"].includes(s.status)).length;
+  const dur = durationBetween(run.started_at, run.completed_at);
+  mount($("mon-head"), statusPill(run.status), h("b", null, "Run"), idChip(run.run_id, 13), h("span", { class: "pill" }, run.mode),
+    run.source ? h("span", { class: "pill" }, "source: " + run.source) : null,
+    h("span", { class: "faint", style: { fontSize: "12px" } }, `${done}/${run.steps.length} steps · started ${relTime(run.started_at)}${dur != null ? " · " + fmtMs(dur) : ""}`),
+    h("span", { class: "grow" }),
+    isActive ? btn("Cancel run", { icon: "stop", kind: "danger", size: "sm", onClick: () => cancelActiveRun() }) : null);
+  const bar = $("mon-bar"); bar.className = "bar" + (run.status === "completed" ? " ok" : ["failed", "cancelled"].includes(run.status) ? " err" : "");
+  bar.firstChild.style.width = (run.steps.length ? Math.round(100 * done / run.steps.length) : 0) + "%";
+  const host = $("mon-steps");
+  run.steps.forEach((s, i) => {
+    let blk = area._steps[s.step_id];
+    if (!blk) {
+      blk = { root: h("div", { class: "stepblock" }) };
+      blk.head = h("button", { type: "button", class: "sb-head", onclick: () => { const on = !blk.root.classList.contains("open"); openSteps.set(s.step_id, on); blk.root.classList.toggle("open", on); } });
+      blk.prog = h("div", { class: "sb-prog" });
+      blk.stream = h("div");
+      blk.result = h("div");
+      blk.root.append(blk.head, h("div", { class: "sb-body" }, blk.prog, blk.stream, blk.result));
+      area._steps[s.step_id] = blk; host.appendChild(blk.root);
     }
+    renderStepBlock(blk, s, stepTasks[i], i, run.steps.length);
+  });
+}
+function renderStepBlock(blk, step, task, i, n) {
+  const t = task || {};
+  // The task queue is in-memory: after a proxy restart a finished step's task is
+  // gone, so fall back to what the run record kept (status + result_preview).
+  const gone = !task && step.task_id && !["pending", "running"].includes(step.status);
+  const pct = gone ? (step.status === "completed" ? 100 : 0) : Math.round((t.progress || 0) * 100);
+  const evList = (t.metadata && t.metadata.events) || [];
+  const progressMsg = (t.metadata && t.metadata.progress_message) || (gone ? "Task details expired (proxy restarted) — showing the saved preview" : step.status === "pending" ? "Pending…" : "Processing...");
+  const open = openSteps.has(step.step_id) ? openSteps.get(step.step_id) : (n <= 2 || step.status === "running" || step.status === "failed");
+  blk.root.classList.toggle("open", open);
+  const r = t.result || {};
+  const dur = durationBetween(step.started_at, step.completed_at);
+  mount(blk.head, icon("chevronRight", "chev"), h("span", { class: "faint mono" }, `#${i + 1}`), statusPill(step.status), h("b", { class: "ellipsis" }, step.name || step.agent_name || step.agent_id || `Step ${i + 1}`),
+    step.name && step.agent_name ? h("span", { class: "faint" }, step.agent_name) : null, h("span", { class: "grow" }),
+    t.result && r.cost_usd != null ? h("span", { class: "faint mono" }, fmtCost(r.cost_usd)) : null,
+    t.result && r.tokens ? h("span", { class: "faint mono" }, `${fmtTokens(r.tokens.input)} in · ${fmtTokens(r.tokens.output)} out`) : null,
+    dur != null && step.started_at ? h("span", { class: "faint mono" }, fmtMs(dur)) : null,
+    step.task_id ? idChip(step.task_id, 6, "Task " + step.task_id) : null);
+  mount(blk.prog, h("div", { class: "bar" + (step.status === "completed" ? " ok" : step.status === "failed" ? " err" : "") }, h("i", { style: { width: pct + "%" } })),
+    h("span", null, `${progressMsg} · ${pct}%`));
+  blk.stream.style.display = gone ? "none" : "";
+  if (!gone) updateStream(blk.stream, evList, { key: step.step_id, limit: 100, status: step.status, emptyText: step.status === "pending" ? "Waiting for the previous phase…" : "Waiting for events..." });
+  const rsig = JSON.stringify([t.result || null, step.error || null, step.status]).length + ":" + step.status;
+  if (blk.result._sig !== rsig) {
+    blk.result._sig = rsig;
+    const parts = [];
+    if (t.result) parts.push(renderResultBlock(t.result, { title: "Agent reply", fallback: step.status === "completed" ? "Step finished without a final text response." : "" }));
+    else if (gone && step.result_preview) parts.push(renderResultBlock(step.result_preview, { title: "Agent reply (preview)" }));
+    if (step.error) parts.push(renderErrorBlock(step.error, "Step error"));
+    mount(blk.result, parts);
   }
-
-  async function pollRun(jobId) {
-    if (!state.activeRunId) return;
-    try {
-      const r = await api(`/api/runs/${encodeURIComponent(state.activeRunId)}`);
-      const run = r.run;
-      // Pull live task state for each step so the monitor reflects events
-      const stepTasks = await Promise.all(run.steps.map(async s => {
-        if (!s.task_id) return null;
-        try {
-          return await api(`/api/tasks/${encodeURIComponent(s.task_id)}`);
-        } catch { return null; }
-      }));
-      renderRunMonitor(run, stepTasks);
-
-      if (['completed', 'failed', 'partial', 'cancelled'].includes(run.status)) {
-        clearInterval(state.executionTimer);
-        state.executionTimer = null;
-        showToast(`Run ${run.status}`);
-        const runsRes = await api(`/api/jobs/${encodeURIComponent(jobId)}/runs`);
-        renderRunHistoryList(runsRes.runs || []);
-      }
-    } catch (e) { clearInterval(state.executionTimer); }
-  }
-
-  function renderStepBlock(step, task) {
-    const t = task || {};
-    const pct = Math.round((t.progress || 0) * 100);
-    const evList = (t.metadata && t.metadata.events) || [];
-    const events = evList.slice(-100).map(e => {
-      const k = e.kind || 'info';
-      const body = e.text || e.summary || JSON.stringify(e);
-      return `<div class="ev ${k}"><span class="k">${k}</span>${escapeHtml(body)}</div>`;
-    }).join('') || '<div class="muted">Waiting for events...</div>';
-    const progressMsg = (t.metadata && t.metadata.progress_message) || (step.status === 'pending' ? 'Pending…' : 'Processing...');
-
-    let resultHtml = '';
-    if (t.result) {
-      const r = t.result;
-      const tok = r.tokens || {};
-      let agentMessage = "";
-      if (typeof r === 'string') agentMessage = r;
-      else if (r.result && typeof r.result === 'string') agentMessage = r.result;
-      else if (r.result && r.result.result) agentMessage = r.result.result;
-      if (!agentMessage && step.status === 'completed') agentMessage = "Step finished without a final text response.";
-
-      const stats = `
-        <div class="stats-grid" style="margin-top:10px;">
-          <div class="stat-card"><div class="stat-label">cost</div><div class="stat-value">${fmtCost(r.cost_usd)}</div></div>
-          <div class="stat-card"><div class="stat-label">duration</div><div class="stat-value">${fmtMs(r.duration_ms)}</div></div>
-          <div class="stat-card"><div class="stat-label">turns</div><div class="stat-value">${fmtNum(r.num_turns)}</div></div>
-          <div class="stat-card"><div class="stat-label">input tok</div><div class="stat-value">${fmtNum(tok.input)}</div></div>
-          <div class="stat-card"><div class="stat-label">output tok</div><div class="stat-value">${fmtNum(tok.output)}</div></div>
-        </div>`;
-      const textBlock = agentMessage ? `<pre style="margin-top:12px; background:var(--panel); padding:10px; border-radius:6px; border:1px solid var(--border); font-size:12px;">${escapeHtml(agentMessage)}</pre>` : "";
-      resultHtml = `${stats}${textBlock}`;
-    }
-
-    const errorHtml = step.error ? `<pre style="color:var(--err); background:var(--panel2); padding:10px; border-radius:6px; border:1px solid var(--err); margin-top:8px;">${escapeHtml(step.error)}</pre>` : "";
-
-    return `
-      <div style="border:1px solid var(--border); border-radius:8px; padding:12px; margin-top:10px; background:var(--panel);">
-        <div class="flex" style="justify-content:space-between; margin-bottom:6px;">
-          <div class="flex">
-            <span class="pill ${step.status}">${step.status}</span>
-            <span style="font-family:var(--mono); font-size:11px;">${escapeHtml(step.name || step.agent_name || step.agent_id || '')}</span>
-          </div>
-        </div>
-        <div class="bar"><span style="width:${pct}%"></span></div>
-        <div class="muted" style="margin-bottom:8px; font-size:11px;">${escapeHtml(progressMsg)} · ${pct}%</div>
-        <div class="events">${events}</div>
-        ${resultHtml}
-        ${errorHtml}
-      </div>`;
-  }
-
-  function renderRunMonitor(run, stepTasks) {
-    const area = document.getElementById('execution-area');
-    if (!area) return;
-    const isActive = !['completed','failed','partial','cancelled'].includes(run.status);
-    const cancelBtn = isActive
-      ? `<button class="danger icon small" onclick="cancelActiveRun()" title="Cancel run">${SVGS.stop}</button>`
-      : '';
-    const stepBlocks = run.steps.map((s, i) => renderStepBlock(s, stepTasks[i])).join('');
-
-    area.innerHTML = `
-      <div class="flex" style="justify-content:space-between; margin-bottom: 8px;">
-        <div class="flex">
-          <span class="pill ${run.status}">${run.status}</span>
-          <span class="muted" style="font-family:var(--mono); font-size:11px;">${run.run_id}</span>
-          <span class="muted" style="font-size:11px;">${run.mode}</span>
-        </div>
-        ${cancelBtn}
-      </div>
-      ${stepBlocks}
-    `;
-  }
-
-  async function cancelActiveRun() {
-    if (!state.activeRunId) return;
-    const jobId = state.activeId;
-    try {
-      await api(`/api/jobs/${encodeURIComponent(jobId)}/runs/${encodeURIComponent(state.activeRunId)}/cancel`, { method: 'POST' });
-    } catch (e) { showToast(e.message, true); }
-  }
-
-  async function downloadAllFiles(type, id) {
-    const fileRes = await api(type === 'ws' ? `/api/sessions/${encodeURIComponent(id)}/files` : type === 'agent' ? `/api/agents/${id}/files` : `/api/jobs/${id}/files`);
+}
+async function cancelActiveRun() {
+  if (!state.activeRunId) return;
+  const jobId = state.activeId;
+  if (!(await confirmDialog("Cancel this run?", "In-flight steps are cancelled and pending ones skipped.", { confirm: "Cancel run", danger: true }))) return;
+  try {
+    await api(`/api/jobs/${encodeURIComponent(jobId)}/runs/${encodeURIComponent(state.activeRunId)}/cancel`, { method: "POST" });
+    toast("Cancelling run…");
+  } catch (e) { showToast(e.message, true); }
+}
+async function downloadAllFiles(type, id) {
+  try {
+    const fileRes = await api(type === "ws" ? `/api/sessions/${encodeURIComponent(id)}/files` : type === "agent" ? `/api/agents/${id}/files` : `/api/jobs/${id}/files`);
     const files = fileRes.files || [];
-    if (files.length === 0) return showToast('No files to download', true);
-    
-    showToast('Starting downloads...');
+    if (files.length === 0) return showToast("No files to download", true);
+    toast(`Downloading ${files.length} file${files.length === 1 ? "" : "s"}…`);
     for (const f of files) {
-      const url = type === 'ws' 
-        ? `/api/sessions/${encodeURIComponent(id)}/files/${encodeURIComponent(f.path)}`
-        : type === 'agent'
-          ? `/api/agents/${id}/files/${encodeURIComponent(f.path)}`
-          : `/api/jobs/${id}/files/${encodeURIComponent(f.path)}`;
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = f.path.split('/').pop();
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      triggerDownload(fileUrl(type, id, f.path), f.path.split("/").pop());
       await new Promise(r => setTimeout(r, 150));
     }
-  }
+  } catch (e) { showToast(e.message, true); }
+}
 
+// ── Shortcuts ──────────────────────────────────────────────────────────
+stdShortcuts();
+addShortcut({ group: "Team Mode", desc: "Filter sidebar", keys: ["/"], match: e => e.key === "/" && !e.ctrlKey, run: () => { $("rail-search").focus(); $("rail-search").select(); } });
+addShortcut({ group: "Team Mode", desc: "Save workspace / agent / job", keys: ["Ctrl", "S"], whileTyping: true, match: e => (e.ctrlKey || e.metaKey) && e.code === "KeyS",
+  run: () => { const b = $("ws-save") || $("agent-save") || $("job-save"); if (b) b.click(); } });
+addShortcut({ group: "Team Mode", desc: "Run the open job", keys: ["Ctrl", "Enter"], whileTyping: false, match: e => (e.ctrlKey || e.metaKey) && e.key === "Enter" && state.activeType === "job",
+  run: () => openRunModal(state.activeId) });
+addShortcut({ group: "Team Mode", desc: "New workspace", keys: ["W"], match: e => e.key.toLowerCase() === "w" && !e.ctrlKey && !e.altKey && !e.metaKey, run: () => createWorkspacePrompt() });
+addShortcut({ group: "Team Mode", desc: "New agent", keys: ["A"], match: e => e.key.toLowerCase() === "a" && !e.ctrlKey && !e.altKey && !e.metaKey, run: () => createAgentPrompt() });
+addShortcut({ group: "Team Mode", desc: "New job", keys: ["J"], match: e => e.key.toLowerCase() === "j" && !e.ctrlKey && !e.altKey && !e.metaKey, run: () => createJobPrompt() });
+addShortcut({ group: "Team Mode", desc: "Back to overview", keys: ["O"], match: e => e.key.toLowerCase() === "o" && !e.ctrlKey && !e.altKey && !e.metaKey, run: async () => { if (await guardLeave()) showDefaultView(); } });
+
+// ── Boot + #/<type>/<id> routing (reload / back-forward / pasted links) ──
+function routeFromHash() {
+  const m = /^#\/(ws|agent|job)\/(.+)$/.exec(location.hash);
+  if (!m) return false;
+  const id = decodeURIComponent(m[2]);
+  if (state.activeType === m[1] && state.activeId === id) return true;
+  if (m[1] === "ws" && state.workspaces.some(w => w.session_id === id)) selectWorkspace(id);
+  else if (m[1] === "agent" && state.agents.some(a => a.id === id)) selectAgent(id);
+  else if (m[1] === "job" && state.jobs.some(j => j.id === id)) {
+    const j = state.jobs.find(x => x.id === id); if ((j.kind || "user") !== state.activeJobTab) selectJobTab(j.kind || "user");
+    selectJob(id);
+  } else return false;
+  return true;
+}
+addEventListener("hashchange", () => { if (!routeFromHash() && !location.hash) showDefaultView(); });
+(async () => {
+  renderSidebar(true);
+  loadEngineInfo();
+  const m = /^#\/(ws|agent|job)\/(.+)$/.exec(location.hash);
+  if (!m) renderOverview(); else loadingView("Loading…");
+  await Promise.all([refreshWorkspaces(), refreshAgents(), refreshJobs()]);
+  if (m) { if (!routeFromHash()) showDefaultView(); } else renderOverview();
+})();
+setInterval(() => {
   refreshWorkspaces();
   refreshAgents();
   refreshJobs();
-  setInterval(() => {
-    refreshWorkspaces();
-    refreshAgents();
-    refreshJobs();
-  }, 5000);
+  if (!state.activeType && $("recent-runs")) refreshRecentRuns();
+}, 5000);
 </script>
 </body>
 </html>

@@ -613,7 +613,7 @@ async def send_comments(request: web.Request) -> web.Response:
     if not store.valid_id(chat_id or "") or not dchats.get_chat(pid, chat_id):
         return _err("Chat not found", 404)
     body = {"text": data.get("text") or "Address the attached comments.", "comment_ids": ids}
-    for k in ("engine", "is_local", "effort"):
+    for k in ("engine", "is_local", "effort", "model"):
         if k in data:
             body[k] = data[k]
     try:

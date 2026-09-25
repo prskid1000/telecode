@@ -446,7 +446,7 @@ function composer() {
   els.chips = h("div", { class: "chips" });
   els.queue = h("div", { class: "queue" });
   els.send = h("button", { class: "send", title: "Send  (Enter)", "aria-label": "Send", onclick: () => onSend() }, icon("send"));
-  els.pickers = h("div", { class: "row", style: { gap: "2px" } });
+  els.pickers = h("div", { class: "row pickers", style: { gap: "2px" } });
   const box = h("div", { class: "compose-box" }, ta,
     h("div", { class: "compose-row" },
       h("button", { class: "pick", title: "Attach files", onclick: () => fileIn.click() }, icon("paperclip")), fileIn,
@@ -475,7 +475,6 @@ function drawPickers() {
     ...engines.map((x) => ({ label: ENGINE_LABEL[x.id] || x.id, hint: x.available === false ? "Not installed" : x.version || null, disabled: x.available === false, icon: x.id === eng ? "check" : null, checked: x.id === eng, onClick: () => setChatOpt({ engine: x.id }) })),
     "-",
     { label: "Route through the local model", icon: local ? "check" : null, checked: local, hint: S.engines?.local?.available === false ? "Local model not running" : S.engines?.local?.model || null, disabled: S.engines?.local?.available === false && !local, onClick: () => setChatOpt({ is_local: !local }) },
-    { label: "Engines and integrations…", icon: "settings", onClick: () => import("./exporter.js").then((m) => m.settingsDialog()) },
   ]) }, icon("bolt"), (ENGINE_LABEL[eng] || eng) + (local ? " · local" : ""), icon("chevronDown"));
   const effBtn = h("button", { class: "pick", title: "Reasoning effort", onclick: (e) => menu(e.currentTarget, [{ heading: "Effort" },
     ...EFFORTS.map(([v, l]) => ({ label: l, icon: (effort || "") === v ? "check" : null, checked: (effort || "") === v, onClick: () => setChatOpt({ effort: v || null }) }))]) },
@@ -492,12 +491,32 @@ function drawPickers() {
         onchange: (e) => setChatOpt({ is_local: e.currentTarget.checked }) }),
       h("span")),
     "Local");
-  mount(els.pickers, engBtn, localSw, effBtn);
+  // Model: the list the engine's own CLI reports (local → llama.cpp models).
+  // Empty = settings default (design.models.*), then the CLI's own default.
+  const engInfo = engines.find((x) => x.id === eng) || {};
+  const models = local ? (localInfo.models || []) : (engInfo.models || []);
+  const settingsDefault = local ? localInfo.default_model : engInfo.default_model;
+  const model = c ? c.model || "" : prefs.get("model:" + (local ? "local" : eng), "");
+  const modelLabel = model || settingsDefault || "Model";
+  const modelBtn = h("button", { class: "pick", title: local ? "Local model" : "Model", onclick: (e) => menu(e.currentTarget, [
+    { heading: local ? "Local model (llama.cpp)" : (ENGINE_LABEL[eng] || eng) + " model" },
+    { label: settingsDefault ? `Default — ${settingsDefault}` : "Default", icon: !model ? "check" : null, checked: !model, onClick: () => setChatOpt({ model: null }) },
+    ...(models.length ? ["-"] : []),
+    ...models.map((m) => ({ label: m.label && m.label !== m.id ? `${m.label}` : m.id, hint: m.label && m.label !== m.id ? m.id : null, icon: m.id === model ? "check" : null, checked: m.id === model, onClick: () => setChatOpt({ model: m.id }) })),
+  ]) }, modelLabel, icon("chevronDown"));
+  mount(els.pickers, engBtn, modelBtn, localSw, effBtn);
 }
 async function setChatOpt(patch) {
   if (patch.engine) prefs.set("engine", patch.engine);
   if ("is_local" in patch) prefs.set("local", patch.is_local);
   if ("effort" in patch) prefs.set("effort", patch.effort || "");
+  if (("engine" in patch || "is_local" in patch) && !("model" in patch)) patch.model = null;
+  if ("model" in patch) {
+    const cc = currentChat();
+    const key = (("is_local" in patch ? patch.is_local : cc ? cc.is_local : prefs.get("local", false)) ? "local"
+      : (patch.engine || cc?.engine || prefs.get("engine", "claude_code")));
+    prefs.set("model:" + key, patch.model || "");
+  }
   const c = currentChat();
   if (c) {
     if (patch.engine && patch.engine !== c.engine && currentTurns().length) toast("Switching engines starts a fresh session. Earlier context won't carry over.");
@@ -557,7 +576,7 @@ async function onSend() {
 }
 async function submit(cid, text, extra) {
   const c = S.chats.find((x) => x.id === cid);
-  const body = { text, engine: c?.engine || prefs.get("engine", undefined), is_local: c ? !!c.is_local : prefs.get("local", undefined), effort: c?.effort ?? (prefs.get("effort", "") || undefined), ...extra };
+  const body = { text, engine: c?.engine || prefs.get("engine", undefined), is_local: c ? !!c.is_local : prefs.get("local", undefined), model: c ? c.model || undefined : undefined, effort: c?.effort ?? (prefs.get("effort", "") || undefined), ...extra };
   if (chatRunning(cid)) { enqueue(cid, text, body); return null; }
   // Optimistic user turn so the message shows instantly.
   const temp = { id: "local-" + Math.random().toString(36).slice(2), role: "user", chat_id: cid, text, status: "done", created_at: new Date().toISOString(), ...extra };

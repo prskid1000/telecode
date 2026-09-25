@@ -741,3 +741,9 @@ dialog.modal.full { width: min(1400px, calc(100vw - 48px)); height: calc(100vh -
 }
 .pick.local-switch { gap: 6px; cursor: pointer; }
 .pick.local-switch:has(input:disabled) { opacity: .5; cursor: not-allowed; }
+/* composer pickers: one line, shrink the labels instead of wrapping, never push Send off */
+.compose-row { min-width: 0; }
+.compose-row .pickers { flex-wrap: nowrap; min-width: 0; overflow: hidden; }
+.compose-row .pick { white-space: nowrap; flex-shrink: 1; min-width: 0; max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+.compose-row .pick.local-switch { flex-shrink: 0; max-width: none; }
+.compose-row .send { flex-shrink: 0; }

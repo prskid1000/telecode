@@ -8,14 +8,19 @@ import { sheet } from "./shortcuts.js";
 
 applyTheme();
 const app = document.getElementById("app");
+// Shared Team · Tasks · Design switcher (/shared/appnav.js). Optional: if the
+// route is missing TeleDesign renders exactly as before.
+import("/shared/appnav.js").catch(() => {});
+const appnav = (compact) => h("tc-appnav", { active: "design", variant: "switch", compact: compact ? "" : null });
 
 function homeTopbar() {
   const themeBtn = btn("", { kind: "quiet", icon: currentTheme() === "dark" ? "sun" : "moon", title: "Toggle light / dark  (Alt+Shift+L)", onClick: () => toggleTheme() });
   bus.on("theme", (t) => mount(themeBtn, icon(t === "dark" ? "sun" : "moon")));
   return h("header", { class: "topbar" },
     h("a", { class: "brand", href: "/design", onclick: (e) => { e.preventDefault(); go({ route: "home" }, true); } }, h("span", { class: "brand-mark" }, icon("edit")), "TeleDesign"),
+    appnav(false),
     h("div", { class: "right" },
-      btn("", { kind: "quiet", icon: "settings", title: "Engines and integrations", onClick: () => import("./exporter.js").then((m) => m.settingsDialog()) }),
+      btn("", { kind: "quiet", icon: "settings", title: "Preferences", onClick: () => import("./exporter.js").then((m) => m.settingsDialog()) }),
       btn("", { kind: "quiet", icon: "keyboard", title: "Keyboard shortcuts  (?)", onClick: () => sheet() }),
       themeBtn));
 }
@@ -49,6 +54,7 @@ function addProjectTopbarExtras() {
   if (!right) return;
   const themeBtn = btn("", { kind: "quiet", icon: currentTheme() === "dark" ? "sun" : "moon", title: "Toggle light / dark  (Alt+Shift+L)", onClick: () => toggleTheme() });
   bus.on("theme", (t) => themeBtn.isConnected && mount(themeBtn, icon(t === "dark" ? "sun" : "moon")));
+  right.prepend(appnav(true), h("span", { class: "divider-v" }));
   right.append(btn("", { kind: "quiet", icon: "keyboard", title: "Keyboard shortcuts  (?)", onClick: () => sheet() }), themeBtn);
 }
 
