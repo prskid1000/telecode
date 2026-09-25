@@ -344,9 +344,9 @@ export function promptDialog(title, { label = "", value = "", placeholder = "", 
 // menu(anchor, [{label, icon, onClick, danger, kbd, disabled, hint} | "-" | {heading}])
 let openMenu = null;
 export function closeMenu() { if (openMenu) { openMenu.remove(); openMenu = null; } }
-export function menu(anchor, items, { align = "left", width } = {}) {
+export function menu(anchor, items, { align = "left", width, cls } = {}) {
   closeMenu();
-  const el = h("div", { class: "menu", role: "menu", style: width ? { minWidth: width } : null });
+  const el = h("div", { class: "menu" + (cls ? " " + cls : ""), role: "menu", style: width ? { minWidth: width } : null });
   for (const it of items) {
     if (!it) continue;
     if (it === "-") { el.appendChild(h("div", { class: "menu-sep" })); continue; }
@@ -354,7 +354,7 @@ export function menu(anchor, items, { align = "left", width } = {}) {
     if (it.node) { el.appendChild(it.node); continue; }
     el.appendChild(h("button", {
       class: "menu-item" + (it.danger ? " danger" : "") + (it.checked ? " checked" : ""), role: "menuitem",
-      disabled: it.disabled || null,
+      disabled: it.disabled || null, dataset: it.data || null,
       onclick: (e) => { e.stopPropagation(); closeMenu(); it.onClick && it.onClick(); },
     }, it.icon ? icon(it.icon) : h("span", { class: "ic" }),
        h("span", { class: "menu-label" }, it.label, it.hint ? h("small", null, it.hint) : null),

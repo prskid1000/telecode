@@ -104,7 +104,7 @@ export async function switchChat(cid) {
   S.chatId = cid;
   bus.emit("chat-switched", cid);
   const { writeUrl } = await import("./state.js"); writeUrl();
-  drawTabs(); mount(els.msgs, skeleton(4));
+  drawTabs(); drawPickers(); mount(els.msgs, skeleton(4));
   await loadTurns(cid); drawMeta(); drawMessages();
 }
 
@@ -504,7 +504,21 @@ function drawPickers() {
     ...(models.length ? ["-"] : []),
     ...models.map((m) => ({ label: m.label && m.label !== m.id ? `${m.label}` : m.id, hint: m.label && m.label !== m.id ? m.id : null, icon: m.id === model ? "check" : null, checked: m.id === model, onClick: () => setChatOpt({ model: m.id }) })),
   ]) }, modelLabel, icon("chevronDown"));
-  mount(els.pickers, engBtn, modelBtn, localSw, effBtn);
+  // Phones: one "⚙" button carries all four pickers as a single sheet.
+  const effLabel = (EFFORTS.find(([v]) => v === (effort || ""))?.[1] || "Default effort");
+  const gear = h("button", { class: "pick gear", title: "Engine, model, local and effort", "aria-label": "Engine, model, local and effort", onclick: (e) => menu(e.currentTarget, [
+    { heading: "Engine" },
+    ...engines.map((x) => ({ label: ENGINE_LABEL[x.id] || x.id, hint: x.available === false ? "Not installed" : x.version || null, disabled: x.available === false, icon: x.id === eng ? "check" : null, checked: x.id === eng, onClick: () => setChatOpt({ engine: x.id }) })),
+    { heading: local ? "Local model" : "Model" },
+    { label: settingsDefault ? `Default — ${settingsDefault}` : "Default", icon: !model ? "check" : null, checked: !model, onClick: () => setChatOpt({ model: null }) },
+    ...models.map((m) => ({ label: m.label && m.label !== m.id ? `${m.label}` : m.id, hint: m.label && m.label !== m.id ? m.id : null, icon: m.id === model ? "check" : null, checked: m.id === model, onClick: () => setChatOpt({ model: m.id }) })),
+    { heading: "Effort" },
+    ...EFFORTS.map(([v, l]) => ({ label: l, icon: (effort || "") === v ? "check" : null, checked: (effort || "") === v, onClick: () => setChatOpt({ effort: v || null }) })),
+    "-",
+    { label: "Run on the local model", icon: local ? "check" : null, checked: local, hint: localOff ? "Local model not available" : localInfo.model || "Through the telecode proxy", disabled: localOff, onClick: () => setChatOpt({ is_local: !local }) },
+  ], { width: "280px" }) },
+    icon("settings"), h("span", { class: "nm" }, [(ENGINE_LABEL[eng] || eng) + (local ? " · local" : ""), model || null, effort ? effLabel : null].filter(Boolean).join(" · ")), icon("chevronDown"));
+  mount(els.pickers, engBtn, modelBtn, localSw, effBtn, gear);
 }
 async function setChatOpt(patch) {
   if (patch.engine) prefs.set("engine", patch.engine);

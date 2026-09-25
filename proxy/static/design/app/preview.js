@@ -43,14 +43,16 @@ export function render(body, bar) {
 
   // ── Bar ────────────────────────────────────────────────────────────────
   const tb = modeToolbar();
-  const devSeg = h("div", { class: "seg icons", role: "group", "aria-label": "Viewport" });
+  const devSeg = h("div", { class: "seg icons dev-seg", role: "group", "aria-label": "Viewport" });
+  // Phones: the viewport presets as one compact menu button.
+  const devBtn = h("button", { class: "pick dev-compact", title: "Viewport", "aria-label": "Viewport" });
   const zoomBtn = h("button", { class: "pick", title: "Zoom" });
   const deckBox = h("div", { class: "row", style: { gap: "2px" } });
   const tweaksBtn = btn("Tweaks", { icon: "sliders", cls: "sm hidden", title: "Show the page's live controls", onClick: () => { const t = live.tweaks.get(S.activeFile); toggleTweaks(S.activeFile, !(t && t.on)); } });
   const notesBtn = btn("", { kind: "quiet", icon: "notes", cls: "sm hidden", title: "Speaker notes", onClick: () => { showNotes = !showNotes; prefs.set("notes", showNotes); drawBody(); } });
   const consoleBtn = h("button", { class: "btn quiet sm", title: "Console", onclick: () => { showConsole = !showConsole; drawBody(); } });
   const presentBtn = btn("Present", { icon: "present", cls: "sm hidden", onClick: () => present() });
-  bar.append(tb, h("span", { class: "divider-v" }), devSeg, zoomBtn, deckBox, h("span", { class: "grow" }), tweaksBtn, notesBtn, consoleBtn,
+  bar.append(tb, h("span", { class: "divider-v" }), devSeg, devBtn, zoomBtn, deckBox, h("span", { class: "grow" }), tweaksBtn, notesBtn, consoleBtn,
     btn("", { kind: "quiet", icon: "refresh", cls: "sm", title: "Reload  (Ctrl+R)", onClick: () => reload() }),
     btn("", { kind: "quiet", icon: "external", cls: "sm", title: "Open in a new tab", onClick: () => S.activeFile && window.open(previewUrl(pid, S.activeFile), "_blank", "noopener") }),
     presentBtn);
@@ -74,7 +76,10 @@ export function render(body, bar) {
     const cur = curDevice();
     const board = defaultDevice();
     const list = [board.id === "board" ? board : null, ...DEVICES].filter(Boolean);
-    mount(devSeg, list.map((d) => h("button", { class: cur.id === d.id ? "on" : "", title: `${d.label}${d.w ? ` — ${d.w}×${d.h}` : ""}`, onclick: () => { device = d.id; prefs.set("device:" + pid, device); drawBody(); drawBar(); } }, icon(d.icon), d.id === "board" ? h("span", { style: { fontSize: "11px" } }, d.label) : null)));
+    const pickDev = (d) => { device = d.id; prefs.set("device:" + pid, device); drawBody(); drawBar(); };
+    mount(devSeg, list.map((d) => h("button", { class: cur.id === d.id ? "on" : "", title: `${d.label}${d.w ? ` — ${d.w}×${d.h}` : ""}`, onclick: () => pickDev(d) }, icon(d.icon), d.id === "board" ? h("span", { style: { fontSize: "11px" } }, d.label) : null)));
+    mount(devBtn, icon(cur.icon), h("span", { class: "lbl" }, cur.label), icon("chevronDown"));
+    devBtn.onclick = (e) => menu(e.currentTarget, [{ heading: "Viewport" }, ...list.map((d) => ({ label: d.id === "board" ? `Board — ${d.label}` : d.label, hint: d.w ? `${d.w} × ${d.h}` : "The page at this screen's width", icon: d.icon, checked: cur.id === d.id, onClick: () => pickDev(d) }))]);
     mount(zoomBtn, zoom === "fit" ? "Fit" : Math.round(zoom * 100) + "%", icon("chevronDown"));
     zoomBtn.onclick = (e) => menu(e.currentTarget, ZOOMS.map((z) => ({ label: z === "fit" ? "Fit to window" : Math.round(z * 100) + "%", icon: z === zoom ? "check" : null, onClick: () => { zoom = z; prefs.set("zoom", z); drawBody(); drawBar(); } })));
     zoomBtn.classList.toggle("hidden", cur.id === "fit");
@@ -126,8 +131,7 @@ export function render(body, bar) {
       scroll.appendChild(wrap);
     } else {
       scroll.style.display = "flex";
-      const avail = { w: scroll.clientWidth - 48, h: scroll.clientHeight - 60 };
-      const z = zoom === "fit" ? Math.min(1, avail.w / d.w, avail.h / d.h) : +zoom;
+      const z = zoom === "fit" ? fitZoom(d) : +zoom;
       const dev = h("div", { class: "device" + (d.id === "mobile" ? " mobile" : ""), style: { width: d.w + "px", height: d.h + "px", transform: `scale(${z})` } }, frame);
       const wrap = h("div", { class: "device-wrap", style: { width: d.w * z + "px", height: d.h * z + "px" } }, h("span", { class: "device-size" }, `${d.w} × ${d.h} · ${Math.round(z * 100)}%`), dev);
       scroll.appendChild(h("div", { class: "preview-center" }, wrap));
@@ -153,6 +157,14 @@ export function render(body, bar) {
       btn("", { kind: "quiet", icon: "x", cls: "sm", title: "Close", onClick: () => { showConsole = false; drawBody(); drawBar(); } })), bodyEl);
     bodyEl.scrollTop = bodyEl.scrollHeight;
   }
+  // Fit scale for a fixed viewport. On a phone the board fills the width (the
+  // page scrolls vertically) rather than shrinking to fit both axes.
+  function fitZoom(d) {
+    const narrow = scroll.clientWidth < 600;
+    const avail = { w: scroll.clientWidth - (narrow ? 16 : 48), h: scroll.clientHeight - 60 };
+    const z = narrow ? Math.min(1, avail.w / d.w) : Math.min(1, avail.w / d.w, avail.h / d.h);
+    return z > 0 ? z : 1;
+  }
   function reload() { if (frame && S.activeFile) frame.src = previewUrl(pid, S.activeFile, "&r=" + Date.now()); }
   function drawAll() { drawTabs(); drawBar(); drawBody(); }
 
@@ -161,7 +173,7 @@ export function render(body, bar) {
   }
 
   drawAll();
-  const ro = new ResizeObserver(() => { if (curDevice().id !== "fit" && zoom === "fit" && frame) { const f = frame; const d = curDevice(); const avail = { w: scroll.clientWidth - 48, h: scroll.clientHeight - 60 }; const z = Math.min(1, avail.w / d.w, avail.h / d.h); const dev = f.parentNode; if (dev && dev.classList.contains("device")) { dev.style.transform = `scale(${z})`; const w = dev.parentNode; w.style.width = d.w * z + "px"; w.style.height = d.h * z + "px"; w.firstChild.textContent = `${d.w} × ${d.h} · ${Math.round(z * 100)}%`; } } });
+  const ro = new ResizeObserver(() => { if (curDevice().id !== "fit" && zoom === "fit" && frame && scroll.clientWidth) { const f = frame; const d = curDevice(); const z = fitZoom(d); const dev = f.parentNode; if (dev && dev.classList.contains("device")) { dev.style.transform = `scale(${z})`; const w = dev.parentNode; w.style.width = d.w * z + "px"; w.style.height = d.h * z + "px"; w.firstChild.textContent = `${d.w} × ${d.h} · ${Math.round(z * 100)}%`; } } });
   ro.observe(scroll);
   offs.push(
     bus.on("tabs", (e) => { drawTabs(); if (e && e.navigated) drawBar(); }),

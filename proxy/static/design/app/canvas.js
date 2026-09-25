@@ -6,7 +6,7 @@
 // pan/zoom canvas lays every HTML file out as a board.
 //
 // The editor protocol is documented above renderEditor().
-import { h, icon, btn, mount, clear, bus, prefs, api, toast, toastError, emptyState, P_, isHtml, promptDialog } from "./core.js";
+import { h, icon, btn, mount, clear, bus, prefs, api, toast, toastError, emptyState, P_, isHtml, promptDialog, menu } from "./core.js";
 import { S, htmlFiles, assetFor, previewUrl, loadBoards, writeUrl } from "./state.js";
 import { makePreviewFrame, unregisterFrame, post } from "./bridge.js";
 import { modeToolbar, openFile, setView } from "./workspace.js";
@@ -21,7 +21,23 @@ export function render(body, bar) {
       h("button", { class: useEditor ? "" : "on", title: "Every HTML page side by side", onclick: () => { prefs.set("canvasEngine", "grid"); import("./workspace.js").then((m) => m.drawStage()); } }, icon("grid"), "Pages"));
     bar.appendChild(seg);
   }
-  return r;
+  // Phones: the canvas is shown, but editing it wants a pointer and room. Say
+  // so, and offer each HTML board in Preview instead.
+  if (!matchMedia("(max-width: 600px)").matches) return r;
+  bar.insertBefore(btn("Boards", { kind: "ghost", cls: "sm m-boards", icon: "eye", title: "Open an HTML board in Preview", onClick: (e) => boardsSheet(e.currentTarget) }), bar.children[1] || null);
+  if (prefs.get("canvasNoteHidden", false)) return r;
+  // A strip between the stage bar and the editor, so it hides none of the editor's own chrome.
+  const note = h("div", { class: "m-canvas-note", role: "note" },
+    icon("info"), h("span", { class: "grow" }, "Canvas editing works best on a larger screen."),
+    btn("Preview boards", { kind: "primary", cls: "sm", icon: "eye", onClick: (e) => boardsSheet(e.currentTarget) }),
+    btn("", { kind: "quiet", icon: "x", cls: "sm", title: "Hide this note", onClick: () => { prefs.set("canvasNoteHidden", true); note.remove(); } }));
+  bar.after(note);
+  return () => { note.remove(); if (typeof r === "function") r(); };
+}
+function boardsSheet(anchor) {
+  const files = htmlFiles();
+  menu(anchor, files.length ? [{ heading: "Open a board in Preview" }, ...files.map((f) => ({ label: f.path, icon: "canvas", hint: boardSize(f.path).join(" × "), onClick: () => openFile(f.path, { view: "preview" }) }))]
+    : [{ label: "No HTML boards yet — ask the agent for one", disabled: true }], { width: "260px" });
 }
 
 // Board size: registry → asset viewport → kind default.
@@ -143,6 +159,7 @@ function renderBuiltin(body, bar) {
     const list = only ? boards.filter((b) => b.path === only) : boards;
     if (!list.length) return;
     const r = cv.getBoundingClientRect();
+    if (r.width < 50 || r.height < 50) return;   // hidden (another tab on a phone)
     const minX = Math.min(...list.map((b) => b.x)), minY = Math.min(...list.map((b) => b.y));
     const maxX = Math.max(...list.map((b) => b.x + b.w)), maxY = Math.max(...list.map((b) => b.y + b.h));
     const pad = 80;

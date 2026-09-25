@@ -7,9 +7,91 @@ import {
   S, writeUrl, loadFiles, loadComments, loadVersions, loadAssets, loadBoards, detectEditor, htmlFiles, assetFor, previewUrl,
 } from "./state.js";
 import { broadcast } from "./bridge.js";
+import { currentTheme, toggleTheme } from "./theme.js";
 
 let root = null, es = null, pollTimer = null;
 const els = {};
+
+// ── Responsive layout ────────────────────────────────────────────────────
+// desktop ≥ 1100 px: rail | stage | side, unchanged.
+// tablet 901–1099 px: the rail and the side panel become drawers over the stage.
+// tabs ≤ 900 px: one pane at a time behind a bottom tab bar (Chat · Preview ·
+// Canvas · Files · More); "phone" (≤ 600 px) is the narrow end of that.
+const MQ = {
+  tabs: matchMedia("(max-width: 900px)"),
+  phone: matchMedia("(max-width: 600px)"),
+  tablet: matchMedia("(min-width: 901px) and (max-width: 1099.98px)"),
+};
+export const isTabs = () => MQ.tabs.matches;
+export const isPhone = () => MQ.phone.matches;
+const isTablet = () => MQ.tablet.matches;
+export const MTABS = [
+  { id: "chat", icon: "chat", label: "Chat" },
+  { id: "preview", icon: "eye", label: "Preview" },
+  { id: "canvas", icon: "canvas", label: "Canvas" },
+  { id: "files", icon: "folder", label: "Files" },
+  { id: "more", icon: "more", label: "More" },
+];
+// Deep link → the tab that shows it: a side panel other than chat lives under
+// More; an explicit view picks Preview / Canvas; otherwise the chat.
+function initialMTab(opts) {
+  if (opts.panel && opts.panel !== "chat") return "more";
+  if (opts.view === "preview" || opts.view === "code") return "preview";
+  if (opts.view === "canvas") return "canvas";
+  return "chat";
+}
+function applyMTab() {
+  if (!els.ws) return;
+  els.ws.dataset.mtab = S.mtab;
+  if (S.mtab !== "canvas") els.ws.classList.remove("m-side");
+  if (els.mtabs) for (const b of els.mtabs.querySelectorAll("[data-mtab]")) {
+    const on = b.dataset.mtab === S.mtab;
+    b.classList.toggle("on", on); b.setAttribute("aria-selected", on ? "true" : "false");
+  }
+  bus.emit("mtab", S.mtab);
+}
+// Switch the visible pane on small screens. Keeps S.view / S.panel in step so
+// the URL and every other module see the same state as on desktop.
+export function setMTab(t) {
+  if (t === "more") { moreSheet(); return; }
+  S.mtab = t;
+  if (t === "chat" && S.panel !== "chat") { S.panel = "chat"; writeUrl(); drawSideTabs(); drawSide(); }
+  if (t === "preview" && S.view === "canvas") { S.view = "preview"; writeUrl(); drawViewSwitch(); drawStage(); }
+  if (t === "canvas" && S.view !== "canvas") { S.view = "canvas"; writeUrl(); drawViewSwitch(); drawStage(); }
+  applyMTab();
+}
+function drawMTabs() {
+  if (!els.mtabs) return;
+  const badge = S.comments.filter((c) => c.status !== "resolved").length + S.assets.filter((a) => a.status === "needs-review").length;
+  mount(els.mtabs, MTABS.map((t) => h("button", { class: "mtab" + (S.mtab === t.id ? " on" : ""), role: "tab", "aria-selected": S.mtab === t.id ? "true" : "false", dataset: { mtab: t.id },
+    onclick: () => setMTab(t.id) }, icon(t.icon), h("span", { class: "mtab-lbl" }, t.label), t.id === "more" && badge ? h("span", { class: "count" }, badge) : null)));
+}
+function moreSheet() {
+  const anchor = els.mtabs?.querySelector('[data-mtab="more"]') || els.title;
+  const panelItem = (t) => ({ label: t.label, icon: t.icon, data: { panel: t.id }, checked: S.mtab === "more" && S.panel === t.id,
+    hint: t.count && t.count() ? `${t.count()} open` : null, onClick: () => { S.mtab = "more"; setPanel(t.id); } });
+  menu(anchor, [
+    { heading: "Review and edit" },
+    ...SIDE.filter((t) => t.id !== "chat" && (!t.feature || features[t.feature] !== false)).map(panelItem),
+    "-",
+    { label: S.view === "code" ? "Show the preview" : "Show the code", icon: S.view === "code" ? "eye" : "code", data: { action: "code" }, onClick: () => { S.mtab = "preview"; setView(S.view === "code" ? "preview" : "code"); } },
+    features.agents === false ? null : { label: "Agents", icon: "agents", hint: "Run several agents in parallel", onClick: () => import("./exporter.js").then((m) => (m.runs.list.length ? m.runsDialog() : m.agentsDialog())) },
+    { label: "Export", icon: "download", onClick: () => import("./exporter.js").then((m) => m.exportMenu(anchor)) },
+    { label: "Share", icon: "share", onClick: () => import("./exporter.js").then((m) => m.shareDialog()) },
+  ], { width: "260px", cls: "msheet" });
+}
+// Layout changes (rotation, window resize): the tablet drawers start closed
+// for the rail; leaving tablet width restores the saved desktop state.
+function applyLayout() {
+  if (!els.ws) return;
+  const tablet = isTablet();
+  els.ws.classList.toggle("tablet", tablet);
+  if (tablet) els.rail.classList.add("collapsed");
+  else els.rail.classList.toggle("collapsed", !!prefs.get("railHidden", false));
+  els.ws.classList.remove("m-side");
+  applyMTab();
+}
+for (const q of Object.values(MQ)) q.addEventListener("change", () => { if (S.route === "project" && els.ws?.isConnected) applyLayout(); });
 
 export const MODES = [
   { id: "view", icon: "cursor", label: "Interact", key: "V" },
@@ -28,9 +110,12 @@ export function setMode(m) {
 export function setView(v) {
   if (!["canvas", "code", "preview"].includes(v)) return;
   S.view = v; writeUrl(); drawViewSwitch(); drawStage();
+  if (S.mtab) { S.mtab = v === "canvas" ? "canvas" : "preview"; applyMTab(); }
 }
 export function setPanel(p) {
   S.panel = p; writeUrl(); drawSideTabs(); drawSide();
+  if (S.mtab) { S.mtab = p === "chat" ? "chat" : "more"; applyMTab(); }
+  if (isTabs()) return;
   if (els.side?.classList.contains("collapsed")) toggleSide(true);
 }
 export function openFile(path, { view, background = false, agent = false } = {}) {
@@ -42,9 +127,13 @@ export function openFile(path, { view, background = false, agent = false } = {})
     if (v !== S.view) { S.view = v; drawViewSwitch(); }
     writeUrl();
     drawStage();
+    // Small screens: a file the user picked shows at once; one the agent opened
+    // waits behind a "Show" action instead of pulling them out of the chat.
+    if (S.mtab && !agent) { S.mtab = S.view === "canvas" ? "canvas" : "preview"; applyMTab(); }
   } else bus.emit("tabs");
   drawRail();
-  if (agent) toast(`The agent opened ${path}`, { action: background ? { label: "Show", run: () => openFile(path) } : null });
+  const showLater = background || (agent && isTabs() && S.mtab !== "preview");
+  if (agent) toast(`The agent opened ${path}`, { action: showLater ? { label: "Show", run: () => { if (background) openFile(path); else if (S.mtab) setMTab("preview"); } } : null });
 }
 export function closeTab(path) {
   const i = S.tabs.indexOf(path);
@@ -71,7 +160,7 @@ export async function openProject(host, pid, opts = {}) {
   Object.assign(S, {
     route: "project", project, chats: [], chatId: opts.chat || null, files: [], comments: [], versions: [], assets: [], boards: {},
     tabs: [], activeFile: opts.file || null, view: opts.view || "canvas", panel: opts.panel || "chat", mode: "view", selection: null,
-    deepBoard: opts.board || null, deepNode: opts.node || null,
+    deepBoard: opts.board || null, deepNode: opts.node || null, mtab: initialMTab(opts),
   });
   S.turns = new Map();
   document.title = `${project.title} — TeleDesign`;
@@ -84,7 +173,7 @@ export async function openProject(host, pid, opts = {}) {
   }
   if (!opts.view && S.activeFile && !htmlFiles().length) S.view = "code";
   writeUrl();
-  drawRail(); drawViewSwitch(); drawStage(); drawSideTabs(); drawSide();
+  drawRail(); drawViewSwitch(); drawStage(); drawSideTabs(); drawSide(); drawMTabs(); applyLayout();
   // chat.js listens for project-opened (first prompt) — make sure it is loaded.
   await import("./chat.js");
   connect(pid);
@@ -116,11 +205,11 @@ function build() {
     els.saveState,
     h("div", { class: "center" }, els.viewSwitch),
     h("div", { class: "right" },
-      btn("", { kind: "quiet", icon: "panelLeft", title: "Toggle files  (Ctrl+Alt+B)", onClick: () => toggleRail() }),
-      btn("", { kind: "quiet", icon: "panel", title: "Toggle side panel  (Ctrl+\\)", onClick: () => toggleSide() }),
+      btn("", { kind: "quiet", icon: "panelLeft", cls: "ws-rail-toggle", title: "Toggle files  (Ctrl+Alt+B)", onClick: () => toggleRail() }),
+      btn("", { kind: "quiet", icon: "panel", cls: "ws-side-toggle", title: "Toggle side panel  (Ctrl+\\)", onClick: () => toggleSide() }),
       h("span", { class: "divider-v" }),
       agentsBtn, shareBtn, exportBtn,
-      btn("", { kind: "quiet", icon: "more", title: "More", onClick: (e) => projectMore(e.currentTarget) })));
+      btn("", { kind: "quiet", icon: "more", cls: "ws-overflow", title: "More", onClick: (e) => projectMore(e.currentTarget) })));
   els.rail = h("aside", { class: "rail" + (prefs.get("railHidden", false) ? " collapsed" : ""), "aria-label": "Files" });
   els.stagebar = h("div", { class: "stagebar" });
   els.stageBody = h("div", { class: "stage-body" });
@@ -136,23 +225,49 @@ function build() {
     const up = () => { resize.classList.remove("drag"); resize.removeEventListener("pointermove", move); resize.removeEventListener("pointerup", up); };
     resize.addEventListener("pointermove", move); resize.addEventListener("pointerup", up);
   });
-  mount(root, topbar, h("div", { class: "ws" }, els.rail, els.stage, els.side));
+  // Tablet drawers close when the stage behind them is tapped.
+  const scrim = h("div", { class: "ws-scrim", onclick: () => { if (isTablet()) toggleRail(false); } });
+  els.ws = h("div", { class: "ws", dataset: { mtab: S.mtab || "chat" } }, els.rail, els.stage, els.side, scrim);
+  els.mtabs = h("nav", { class: "mtabs", role: "tablist", "aria-label": "Workspace" });
+  mount(root, topbar, els.ws, els.mtabs);
   // Agents API present? Probe lazily and hide the button when it's missing.
   import("./exporter.js").then((m) => m.loadRuns()).then(() => { if (features.agents === false) agentsBtn.classList.add("hidden"); else drawAgentsBtn(); });
 }
 
 export function toggleRail(force) {
+  if (isTabs()) { setMTab(force === false || S.mtab === "files" ? "chat" : "files"); return; }
   const hide = force === undefined ? !els.rail.classList.contains("collapsed") : !force;
-  els.rail.classList.toggle("collapsed", hide); prefs.set("railHidden", hide);
+  els.rail.classList.toggle("collapsed", hide);
+  // Tablet drawers are transient; only the desktop layout is remembered.
+  if (!isTablet()) prefs.set("railHidden", hide);
 }
 export function toggleSide(force) {
+  if (isTabs()) {
+    // Tablet-width canvas: the side panel slides over the editor. Elsewhere the
+    // side panel is its own tab.
+    if (S.mtab === "canvas" && !isPhone()) { els.ws.classList.toggle("m-side", force === undefined ? !els.ws.classList.contains("m-side") : !!force); return; }
+    setMTab(S.mtab === "chat" && force !== true ? "preview" : "chat");
+    return;
+  }
   const hide = force === undefined ? !els.side.classList.contains("collapsed") : !force;
   els.side.classList.toggle("collapsed", hide); prefs.set("sideHidden", hide);
 }
 
 function projectMore(anchor) {
   const p = S.project;
+  // On small screens the top bar keeps only this menu, so it also carries the
+  // actions the bar would otherwise show.
+  const small = isTabs() ? [
+    features.agents === false ? null : { label: "Agents", icon: "agents", hint: "Run several agents in parallel", onClick: () => import("./exporter.js").then((m) => (m.runs.list.length ? m.runsDialog() : m.agentsDialog())) },
+    { label: "Share", icon: "share", onClick: () => import("./exporter.js").then((m) => m.shareDialog()) },
+    { label: "Export", icon: "download", onClick: () => import("./exporter.js").then((m) => m.exportMenu(anchor)) },
+    { label: currentTheme() === "dark" ? "Light theme" : "Dark theme", icon: currentTheme() === "dark" ? "sun" : "moon", onClick: () => toggleTheme() },
+    { label: "Team Mode", icon: "agents", hint: "Switch app", onClick: () => { location.href = "/team"; } },
+    { label: "Task Mode", icon: "list", hint: "Switch app", onClick: () => { location.href = "/tasks"; } },
+    "-",
+  ] : [];
   menu(anchor, [
+    ...small,
     { label: "Rename", icon: "edit", onClick: () => { els.title.focus(); els.title.select(); } },
     { label: "Design system", icon: "palette", hint: S.systems.find((s) => s.id === p.design_system_id)?.name || "None", onClick: () => pickSystem() },
     { label: "Check design-system adherence", icon: "checkCircle", hint: "Hard-coded colours, fonts, off-system components", onClick: () => lintDialog() },
@@ -231,12 +346,21 @@ export function drawStage() {
   mod.then((m) => { stageCleanup = m.render(els.stageBody, els.stagebar) || null; }).catch((e) => { console.error(e); toastError(e); });
 }
 export function modeToolbar() {
-  const seg = h("div", { class: "seg icons", role: "toolbar", "aria-label": "Interaction mode" });
-  const draw = () => mount(seg, MODES.map((m) => h("button", { class: S.mode === m.id ? "on" : "", title: `${m.label}  (${m.key})`, "aria-pressed": S.mode === m.id ? "true" : "false", onclick: () => setMode(m.id) }, icon(m.icon))));
+  const seg = h("div", { class: "seg icons modes-seg", role: "toolbar", "aria-label": "Interaction mode" });
+  // Phones: the same modes behind one button (CSS picks which one shows).
+  const compact = h("button", { class: "pick modes-compact", title: "Interaction mode", "aria-label": "Interaction mode", onclick: (e) => menu(e.currentTarget, [{ heading: "Mode" },
+    ...MODES.map((m) => ({ label: m.label, icon: m.icon, checked: S.mode === m.id, hint: S.mode === m.id ? "Current" : null, onClick: () => setMode(m.id) }))]) });
+  const draw = () => {
+    mount(seg, MODES.map((m) => h("button", { class: S.mode === m.id ? "on" : "", title: `${m.label}  (${m.key})`, "aria-pressed": S.mode === m.id ? "true" : "false", onclick: () => setMode(m.id) }, icon(m.icon))));
+    const cur = MODES.find((m) => m.id === S.mode) || MODES[0];
+    mount(compact, icon(cur.icon), h("span", { class: "lbl" }, cur.id === "view" ? "Interact" : cur.label.split(" ")[0]), icon("chevronDown"));
+    compact.classList.toggle("on", cur.id !== "view");
+  };
   draw();
   const off = bus.on("mode", draw);
-  seg._cleanup = off;
-  return seg;
+  const wrap = h("span", { class: "modes" }, seg, compact);
+  wrap._cleanup = off;
+  return wrap;
 }
 
 // ── Files rail ───────────────────────────────────────────────────────────
@@ -357,7 +481,7 @@ export function drawSideTabs() {
   if (!els.sideTabs) return;
   mount(els.sideTabs, SIDE.filter((t) => !t.feature || features[t.feature] !== false || S.panel === t.id).map((t) => {
     const n = t.count ? t.count() : 0;
-    return h("button", { class: "side-tab" + (S.panel === t.id ? " on" : ""), role: "tab", title: t.label, "aria-selected": S.panel === t.id ? "true" : "false", onclick: () => setPanel(t.id) },
+    return h("button", { class: "side-tab" + (S.panel === t.id ? " on" : ""), role: "tab", title: t.label, dataset: { p: t.id }, "aria-selected": S.panel === t.id ? "true" : "false", onclick: () => setPanel(t.id) },
       icon(t.icon), h("span", { class: "lbl" }, t.label), n ? h("span", { class: "count" }, n) : null);
   }));
 }
@@ -370,8 +494,8 @@ export function drawSide() {
   mod.then((m) => { sideCleanup = (S.panel === "chat" ? m.render(els.sideBody) : m.render(S.panel, els.sideBody)) || null; })
     .catch((e) => { console.error(e); toastError(e); });
 }
-bus.on("comments", drawSideTabs);
-bus.on("assets", () => { drawSideTabs(); drawRail(); });
+bus.on("comments", () => { drawSideTabs(); drawMTabs(); });
+bus.on("assets", () => { drawSideTabs(); drawRail(); drawMTabs(); });
 bus.on("files", () => drawRail());
 
 // ── Events (SSE, with a polling fallback) ────────────────────────────────

@@ -11,7 +11,14 @@ const app = document.getElementById("app");
 // Shared Team · Tasks · Design switcher (/shared/appnav.js). Optional: if the
 // route is missing TeleDesign renders exactly as before.
 import("/shared/appnav.js").catch(() => {});
-const appnav = (compact) => h("tc-appnav", { active: "design", variant: "switch", compact: compact ? "" : null });
+// Phones get the icon-only switch on the home bar too (the component's own
+// "compact" attribute; nothing here restyles it).
+const narrow = matchMedia("(max-width: 600px)");
+const appnav = (compact) => {
+  const el = h("tc-appnav", { active: "design", variant: "switch", compact: compact || narrow.matches ? "" : null });
+  if (!compact) narrow.addEventListener("change", () => el.toggleAttribute("compact", narrow.matches));
+  return el;
+};
 
 function homeTopbar() {
   const themeBtn = btn("", { kind: "quiet", icon: currentTheme() === "dark" ? "sun" : "moon", title: "Toggle light / dark  (Alt+Shift+L)", onClick: () => toggleTheme() });
@@ -21,7 +28,7 @@ function homeTopbar() {
     appnav(false),
     h("div", { class: "right" },
       btn("", { kind: "quiet", icon: "settings", title: "Preferences", onClick: () => import("./exporter.js").then((m) => m.settingsDialog()) }),
-      btn("", { kind: "quiet", icon: "keyboard", title: "Keyboard shortcuts  (?)", onClick: () => sheet() }),
+      btn("", { kind: "quiet", icon: "keyboard", cls: "kbd-btn", title: "Keyboard shortcuts  (?)", onClick: () => sheet() }),
       themeBtn));
 }
 
@@ -55,7 +62,7 @@ function addProjectTopbarExtras() {
   const themeBtn = btn("", { kind: "quiet", icon: currentTheme() === "dark" ? "sun" : "moon", title: "Toggle light / dark  (Alt+Shift+L)", onClick: () => toggleTheme() });
   bus.on("theme", (t) => themeBtn.isConnected && mount(themeBtn, icon(t === "dark" ? "sun" : "moon")));
   right.prepend(appnav(true), h("span", { class: "divider-v" }));
-  right.append(btn("", { kind: "quiet", icon: "keyboard", title: "Keyboard shortcuts  (?)", onClick: () => sheet() }), themeBtn);
+  right.append(btn("", { kind: "quiet", icon: "keyboard", cls: "kbd-btn", title: "Keyboard shortcuts  (?)", onClick: () => sheet() }), themeBtn);
 }
 
 bus.on("navigate", (nav) => go(nav, true).catch(toastError));
