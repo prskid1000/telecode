@@ -22,7 +22,8 @@ import logging
 import os
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Callable, Dict, List, Optional
 
 from services.session import session_store
 from services.task.agent_prompt import resolve_prompt
@@ -34,6 +35,12 @@ from services.task.task_utils import (
     get_session_namespace,
     get_task_id,
     is_cancelled,
+    kill_proc_tree,
+    make_resume_store,
+    prompt_digest,
+    read_resume_id,
+    track_process,
+    untrack_process,
     update_progress,
     StreamDrain,
 )
@@ -110,6 +117,41 @@ def _handle_event(evt: Dict[str, Any], tool_calls: List[str]) -> Optional[str]:
     return captured_sid
 
 
+# `turn.completed.usage` in codex-cli 0.157 (same TokenUsage struct as the
+# rollout files' token_count events): input_tokens, cached_input_tokens,
+# output_tokens, reasoning_output_tokens, and on newer builds
+# cache_write_input_tokens. cached_input_tokens is a SUBSET of input_tokens
+# (OpenAI semantics), unlike Claude where input_tokens excludes the cache.
+# There is no cost, turn-count or duration field — turns are counted from
+# turn.completed events and duration is wall clock.
+_USAGE_FIELDS = ("input_tokens", "cached_input_tokens", "output_tokens",
+                 "reasoning_output_tokens", "cache_write_input_tokens")
+
+
+def _add_usage(totals: Dict[str, int], usage: Any) -> None:
+    if not isinstance(usage, dict):
+        return
+    for k in _USAGE_FIELDS:
+        v = usage.get(k)
+        if isinstance(v, (int, float)):
+            totals[k] = totals.get(k, 0) + int(v)
+
+
+def _normalize_usage(totals: Dict[str, int]) -> Dict[str, int]:
+    """Map summed codex usage onto the handlers' shared `tokens` shape, where
+    `input` excludes cache reads (Claude's convention)."""
+    total_in = totals.get("input_tokens", 0)
+    cached = min(totals.get("cached_input_tokens", 0), total_in)
+    return {
+        "input": total_in - cached,
+        "output": totals.get("output_tokens", 0),
+        "cache_read": cached,
+        "cache_write": totals.get("cache_write_input_tokens", 0),
+        "reasoning_output": totals.get("reasoning_output_tokens", 0),
+        "total_input_incl_cache": total_in,
+    }
+
+
 def codex_task(
     prompt: Optional[str] = None,
     is_local: bool = False,
@@ -119,6 +161,7 @@ def codex_task(
     job: Optional[Dict[str, Any]] = None,
     agent_files: Optional[List[Any]] = None,
     job_files: Optional[List[Any]] = None,
+    model: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run Codex (`codex exec --json`) in the session folder.
 
@@ -150,7 +193,8 @@ def codex_task(
         raise RuntimeError("No session bound to this task")
 
     meta = session_store.get(sid, namespace=ns) or {}
-    resume_id = (meta.get("data") or {}).get("last_codex_session_id")
+    resume_id = read_resume_id(meta.get("data"), agent_id, "codex", is_local)
+    resume_store = make_resume_store(sid, ns, agent_id, "codex", is_local)
 
     with stage_for_run(agent_id, sid, work_dir, engine="codex"):
         return _run_codex_subprocess(
@@ -162,6 +206,8 @@ def codex_task(
             is_local=is_local,
             log_path=log_path,
             last_msg_path=last_msg_path,
+            model=model,
+            resume_store=resume_store,
         )
 
 
@@ -248,15 +294,19 @@ def _run_codex_subprocess(
     is_local: bool,
     log_path: Path,
     last_msg_path: Path,
+    model: Optional[str] = None,
+    resume_store: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, Any]:
+    """Spawn `codex exec --json`. `resume_store(id)` persists a new thread id;
+    when omitted (the TeleDesign path) the legacy `last_codex_session_id` key
+    is written."""
     import config as app_config
 
     env = None
-    model: Optional[str] = None
     overrides: List[str] = []
     if is_local:
         import llamacpp.state as llama_state
-        model = llama_state.last_active_model() or "local"
+        model = model or llama_state.last_active_model() or "local"
         overrides = _local_provider_overrides(app_config.proxy_port())
         env = _local_env()
         logger.info(f"Local mode: codex provider '{LOCAL_PROVIDER_ID}' -> "
@@ -277,7 +327,7 @@ def _run_codex_subprocess(
         "kind": "start",
         "session_id": sid,
         "cwd": str(work_dir),
-        "prompt": prompt,
+        **prompt_digest(prompt),
         "resumed": bool(resume_id),
         "resumed_codex_session_id": resume_id,
         "is_local": is_local,
@@ -300,13 +350,19 @@ def _run_codex_subprocess(
         shell=True,
         creationflags=creation,
     )
+    started = time.monotonic()
+    tracked_pid = track_process(proc)
     assert proc.stdin is not None
-    proc.stdin.write(prompt)
-    proc.stdin.close()
+    try:
+        proc.stdin.write(prompt)
+        proc.stdin.close()
+    except OSError:
+        pass  # killed before reading stdin (cancel/timeout); handled below
     stderr_drain = StreamDrain(proc.stderr)
 
     tool_calls: List[str] = []
-    final_usage: Dict[str, Any] = {}
+    usage_totals: Dict[str, int] = {}
+    turns = 0
     captured_codex_sid: Optional[str] = None
     accumulated_text: List[str] = []
     saw_turn_completed = False
@@ -320,7 +376,7 @@ def _run_codex_subprocess(
 
                 if is_cancelled():
                     logger.info("Cancellation requested — terminating Codex")
-                    proc.terminate()
+                    kill_proc_tree(proc)
                     raise RuntimeError("Task cancelled")
 
                 try:
@@ -333,18 +389,25 @@ def _run_codex_subprocess(
                 evt_sid = _handle_event(evt, tool_calls)
                 if evt_sid and evt_sid != captured_codex_sid:
                     captured_codex_sid = evt_sid
-                    session_store.patch_data(sid, {"last_codex_session_id": evt_sid}, namespace=ns)
+                    if resume_store:
+                        resume_store(evt_sid)
+                    else:
+                        session_store.patch_data(sid, {"last_codex_session_id": evt_sid}, namespace=ns)
 
                 if evt.get("type") == "turn.completed":
                     saw_turn_completed = True
-                    usage = evt.get("usage") or {}
-                    if isinstance(usage, dict):
-                        final_usage = usage
+                    turns += 1
+                    _add_usage(usage_totals, evt.get("usage"))
 
         proc.wait(timeout=30)
     finally:
         if proc.poll() is None:
-            proc.kill()
+            kill_proc_tree(proc)
+        untrack_process(tracked_pid)
+
+    if is_cancelled():
+        raise RuntimeError("Task cancelled")
+    duration_ms = int((time.monotonic() - started) * 1000)
 
     stderr = stderr_drain.text()
     if proc.returncode != 0 and not saw_turn_completed and not accumulated_text:
@@ -365,43 +428,30 @@ def _run_codex_subprocess(
         for txt in accumulated_text:
             append_event({"kind": "narrative", "text": txt})
 
-    # Codex usage fields are not 100% stable across versions — normalize defensively.
-    input_tokens = final_usage.get("input_tokens") or final_usage.get("prompt_tokens") or 0
-    cache_reads = (
-        final_usage.get("cached_input_tokens")
-        or final_usage.get("cache_read_input_tokens")
-        or 0
-    )
-    output_tokens = final_usage.get("output_tokens") or final_usage.get("completion_tokens") or 0
-    total_input = input_tokens + cache_reads
+    tokens = _normalize_usage(usage_totals)
 
     update_progress(1.0, "done")
     append_event({
         "kind": "done",
         "tool_count": len(tool_calls),
-        "cost_usd": final_usage.get("total_cost_usd"),
-        "num_turns": final_usage.get("num_turns"),
-        "input_tokens": total_input,
-        "output_tokens": output_tokens,
-        "cache_read_tokens": cache_reads,
-        "cache_write_tokens": 0,
+        "cost_usd": None,           # codex exec reports no cost
+        "num_turns": turns,
+        "input_tokens": tokens["total_input_incl_cache"],
+        "output_tokens": tokens["output"],
+        "cache_read_tokens": tokens["cache_read"],
+        "cache_write_tokens": tokens["cache_write"],
     })
 
     return {
         "result": final_text,
         "session_id": sid,
         "codex_session_id": captured_codex_sid,
-        "cost_usd": final_usage.get("total_cost_usd") or 0,
-        "duration_ms": final_usage.get("duration_ms") or 0,
-        "duration_api_ms": final_usage.get("duration_api_ms") or 0,
-        "num_turns": final_usage.get("num_turns") or 0,
-        "tokens": {
-            "input": input_tokens,
-            "output": output_tokens,
-            "cache_read": cache_reads,
-            "cache_write": 0,
-            "total_input_incl_cache": total_input,
-        },
+        # codex exec --json has no cost field; None = unknown, not free.
+        "cost_usd": None,
+        "duration_ms": duration_ms,
+        "duration_api_ms": 0,
+        "num_turns": turns,
+        "tokens": tokens,
         "tool_calls": tool_calls,
         "log_path": str(log_path),
     }

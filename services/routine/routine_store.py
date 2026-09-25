@@ -60,6 +60,21 @@ def _parse_iso(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def normalize_task_type(task_type: Any) -> str:
+    """Upper-case task_type for a routine; also accepts engine names
+    ("codex" -> "CODEX"). Only the CLI engines are valid -- anything else would
+    fail at fire time (ECHO, say, does not take a prompt)."""
+    from services.task.engine_map import ENGINE_TO_TASK_TYPE
+    if not isinstance(task_type, str) or not task_type.strip():
+        raise ValueError("task_type must be a non-empty string")
+    raw = task_type.strip()
+    tt = ENGINE_TO_TASK_TYPE.get(raw.lower(), raw.upper())
+    valid = sorted(set(ENGINE_TO_TASK_TYPE.values()))
+    if tt not in valid:
+        raise ValueError(f"task_type must be one of {valid}, got {task_type!r}")
+    return tt
+
+
 def compute_next_fire(every_seconds: int, *, from_dt: Optional[datetime] = None) -> str:
     base = from_dt or _now_utc()
     return _to_iso(base + timedelta(seconds=int(every_seconds)))
@@ -140,6 +155,7 @@ def build_record(
     rid = routine_id or str(uuid.uuid4())
     _validate_id(rid)
     validated = _validate_schedule(schedule)
+    task_type = normalize_task_type(task_type or "CLAUDE_CODE")
     now = _now_utc()
     return {
         "routine_id": rid,
@@ -147,7 +163,7 @@ def build_record(
         "description": (description or "").strip() or None,
         "prompt": prompt,
         "outputs_only": bool(outputs_only),
-        "task_type": task_type or "CLAUDE_CODE",
+        "task_type": task_type,
         "is_local": bool(is_local),
         "task_timeout_seconds": int(task_timeout_seconds),
         "schedule": validated,
@@ -227,10 +243,7 @@ def patch(routine_id: str, patch_body: Dict[str, Any]) -> Optional[Dict[str, Any
         if "is_local" in patch_body:
             rec["is_local"] = bool(patch_body["is_local"])
         if "task_type" in patch_body:
-            tt = patch_body["task_type"]
-            if not isinstance(tt, str) or not tt.strip():
-                raise ValueError("task_type must be a non-empty string")
-            rec["task_type"] = tt.strip()
+            rec["task_type"] = normalize_task_type(patch_body["task_type"])
         if "task_timeout_seconds" in patch_body:
             tts = patch_body["task_timeout_seconds"]
             if not isinstance(tts, int) or tts < 30:

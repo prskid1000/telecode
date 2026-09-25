@@ -8,6 +8,26 @@ from aiohttp import web
 from pathlib import Path
 from proxy.media_fetch import MediaFetchError, fetch_media_bytes
 from services.job.job_manager import get_job_manager
+from services.task.safe_paths import validate_id
+
+
+def _guarded(fn):
+    """Validate job_id (B9) and map ValueError (unsafe file name, bad step
+    engine) to 400 instead of a 500."""
+    import functools
+
+    @functools.wraps(fn)
+    async def wrapper(request: web.Request) -> web.Response:
+        if "job_id" in request.match_info:
+            try:
+                validate_id(request.match_info["job_id"], "job_id")
+            except ValueError as exc:
+                return web.json_response({"error": str(exc)}, status=400)
+        try:
+            return await fn(request)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+    return wrapper
 
 # Job attachments are documents, not media — a far smaller cap than video.
 MAX_JOB_FILE_BYTES = 64 * 1024 * 1024
@@ -127,13 +147,14 @@ async def delete_job_file(request: web.Request) -> web.Response:
     return web.json_response({"success": True})
 
 def register_routes(app: web.Application):
+    g = _guarded
     app.router.add_get("/api/jobs", list_jobs)
-    app.router.add_post("/api/jobs", create_job)
-    app.router.add_get("/api/jobs/{job_id}", get_job)
-    app.router.add_put("/api/jobs/{job_id}", update_job)
-    app.router.add_delete("/api/jobs/{job_id}", delete_job)
-    app.router.add_get("/api/jobs/{job_id}/files", list_job_files)
-    app.router.add_post("/api/jobs/{job_id}/files", upload_job_files)
-    app.router.add_post("/api/jobs/{job_id}/files/fetch", fetch_job_file)
-    app.router.add_get("/api/jobs/{job_id}/files/{rel_path:.*}", get_job_file)
-    app.router.add_delete("/api/jobs/{job_id}/files/{rel_path:.*}", delete_job_file)
+    app.router.add_post("/api/jobs", g(create_job))
+    app.router.add_get("/api/jobs/{job_id}", g(get_job))
+    app.router.add_put("/api/jobs/{job_id}", g(update_job))
+    app.router.add_delete("/api/jobs/{job_id}", g(delete_job))
+    app.router.add_get("/api/jobs/{job_id}/files", g(list_job_files))
+    app.router.add_post("/api/jobs/{job_id}/files", g(upload_job_files))
+    app.router.add_post("/api/jobs/{job_id}/files/fetch", g(fetch_job_file))
+    app.router.add_get("/api/jobs/{job_id}/files/{rel_path:.*}", g(get_job_file))
+    app.router.add_delete("/api/jobs/{job_id}/files/{rel_path:.*}", g(delete_job_file))

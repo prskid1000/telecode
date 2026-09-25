@@ -2,7 +2,9 @@
 
 State file: data/heartbeat-state.json — atomic writes via tempfile + os.replace.
 
-Key format: "<agent_id>:<entry_name>" → {last_run, last_status, last_task_id}.
+Key format: "<agent_id>:<entry_name>" → {last_run, last_status, last_task_id,
+last_finished, first_seen}. `first_seen` anchors a never-fired entry's first
+cron slot (B4); it is dropped once the entry has fired (last_run takes over).
 """
 
 from __future__ import annotations
@@ -75,6 +77,36 @@ def mark_fired(agent_id: str, entry_name: str, task_id: Optional[str] = None) ->
             "last_task_id": task_id,
         }
         _write(state)
+
+
+def mark_seen(agent_id: str, entry_name: str) -> str:
+    """Record when the scheduler first saw a never-fired entry. Idempotent;
+    returns the stored first_seen."""
+    with _lock:
+        state = _read()
+        cur = state.get(_key(agent_id, entry_name), {})
+        if not cur.get("first_seen"):
+            cur["first_seen"] = _now_iso()
+            state[_key(agent_id, entry_name)] = cur
+            _write(state)
+        return cur["first_seen"]
+
+
+def reconcile_interrupted(is_live) -> int:
+    """Startup pass (B6): entries left "running" whose task is not alive
+    (`is_live(task_id)` False) become "interrupted". Returns count."""
+    with _lock:
+        state = _read()
+        n = 0
+        for cur in state.values():
+            if isinstance(cur, dict) and cur.get("last_status") == "running" \
+                    and not is_live(cur.get("last_task_id")):
+                cur["last_status"] = "interrupted"
+                cur["last_finished"] = _now_iso()
+                n += 1
+        if n:
+            _write(state)
+        return n
 
 
 def mark_finished(agent_id: str, entry_name: str, status: str, task_id: Optional[str] = None) -> None:

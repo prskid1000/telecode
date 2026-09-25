@@ -22,8 +22,13 @@ async def list_sessions(request: web.Request) -> web.Response:
     namespace = request.query.get("namespace")
     try:
         sessions = session_store.list_all(namespace=namespace)
+        out = {"success": True, "namespace": namespace, "sessions": sessions}
+        # Expired workspaces are archived, not deleted (B1); ?include_archived=1
+        # lists them separately so the UI can offer a restore.
+        if (request.query.get("include_archived") or "").lower() in ("1", "true", "yes"):
+            out["archived"] = session_store.list_archived(namespace=namespace)
         request_log.finish(rid, 200)
-        return web.json_response({"success": True, "namespace": namespace, "sessions": sessions})
+        return web.json_response(out)
     except Exception as exc:
         request_log.finish(rid, 400, str(exc))
         return web.json_response({"success": False, "error": str(exc)}, status=400)
@@ -34,11 +39,14 @@ async def create_session(request: web.Request) -> web.Response:
     except Exception: body = {}
     request_log.set_request_preview(rid, body)
     try:
+        # A session created here is a workspace: with no TTL given it never
+        # expires (0). 0 from the UI's "expiry off" also means never.
+        idle = body.get("session_idle_timeout_seconds")
         meta = session_store.create(
             session_id=body.get("session_id"),
             data=body.get("data"),
-            session_idle_timeout_seconds=body.get("session_idle_timeout_seconds"),
-            absolute_ttl_seconds=body.get("absolute_ttl_seconds"),
+            session_idle_timeout_seconds=0 if idle in (None, "") else idle,
+            absolute_ttl_seconds=body.get("absolute_ttl_seconds") or None,
             files=body.get("files"),
             namespace=body.get("namespace"),
         )
@@ -181,12 +189,28 @@ async def delete_file(request: web.Request) -> web.Response:
         request_log.finish(rid, 400, str(exc))
         return web.json_response({"success": False, "error": str(exc)}, status=400)
 
+async def restore_session(request: web.Request) -> web.Response:
+    rid = _log_req(request)
+    session_id = request.match_info["session_id"]
+    namespace = request.query.get("namespace")
+    try:
+        meta = session_store.restore(session_id, namespace=namespace)
+    except ValueError as exc:
+        request_log.finish(rid, 400, str(exc))
+        return web.json_response({"success": False, "error": str(exc)}, status=400)
+    if not meta:
+        request_log.finish(rid, 404, "Not archived")
+        return web.json_response({"success": False, "error": "No archived session with that id"}, status=404)
+    request_log.finish(rid, 200)
+    return web.json_response({"success": True, "session": meta})
+
 def register_routes(app: web.Application):
     app.router.add_get("/api/sessions", list_sessions)
     app.router.add_post("/api/sessions", create_session)
     app.router.add_get("/api/sessions/{session_id}", get_session)
     app.router.add_put("/api/sessions/{session_id}", update_session)
     app.router.add_delete("/api/sessions/{session_id}", delete_session)
+    app.router.add_post("/api/sessions/{session_id}/restore", restore_session)
     
     app.router.add_get("/api/sessions/{session_id}/files", list_files)
     app.router.add_post("/api/sessions/{session_id}/files", upload_files)

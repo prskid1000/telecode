@@ -39,7 +39,7 @@ import logging
 import os
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from services.session import session_store
 from services.task.agent_prompt import resolve_prompt
@@ -51,6 +51,12 @@ from services.task.task_utils import (
     get_session_namespace,
     get_task_id,
     is_cancelled,
+    kill_proc_tree,
+    make_resume_store,
+    prompt_digest,
+    read_resume_id,
+    track_process,
+    untrack_process,
     update_progress,
     StreamDrain,
 )
@@ -126,8 +132,13 @@ def antigravity_task(
     job: Optional[Dict[str, Any]] = None,
     agent_files: Optional[List[Any]] = None,
     job_files: Optional[List[Any]] = None,
+    model: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Run Antigravity (`agy -p`) in the session folder."""
+    """Run Antigravity (`agy -p`) in the session folder.
+
+    `model`: an `agy models` id in cloud mode, the llama model name in local
+    mode. The resume id is scoped per (workspace, agent, engine[, local]).
+    """
     prompt = resolve_prompt({
         "prompt": prompt,
         "agent": agent,
@@ -152,8 +163,8 @@ def antigravity_task(
         raise RuntimeError("No session bound to this task")
 
     meta = session_store.get(sid, namespace=ns) or {}
-    resume_key = _RESUME_KEY_LOCAL if is_local else _RESUME_KEY
-    resume_id = (meta.get("data") or {}).get(resume_key)
+    resume_id = read_resume_id(meta.get("data"), agent_id, "antigravity", is_local)
+    resume_store = make_resume_store(sid, ns, agent_id, "antigravity", is_local)
 
     with stage_for_run(agent_id, sid, work_dir, engine="antigravity"):
         return _run_antigravity_subprocess(
@@ -164,6 +175,8 @@ def antigravity_task(
             resume_id=resume_id,
             log_path=log_path,
             is_local=is_local,
+            model=model,
+            resume_store=resume_store,
         )
 
 
@@ -203,14 +216,19 @@ def _run_antigravity_subprocess(
     resume_id: Optional[str],
     log_path: Path,
     is_local: bool = False,
+    model: Optional[str] = None,
+    resume_store: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, Any]:
+    """Spawn agy. `resume_store(id)` persists a new conversation id; when
+    omitted (the TeleDesign path) the legacy flat key is written."""
     env: Optional[Dict[str, str]] = None
-    model_arg: Optional[str] = None
+    # Cloud: an `agy models` id (e.g. gemini-3.8-flash-high). Local: a llama model name.
+    model_arg: Optional[str] = model if (model and not is_local) else None
     resume_key = _RESUME_KEY_LOCAL if is_local else _RESUME_KEY
     if is_local:
         import config as app_config
         import llamacpp.state as llama_state
-        model = llama_state.last_active_model() or "local"
+        model = model or llama_state.last_active_model() or "local"
         home = ensure_local_home()
         env = local_env(app_config.proxy_port(), home)
         model_arg = local_model_arg(model)
@@ -225,7 +243,7 @@ def _run_antigravity_subprocess(
         "kind": "start",
         "session_id": sid,
         "cwd": str(work_dir),
-        "prompt": prompt,
+        **prompt_digest(prompt),
         "resumed": bool(resume_id),
         "resumed_antigravity_conversation_id": resume_id,
         "is_local": is_local,
@@ -248,9 +266,13 @@ def _run_antigravity_subprocess(
         shell=True,
         creationflags=creation,
     )
+    tracked_pid = track_process(proc)
     assert proc.stdin is not None
-    proc.stdin.write(_stdin_message(prompt))
-    proc.stdin.close()
+    try:
+        proc.stdin.write(_stdin_message(prompt))
+        proc.stdin.close()
+    except OSError:
+        pass  # killed before reading stdin (cancel/timeout); handled below
     stderr_drain = StreamDrain(proc.stderr)
 
     tool_calls: List[str] = []
@@ -267,7 +289,7 @@ def _run_antigravity_subprocess(
 
                 if is_cancelled():
                     logger.info("Cancellation requested — terminating Antigravity")
-                    proc.terminate()
+                    kill_proc_tree(proc)
                     raise RuntimeError("Task cancelled")
 
                 try:
@@ -296,13 +318,20 @@ def _run_antigravity_subprocess(
                     conversation_id = final.get("conversation_id") or conversation_id
 
                 if conversation_id and conversation_id != resume_id:
-                    session_store.patch_data(sid, {resume_key: conversation_id}, namespace=ns)
+                    if resume_store:
+                        resume_store(conversation_id)
+                    else:
+                        session_store.patch_data(sid, {resume_key: conversation_id}, namespace=ns)
                     resume_id = conversation_id
 
         proc.wait(timeout=60)
     finally:
         if proc.poll() is None:
-            proc.kill()
+            kill_proc_tree(proc)
+        untrack_process(tracked_pid)
+
+    if is_cancelled():
+        raise RuntimeError("Task cancelled")
 
     stderr = stderr_drain.text()
     fin = final or {}

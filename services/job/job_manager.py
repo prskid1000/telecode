@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import config
+from services.task.safe_paths import resolve_in, validate_id
 
 logger = logging.getLogger("telecode.services.job")
 
@@ -53,6 +54,10 @@ def _normalize_pipeline(data: Dict[str, Any]) -> Dict[str, Any]:
             "prompt_override": s.get("prompt_override") or "",
             "depends_on_text": bool(s.get("depends_on_text", False)),
             "phase": s.get("phase"),
+            # Per-step overrides; blank / None = inherit (run body → agent default).
+            "engine": _normalize_step_engine(s.get("engine")),
+            "model": (s.get("model") or "").strip() if isinstance(s.get("model"), str) else "",
+            "is_local": _normalize_tristate(s.get("is_local")),
         }
         if not step["agent_id"]:
             continue  # drop malformed steps
@@ -90,16 +95,39 @@ def _normalize_pipeline(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 
+def _normalize_step_engine(engine: Any) -> str:
+    """'' = inherit; else one of the supported engine keys. Unknown → ValueError."""
+    from services.task.engine_map import supported_engines
+    if engine is None:
+        return ""
+    e = str(engine).strip().lower()
+    if e and e not in supported_engines():
+        raise ValueError(f"step engine must be one of {supported_engines()} or blank, got {engine!r}")
+    return e
+
+
+def _normalize_tristate(value: Any) -> Optional[bool]:
+    """None / '' = inherit; otherwise a bool ("true"/"false" strings accepted)."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("", "inherit", "default"):
+            return None
+        return v in ("1", "true", "yes", "on", "local")
+    return bool(value)
+
+
 class JobManager:
     def __init__(self):
         self.base_dir = get_jobs_base_dir()
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_job_path(self, job_id: str) -> Path:
-        return self.base_dir / f"{job_id}.json"
+        return self.base_dir / f"{validate_id(job_id, 'job_id')}.json"
 
     def _get_job_files_dir(self, job_id: str) -> Path:
-        return self.base_dir / job_id / "files"
+        return self.base_dir / validate_id(job_id, "job_id") / "files"
 
     def list_jobs(self, kind: Optional[str] = None, include_archived: bool = False) -> List[Dict[str, Any]]:
         jobs = []
@@ -153,7 +181,10 @@ class JobManager:
         return job_data
 
     def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
-        p = self._get_job_path(job_id)
+        try:
+            p = self._get_job_path(job_id)
+        except ValueError:
+            return None
         if not p.exists():
             return None
         try:
@@ -193,7 +224,7 @@ class JobManager:
         p = self._get_job_path(job_id)
         if p.exists():
             p.unlink()
-            files_dir = self.base_dir / job_id
+            files_dir = self.base_dir / validate_id(job_id, "job_id")
             if files_dir.exists():
                 shutil.rmtree(files_dir)
             return True
@@ -224,19 +255,9 @@ class JobManager:
         primitive: "../../../x" walks out of the job directory, and save_file
         even creates the parents on the way. Containment is enforced here, at
         the one place every caller goes through, rather than in each handler.
+        Shared with the agent store via services.task.safe_paths.
         """
-        if not filename:
-            raise ValueError("filename is required")
-        # Reject absolute paths and drive letters outright; on Windows
-        # "C:/x" and "\host\share" both survive a naive join.
-        candidate = Path(filename)
-        if candidate.is_absolute() or candidate.drive or candidate.anchor:
-            raise ValueError(f"unsafe filename: {filename!r}")
-        base = files_dir.resolve()
-        dest = (base / candidate).resolve()
-        if dest != base and base not in dest.parents:
-            raise ValueError(f"unsafe filename: {filename!r}")
-        return dest
+        return resolve_in(files_dir, filename)
 
     def save_file(self, job_id: str, filename: str, content: bytes):
         files_dir = self._get_job_files_dir(job_id)

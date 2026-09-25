@@ -18,6 +18,14 @@ Pytest suite for agents, jobs, runs, and heartbeats.
 | `test_int_staging.py` | integration | Stage / writeback / unstage with the AGENT.md → CLAUDE.md rename |
 | `test_flow_run_executor.py` | flow | Phase-based executor with a fake task handler — single, sequential, parallel, custom; output threading; failure halt; cancellation |
 | `test_flow_heartbeat_scheduler.py` | flow | `_is_due`, `_fire`, `_sweep_ephemeral`, `_tick` (reconcile + cap on concurrent fires) |
+| `test_int_session_expiry.py` | integration | B1: absolute TTL ignored for workspaces, idle expiry archives, in-use never expires, `ensure()` restores |
+| `test_flow_run_handoff_engine.py` | flow | B2 full handoff + files changed, B3 run/step/agent engine precedence, B6 orphaned runs, B10 cancel, B11 usage roll-up |
+| `test_flow_heartbeat_p0.py` | flow | B3 heartbeat engine/model/is_local, B4 first fire via `first_seen`, B6 stale state |
+| `test_flow_routine_p0.py` | flow | B5 outputs_only, B13 lock/task_type/timeout, B6 interrupted fires |
+| `test_int_handlers_p0.py` | integration | B3/B7/B8 through the real handlers with the CLI mocked, B6 prompt digest, B11 codex usage |
+| `test_int_staging_p0.py` | integration | B8 backup/restore, crash repair, three-way MEMORY merge |
+| `test_int_paths_api_p0.py` | integration | B9 id/path validation at manager and HTTP level; B3 run body over HTTP |
+| `test_int_task_queue_p0.py` | integration | B10 real process-tree kill, B13 timeout, B12 pools, B6 eviction |
 | `test_e2e_http.py` | e2e | Hits the running proxy at `:1235` — workspace/agent CRUD, pipeline normalisation, parallel/custom run topology, heartbeat validate/reconcile/archive. Auto-skipped when server is down. |
 
 ## Run

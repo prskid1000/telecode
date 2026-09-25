@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import config
+from services.task.safe_paths import resolve_in, validate_id
 
 logger = logging.getLogger("telecode.services.agent")
 
@@ -43,14 +44,15 @@ class AgentManager:
         self.base_dir = get_agents_base_dir()
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
+    # Every path helper validates the id (B9): an id is one safe path segment.
     def _get_agent_path(self, agent_id: str) -> Path:
-        return self.base_dir / f"{agent_id}.json"
+        return self.base_dir / f"{validate_id(agent_id, 'agent_id')}.json"
 
     def _get_agent_files_dir(self, agent_id: str) -> Path:
-        return self.base_dir / agent_id / "files"
+        return self.base_dir / validate_id(agent_id, "agent_id") / "files"
 
     def _get_agent_internal_dir(self, agent_id: str) -> Path:
-        return self.base_dir / agent_id / "internal"
+        return self.base_dir / validate_id(agent_id, "agent_id") / "internal"
 
     def list_agents(self) -> List[Dict[str, Any]]:
         agents = []
@@ -62,13 +64,18 @@ class AgentManager:
                 logger.error(f"Failed to load agent from {p}: {e}")
         return sorted(agents, key=lambda x: x.get("updated_at", ""), reverse=True)
 
-    def create_agent(self, name: str, instructions: str = "", soul: str = "") -> Dict[str, Any]:
+    def create_agent(self, name: str, instructions: str = "", soul: str = "",
+                     engine: Optional[str] = None, model: Optional[str] = None) -> Dict[str, Any]:
         agent_id = str(uuid.uuid4())
         now = _now_iso()
         agent_data = {
             "id": agent_id,
             "name": name,
             "instructions": instructions,
+            # Defaults for pipeline steps / heartbeat fires that don't pick an
+            # engine or model themselves. Blank = claude_code / CLI default.
+            "engine": normalize_engine(engine),
+            "model": (model or "").strip(),
             "created_at": now,
             "updated_at": now
         }
@@ -83,7 +90,10 @@ class AgentManager:
         return agent_data
 
     def get_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:
-        p = self._get_agent_path(agent_id)
+        try:
+            p = self._get_agent_path(agent_id)
+        except ValueError:
+            return None
         if not p.exists():
             return None
         try:
@@ -100,6 +110,10 @@ class AgentManager:
             agent["name"] = data["name"]
         if "instructions" in data:
             agent["instructions"] = data["instructions"]
+        if "engine" in data:
+            agent["engine"] = normalize_engine(data["engine"])
+        if "model" in data:
+            agent["model"] = (data["model"] or "").strip()
         
         agent["updated_at"] = _now_iso()
         self._get_agent_path(agent_id).write_text(json.dumps(agent, indent=2), encoding="utf-8")
@@ -109,7 +123,7 @@ class AgentManager:
         p = self._get_agent_path(agent_id)
         if p.exists():
             p.unlink()
-            files_dir = self.base_dir / agent_id
+            files_dir = self.base_dir / validate_id(agent_id, "agent_id")
             if files_dir.exists():
                 shutil.rmtree(files_dir)
             return True
@@ -131,21 +145,24 @@ class AgentManager:
                 })
         return result
 
+    # File names come straight from HTTP (multipart filename / URL tail):
+    # resolve_in refuses anything that escapes the agent's files dir and
+    # raises ValueError, which the API maps to 400.
     def save_file(self, agent_id: str, filename: str, content: bytes):
         files_dir = self._get_agent_files_dir(agent_id)
         files_dir.mkdir(parents=True, exist_ok=True)
-        dest = files_dir / filename
+        dest = resolve_in(files_dir, filename)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(content)
 
     def get_file_path(self, agent_id: str, filename: str) -> Optional[Path]:
-        p = self._get_agent_files_dir(agent_id) / filename
+        p = resolve_in(self._get_agent_files_dir(agent_id), filename)
         if p.exists() and p.is_file():
             return p
         return None
 
     def delete_file(self, agent_id: str, filename: str) -> bool:
-        p = self._get_agent_files_dir(agent_id) / filename
+        p = resolve_in(self._get_agent_files_dir(agent_id), filename)
         if p.exists() and p.is_file():
             p.unlink()
             return True
@@ -170,6 +187,15 @@ class AgentManager:
                     continue
                 (d / fname).write_text(content or "", encoding="utf-8")
         return True
+
+def normalize_engine(engine: Optional[str]) -> str:
+    """'' (inherit / default) or one of the supported engine keys."""
+    from services.task.engine_map import supported_engines
+    e = (engine or "").strip().lower()
+    if e and e not in supported_engines():
+        raise ValueError(f"engine must be one of {supported_engines()} or blank, got {engine!r}")
+    return e
+
 
 _manager = AgentManager()
 def get_agent_manager() -> AgentManager:

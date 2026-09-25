@@ -7,7 +7,7 @@ import logging
 import os
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from services.session import session_store
 from services.task.agent_prompt import resolve_prompt
@@ -19,6 +19,12 @@ from services.task.task_utils import (
     get_session_namespace,
     get_task_id,
     is_cancelled,
+    kill_proc_tree as _kill_tree,
+    make_resume_store,
+    prompt_digest,
+    read_resume_id,
+    track_process,
+    untrack_process,
     update_progress,
     StreamDrain,
 )
@@ -67,6 +73,7 @@ def claude_code_task(
     job: Optional[Dict[str, Any]] = None,
     agent_files: Optional[List[Any]] = None,
     job_files: Optional[List[Any]] = None,
+    model: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run Claude Code in the session folder assigned by the queue.
 
@@ -74,9 +81,14 @@ def claude_code_task(
     (`agent`, `job`, optional `agent_files`/`job_files`) which are rendered
     into the shared <agent_task> XML via services.task.agent_prompt.
 
-    When `agent_id` is provided, the agent's internal files (SOUL/USER/MEMORY
-    + AGENT→CLAUDE.md) are staged into the workspace before the CLI starts and
-    written back / unstaged after it finishes. See services.task.staging.
+    When `agent_id` is provided, SOUL/USER/MEMORY are staged into the
+    workspace and the agent's AGENT.md is handed to the CLI with
+    `--append-system-prompt-file` (never written over the workspace's own
+    CLAUDE.md); changes are merged back afterwards. See services.task.staging.
+
+    `model` (optional) is a Claude alias or full model name in cloud mode, the
+    llama model name in local mode. The resume id is scoped per
+    (workspace, agent, engine[, local]) — see task_utils.resume_scope_key.
     """
     prompt = resolve_prompt({
         "prompt": prompt,
@@ -103,9 +115,17 @@ def claude_code_task(
         raise RuntimeError("No session bound to this task")
 
     meta = session_store.get(sid, namespace=ns) or {}
-    resume_id = (meta.get("data") or {}).get("last_claude_session_id")
+    resume_id = read_resume_id(meta.get("data"), agent_id, "claude_code", is_local)
+    resume_store = make_resume_store(sid, ns, agent_id, "claude_code", is_local)
 
-    with stage_for_run(agent_id, sid, work_dir, engine="claude"):
+    agent_md_file = None
+    if agent_id:
+        agent_md_file = (Path(app_config._settings_dir()) / "data" / "runtime"
+                         / "agent_prompts" / f"{task_id}.md")
+
+    with stage_for_run(agent_id, sid, work_dir, engine="claude", agent_md_file=agent_md_file):
+        append_file = agent_md_file if (agent_md_file and agent_md_file.exists()
+                                        and agent_md_file.stat().st_size > 0) else None
         return _run_claude_subprocess(
             prompt=prompt,
             work_dir=work_dir,
@@ -114,6 +134,9 @@ def claude_code_task(
             resume_id=resume_id,
             is_local=is_local,
             log_path=log_path,
+            model=model,
+            resume_store=resume_store,
+            append_system_prompt_file=append_file,
         )
 
 
@@ -126,7 +149,16 @@ def _run_claude_subprocess(
     resume_id: Optional[str],
     is_local: bool,
     log_path: Path,
+    model: Optional[str] = None,
+    resume_store: Optional[Callable[[str], None]] = None,
+    append_system_prompt_file: Optional[Path] = None,
 ) -> Dict[str, Any]:
+    """Spawn `claude -p` and stream its events.
+
+    `resume_store(id)` persists a new CLI session id; when omitted (the
+    TeleDesign path) the legacy flat `last_claude_session_id` key is written.
+    `append_system_prompt_file` passes the agent's AGENT.md explicitly.
+    """
     # The prompt goes on stdin, not argv: `claude -p` reads it from there, and
     # a design prompt (charter + design system + comments) overflows the
     # Windows command line (~8 KB through a .cmd shim) on this shell=True spawn.
@@ -139,12 +171,18 @@ def _run_claude_subprocess(
     ]
     if resume_id:
         cmd += ["--resume", resume_id]
+    # Cloud: `model` is a Claude alias (fable/opus/sonnet/haiku) or full name.
+    # Local: it names the llama model and travels as ANTHROPIC_MODEL below.
+    if model and not is_local:
+        cmd += ["--model", model]
+    if append_system_prompt_file:
+        cmd += ["--append-system-prompt-file", str(append_system_prompt_file)]
 
     import config as app_config
     env = None
     if is_local:
         import llamacpp.state as llama_state
-        model = llama_state.last_active_model() or "local"
+        model = model or llama_state.last_active_model() or "local"
         proxy_url = f"http://localhost:{app_config.proxy_port()}"
         
         env = {
@@ -170,7 +208,7 @@ def _run_claude_subprocess(
         "kind": "start",
         "session_id": sid,
         "cwd": str(work_dir),
-        "prompt": prompt,
+        **prompt_digest(prompt),
         "resumed": bool(resume_id),
         "resumed_claude_session_id": resume_id,
         "is_local": is_local,
@@ -193,9 +231,13 @@ def _run_claude_subprocess(
         shell=True,
         creationflags=creation,
     )
+    tracked_pid = track_process(proc)
     assert proc.stdin is not None
-    proc.stdin.write(prompt)
-    proc.stdin.close()
+    try:
+        proc.stdin.write(prompt)
+        proc.stdin.close()
+    except OSError:
+        pass  # killed before reading stdin (cancel/timeout); handled below
     stderr_drain = StreamDrain(proc.stderr)
 
     tool_calls: List[str] = []
@@ -212,7 +254,7 @@ def _run_claude_subprocess(
 
                 if is_cancelled():
                     logger.info("Cancellation requested — terminating Claude Code")
-                    proc.terminate()
+                    _kill_tree(proc)
                     raise RuntimeError("Task cancelled")
 
                 try:
@@ -227,7 +269,10 @@ def _run_claude_subprocess(
                 evt_sid = evt.get("session_id")
                 if evt_sid and evt_sid != captured_claude_sid:
                     captured_claude_sid = evt_sid
-                    session_store.patch_data(sid, {"last_claude_session_id": evt_sid}, namespace=ns)
+                    if resume_store:
+                        resume_store(evt_sid)
+                    else:
+                        session_store.patch_data(sid, {"last_claude_session_id": evt_sid}, namespace=ns)
 
                 if evt.get("type") == "result":
                     final = evt
@@ -235,7 +280,11 @@ def _run_claude_subprocess(
         proc.wait(timeout=30)
     finally:
         if proc.poll() is None:
-            proc.kill()
+            _kill_tree(proc)
+        untrack_process(tracked_pid)
+
+    if is_cancelled():
+        raise RuntimeError("Task cancelled")
 
     stderr = stderr_drain.text()
     if proc.returncode != 0 and final is None and not accumulated_text:

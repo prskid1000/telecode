@@ -90,12 +90,13 @@ async def cancel_task(request: web.Request) -> web.Response:
         request_log.finish(rid, 404, "Task not found")
         return web.json_response({"success": False, "error": "Task not found"}, status=404)
     
-    with queue.lock:
-        if task.future and not task.future.done():
-            task.future.cancel()
-        from services.task.task_manager import TaskStatus
-        task.status = TaskStatus.CANCELLED
-    
+    # Shared cancel: flips the status (never over a finished task), stamps
+    # completed_at and kills the CLI process tree (B10).
+    if not queue.cancel(task_id, "cancelled by user"):
+        out = {"success": False, "error": f"Task already {task.status.value}", "task": task_to_dict(task)}
+        request_log.finish(rid, 409, out["error"])
+        return web.json_response(out, status=409)
+
     out = {"success": True, "task": task_to_dict(task)}
     request_log.set_response_preview(rid, out)
     request_log.finish(rid, 200)

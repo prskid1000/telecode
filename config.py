@@ -429,6 +429,21 @@ def proxy_upstream_url() -> str:  return get_nested("proxy.upstream_url", "http:
 
 
 # ── Task engines: local mode (is_local=True) ──────────────────────────────────
+def _int_setting(path: str, default: int, minimum: int = 1) -> int:
+    try:
+        return max(minimum, int(get_nested(path, default) or default))
+    except (TypeError, ValueError):
+        return default
+
+
+# Task queue worker pools. Interactive = Task-mode submits and TeleDesign turns;
+# background = routines, heartbeat fires and pipeline-run steps. Separate pools
+# so a burst of background work can never starve an interactive request.
+# Read once when the queue is created (restart to resize).
+def tasks_interactive_workers() -> int: return _int_setting("tasks.pools.interactive_workers", 4)
+def tasks_background_workers()  -> int: return _int_setting("tasks.pools.background_workers", 3)
+
+
 def tasks_local_max_output_tokens() -> int:
     """CLAUDE_CODE_MAX_OUTPUT_TOKENS for local-mode Claude Code runs. Default
     16384, matching the hand-run `claudel.bat` launcher."""

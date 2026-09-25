@@ -7,8 +7,35 @@ from aiohttp import web
 from pathlib import Path
 
 from services.agent.agent_manager import get_agent_manager
+from services.task.safe_paths import validate_id
 
 logger = logging.getLogger("telecode.proxy.api_agents")
+
+
+def _check_id(request: web.Request):
+    """400 for an agent_id that is not one safe path segment (B9)."""
+    try:
+        validate_id(request.match_info.get("agent_id", ""), "agent_id")
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    return None
+
+
+def _guarded(fn):
+    """Validate agent_id first; map ValueError (unsafe file name, bad engine) to 400."""
+    import functools
+
+    @functools.wraps(fn)
+    async def wrapper(request: web.Request) -> web.Response:
+        if "agent_id" in request.match_info:
+            bad = _check_id(request)
+            if bad is not None:
+                return bad
+        try:
+            return await fn(request)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+    return wrapper
 
 async def list_agents(request: web.Request) -> web.Response:
     agents = get_agent_manager().list_agents()
@@ -26,7 +53,8 @@ async def create_agent(request: web.Request) -> web.Response:
     
     instructions = data.get("instructions", "")
     soul = data.get("soul", "")
-    agent = get_agent_manager().create_agent(name, instructions, soul=soul)
+    agent = get_agent_manager().create_agent(name, instructions, soul=soul,
+                                             engine=data.get("engine"), model=data.get("model"))
     return web.json_response({"agent": agent})
 
 async def get_agent(request: web.Request) -> web.Response:
@@ -163,16 +191,17 @@ async def reconcile_agent_heartbeat(request: web.Request) -> web.Response:
     return web.json_response(summary)
 
 def register_routes(app: web.Application):
+    g = _guarded
     app.router.add_get("/api/agents", list_agents)
-    app.router.add_post("/api/agents", create_agent)
-    app.router.add_get("/api/agents/{agent_id}", get_agent)
-    app.router.add_put("/api/agents/{agent_id}", update_agent)
-    app.router.add_delete("/api/agents/{agent_id}", delete_agent)
-    app.router.add_get("/api/agents/{agent_id}/internal", get_agent_internal)
-    app.router.add_put("/api/agents/{agent_id}/internal", update_agent_internal)
-    app.router.add_post("/api/agents/{agent_id}/heartbeat/validate", validate_agent_heartbeat)
-    app.router.add_post("/api/agents/{agent_id}/heartbeat/reconcile", reconcile_agent_heartbeat)
-    app.router.add_get("/api/agents/{agent_id}/files", list_agent_files)
-    app.router.add_post("/api/agents/{agent_id}/files", upload_agent_files)
-    app.router.add_get("/api/agents/{agent_id}/files/{rel_path:.*}", get_agent_file)
-    app.router.add_delete("/api/agents/{agent_id}/files/{rel_path:.*}", delete_agent_file)
+    app.router.add_post("/api/agents", g(create_agent))
+    app.router.add_get("/api/agents/{agent_id}", g(get_agent))
+    app.router.add_put("/api/agents/{agent_id}", g(update_agent))
+    app.router.add_delete("/api/agents/{agent_id}", g(delete_agent))
+    app.router.add_get("/api/agents/{agent_id}/internal", g(get_agent_internal))
+    app.router.add_put("/api/agents/{agent_id}/internal", g(update_agent_internal))
+    app.router.add_post("/api/agents/{agent_id}/heartbeat/validate", g(validate_agent_heartbeat))
+    app.router.add_post("/api/agents/{agent_id}/heartbeat/reconcile", g(reconcile_agent_heartbeat))
+    app.router.add_get("/api/agents/{agent_id}/files", g(list_agent_files))
+    app.router.add_post("/api/agents/{agent_id}/files", g(upload_agent_files))
+    app.router.add_get("/api/agents/{agent_id}/files/{rel_path:.*}", g(get_agent_file))
+    app.router.add_delete("/api/agents/{agent_id}/files/{rel_path:.*}", g(delete_agent_file))

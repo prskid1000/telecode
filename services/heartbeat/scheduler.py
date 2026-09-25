@@ -22,7 +22,7 @@ import config
 from services.agent.agent_manager import get_agent_manager
 from services.job.job_manager import get_job_manager
 from services.session import session_store
-from services.task.task_manager import TaskStatus, get_task_queue
+from services.task.task_manager import POOL_BACKGROUND, TaskStatus, get_task_queue
 from services.heartbeat import state as hb_state
 from services.heartbeat.parser import ScheduleEntry, parse
 from services.heartbeat.reconcile import reconcile_agent
@@ -48,6 +48,12 @@ class HeartbeatScheduler:
         if not config.heartbeat_enabled():
             logger.info("heartbeat.enabled=false — scheduler not started")
             return
+        try:
+            n = hb_state.reconcile_interrupted(get_task_queue().is_active)
+            if n:
+                logger.warning(f"Marked {n} heartbeat entr(y/ies) left running by a previous process as interrupted")
+        except Exception as exc:
+            logger.warning(f"heartbeat state reconcile failed: {exc}")
         self._stop.clear()
         self._task = asyncio.create_task(self._run(), name="heartbeat-scheduler")
         logger.info(f"Heartbeat scheduler started (tick={config.heartbeat_tick_seconds()}s)")
@@ -132,9 +138,16 @@ class HeartbeatScheduler:
             except Exception:
                 last_dt = now  # malformed; treat as just-fired
         else:
-            # No prior run — anchor to now so first fire is at next scheduled time,
-            # not immediately. Backfill is intentionally skipped.
-            last_dt = now
+            # Never fired: anchor to when the scheduler first saw the entry
+            # (persisted), so it fires at the first cron slot after creation.
+            # Anchoring to "now" on every tick (the old behaviour) meant the
+            # next slot was always in the future and the entry never fired.
+            # Slots before first_seen are not backfilled.
+            first_seen = st.get("first_seen") or hb_state.mark_seen(agent_id, entry.name)
+            try:
+                last_dt = datetime.fromisoformat(first_seen.replace("Z", "+00:00"))
+            except Exception:
+                last_dt = now
 
         try:
             it = croniter(entry.cron, last_dt)
@@ -192,14 +205,22 @@ class HeartbeatScheduler:
 
         params = {
             "prompt": entry.prompt,
-            "is_local": False,
+            "is_local": bool(entry.is_local),
             "agent_id": agent_id,
         }
+        # Entry model > agent default model (only when the engine matches the
+        # agent's default engine — a model id is engine-specific).
+        model = entry.model
+        if not model and (agent.get("engine") or "claude_code") == entry.engine:
+            model = (agent.get("model") or "").strip() or None
+        if model:
+            params["model"] = model
         meta = {
             "source": "heartbeat",
             "agent_id": agent_id,
             "job_id": job_id,
             "heartbeat_entry": entry.name,
+            "engine": entry.engine,
             "ephemeral_session": entry.workspace == "ephemeral",
         }
 
@@ -210,6 +231,7 @@ class HeartbeatScheduler:
             metadata=meta,
             session_id=ws_id,
             session_namespace=session_namespace,
+            pool=POOL_BACKGROUND,
         )
         hb_state.mark_fired(agent_id, entry.name, task_id=task_id)
 

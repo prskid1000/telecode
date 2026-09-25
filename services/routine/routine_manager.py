@@ -5,10 +5,15 @@ walks every routine on disk via :func:`tick`. For routines whose
 ``next_fire_at`` has been reached, :func:`fire_routine` submits a task
 against the routine's permanent session.
 
-Skip-if-running is enforced on every fire -- a routine never has two of
-its own tasks in flight at once. ``next_fire_at`` advances regardless
-of whether we fired or skipped, so missed windows are dropped rather
-than caught up.
+Skip-if-running is enforced on every fire, under the routine's lock
+(the record is re-read inside it), so a manager tick and a manual
+run-now can never both submit -- a routine never has two of its own
+tasks in flight at once. ``next_fire_at`` advances regardless of whether
+we fired or skipped, so missed windows are dropped rather than caught up.
+
+Routine tasks run on the queue's background pool with
+``task_timeout_seconds`` enforced by the queue (the CLI tree is killed and
+the task fails with error "timeout").
 """
 
 from __future__ import annotations
@@ -20,7 +25,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from services.routine import routine_store
-from services.task.task_manager import TaskStatus, get_task_queue
+from services.task.task_manager import POOL_BACKGROUND, TaskStatus, get_task_queue
 
 logger = logging.getLogger("telecode.services.routine.manager")
 
@@ -68,6 +73,10 @@ def start(*, run_now: bool = True) -> None:
         logger.info(
             f"routine_manager: heartbeat started (every {MANAGER_INTERVAL_SECONDS}s)"
         )
+    try:
+        reconcile_interrupted()
+    except Exception:
+        logger.exception("routine_manager: interrupted-fire reconcile failed")
     if run_now:
         # Catch up any routines that became due while we were down. The loop
         # itself sleeps first, so without this the first tick wouldn't run
@@ -175,14 +184,51 @@ def tick() -> None:
         )
 
 
+OUTPUTS_ONLY_INSTRUCTION = (
+    "\n---\n"
+    "Output rule for this routine: reply with ONLY this tick's deliverable -- "
+    "no narration of the steps you took, no preamble, no sign-off. If there "
+    "is nothing new, reply with one short line saying so.\n"
+)
+
+
+def reconcile_interrupted() -> int:
+    """Startup pass (B6): a routine whose last task is not in the queue (the
+    process restarted) and was never reconciled gets completion status
+    "interrupted", so the UI stops showing it as running."""
+    queue = get_task_queue()
+    n = 0
+    for rec in routine_store.list_all():
+        tid = rec.get("last_task_id")
+        if not tid or rec.get("last_completed_task_id") == tid or queue.get_task(tid):
+            continue
+        routine_store.record_completion(
+            rec["routine_id"], task_id=tid, status="interrupted",
+            completed_at_iso=None, error="interrupted: telecode restarted while this fire was running",
+        )
+        n += 1
+    if n:
+        logger.warning(f"routine_manager: marked {n} routine fire(s) from a previous process as interrupted")
+    return n
+
+
 def fire_routine(rec: dict, *, source: str = "manager") -> Optional[str]:
     """Submit a task for this routine.
 
-    Honours skip-if-running. Always advances ``next_fire_at`` (no
-    catch-up). Returns the new task_id, or None if skipped/failed.
+    Honours skip-if-running under the routine's lock. Always advances
+    ``next_fire_at`` (no catch-up). Returns the new task_id, or None if
+    skipped/failed.
     """
     rid = rec["routine_id"]
+    with routine_store._lock_for(rid):
+        return _fire_locked(rid, rec, source)
+
+
+def _fire_locked(rid: str, rec: dict, source: str) -> Optional[str]:
     queue = get_task_queue()
+    rec = routine_store.get(rid) or rec  # fresh read inside the lock
+    if source == "manager" and not routine_store.is_due(rec):
+        return None  # another caller fired it since the tick decided
 
     # Skip-if-running: previous task still in flight?
     last_task_id = rec.get("last_task_id")
@@ -195,6 +241,13 @@ def fire_routine(rec: dict, *, source: str = "manager") -> Optional[str]:
             )
             routine_store.record_fire(rid, task_id=None, skipped=True)
             return None
+
+    try:
+        task_type = routine_store.normalize_task_type(rec.get("task_type") or "CLAUDE_CODE")
+    except ValueError as exc:
+        logger.error(f"routine {rid}: {exc} -- not firing")
+        routine_store.record_fire(rid, task_id=None, error=str(exc))
+        return None
 
     # Heartbeat preface -- frames this fire as cycle N of an ongoing
     # assignment so the resumed CLI continues progress instead of
@@ -235,18 +288,19 @@ def fire_routine(rec: dict, *, source: str = "manager") -> Optional[str]:
         "---\n"
     )
 
-    task_type = rec.get("task_type") or "CLAUDE_CODE"
-    params: dict = {
-        "prompt": heartbeat_preface + rec["prompt"],
-    }
-    # is_local is meaningful for engines that can be redirected to the local
-    # llama.cpp proxy (Claude via ANTHROPIC_BASE_URL, Codex via OPENAI_BASE_URL).
-    # Antigravity has no documented base-url flag yet — its handler accepts but
-    # warns-and-ignores the param, so we still forward it for forward-compat.
-    if task_type in ("CLAUDE_CODE", "CODEX", "ANTIGRAVITY"):
-        params["is_local"] = bool(rec.get("is_local", False))
+    prompt = heartbeat_preface + rec["prompt"]
+    # outputs_only is a prompt instruction, never a handler kwarg: the
+    # handlers share one signature and an unknown kwarg is a TypeError (B5).
     if rec.get("outputs_only"):
-        params["outputs_only"] = True
+        prompt += OUTPUTS_ONLY_INSTRUCTION
+    params: dict = {
+        "prompt": prompt,
+        # All three engines can run against the local llama.cpp proxy: Claude
+        # via ANTHROPIC_BASE_URL, Codex via a `-c model_provider=telecode`
+        # override pointing at /v1/responses, Antigravity via its Gemini-API
+        # route (GOOGLE_GEMINI_BASE_URL + an isolated home).
+        "is_local": bool(rec.get("is_local", False)),
+    }
 
     try:
         task_id = queue.submit_task(
@@ -260,6 +314,7 @@ def fire_routine(rec: dict, *, source: str = "manager") -> Optional[str]:
             task_timeout_seconds=int(rec.get("task_timeout_seconds") or 1800),
             session_id=rec["session_id"],
             session_namespace=rec.get("session_namespace"),
+            pool=POOL_BACKGROUND,
         )
         routine_store.record_fire(rid, task_id=task_id)
         logger.info(

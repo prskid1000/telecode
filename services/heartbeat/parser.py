@@ -11,7 +11,10 @@ fence we expect a YAML list whose items have at least:
 Optional:
   workspace      "ephemeral" (default) | "persistent"
   workspace_id   required when workspace == "persistent"
-  engine         "claude_code" (default)
+  engine         "claude_code" (default) | "codex" | "antigravity"
+  model          str, optional — engine model id (cloud) / llama model (local);
+                 blank = the agent's default model, else the CLI default
+  is_local       bool, default False — run against the local llama.cpp proxy
   enabled        bool, default True
 
 Per-entry errors are collected; bad entries are skipped, valid ones still parsed.
@@ -29,7 +32,7 @@ from croniter import croniter
 
 logger = logging.getLogger("telecode.services.heartbeat.parser")
 
-VALID_ENGINES = ("claude_code",)
+VALID_ENGINES = ("claude_code", "codex", "antigravity")
 VALID_WORKSPACE_MODES = ("ephemeral", "persistent")
 
 
@@ -42,6 +45,8 @@ class ScheduleEntry:
     workspace_id: Optional[str] = None
     engine: str = "claude_code"
     enabled: bool = True
+    model: Optional[str] = None
+    is_local: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -51,6 +56,8 @@ class ScheduleEntry:
             "workspace": self.workspace,
             "workspace_id": self.workspace_id,
             "engine": self.engine,
+            "model": self.model,
+            "is_local": self.is_local,
             "enabled": self.enabled,
         }
 
@@ -121,10 +128,23 @@ def _coerce_entry(raw: Any, block_idx: int, item_idx: int, errors: List[Dict[str
     else:
         workspace_id = None  # ignore for ephemeral
 
-    engine = (raw.get("engine") or "claude_code").strip()
+    engine = str(raw.get("engine") or "claude_code").strip().lower()
     if engine not in VALID_ENGINES:
         errors.append({"block": block_idx, "index": item_idx, "name": name,
                        "msg": f"engine must be one of {VALID_ENGINES}, got '{engine}'"})
+        return None
+
+    model = raw.get("model")
+    if model is not None and not isinstance(model, str):
+        errors.append({"block": block_idx, "index": item_idx, "name": name,
+                       "msg": "model must be a string"})
+        return None
+    model = (model or "").strip() or None
+
+    is_local = raw.get("is_local", False)
+    if not isinstance(is_local, bool):
+        errors.append({"block": block_idx, "index": item_idx, "name": name,
+                       "msg": "is_local must be true or false"})
         return None
 
     enabled = raw.get("enabled", True)
@@ -134,7 +154,7 @@ def _coerce_entry(raw: Any, block_idx: int, item_idx: int, errors: List[Dict[str
     return ScheduleEntry(
         name=name, cron=cron, prompt=prompt.rstrip(),
         workspace=workspace, workspace_id=workspace_id,
-        engine=engine, enabled=enabled,
+        engine=engine, enabled=enabled, model=model, is_local=is_local,
     )
 
 
