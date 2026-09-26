@@ -43,9 +43,9 @@ def antigravity_task(
     step_ctl: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Run Antigravity (``agy``) in the session folder. ``model``: an ``agy
-    models`` id in cloud mode, the llama model in local mode. ``schema`` is
-    accepted for signature parity; agy has no structured-output flag yet — a
-    pipeline step's handoff comes from ``.telecode/handoff.json`` instead
+    models`` id in cloud mode, the llama model in local mode. ``schema`` goes
+    to ``agy --json-schema`` (agy >= 1.2.11); a pipeline step's handoff falls
+    back to ``.telecode/handoff.json`` when that answer is missing or invalid
     (``step_ctl.handoff``)."""
     ctx = prepare(ENGINE, prompt=prompt, is_local=is_local, agent_id=agent_id, agent=agent, job=job,
                   agent_files=agent_files, job_files=job_files, step_ctl=step_ctl)

@@ -154,7 +154,7 @@ tasks, shared Team · Tasks · Design navbar.
   session, snapshots, usage, budget), not a table. Everything a retry needs is copied into the run at creation
   (`job_snapshot`, per-step `spec`). The executor (`services/run/executor.py`) was rewritten around `_attempt()`.
 - **Handoffs** (`services/run/handoff.py`): shared strict JSON Schema → Claude `--json-schema` / Codex `--output-schema`;
-  agy is told to write `.telecode/handoff.json` (read + removed by the handler). Invalid/missing → derived from the final
+  agy `--json-schema <file>` (1.2.11+; a `.telecode/handoff.json` it wrote is only a fallback). Invalid/missing → derived from the final
   text (`status/verdict: unknown`, `derived: true`). The next step gets `<handoff>` block(s) (summary, decisions, open
   questions, next steps, verdict, artifact stored paths + descriptions, files changed) + `--add-dir` of those artifact
   dirs; the full reply stays on the step (`result_text`, 256 KB) and the task row. Stored per step in the step record and

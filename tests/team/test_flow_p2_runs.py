@@ -334,15 +334,16 @@ def test_parallel_steps_are_ephemeral_and_keep_their_files(env):
     assert not (wd / "a.txt").exists()
 
 
-def test_antigravity_handoff_file(env):
-    fake(env, "antigravity", lambda req: ["--agy", "--handoff", HO(summary="agy did it"), "--text", "hi"])
+def test_antigravity_handoff_file_fallback(env):
+    # agy gave no structured_output (e.g. an older build) but wrote the file: the file is the fallback.
+    fake(env, "antigravity", lambda req: ["--agy", "--agy-file", "--handoff", HO(summary="agy did it"),
+                                          "--text", "hi"])
     j, wd = setup_job([{"prompt_override": "A", "engine": "antigravity"}], mode="single")
     r = wait_run(start(j)["run_id"])
     ho = r["steps"][0]["handoff"]
     assert r["status"] == "completed" and ho["summary"] == "agy did it" and not ho["derived"]
-    assert ".telecode/handoff.json" in prompts(env)[0]
+    assert ".telecode/handoff.json" not in prompts(env)[0]      # no longer asked for
     assert not (wd / ".telecode" / "handoff.json").exists()
-    assert "--json-schema" not in " ".join(argvs(env)[0])
 
 
 # ── rotation ──────────────────────────────────────────────────────────────

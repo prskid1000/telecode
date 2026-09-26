@@ -14,7 +14,7 @@ stages the agent's files and calls :func:`run`, which drives its
      "policy": "<pipeline policy name>",       # recorded in sessions_index
      "budget": {max_usd, max_tokens, max_seconds},
      "add_dirs": ["<dir>", …],                 # e.g. previous steps' artifacts
-     "handoff": true,                          # agy: read .telecode/handoff.json
+     "handoff": true,                          # agy: schema answer, .telecode/handoff.json fallback
      "rotate": true,                           # force a rotation
      "pinned": "<constraints kept across a rotation>"}
 
@@ -195,7 +195,7 @@ def _ask_rotation_handoff(ctx: TaskContext, run_fn: Callable[..., Dict[str, Any]
         ho_mod.clear_agy_file(ctx.work_dir)
     try:
         res = run_fn(prompt=ROTATION_ASK + "\n\n" + ho_mod.instructions(ctx.engine), resume_id=ctx.resume_id,
-                     fork=False, schema=None if agy else ho_mod.HANDOFF_SCHEMA, budget=None,
+                     fork=False, schema=ho_mod.HANDOFF_SCHEMA, budget=None,
                      add_dirs=ctx.ctl.get("add_dirs") or (), lineage=None, log_suffix=".rotate")
     except EngineCancelled:
         raise
@@ -203,14 +203,16 @@ def _ask_rotation_handoff(ctx: TaskContext, run_fn: Callable[..., Dict[str, Any]
         logger.warning(f"rotation handoff failed ({exc}) — continuing fresh without one")
         return ho_mod.derive("", step_status="failed", error=f"rotation handoff failed: {exc}",
                              reason="rotation handoff failed")
-    structured = ho_mod.read_agy_file(ctx.work_dir) if agy else res.get("structured_output")
+    structured = res.get("structured_output")
+    if agy:
+        structured = ho_mod.agy_structured(structured, ctx.work_dir)
     return ho_mod.resolve(structured, res.get("result") or "", step_status="completed", error=None,
                           work_dir=ctx.work_dir)
 
 
 def run(ctx: TaskContext, run_fn: Callable[..., Dict[str, Any]], *,
         schema: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Rotation (if due) → the real run → agy handoff file. ``run_fn`` is the
+    """Rotation (if due) → the real run → agy handoff (schema answer, file fallback). ``run_fn`` is the
     handler's closure over its ``_run_*_subprocess``:
     ``run_fn(prompt, resume_id, fork, schema, budget, add_dirs, lineage, log_suffix)``."""
     from services.run import handoff as ho_mod
@@ -235,7 +237,7 @@ def run(ctx: TaskContext, run_fn: Callable[..., Dict[str, Any]], *,
                  budget=ctx.ctl.get("budget") or None, add_dirs=ctx.ctl.get("add_dirs") or (),
                  lineage=lineage, log_suffix="")
     if agy_file:
-        res["structured_output"] = ho_mod.read_agy_file(ctx.work_dir)
+        res["structured_output"] = ho_mod.agy_structured(res.get("structured_output"), ctx.work_dir)
     if rotation:
         res["rotation"] = rotation
     return res

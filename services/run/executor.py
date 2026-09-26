@@ -157,7 +157,7 @@ GRADER_PROMPT = (
     "work strictly against the rubric. Do not fix anything yourself.\n\n"
     "<rubric>\n{rubric}\n</rubric>\n\n<task>\n{task}\n</task>\n\n{work}\n\n"
     "Reply with a verdict (pass | fail), a short summary and the findings — the specific problems the agent "
-    "must fix (empty when it passes).{agy}\n</grading_task>")
+    "must fix (empty when it passes).\n</grading_task>")
 
 _VERDICT_RE = re.compile(r"\bverdict\s*[:=]\s*\**\s*(pass|fail)\b", re.I)
 
@@ -1047,7 +1047,7 @@ def _run_unit(run: Dict[str, Any], step: Dict[str, Any], *, driver: _RunDriver, 
     params: Dict[str, Any] = {"prompt": prompt, "is_local": bool(is_local), "agent_id": agent_id, "step_ctl": ctl}
     if model:
         params["model"] = model
-    if schema and engine in ("claude_code", "codex"):
+    if schema and engine in ("claude_code", "codex", "antigravity"):   # agy: --json-schema (1.2.11+)
         params["schema"] = schema
     overrides = run.get("overrides") or {}
     md = {"source": source, "job_id": run.get("job_id"), "run_id": run["run_id"], "step_id": step["step_id"],
@@ -1681,8 +1681,8 @@ def _grader_check(run_id: str, step_id: str, check: Dict[str, Any], body: Dict[s
     task = (step.get("spec") or {}).get("prompt_override") or snap.get("task_description") or ""
     work = handoff_mod.render_block({"name": step.get("name") or "the work", "handoff": body.get("handoff") or {},
                                      "files_changed": body.get("files_changed") or []})
-    agy = ("\nEnd your reply with a line `VERDICT: PASS` or `VERDICT: FAIL`." if engine == "antigravity" else "")
-    prompt = GRADER_PROMPT.format(rubric=check.get("rubric") or "", task=_cap_head_tail(task, 8000), work=work, agy=agy)
+    # Every engine gets GRADER_SCHEMA (agy via --json-schema); _VERDICT_RE stays the text fallback.
+    prompt = GRADER_PROMPT.format(rubric=check.get("rubric") or "", task=_cap_head_tail(task, 8000), work=work)
     grader_rec: Dict[str, Any] = {}
 
     def submitted(task_id: str, before: Optional[str]) -> None:

@@ -6,13 +6,14 @@ Every pipeline step ends with a handoff object::
      artifacts[{path, kind, description}], open_questions[], next_steps[],
      verdict: pass|fail|unknown}
 
-* Claude / Codex produce it as their structured final answer — the shared
+* Every engine produces it as its structured final answer — the shared
   :data:`HANDOFF_SCHEMA` goes to ``claude --json-schema`` / ``codex exec
-  --output-schema`` (strict: every property required, no extras, which Codex
-  demands).
-* Antigravity has no structured-output flag: it is told to write
-  ``.telecode/handoff.json`` in its working directory, which the handler reads
-  (and removes) after the run.
+  --output-schema`` / ``agy --json-schema <file>`` (agy >= 1.2.11; strict:
+  every property required, no extras, which Codex demands).
+* Antigravity fallback: when agy's ``result.structured_output`` is missing or
+  invalid, a ``.telecode/handoff.json`` in its working directory (the pre-1.2.11
+  mechanism; no longer asked for) is used if present — :func:`agy_structured`.
+  The handler clears the file before the run and removes it after.
 * Missing or invalid → :func:`derive` builds one from the step's final text
   (``status`` / ``verdict`` = ``unknown``, ``derived: true``) instead of failing
   the step.
@@ -79,10 +80,6 @@ HANDOFF_SCHEMA: Dict[str, Any] = {
     },
 }
 
-_KEYS_DOC = ('{"status": "done|partial|blocked|failed", "summary": "...", "decisions": ["..."], '
-             '"artifacts": [{"path": "relative/path", "kind": "code|doc|data|...", "description": "..."}], '
-             '"open_questions": ["..."], "next_steps": ["..."], "items": ["..."], "verdict": "pass|fail|unknown"}')
-
 
 def instructions(engine: str) -> str:
     """The <handoff_instructions> block appended to every step prompt."""
@@ -91,11 +88,9 @@ def instructions(engine: str) -> str:
             "decisions, the artifacts that matter (files you created or changed — path relative to your working "
             "directory, a kind, a one-line description), open questions, next steps, and a verdict "
             "(pass | fail | unknown) on whether the step's goal was met.")
-    if engine == "antigravity":
-        body += (f"\nWrite it as JSON to {AGY_HANDOFF_REL} in your working directory (create the folder), "
-                 f"with exactly these keys: {_KEYS_DOC}")
-    else:
-        body += "\nYour final answer is captured in exactly that structured form."
+    # All three engines take the schema (agy via --json-schema since 1.2.11), so
+    # the wording is shared; the agy file is only read as a fallback (agy_structured).
+    body += "\nYour final answer is captured in exactly that structured form."
     return f"<handoff_instructions>\n{body}\n</handoff_instructions>"
 
 
@@ -234,6 +229,19 @@ def read_agy_file(work_dir: Path) -> Optional[Any]:
         return json.loads(raw)
     except ValueError:
         return raw  # validate() reports "not JSON"
+
+
+def agy_structured(structured: Any, work_dir: Path) -> Optional[Any]:
+    """agy's handoff: its ``--json-schema`` answer when that validates, else a
+    ``.telecode/handoff.json`` it wrote (fallback), else whatever it returned
+    (so :func:`resolve` records why it was invalid). The file is always removed."""
+    file_obj = read_agy_file(work_dir)
+    if structured is not None and validate(structured, work_dir)[0] is not None:
+        return structured
+    if file_obj is not None and validate(file_obj, work_dir)[0] is not None:
+        logger.info("agy: no valid --json-schema handoff — using .telecode/handoff.json")
+        return file_obj
+    return structured if structured is not None else file_obj
 
 
 def clear_agy_file(work_dir: Path) -> None:

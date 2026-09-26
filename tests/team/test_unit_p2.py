@@ -91,7 +91,8 @@ def test_agy_handoff_file_is_read_and_removed(tmp_path):
     assert handoff.read_agy_file(tmp_path)["summary"] == "wrote the plan"
     assert not (tmp_path / ".telecode" / "handoff.json").exists()
     assert handoff.read_agy_file(tmp_path) is None
-    assert "handoff.json" in handoff.instructions("antigravity") and "structured" in handoff.instructions("codex")
+    assert handoff.instructions("antigravity") == handoff.instructions("codex")  # agy takes --json-schema too
+    assert "handoff.json" not in handoff.instructions("antigravity")
 
 
 # ── budget ────────────────────────────────────────────────────────────────

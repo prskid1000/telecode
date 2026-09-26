@@ -8,7 +8,12 @@ Stream: ``init.conversation_id`` (replayed with ``--conversation``),
 Local mode (agy >= 1.1.13): the Gemini-API route against the proxy, in an
 isolated home (``<settings_dir>/data/agy-local-home`` via USERPROFILE/HOME) so
 the user's real ``~/.gemini`` is never touched; model in agy's custom-model
-URL form. No cost field; no structured-output flag yet.
+URL form. No cost field.
+
+Structured output (agy >= 1.2.11): ``--json-schema <file>`` — the schema is
+written to a temp file (a path, not an inline string: no Windows command-line
+length or quoting concerns); in stream-json mode it applies to the final
+``result`` event only (see :func:`structured_from_result`).
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -125,7 +131,7 @@ def effort_args(effort: Optional[str]) -> List[str]:
 
 def build_argv(*, work_dir: Path, resume_id: Optional[str], model: Optional[str] = None,
                add_dirs=(), permission_mode: Optional[str] = None,
-               effort: Optional[str] = None) -> List[str]:
+               effort: Optional[str] = None, schema_path: Optional[Path] = None) -> List[str]:
     cmd: List[str] = [
         "agy",
         "--input-format", "stream-json",
@@ -140,8 +146,68 @@ def build_argv(*, work_dir: Path, resume_id: Optional[str], model: Optional[str]
     cmd += effort_args(effort)
     if resume_id:
         cmd += ["--conversation", resume_id]
+    if schema_path:
+        cmd += ["--json-schema", str(schema_path)]
     cmd.append("-p=")
     return cmd
+
+
+def write_schema_file(schema: Dict[str, Any]) -> Path:
+    """The schema as a temp file under ``data/runtime/engine`` (the runner
+    deletes it after the run via ``Launch.cleanup``)."""
+    import config as app_config
+    d = Path(app_config._settings_dir()) / "data" / "runtime" / "engine"
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / f"agy-schema-{uuid.uuid4().hex}.json"
+    path.write_text(json.dumps(schema), encoding="utf-8")
+    return path
+
+
+_SUBMIT_TOOL_KEYS = ("toolAction", "toolSummary")
+
+
+def _loads_json(text: Any) -> Optional[Any]:
+    """A JSON object/array from a string, tolerating a ```json fence."""
+    if not isinstance(text, str):
+        return None
+    t = text.strip()
+    if t.startswith("```"):
+        t = t.split("\n", 1)[1] if "\n" in t else ""
+        if t.rstrip().endswith("```"):
+            t = t.rstrip()[:-3]
+        t = t.strip()
+    if not t or t[0] not in "{[":
+        return None
+    try:
+        return json.loads(t)
+    except ValueError:
+        return None
+
+
+def structured_from_result(fin: Dict[str, Any]) -> Optional[Any]:
+    """The structured answer of a ``--json-schema`` run's ``result`` event.
+
+    Verified on agy 1.2.11 (fixture ``agy_schema_result.jsonl``)::
+
+        {"event":"result","result":{"status":"SUCCESS",
+          "response":"{\"toolAction\":\"Submitting response\",\"toolSummary\":\"Submit response\",\"word\":\"banana\"}",
+          "structured_output":{"word":"banana"}, "json_schema":{…}, …}}
+
+    ``structured_output`` is the validated object. ``response`` carries the
+    same JSON plus agy's own submit-tool keys (``toolAction`` / ``toolSummary``)
+    — the fallback when ``structured_output`` is absent, with those keys
+    dropped. None when neither holds a JSON value."""
+    if not isinstance(fin, dict):
+        return None
+    v = fin.get("structured_output")
+    if isinstance(v, (dict, list)):
+        return v
+    parsed = _loads_json(v) if isinstance(v, str) else None
+    if parsed is None:
+        parsed = _loads_json(fin.get("response"))
+    if isinstance(parsed, dict):
+        parsed = {k: x for k, x in parsed.items() if k not in _SUBMIT_TOOL_KEYS}
+    return parsed
 
 
 def stdin_message(prompt: str) -> str:
@@ -168,8 +234,11 @@ class AntigravityAdapter(Adapter):
             logger.info(f"Local mode: agy home={home} base_url={env['GOOGLE_GEMINI_BASE_URL']} model={model_arg}")
         if req.env_extra:
             env = {**(env or os.environ), **req.env_extra}
+        cleanup: List[Path] = []
+        schema_path: Optional[Path] = None
         if req.schema:
-            logger.info("antigravity: no structured-output flag yet — schema ignored")
+            schema_path = write_schema_file(req.schema)
+            cleanup.append(schema_path)
         resume_id = req.resume_id
         if req.fork and resume_id:
             # agy has no fork: the caller seeds a fresh conversation with a handoff instead.
@@ -179,9 +248,9 @@ class AntigravityAdapter(Adapter):
         if warning:
             logger.warning(warning)
         argv = build_argv(work_dir=req.cwd, resume_id=resume_id, model=model_arg, add_dirs=req.add_dirs,
-                          permission_mode=req.permission_mode, effort=req.effort)
+                          permission_mode=req.permission_mode, effort=req.effort, schema_path=schema_path)
         # agy has no OTel export: own spans only. engine_extras args go before the trailing -p=.
-        return Launch(argv=argv, stdin=stdin_message(req.prompt), env=env,
+        return Launch(argv=argv, stdin=stdin_message(req.prompt), env=env, cleanup=cleanup,
                       warnings=[warning] if warning else [], extras_at=len(argv) - 1)
 
     def parse(self, evt: Dict[str, Any], st: ParseState) -> List[Dict[str, Any]]:
@@ -244,9 +313,14 @@ class AntigravityAdapter(Adapter):
         if returncode not in (0, None) and st.final is None and not st.text_parts:
             raise EngineError(f"agy exited with code {returncode}: {stderr.strip()[:500]}")
         text = (fin.get("response") or "".join(st.text_parts) or "\n".join(st.raw_lines)).strip()
+        structured = None
+        if getattr(req, "schema", None):
+            structured = structured_from_result(fin)
+            if structured is None:
+                logger.warning("antigravity: --json-schema run returned no structured result")
         return EngineResult(
             engine=self.engine, text=text, engine_session_id=st.session_id,
             cost_usd=None,  # agy reports no cost: None = unknown, not free
             duration_ms=int((fin.get("duration_seconds") or 0) * 1000), duration_api_ms=0,
             num_turns=fin.get("num_turns") or 1, tokens=self._tokens(st),
-            tool_calls=list(st.tool_calls), exit_code=returncode)
+            tool_calls=list(st.tool_calls), structured_output=structured, exit_code=returncode)

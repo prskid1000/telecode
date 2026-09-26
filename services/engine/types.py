@@ -76,7 +76,7 @@ class EngineRequest:
     last_msg_path: Optional[Path] = None
     # Claude: --append-system-prompt-file (the agent's AGENT.md).
     system_append_file: Optional[Path] = None
-    # Structured output: Claude --json-schema, Codex --output-schema, agy none yet.
+    # Structured output: Claude --json-schema, Codex --output-schema, agy --json-schema <file>.
     schema: Optional[Dict[str, Any]] = None
     timeout_sec: Optional[float] = None
     # Fork the resumed session instead of continuing it (Claude --fork-session,

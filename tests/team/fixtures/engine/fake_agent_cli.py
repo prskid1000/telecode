@@ -3,12 +3,14 @@
 Reads the prompt from stdin, optionally writes files into its cwd, then prints
 a Claude-style (default) or Antigravity-style stream ending in a result. The
 Claude result carries ``structured_output`` (the handoff) when --handoff is
-given; --agy writes the handoff to .telecode/handoff.json instead, as agy is
-told to. Options:
+given; with --agy it goes into agy's ``result.structured_output`` (as agy
+>= 1.2.11 does under --json-schema), or with --agy-file to
+.telecode/handoff.json instead (the fallback). Options:
 
   --write REL=TEXT      write TEXT to cwd/REL (repeatable)
-  --handoff JSON        structured handoff (Claude: result.structured_output;
-                        --agy: .telecode/handoff.json)
+  --handoff JSON        structured handoff (Claude / --agy: result.structured_output;
+                        --agy --agy-file: .telecode/handoff.json)
+  --agy-file            with --agy: write --handoff to the file, not the result
   --text TEXT           the final reply text
   --session ID          session id to report (default: fresh uuid)
   --agy                 emit agy stream-json
@@ -40,6 +42,7 @@ def main() -> int:
     ap.add_argument("--text", default="step finished")
     ap.add_argument("--session")
     ap.add_argument("--agy", action="store_true")
+    ap.add_argument("--agy-file", action="store_true")
     ap.add_argument("--argv-out")
     ap.add_argument("--prompt-out")
     ap.add_argument("--fail-times", type=int, default=0)
@@ -101,13 +104,16 @@ def main() -> int:
             time.sleep(0.1)
 
     if a.agy:
-        if a.handoff:
+        if a.handoff and a.agy_file:
             os.makedirs(".telecode", exist_ok=True)
             with open(os.path.join(".telecode", "handoff.json"), "w", encoding="utf-8") as fh:
                 fh.write(a.handoff)
         out({"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": a.text}})
-        out({"event": "result", "result": {"status": "SUCCESS", "response": a.text, "num_turns": 1,
-                                           "conversation_id": sid, "usage": {"input_tokens": 100, "output_tokens": 20}}})
+        result = {"status": "SUCCESS", "response": a.text, "num_turns": 1,
+                  "conversation_id": sid, "usage": {"input_tokens": 100, "output_tokens": 20}}
+        if a.handoff and not a.agy_file:
+            result["structured_output"] = json.loads(a.handoff)
+        out({"event": "result", "result": result})
         return 0
 
     usage = {"input_tokens": 100, "output_tokens": 20, "cache_read_input_tokens": 1000,
