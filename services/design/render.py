@@ -1546,7 +1546,7 @@ async def verify(pid: str, files: List[str], screenshots: bool = True,
             decks[rel] = r["deck"]
     layer_report: Dict[str, Any] = {"ran": False, "skipped": "disabled", "issues": [], "problems": [],
                                     "text": "", "screenshots": []}
-    if _layer_checks_enabled(layers) and (d / "doc.fig").is_file():
+    if _layer_checks_enabled(layers) and store.has_canvas(d):
         try:
             from services.design import editor_bridge
             layer_report = await editor_bridge.inspect_layers(
@@ -1558,7 +1558,7 @@ async def verify(pid: str, files: List[str], screenshots: bool = True,
         issues += layer_report.get("issues") or []
         shots += layer_report.get("screenshots") or []
     elif _layer_checks_enabled(layers):
-        layer_report["skipped"] = "project has no canvas (doc.fig)"
+        layer_report["skipped"] = "project has no canvas document (docs/*.fig)"
     issues.sort(key=lambda i: _SEV_ORDER.get(i["severity"], 9))
     pen = layer_report.get("text") or (f"(not checked: {layer_report['skipped']})"
                                        if layer_report.get("skipped") else "")

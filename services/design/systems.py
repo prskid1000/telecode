@@ -46,7 +46,7 @@ STAGE_CORE = ("USAGE.md", "DESIGN.md", "SKILL.md", "tokens.css", "tokens.json", 
               "components.css", "manifest.json", "adherence.json", ds_bundle.BUNDLE_NAME)
 
 # Project-internal paths never copied back into a system from its design-system project.
-_PROJECT_ONLY = {".versions", ".td", "chats", "uploads", "_ds", "scraps", "imports", "doc.fig",
+_PROJECT_ONLY = {".versions", ".td", "chats", "uploads", "_ds", "scraps", "imports", "doc.fig", "docs",
                  "boards.json", "comments.json", "assets.json", "thumbnail.webp", "node_modules", ".git"}
 
 _FONT_EXT = {".woff", ".woff2", ".ttf", ".otf", ".eot"}

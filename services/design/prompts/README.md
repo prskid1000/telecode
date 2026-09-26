@@ -105,7 +105,7 @@ paragraph and add `(full text: {{ds_path}}/DESIGN.md)`; the agent is told to rea
 {{canvas_summary}}
 ```
 
-`{{canvas_summary}}` — one line per top-level node of the canvas (`doc.fig`, read through the editor):
+`{{canvas_summary}}` — one line per top-level node of the canvas (the open `docs/<id>.fig`, read through the editor):
 `node_id · type (frame|component|…) · name · x,y · width×height · board key + src (HTML boards)` plus
 the currently focused board (`{{active_board}}`) and open deep link (`{{deep_link}}`).
 
@@ -174,7 +174,7 @@ composer bug — the composer must fail loudly rather than send literal braces.
 | `<!-- @tdCard group="…" -->` | Design-system specimen card marker |
 | `<question-form>` / `<form-answers>` | Clarifying-question round trip |
 | `<attached-comments>` / `<mentioned-element>` | Scoped-edit context |
-| `boards.json` `{board_key: {src, width, height}}` | HTML board registry. The board key is stored inside the frame in `doc.fig` (node ids change on every reopen); register with `telecode_board_mark` |
+| `boards.json` `{board_key: {src, width, height}}` | HTML board registry. The board key is stored inside the frame in its canvas document (node ids change on every reopen); register with `telecode_board_mark` |
 | `assets.json` | Deliverable registry for the Review tab |
 | `window.telecode.complete()` | In-artifact AI helper |
 | `window.tdTimeline` | Seekable timeline for animation export |

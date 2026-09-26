@@ -3,7 +3,7 @@
   "tag": "v0.15.1",
   "commit": "6cf1748e31a0e43d3794d43abbd003ce9caa3c6f",
   "base": "/design/editor/",
-  "built_at": "2026-09-25T13:10:35Z",
+  "built_at": "2026-09-26T01:53:38Z",
   "bun": "1.4.2",
   "patches": [
     {
@@ -53,12 +53,36 @@
     {
       "name": "0012-telecode-bound-the-wait-for-the-original-.fig-archiv.patch",
       "sha256": "9317b868e46bba0875593f0129f8a87d3fd3e0ba5fc1b3a94896b9c62f6c19c5"
+    },
+    {
+      "name": "0013-telecode-several-canvas-documents-per-project.patch",
+      "sha256": "b3f3204d6185eb7e6e30b45ecbb6006a4217139e0152ab48ece76097fca5160e"
+    },
+    {
+      "name": "0014-telecode-deterministic-JSON-mirror-of-each-canvas-do.patch",
+      "sha256": "ee5d844848184b17734d285c6a70836b82c6bfe44fcebf06043e2410c18d8c27"
+    },
+    {
+      "name": "0015-telecode-script-nodes-layers-generated-by-a-project-.patch",
+      "sha256": "d1b775c93576260abb6f2b2f7ad7a1d75effa636dae46c27c0c6d01243298771"
+    },
+    {
+      "name": "0016-telecode-theme-axes-compose-modes-across-variable-co.patch",
+      "sha256": "a26effee652a7001596287800257ad620980f9a7aa2847835229a3fe7ab06fb9"
+    },
+    {
+      "name": "0017-telecode-component-slots-on-instance-swap-properties.patch",
+      "sha256": "4541c4072f0c318c39c0e9453c656bf18faf45fab5c90dd555f3566c529abc08"
+    },
+    {
+      "name": "0018-telecode-shader-and-mesh-gradient-fills.patch",
+      "sha256": "5c28372e318f7137faca1d2271eb5ff4ef91d5c0affc01a432218a505cc06596"
     }
   ],
-  "tools": 125,
+  "tools": 144,
   "open_pencil_version": "0.15.1",
   "third_party_packages": 195,
   "files": 588,
-  "bytes": 29080195,
-  "index_sha256": "4183e0a0b579ba84dab863eb6c5bed9fb69135f4351b4a1426b39a0f0e26803f"
+  "bytes": 29132524,
+  "index_sha256": "a911604dc4758cbc7d2f5e823dae5e76e068f22b8ab6ea56d37f706a80e07fb9"
 }

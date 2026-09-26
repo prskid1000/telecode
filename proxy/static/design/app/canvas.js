@@ -10,6 +10,8 @@ import { h, icon, btn, mount, clear, bus, prefs, api, toast, toastError, emptySt
 import { S, htmlFiles, assetFor, previewUrl, loadBoards, writeUrl, chatRunning } from "./state.js";
 import { makePreviewFrame, unregisterFrame, post } from "./bridge.js";
 import { modeToolbar, openFile, setView } from "./workspace.js";
+import { mountDocs, mountScripts, preferredDoc } from "./canvas_nodes.js";
+import { mountExtras } from "./canvas_extras.js";
 
 export function render(body, bar) {
   const useEditor = S.editorAvailable && prefs.get("canvasEngine", "editor") === "editor";
@@ -257,11 +259,18 @@ function renderEditor(body, bar) {
   let selNodes = [];
   bar.append(tb, h("span", { class: "divider-v" }), status, h("span", { class: "grow" }), markBtn, unmarkBtn, placeBtn,
     btn("HTML board", { icon: "plus", kind: "ghost", cls: "sm", title: "Place one HTML page on the canvas as a live board", onClick: () => placeOne() }));
-  const frame = h("iframe", { class: "editor-frame", src: "/design/editor/?" + new URLSearchParams({ project: pid }), title: "Canvas editor", allow: "clipboard-read; clipboard-write" });
+  const editorUrl = (doc) => "/design/editor/?" + new URLSearchParams({ project: pid, ...(doc ? { doc } : {}) });
+  const frame = h("iframe", { class: "editor-frame", src: editorUrl(preferredDoc(pid)), title: "Canvas editor", allow: "clipboard-read; clipboard-write" });
   const layer = h("div", { class: "overlay-layer" });
   mount(body, frame, layer);
   const send = (type, payload = {}) => { try { frame.contentWindow.postMessage({ type: "td-editor:" + type, payload }, location.origin); } catch {} };
   const gaps = mountCanvasGaps({ pid, body, bar, layer, send, vp: () => vp, selection: () => selNodes });
+  // Several canvas documents per project (0013) and script nodes (0015).
+  const docs = mountDocs({ pid, bar, anchor: tb, reload: (doc) => { ready = false; status.textContent = "Loading the canvas…"; frame.src = editorUrl(doc); } });
+  const scriptsUi = mountScripts({ pid, body, bar, layer, send, vp: () => vp });
+  // Theme axes (0016), slots (0017), shader / mesh fills (0018): canvas tools over /editor/call.
+  const extras = mountExtras({ pid, body, bar, vp: () => vp,
+    callTool: async (tool, args = {}, timeout = 30) => (await api("POST", P_(pid) + "/editor/call", { tool, args, timeout }, { feature: "editorCall" })).result });
 
   const placedSrcs = () => new Set(Object.values(S.boards || {}).map((b) => b && b.src).filter(Boolean));
   function drawPlaceBtn() {
@@ -359,14 +368,16 @@ function renderEditor(body, bar) {
   const off = bus.on("editor", async (d) => {
     if (d.source !== frame.contentWindow) return;
     const p = d.payload && typeof d.payload === "object" ? d.payload : d;
+    if (scriptsUi.onMessage(d.type, p)) return;
     switch (d.type) {
       case "td-editor:ready":
         ready = true; status.textContent = p.page_name ? `Canvas · ${p.page_name}` : "Canvas";
+        docs.onReady(p.doc_id || null);
         if (S.deepNode) send("focus", { node_id: S.deepNode });
         else if (S.deepBoard && S.boards[S.deepBoard]) send("focus", { node_id: S.deepBoard });
         drawPlaceBtn();
         break;
-      case "td-editor:viewport": vp = { x: +p.x || 0, y: +p.y || 0, zoom: +p.zoom || 1, canvas: p.canvas || vp.canvas }; place(); gaps.place(); break;
+      case "td-editor:viewport": vp = { x: +p.x || 0, y: +p.y || 0, zoom: +p.zoom || 1, canvas: p.canvas || vp.canvas }; place(); gaps.place(); scriptsUi.place(); extras.place(); break;
       case "td-editor:placeholders": gaps.setPlaceholders(Array.isArray(d.payload) ? d.payload : p.items || []); break;
       case "td-editor:present": gaps.present(p.node_id || null); break;
       case "td-editor:frames": frames = Array.isArray(d.payload) ? d.payload : Array.isArray(p.frames) ? p.frames : []; place(); break;
@@ -380,6 +391,8 @@ function renderEditor(body, bar) {
         selNodes = p.nodes || [];
         drawSelActions();
         gaps.onSelection(selNodes);
+        scriptsUi.onSelection(selNodes);
+        extras.onSelection(selNodes);
         break;
       }
       case "td-editor:saved": status.textContent = "Saved"; setTimeout(() => (status.textContent = "Canvas"), 1500); gaps.onSaved(); break;
@@ -406,7 +419,7 @@ function renderEditor(body, bar) {
   const ro = new ResizeObserver(() => send("get-state"));
   ro.observe(body);
   loadBoards();
-  return () => { off(); offMode(); offReload(); offBoards(); offFiles(); offFocus(); ro.disconnect(); gaps.cleanup(); tb._cleanup && tb._cleanup(); for (const o of overlays.values()) unregisterFrame(o.iframe); };
+  return () => { off(); offMode(); offReload(); offBoards(); offFiles(); offFocus(); ro.disconnect(); gaps.cleanup(); docs.cleanup(); scriptsUi.cleanup(); extras.cleanup(); tb._cleanup && tb._cleanup(); for (const o of overlays.values()) unregisterFrame(o.iframe); };
 }
 
 // ── Canvas parity: Convert, Preview, Tokens, Slides/Present, "working…" ─────

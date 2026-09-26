@@ -84,13 +84,15 @@ class EditorBridgeError(RuntimeError):
 
 
 class _Page:
-    __slots__ = ("ws", "pid", "registered_at", "remote")
+    __slots__ = ("ws", "pid", "registered_at", "remote", "doc")
 
-    def __init__(self, ws: web.WebSocketResponse, pid: str, remote: str):
+    def __init__(self, ws: web.WebSocketResponse, pid: str, remote: str, doc: Optional[str] = None):
         self.ws = ws
         self.pid = pid
         self.registered_at = time.time()
         self.remote = remote
+        # Which of the project's canvas documents the page has open (docs/<doc>.fig).
+        self.doc = doc
 
 
 _pages: Dict[str, _Page] = {}                              # pid → registered page
@@ -193,6 +195,9 @@ async def handle_ws(request: web.Request, pid: str) -> web.WebSocketResponse:
     ws = web.WebSocketResponse(heartbeat=30.0, max_msg_size=MAX_MESSAGE_BYTES)
     await ws.prepare(request)
     remote = request.remote or "?"
+    doc = request.query.get("doc") or None
+    if doc is not None and not store.valid_doc_id(doc):
+        doc = None
     authenticated = False
     # Invite registration without revealing the token (upstream sendRegisterPrompt).
     await _send(ws, {"type": "register", "token": None})
@@ -218,7 +223,7 @@ async def handle_ws(request: web.Request, pid: str) -> web.WebSocketResponse:
                     break
                 authenticated = True
                 previous = _pages.get(pid)
-                _pages[pid] = _Page(ws, pid, remote)
+                _pages[pid] = _Page(ws, pid, remote, doc or store.default_doc_id(pid))
                 if previous and previous.ws is not ws:
                     _fail_pending(pid, "Browser reconnected")
                     await previous.ws.close()
@@ -428,7 +433,25 @@ async def call(pid: str, tool: str, args: Optional[Dict[str, Any]] = None,
         except canvas_convert.ConvertError as exc:
             raise EditorBridgeError(str(exc)) from None
         timeout = max(timeout, 60.0)
+    if tool == "telecode_doc_open":
+        return await open_document(pid, args.get("doc"), timeout=max(timeout, 30.0))
     if command == "local":
+        if tool == "telecode_doc_list":
+            listing = store.list_docs(pid)
+            if not listing:
+                raise EditorBridgeError("Project not found")
+            return {"ok": True, "result": {**listing, "open": open_doc(pid)}}
+        if tool == "telecode_doc_create":
+            copy_from = args.get("copy_from")
+            if copy_from is not None and not store.valid_doc_id(copy_from):
+                raise EditorBridgeError("copy_from must be a document id")
+            doc = store.create_doc(pid, args.get("name"), copy_from=copy_from)
+            if not doc:
+                raise EditorBridgeError("Could not create the document")
+            _publish_docs(pid, created=doc["id"])
+            if args.get("open") is True:
+                await open_document(pid, doc["id"], timeout=max(timeout, 30.0))
+            return {"ok": True, "result": {"doc": doc, "open": open_doc(pid)}}
         if tool == "get_codegen_prompt":
             return {"ok": True, "result": {"prompt": _tools_data().get("codegen_prompt", "")}}
         raise EditorBridgeError(f"Unknown local tool: {tool}")
@@ -505,8 +528,11 @@ def _node_label(n: Any) -> str:
     return f"{n.get('type', 'NODE')} \"{n.get('name') or ''}\" ({n.get('id')})"
 
 
-def layer_issue(page: Dict[str, Any], f: Dict[str, Any]) -> Optional[Dict[str, str]]:
-    """One analyze_overlaps finding → a verifier issue, or None when it is below the bar."""
+def layer_issue(page: Dict[str, Any], f: Dict[str, Any], file: str = "docs/main.fig") -> Optional[Dict[str, str]]:
+    """One analyze_overlaps finding → a verifier issue, or None when it is below the bar.
+
+    `file` is the canvas document the page shows (docs/<doc>.fig).
+    """
     cat = f.get("category")
     table = _OVERFLOW_SEVERITY if cat == "parent-overflow" else _OVERLAP_SEVERITY if cat == "sibling-overlap" else {}
     sev = table.get(str(f.get("severity")))
@@ -517,7 +543,7 @@ def layer_issue(page: Dict[str, Any], f: Dict[str, Any]) -> Optional[Dict[str, s
     where = f"page \"{page.get('name', '')}\" › {_node_label(a)}"
     evidence = (f"{cat} {f.get('severity')}: {_node_label(a)} at {_fmt_bounds(a)} vs {_node_label(b)} at "
                 f"{_fmt_bounds(b)}; area {f.get('area')}px², ratio {f.get('ratio')}")
-    return {"severity": sev, "file": "doc.fig", "board": str(a.get("id") or ""), "where": where,
+    return {"severity": sev, "file": file, "board": str(a.get("id") or ""), "where": where,
             "what": what[:300], "evidence": evidence[:500], "fix": str(f.get("suggestion") or "")[:300],
             "check": "layer_" + str(cat).replace("-", "_")}
 
@@ -531,7 +557,7 @@ async def inspect_layers(pid: str, shots_dir: Optional[Path] = None, max_pages: 
              "typography": {page: small-size counts}, "screenshots": [paths]}.
 
     Needs the editor page (the canvas is only parsed in the browser — there is no
-    Node at runtime to open doc.fig headless), so with no page attached it returns
+    Node at runtime to open a .fig headless), so with no page attached it returns
     `ran: False` with the reason instead of guessing; the caller logs it.
     """
     out: Dict[str, Any] = {"ran": False, "skipped": None, "issues": [], "problems": [], "text": "",
@@ -544,6 +570,8 @@ async def inspect_layers(pid: str, shots_dir: Optional[Path] = None, max_pages: 
         out["skipped"] = ("no canvas editor page is attached for this project — layer boards are only "
                           "inspected while TeleDesign's canvas is open")
         return out
+    # Findings name the document the page has open (docs/<doc>.fig).
+    doc_rel = store.canvas_rel(open_doc(pid) or store.default_doc_id(pid) or store.DEFAULT_DOC_ID)
     tools_enabled = set(tool_names())
     if "analyze_overlaps" not in tools_enabled:
         out["skipped"] = "analyze_overlaps is disabled (design.editor.disabled_tools)"
@@ -577,7 +605,7 @@ async def inspect_layers(pid: str, shots_dir: Optional[Path] = None, max_pages: 
                                     "intersection": f.get("intersection")})
             lines.append(f"- [{f.get('severity')}] page \"{page.get('name')}\": {f.get('message')} — "
                          f"{_node_label(a)} {_fmt_bounds(a)}")
-            issue = layer_issue(page, f)
+            issue = layer_issue(page, f, doc_rel)
             if issue:
                 out["issues"].append(issue)
         if "analyze_typography" in tools_enabled:
@@ -590,7 +618,7 @@ async def inspect_layers(pid: str, shots_dir: Optional[Path] = None, max_pages: 
                     out["typography"][page.get("name") or pg] = tiny
                     lines.append(f"- [minor] page \"{page.get('name')}\": {tiny} text node(s) under 12px")
                     out["issues"].append({
-                        "severity": "minor", "file": "doc.fig", "board": "", "where": f"page \"{page.get('name')}\"",
+                        "severity": "minor", "file": doc_rel, "board": "", "where": f"page \"{page.get('name')}\"",
                         "what": f"{tiny} text node(s) under 12px", "evidence": "analyze_typography group_by=size",
                         "fix": "Raise body and caption text to at least 12px.", "check": "layer_small_text"})
             except EditorBridgeError:
@@ -644,7 +672,44 @@ def status(pid: str) -> Dict[str, Any]:
         "pending": sum(1 for owner, _ in _pending.values() if owner == pid),
         "tools": len(tool_names()),
         "open_pencil_version": open_pencil_version(),
+        "doc_id": page.doc if connected else None,
     }
+
+
+def open_doc(pid: str) -> Optional[str]:
+    """Id of the canvas document the project's editor page has open, or None."""
+    page = _pages.get(pid)
+    return page.doc if page and not page.ws.closed else None
+
+
+def _publish_docs(pid: str, **data: Any) -> None:
+    try:
+        from services.design import events
+        events.publish(pid, "docs", data)
+    except Exception:
+        logger.debug("editor_bridge: docs event not published", exc_info=True)
+
+
+async def open_document(pid: str, doc: Any, timeout: float = 30.0) -> Dict[str, Any]:
+    """Have the project's editor page reload on canvas document `doc`; wait until it is back.
+
+    The page is per document (its storage binding and bridge socket are keyed by it), so
+    switching is a navigation: the page acknowledges, reloads, and registers again.
+    """
+    if not store.valid_doc_id(doc) or not store.get_doc(pid, doc):
+        raise EditorBridgeError(f"Unknown document: {doc}")
+    if open_doc(pid) == doc:
+        return {"ok": True, "result": {"open": doc, "switched": False}}
+    before = _pages.get(pid)
+    await request(pid, "telecode_doc_open", {"doc": doc}, timeout=RPC_TIMEOUT)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        page = _pages.get(pid)
+        if page and page is not before and not page.ws.closed and page.doc == doc:
+            _publish_docs(pid, opened=doc)
+            return {"ok": True, "result": {"open": doc, "switched": True}}
+        await asyncio.sleep(0.1)
+    raise EditorBridgeError(f"The editor did not come back on document {doc} within {int(timeout)}s")
 
 
 def connected_projects() -> List[str]:

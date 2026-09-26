@@ -457,7 +457,7 @@ Claude Design + pen.dev on **one canvas**, driven by the existing CLIs. Tray →
 interface every module codes against: [docs/teledesign-contract.md](docs/teledesign-contract.md); scope:
 [docs/teledesign-parity.md](docs/teledesign-parity.md).
 
-- **Boards.** Layer boards = native open-pencil frames in `doc.fig`. HTML boards = frames registered in
+- **Boards.** Layer boards = native open-pencil frames in a canvas document (`docs/<id>.fig`). HTML boards = frames registered in
   `boards.json`, keyed by a **board key** stored inside the frame (open-pencil renumbers node ids on every
   reopen), with the generated page overlaid live in a sandboxed iframe.
 - **Turns are direct task sessions, not Team Mode.** One session per project chat (namespace `design`),
@@ -508,6 +508,34 @@ interface every module codes against: [docs/teledesign-contract.md](docs/teledes
   `patches/open-pencil/`, vendored at `proxy/static/design/editor/`). Agent tool calls reach the live page
   over `editor_bridge.py`'s WebSocket — no Node at runtime. Rebuild after bumping the tag; `--check` tells
   you whether the series still applies. Never hand-edit the vendored output or the disposable source dir.
+- **Canvas documents** (patch 0013): `docs/<id>.fig` + `docs/canvases.json` (`store.list_docs /
+  create_doc / update_doc / delete_doc`, `get_canvas / save_canvas(pid, data, doc_id)`); a legacy
+  `doc.fig` moves to `docs/main.fig` on first access (`_migrate_docs`; a restored one migrates again).
+  The editor opens `?doc=` (absent = default), its bridge socket carries `doc` (`editor_bridge.open_doc`);
+  `telecode_doc_list` / `_create` are answered by the proxy, `telecode_doc_open` reloads the page and
+  waits for it to register again. REST `…/docs[/{doc}[/canvas|/canvas.json]]`; never delete the open
+  or last one (409 / 400). `GET …/editor?doc=` → `doc_id` = the one asked about, `open_doc` = the one
+  open. `.fig`, mirrors and `canvases.json` are refused by the Files API (`files._canvas_owned`) and
+  left out of share snapshots — they change only through their routes.
+- **JSON mirror** (0014): the editor PUTs `docs/<id>.fig.json` after every save; `save_canvas_mirror`
+  re-serializes it canonically (sorted keys, LF) and skips identical writes. Read-only, never loaded.
+- **Script nodes** (0015): frame + `telecode/script` plugin data → a project `.js` (`@input` header)
+  run in a sandboxed iframe + Worker, returns Design JSX; `GET …/editor/scripts?path=` is what the page
+  polls. Controls / badges in `app/canvas_nodes.js`.
+- **Theme axes / slots / procedural fills** (0016–0018), canvas tools only (`telecode_theme_*`,
+  `telecode_slot_*`, `telecode_fill_*`), driven from the canvas bar's **Theme** menu and **Layer** panel
+  (`app/canvas_extras.js`, over `/editor/call`). Every collection is an axis; a cross-collection alias
+  resolves in the node's mode for *that* collection. A slot = a frame in a component replaced by an
+  instance exposed as an instance-swap property (content components in a "Slot content" section) —
+  `.fig` derives instance children from the main component, so content put straight into an instance is
+  lost on reload; the swap value is not. A shader / mesh fill = a CUSTOM paint whose `customEffectId`
+  links to `telecode/fill:<id>` plugin data (SkSL runtime effect with `u_size` + named uniforms; mesh =
+  Coons patch per cell); shaders are compiled before saving (bad SkSL refused with the message); other
+  renderers and the HTML export see the fallback colour. Static only — no `@time` animation.
+- **Build notes.** `--check` applies each patch after checking it (0008+ extend files 0007 adds). Clone a
+  build dir with `core.autocrlf=false` or `git apply` fails on CRLF; keep the series LF. The upstream
+  headless-CanvasKit loader breaks on Windows paths (`URL.pathname` → `/C:/…`), so render tests load
+  CanvasKit themselves (`tests/engine/render/canvas/procedural-fills.test.ts`).
 - **Canvas parity commands** (patches 0008–0011, `telecode_*` bridge commands; REST in
   `api_design_editor.py` under `…/editor/`). **HTML → layers** is *not* open-pencil's dom-css importer on
   the source (TeleDesign pages are React/Babel, and that importer lays out in a 1000px sandbox, only
@@ -538,7 +566,7 @@ interface every module codes against: [docs/teledesign-contract.md](docs/teledes
   background-image / gradient / media behind the text is *unknown and skipped*, never guessed; `<3:1` major,
   else minor), broken resources, deck checks — plus **layer boards** (`design.verifier.layer_boards`, default
   on): `editor_bridge.inspect_layers` runs open-pencil's own `analyze_overlaps` / `analyze_typography` per page
-  and `export_image` of top-level frames, and returns `pen_problems`. It needs the editor page (doc.fig is
+  and `export_image` of top-level frames, and returns `pen_problems`. It needs the editor page (a .fig is
   only parsed in the browser — no Node at runtime), so with no page attached it **skips with a logged
   reason**. Severity is deliberately conservative: only a node >25% outside its parent is `major` (can wake a
   fix turn); sibling overlaps are minor (a label on a rectangle is a "sibling overlap"). **Directed checks**:

@@ -1,0 +1,1148 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Prithwiraj Samanta <prskid1000@gmail.com>
+Date: Sat, 26 Sep 2026 07:07:00 +0530
+Subject: [PATCH] telecode: shader and mesh-gradient fills
+
+A procedural fill is a CUSTOM paint (its colour is the fallback other readers
+show) whose customEffectId links to a JSON definition in the node's shared
+plugin data, telecode/fill:<id>, so both survive .fig. The renderer
+(core canvas/gradients/procedural) paints kind "shader" as a Skia runtime
+effect (SkSL half4 main(float2 p), u_size supplied, named uniforms; five
+original presets) and kind "mesh" as one Coons patch per grid cell
+(Catmull-Rom edges, warpable points, max 64) recorded into a picture shader;
+a definition that does not compile paints the fallback. Compiled effects are
+cached per CanvasKit and disposed with the renderer. telecode_fill_set /
+_list / _remove / _presets edit them (shaders are compiled first and refused
+with the compiler message).
+---
+ packages/core/src/canvas/fills.ts             |   4 +
+ .../core/src/canvas/gradients/procedural.ts   | 467 ++++++++++++++++++
+ packages/core/src/canvas/index.ts             |  17 +
+ .../core/src/canvas/renderer/lifecycle.ts     |   2 +
+ scripts/telecode-dump-tools.ts                |  57 +++
+ src/app/integrations/telecode/commands.ts     |  55 +++
+ src/app/integrations/telecode/fills.ts        | 185 +++++++
+ tests/engine/app/telecode/fills.test.ts       |  81 +++
+ .../render/canvas/procedural-fills.test.ts    | 140 ++++++
+ 9 files changed, 1008 insertions(+)
+ create mode 100644 packages/core/src/canvas/gradients/procedural.ts
+ create mode 100644 src/app/integrations/telecode/fills.ts
+ create mode 100644 tests/engine/app/telecode/fills.test.ts
+ create mode 100644 tests/engine/render/canvas/procedural-fills.test.ts
+
+diff --git a/packages/core/src/canvas/fills.ts b/packages/core/src/canvas/fills.ts
+index 9d422e2f..84b03270 100644
+--- a/packages/core/src/canvas/fills.ts
++++ b/packages/core/src/canvas/fills.ts
+@@ -5,6 +5,7 @@ import type { Rect, Vector } from '@open-pencil/scene-graph/primitives'
+ 
+ import { figmaBlendModeToSkia } from './blend'
+ import { makeDiamondGradient } from './gradients/diamond'
++import { applyProceduralFill } from './gradients/procedural'
+ import type { SkiaRenderer } from './renderer'
+ import { makeSmoothRRectPath, nodeHasSmoothCorners } from './shapes'
+ 
+@@ -151,6 +152,9 @@ export function applyFill(
+ 
+   if (fill.type === 'PATTERN' && applyPatternFill(r, fill, node, graph, patternStack)) return true
+ 
++  // Shader / mesh-gradient fills: a CUSTOM paint linked to a definition in plugin data.
++  if (fill.type === 'CUSTOM' && applyProceduralFill(r, fill, node)) return true
++
+   if (fill.type === 'PATTERN' || fill.type === 'NOISE' || fill.type === 'CUSTOM') {
+     const c = r.resolveFillColor(fill, fillIndex, node, graph)
+     r.fillPaint.setColor(r.ck.Color4f(c.r, c.g, c.b, c.a))
+diff --git a/packages/core/src/canvas/gradients/procedural.ts b/packages/core/src/canvas/gradients/procedural.ts
+new file mode 100644
+index 00000000..329bbc1b
+--- /dev/null
++++ b/packages/core/src/canvas/gradients/procedural.ts
+@@ -0,0 +1,467 @@
++/**
++ * Procedural fills: SkSL shader fills and mesh gradients.
++ *
++ * Neither exists in the .fig paint model, so a procedural fill is stored as a
++ * `CUSTOM` paint (whose own colour is the fallback every other renderer shows)
++ * linked by `customEffectId` to a definition in the node's shared plugin data,
++ * `telecode` / `fill:<customEffectId>` (JSON). Both round-trip through .fig.
++ *
++ *  - shader: `{kind:'shader', sksl | preset, uniforms}` — a Skia runtime effect,
++ *    `half4 main(float2 p)` with `p` in the node's pixel space. `uniform float2
++ *    u_size` (the node size) is supplied; other uniforms come from `uniforms`
++ *    by name (float / float2..4, missing = 0).
++ *  - mesh: `{kind:'mesh', columns, rows, points:[{x, y, color}]}` — a grid of
++ *    control points (row-major, x/y normalised to the node box, so the grid can
++ *    be warped), drawn as one Coons patch per cell (Catmull-Rom edges unless
++ *    `smooth:false`), colours interpolated across each patch.
++ */
++import type { CanvasKit, RuntimeEffect, Shader } from 'canvaskit-wasm'
++
++import type { Fill, SceneNode } from '@open-pencil/scene-graph'
++
++import type { SkiaRenderer } from '#core/canvas/renderer'
++
++export const PROCEDURAL_NAMESPACE = 'telecode'
++export const PROCEDURAL_KEY_PREFIX = 'fill:'
++
++export type ProceduralColor = [number, number, number, number]
++
++export interface ShaderFillDef {
++  v: 1
++  kind: 'shader'
++  sksl?: string
++  preset?: string
++  uniforms?: Record<string, number | number[]>
++}
++
++export interface MeshPoint {
++  x: number
++  y: number
++  color: ProceduralColor
++}
++
++export interface MeshFillDef {
++  v: 1
++  kind: 'mesh'
++  columns: number
++  rows: number
++  points: MeshPoint[]
++  smooth?: boolean
++}
++
++export type ProceduralFillDef = ShaderFillDef | MeshFillDef
++
++export const MESH_MAX_POINTS = 64
++
++// ── Presets (original shaders) ───────────────────────────────────────────
++
++interface Preset {
++  description: string
++  uniforms: Record<string, number | number[]>
++  sksl: string
++}
++
++const HASH = `
++float hash(float2 p) { return fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453); }
++float vnoise(float2 p) {
++  float2 i = floor(p);
++  float2 f = fract(p);
++  float2 u = f * f * (3.0 - 2.0 * f);
++  return mix(mix(hash(i), hash(i + float2(1, 0)), u.x), mix(hash(i + float2(0, 1)), hash(i + float2(1, 1)), u.x), u.y);
++}
++`
++
++export const SHADER_PRESETS: Record<string, Preset> = {
++  grain: {
++    description: 'Film grain over a base colour (u_color, u_amount 0..1, u_seed)',
++    uniforms: { u_color: [0.95, 0.94, 0.9, 1], u_amount: 0.12, u_seed: 0 },
++    sksl: `
++uniform float2 u_size;
++uniform float4 u_color;
++uniform float u_amount;
++uniform float u_seed;
++${HASH}
++half4 main(float2 p) {
++  float n = hash(p + u_seed * 17.0) - 0.5;
++  float3 c = clamp(u_color.rgb + n * u_amount, 0.0, 1.0);
++  return half4(half3(c * u_color.a), half(u_color.a));
++}`
++  },
++  aurora: {
++    description: 'Soft flowing colour field of three colours (u_a, u_b, u_c, u_scale, u_seed)',
++    uniforms: { u_a: [0.1, 0.1, 0.35, 1], u_b: [0.2, 0.8, 0.7, 1], u_c: [0.8, 0.3, 0.9, 1], u_scale: 2.5, u_seed: 0 },
++    sksl: `
++uniform float2 u_size;
++uniform float4 u_a;
++uniform float4 u_b;
++uniform float4 u_c;
++uniform float u_scale;
++uniform float u_seed;
++${HASH}
++half4 main(float2 p) {
++  float2 q = p / max(u_size.x, u_size.y) * u_scale + u_seed;
++  float n1 = vnoise(q + vnoise(q * 1.7 + 3.1));
++  float n2 = vnoise(q * 0.8 - 5.2 + n1);
++  float4 c = mix(mix(u_a, u_b, smoothstep(0.2, 0.8, n1)), u_c, smoothstep(0.35, 0.9, n2) * 0.8);
++  return half4(half3(c.rgb * c.a), half(c.a));
++}`
++  },
++  stripes: {
++    description: 'Straight stripes (u_a, u_b, u_width px, u_angle degrees)',
++    uniforms: { u_a: [0.1, 0.1, 0.1, 1], u_b: [0.95, 0.8, 0.2, 1], u_width: 16, u_angle: 45 },
++    sksl: `
++uniform float2 u_size;
++uniform float4 u_a;
++uniform float4 u_b;
++uniform float u_width;
++uniform float u_angle;
++half4 main(float2 p) {
++  float r = radians(u_angle);
++  float d = dot(p, float2(cos(r), sin(r)));
++  float t = step(0.5, fract(d / max(u_width * 2.0, 1.0)));
++  float4 c = mix(u_a, u_b, t);
++  return half4(half3(c.rgb * c.a), half(c.a));
++}`
++  },
++  dots: {
++    description: 'Dot grid (u_background, u_dot, u_spacing px, u_radius px)',
++    uniforms: { u_background: [1, 1, 1, 1], u_dot: [0.2, 0.2, 0.25, 1], u_spacing: 16, u_radius: 2 },
++    sksl: `
++uniform float2 u_size;
++uniform float4 u_background;
++uniform float4 u_dot;
++uniform float u_spacing;
++uniform float u_radius;
++half4 main(float2 p) {
++  float s = max(u_spacing, 1.0);
++  float2 cell = (fract(p / s) - 0.5) * s;
++  float t = 1.0 - smoothstep(u_radius - 0.75, u_radius + 0.75, length(cell));
++  float4 c = mix(u_background, u_dot, t);
++  return half4(half3(c.rgb * c.a), half(c.a));
++}`
++  },
++  radial_glow: {
++    description: 'Glow from a point (u_inner, u_outer, u_center 0..1, u_radius 0..1 of the larger side)',
++    uniforms: { u_inner: [1, 0.85, 0.5, 1], u_outer: [0.05, 0.05, 0.12, 1], u_center: [0.5, 0.4], u_radius: 0.7 },
++    sksl: `
++uniform float2 u_size;
++uniform float4 u_inner;
++uniform float4 u_outer;
++uniform float2 u_center;
++uniform float u_radius;
++half4 main(float2 p) {
++  float d = length(p - u_center * u_size) / max(max(u_size.x, u_size.y) * u_radius, 1.0);
++  float4 c = mix(u_inner, u_outer, smoothstep(0.0, 1.0, d));
++  return half4(half3(c.rgb * c.a), half(c.a));
++}`
++  }
++}
++
++export function listShaderPresets() {
++  return Object.entries(SHADER_PRESETS).map(([name, preset]) => ({
++    name,
++    description: preset.description,
++    uniforms: preset.uniforms
++  }))
++}
++
++// ── Parsing ──────────────────────────────────────────────────────────────
++
++const parsed = new Map<string, ProceduralFillDef | null>()
++
++function finite(value: unknown, fallback: number): number {
++  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
++}
++
++function clamp01(value: number): number {
++  return Math.min(1, Math.max(0, value))
++}
++
++/** A colour as [r, g, b, a] floats, #rgb / #rrggbb / #rrggbbaa, or {r, g, b, a}. */
++export function parseProceduralColor(value: unknown): ProceduralColor | null {
++  if (Array.isArray(value) && value.length >= 3) {
++    return [0, 1, 2, 3].map((i) => clamp01(finite(value[i], i === 3 ? 1 : 0))) as ProceduralColor
++  }
++  if (typeof value === 'string') {
++    const hex = value.trim().replace(/^#/, '')
++    const full =
++      hex.length === 3 || hex.length === 4 ? [...hex].map((c) => c + c).join('') : hex
++    if (!/^[0-9a-f]{6}([0-9a-f]{2})?$/i.test(full)) return null
++    const n = (i: number) => Number.parseInt(full.slice(i, i + 2), 16) / 255
++    return [n(0), n(2), n(4), full.length === 8 ? n(6) : 1]
++  }
++  if (value && typeof value === 'object') {
++    const c = value as Record<string, unknown>
++    if (typeof c.r === 'number') {
++      return [clamp01(finite(c.r, 0)), clamp01(finite(c.g, 0)), clamp01(finite(c.b, 0)), clamp01(finite(c.a, 1))]
++    }
++  }
++  return null
++}
++
++/** Validate and normalise a definition; throws with a readable message. */
++export function normalizeProceduralFill(input: unknown): ProceduralFillDef {
++  if (!input || typeof input !== 'object') throw new Error('A fill definition must be an object')
++  const raw = input as Record<string, unknown>
++  if (raw.kind === 'shader') {
++    const preset = typeof raw.preset === 'string' && raw.preset ? raw.preset : undefined
++    const sksl = typeof raw.sksl === 'string' && raw.sksl.trim() ? raw.sksl : undefined
++    if (!preset && !sksl) throw new Error('A shader fill needs "sksl" or "preset"')
++    if (preset && !SHADER_PRESETS[preset]) {
++      throw new Error(`Unknown shader preset "${preset}" (${Object.keys(SHADER_PRESETS).join(', ')})`)
++    }
++    if (sksl && sksl.length > 20000) throw new Error('"sksl" is limited to 20000 characters')
++    const uniforms: Record<string, number | number[]> = {}
++    if (raw.uniforms && typeof raw.uniforms === 'object') {
++      for (const [name, value] of Object.entries(raw.uniforms as Record<string, unknown>)) {
++        if (!/^[A-Za-z_]\w{0,63}$/.test(name)) throw new Error(`Bad uniform name "${name}"`)
++        if (typeof value === 'number' && Number.isFinite(value)) uniforms[name] = value
++        else if (Array.isArray(value) && value.length <= 16 && value.every((x) => typeof x === 'number' && Number.isFinite(x)))
++          uniforms[name] = value as number[]
++        else {
++          const color = parseProceduralColor(value)
++          if (!color) throw new Error(`Uniform "${name}" must be a number, a number array or a colour`)
++          uniforms[name] = color
++        }
++      }
++    }
++    return { v: 1, kind: 'shader', ...(sksl ? { sksl } : { preset }), uniforms }
++  }
++  if (raw.kind === 'mesh') {
++    const columns = Math.round(finite(raw.columns, 0))
++    const rows = Math.round(finite(raw.rows, 0))
++    if (columns < 2 || rows < 2) throw new Error('A mesh needs at least 2 columns and 2 rows')
++    if (columns * rows > MESH_MAX_POINTS) throw new Error(`A mesh has at most ${MESH_MAX_POINTS} points`)
++    const pointsIn = Array.isArray(raw.points) ? raw.points : []
++    if (pointsIn.length !== columns * rows) {
++      throw new Error(`A ${columns}x${rows} mesh needs ${columns * rows} points (got ${pointsIn.length})`)
++    }
++    const points = pointsIn.map((p, index) => {
++      const point = (p ?? {}) as Record<string, unknown>
++      const color = parseProceduralColor(point.color)
++      if (!color) throw new Error(`Point ${index} needs a colour`)
++      const col = index % columns
++      const row = Math.floor(index / columns)
++      return {
++        x: finite(point.x, col / (columns - 1)),
++        y: finite(point.y, row / (rows - 1)),
++        color
++      }
++    })
++    return { v: 1, kind: 'mesh', columns, rows, points, ...(raw.smooth === false ? { smooth: false } : {}) }
++  }
++  throw new Error('"kind" must be "shader" or "mesh"')
++}
++
++export function proceduralKey(fill: Fill): string | null {
++  return fill.type === 'CUSTOM' && fill.customEffectId
++    ? `${PROCEDURAL_KEY_PREFIX}${fill.customEffectId}`
++    : null
++}
++
++/** The definition a CUSTOM fill links to, or null (then it paints its fallback colour). */
++export function proceduralFillOf(node: SceneNode, fill: Fill): ProceduralFillDef | null {
++  const key = proceduralKey(fill)
++  if (!key) return null
++  const encoded = `${PROCEDURAL_NAMESPACE}/${key}`
++  const entry = node.pluginData.find(
++    (e) => e.pluginId === PROCEDURAL_NAMESPACE && (e.key === encoded || e.key === key)
++  )
++  if (!entry?.value) return null
++  if (parsed.has(entry.value)) return parsed.get(entry.value) ?? null
++  let def: ProceduralFillDef | null = null
++  try {
++    def = normalizeProceduralFill(JSON.parse(entry.value))
++  } catch {
++    def = null
++  }
++  if (parsed.size > 256) parsed.clear()
++  parsed.set(entry.value, def)
++  return def
++}
++
++// ── Shaders ──────────────────────────────────────────────────────────────
++
++interface CompiledEffect {
++  effect: RuntimeEffect | null
++  error: string | null
++  uniforms: Array<{ name: string; floats: number }>
++}
++
++const compiled = new WeakMap<CanvasKit, Map<string, CompiledEffect>>()
++
++export function shaderSource(def: ShaderFillDef): string {
++  return def.sksl ?? SHADER_PRESETS[def.preset ?? '']?.sksl ?? ''
++}
++
++/** Compile (cached per CanvasKit instance) and describe an effect's uniforms. */
++export function compileShaderFill(ck: CanvasKit, sksl: string): CompiledEffect {
++  let cache = compiled.get(ck)
++  if (!cache) {
++    cache = new Map()
++    compiled.set(ck, cache)
++  }
++  const hit = cache.get(sksl)
++  if (hit) return hit
++  let error = ''
++  const effect = ck.RuntimeEffect.Make(sksl, (message) => {
++    error = message
++  })
++  const uniforms: CompiledEffect['uniforms'] = []
++  if (effect) {
++    for (let i = 0; i < effect.getUniformCount(); i++) {
++      const u = effect.getUniform(i)
++      uniforms.push({ name: effect.getUniformName(i), floats: u.columns * u.rows })
++    }
++  }
++  const result = { effect: effect ?? null, error: effect ? null : error || 'compile failed', uniforms }
++  if (cache.size > 64) {
++    for (const entry of cache.values()) entry.effect?.delete()
++    cache.clear()
++  }
++  cache.set(sksl, result)
++  return result
++}
++
++/** Delete every compiled effect for this CanvasKit instance (renderer teardown). */
++export function disposeShaderFills(ck: CanvasKit): void {
++  const cache = compiled.get(ck)
++  if (!cache) return
++  for (const entry of cache.values()) entry.effect?.delete()
++  compiled.delete(ck)
++}
++
++function uniformData(def: ShaderFillDef, layout: CompiledEffect['uniforms'], width: number, height: number) {
++  const defaults = def.preset ? (SHADER_PRESETS[def.preset]?.uniforms ?? {}) : {}
++  const values: Record<string, number | number[]> = { ...defaults, ...def.uniforms, u_size: [width, height] }
++  const data: number[] = []
++  for (const { name, floats } of layout) {
++    const value = values[name]
++    for (let i = 0; i < floats; i++) {
++      data.push(Array.isArray(value) ? (value[i] ?? 0) : i === 0 && typeof value === 'number' ? value : 0)
++    }
++  }
++  return data
++}
++
++export function makeShaderFill(r: SkiaRenderer, def: ShaderFillDef, width: number, height: number): Shader | null {
++  const program = compileShaderFill(r.ck, shaderSource(def))
++  if (!program.effect) return null
++  return program.effect.makeShader(uniformData(def, program.uniforms, width, height))
++}
++
++// ── Mesh gradients ───────────────────────────────────────────────────────
++
++type P = [number, number]
++
++function meshGrid(def: MeshFillDef, width: number, height: number): P[][] {
++  const grid: P[][] = []
++  for (let row = 0; row < def.rows; row++) {
++    const line: P[] = []
++    for (let col = 0; col < def.columns; col++) {
++      const p = def.points[row * def.columns + col]
++      line.push([p.x * width, p.y * height])
++    }
++    grid.push(line)
++  }
++  return grid
++}
++
++/** Coons-patch cubics (12 points, clockwise from the top-left corner) for every cell. */
++export function meshPatches(def: MeshFillDef, width: number, height: number) {
++  const g = meshGrid(def, width, height)
++  const smooth = def.smooth !== false
++  const at = (row: number, col: number) => g[Math.min(def.rows - 1, Math.max(0, row))][Math.min(def.columns - 1, Math.max(0, col))]
++  // Catmull-Rom tangent along a row (dc) or a column (dr), one-sided at the edges.
++  const tangent = (row: number, col: number, dr: number, dc: number): P => {
++    const a = at(row - dr, col - dc)
++    const b = at(row + dr, col + dc)
++    const edge = row - dr < 0 || col - dc < 0 || row + dr >= def.rows || col + dc >= def.columns
++    const k = edge ? 1 : 0.5
++    return [(b[0] - a[0]) * k, (b[1] - a[1]) * k]
++  }
++  const handle = (row: number, col: number, dr: number, dc: number, towardRow: number, towardCol: number, sign: number): P => {
++    const p = at(row, col)
++    if (!smooth) {
++      const q = at(towardRow, towardCol)
++      return [p[0] + (q[0] - p[0]) / 3, p[1] + (q[1] - p[1]) / 3]
++    }
++    const t = tangent(row, col, dr, dc)
++    return [p[0] + (sign * t[0]) / 3, p[1] + (sign * t[1]) / 3]
++  }
++  const patches: Array<{ cubics: number[]; corners: [number, number, number, number] }> = []
++  for (let row = 0; row < def.rows - 1; row++) {
++    for (let col = 0; col < def.columns - 1; col++) {
++      const tl = at(row, col)
++      const tr = at(row, col + 1)
++      const br = at(row + 1, col + 1)
++      const bl = at(row + 1, col)
++      const pts: P[] = [
++        tl,
++        handle(row, col, 0, 1, row, col + 1, 1),
++        handle(row, col + 1, 0, 1, row, col, -1),
++        tr,
++        handle(row, col + 1, 1, 0, row + 1, col + 1, 1),
++        handle(row + 1, col + 1, 1, 0, row, col + 1, -1),
++        br,
++        handle(row + 1, col + 1, 0, 1, row + 1, col, -1),
++        handle(row + 1, col, 0, 1, row + 1, col + 1, 1),
++        bl,
++        handle(row + 1, col, 1, 0, row, col, -1),
++        handle(row, col, 1, 0, row + 1, col, 1)
++      ]
++      patches.push({
++        cubics: pts.flat(),
++        corners: [row * def.columns + col, row * def.columns + col + 1, (row + 1) * def.columns + col + 1, (row + 1) * def.columns + col]
++      })
++    }
++  }
++  return patches
++}
++
++export function makeMeshFill(r: SkiaRenderer, def: MeshFillDef, width: number, height: number): Shader | null {
++  if (width <= 0 || height <= 0) return null
++  const ck = r.ck
++  const bounds = ck.LTRBRect(0, 0, width, height)
++  const recorder = new ck.PictureRecorder()
++  const canvas = recorder.beginRecording(bounds)
++  const paint = new ck.Paint()
++  paint.setAntiAlias(true)
++  try {
++    for (const patch of meshPatches(def, width, height)) {
++      const colors = patch.corners.map((i) => {
++        const c = def.points[i].color
++        // drawPatch interpolates colours; the paint's alpha is applied by the fill pass.
++        return ck.Color4f(c[0], c[1], c[2], c[3])
++      })
++      canvas.drawPatch(patch.cubics, colors, null, ck.BlendMode.Dst, paint)
++    }
++  } finally {
++    paint.delete()
++  }
++  const picture = recorder.finishRecordingAsPicture()
++  recorder.delete()
++  try {
++    return picture.makeShader(ck.TileMode.Clamp, ck.TileMode.Clamp, ck.FilterMode.Linear, undefined, bounds)
++  } finally {
++    picture.delete()
++  }
++}
++
++/** Set `r.fillPaint`'s shader for a procedural fill; false = paint the fallback colour. */
++export function applyProceduralFill(r: SkiaRenderer, fill: Fill, node: SceneNode): boolean {
++  const def = proceduralFillOf(node, fill)
++  if (!def) return false
++  const shader =
++    def.kind === 'shader'
++      ? makeShaderFill(r, def, node.width, node.height)
++      : makeMeshFill(r, def, node.width, node.height)
++  if (!shader) return false
++  try {
++    r.fillPaint.setColor(r.ck.Color4f(1, 1, 1, 1))
++    r.fillPaint.setShader(shader)
++  } finally {
++    shader.delete()
++  }
++  return true
++}
+diff --git a/packages/core/src/canvas/index.ts b/packages/core/src/canvas/index.ts
+index 713ac8cc..95ff6a44 100644
+--- a/packages/core/src/canvas/index.ts
++++ b/packages/core/src/canvas/index.ts
+@@ -15,3 +15,20 @@ export { hitTestGuides, type GuideHit } from './guides/hit-test'
+ export type { GuideOverlayState, GuidePreview, GuideSelection } from './guides/types'
+ export { canvasLabelForeground } from './labels/color'
+ export { SkiaRenderer, type RenderOverlays, type RulerTheme } from './renderer'
++export {
++  applyProceduralFill,
++  compileShaderFill,
++  listShaderPresets,
++  MESH_MAX_POINTS,
++  normalizeProceduralFill,
++  parseProceduralColor,
++  proceduralFillOf,
++  proceduralKey,
++  PROCEDURAL_KEY_PREFIX,
++  PROCEDURAL_NAMESPACE,
++  SHADER_PRESETS,
++  shaderSource,
++  type MeshFillDef,
++  type ProceduralFillDef,
++  type ShaderFillDef
++} from './gradients/procedural'
+diff --git a/packages/core/src/canvas/renderer/lifecycle.ts b/packages/core/src/canvas/renderer/lifecycle.ts
+index c418e5fc..79f1db4f 100644
+--- a/packages/core/src/canvas/renderer/lifecycle.ts
++++ b/packages/core/src/canvas/renderer/lifecycle.ts
+@@ -1,3 +1,4 @@
++import { disposeShaderFills } from '#core/canvas/gradients/procedural'
+ import type { SkiaRenderer } from '#core/canvas/renderer'
+ import { clearSubtreePictureCache } from '#core/canvas/renderer/state'
+ import { fontManager } from '#core/text/fonts'
+@@ -36,6 +37,7 @@ export function destroyRenderer(r: SkiaRenderer): void {
+   r.fillPaint.delete()
+   r.diamondGradientEffect?.delete()
+   r.diamondGradientEffect = null
++  disposeShaderFills(r.ck)
+   r.strokePaint.delete()
+   r.selectionPaint.delete()
+   r.parentOutlinePaint.delete()
+diff --git a/scripts/telecode-dump-tools.ts b/scripts/telecode-dump-tools.ts
+index e2f586e3..8d400b10 100644
+--- a/scripts/telecode-dump-tools.ts
++++ b/scripts/telecode-dump-tools.ts
+@@ -468,6 +468,63 @@ const extra = [
+       })
+     )
+   },
++  {
++    name: 'telecode_fill_set',
++    description:
++      'Add (on top) or replace (index) a procedural fill. kind "shader": preset (see telecode_fill_presets) or sksl = a Skia runtime effect `half4 main(float2 p)` with p in the node’s pixels, `uniform float2 u_size` supplied, other uniforms from uniforms {name: number | [..] | "#hex"}; it is compiled first and refused with the compiler message. kind "mesh": a mesh gradient — colors: rows of colours (evenly spaced), or columns + rows + points [{x, y (0..1, warps the grid), color}] row-major, max 64 points, smooth (default true). Stored as a CUSTOM paint + plugin data, saved in the .fig; fallback is the solid colour other renderers (and the HTML export) show. One undo step.',
++    command: 'telecode_fill_set',
++    effect: 'write',
++    availability: 'default',
++    capabilities: ['document:write'],
++    enabled: true,
++    input_schema: schemaOf(
++      v.object({
++        node_id: v.pipe(v.string(), v.description('Node to fill')),
++        kind: v.pipe(v.picklist(['shader', 'mesh']), v.description('Fill kind')),
++        index: v.optional(v.pipe(v.number(), v.description('Replace the fill at this index (default: add on top)'))),
++        preset: v.optional(v.pipe(v.string(), v.description('Shader preset name'))),
++        sksl: v.optional(v.pipe(v.string(), v.description('SkSL source'))),
++        uniforms: v.optional(v.pipe(v.record(v.string(), v.unknown()), v.description('Shader uniforms by name'))),
++        colors: v.optional(v.pipe(v.array(v.array(v.string())), v.description('Mesh: rows of colours'))),
++        columns: v.optional(v.number()),
++        rows: v.optional(v.number()),
++        points: v.optional(v.pipe(v.array(v.record(v.string(), v.unknown())), v.description('Mesh control points'))),
++        smooth: v.optional(v.boolean()),
++        fallback: v.optional(v.pipe(v.string(), v.description('Fallback colour (#hex)')))
++      })
++    )
++  },
++  {
++    name: 'telecode_fill_list',
++    description:
++      'With node_id: its fills; shader / mesh ones carry {kind, definition, error} (error = the SkSL compiler message). Without: {nodes:[{node_id, name, kinds, errors}]} for every node with a procedural fill.',
++    command: 'telecode_fill_list',
++    effect: 'read',
++    availability: 'default',
++    capabilities: ['document:read'],
++    enabled: true,
++    input_schema: schemaOf(v.object({ node_id: v.optional(v.pipe(v.string(), v.description('Node'))) }))
++  },
++  {
++    name: 'telecode_fill_remove',
++    description: 'Remove the fill at index (its shader / mesh definition goes with it). One undo step.',
++    command: 'telecode_fill_remove',
++    effect: 'write',
++    availability: 'default',
++    capabilities: ['document:write'],
++    enabled: true,
++    input_schema: schemaOf(v.object({ node_id: v.pipe(v.string(), v.description('Node')), index: v.pipe(v.number(), v.description('Fill index')) }))
++  },
++  {
++    name: 'telecode_fill_presets',
++    description: 'Built-in shader presets: [{name, description, uniforms (defaults)}].',
++    command: 'telecode_fill_presets',
++    effect: 'read',
++    availability: 'default',
++    capabilities: ['document:read'],
++    enabled: true,
++    input_schema: schemaOf(v.object({}))
++  },
+   {
+     name: 'get_codegen_prompt',
+     description:
+diff --git a/src/app/integrations/telecode/commands.ts b/src/app/integrations/telecode/commands.ts
+index af7186c9..41db2ff9 100644
+--- a/src/app/integrations/telecode/commands.ts
++++ b/src/app/integrations/telecode/commands.ts
+@@ -27,6 +27,10 @@
+  *   telecode_slot_list         {node_id?}          a component's / instance's slots (or every one)
+  *   telecode_slot_fill         {instance_id, slot, jsx? | node_ids? | component_id?}
+  *   telecode_slot_reset        {instance_id, slot?}  default content back
++ *   telecode_fill_set          {node_id, kind: shader|mesh, index?, fallback?, …definition}
++ *   telecode_fill_list         {node_id?}          a node's fills (procedural ones with definition / error)
++ *   telecode_fill_remove       {node_id, index}
++ *   telecode_fill_presets      {}                  built-in shader presets and their uniforms
+  *
+  * They ride the same request/response protocol as the upstream commands; the
+  * proxy uses them to keep boards.json keyed by something that survives reloads.
+@@ -35,6 +39,13 @@ import type { AutomationTarget } from '@/app/automation/bridge/target'
+ 
+ import { isBoardKey, listBoards, markBoard, unmarkBoard } from './boards'
+ import { DOC_ID, readTelecodeConfig } from './config'
++import {
++  describeFills,
++  listProceduralFills,
++  listShaderPresets,
++  removeFill,
++  setProceduralFill
++} from './fills'
+ import { exportHTML, importHTML, importLayout, type LayoutSnapshot } from './html-layers'
+ import { clearPlaceholders, listPlaceholders, setPlaceholder } from './placeholders'
+ import {
+@@ -55,6 +66,20 @@ import { applyVariables, readVariables } from './variables'
+ 
+ type Handler = (target: AutomationTarget, args: unknown) => Promise<unknown>
+ 
++/** Run a synchronous graph edit as one undo step (page snapshots, as the in-app AI tools do). */
++async function undoable<T>(store: AutomationTarget['store'], label: string, edit: () => T): Promise<T> {
++  const before = store.snapshotPage()
++  const result = edit()
++  const after = store.snapshotPage()
++  store.pushUndoEntry({
++    label,
++    forward: () => store.restorePageFromSnapshot(after),
++    inverse: () => store.restorePageFromSnapshot(before)
++  })
++  store.requestRender()
++  return result
++}
++
+ function num(value: unknown): number | undefined {
+   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+ }
+@@ -239,6 +264,36 @@ export const telecodeAutomationCommands: Partial<Record<string, Handler>> = {
+       )
+     }
+   },
++  async telecode_fill_set(target, args) {
++    const a = record(args)
++    const nodeId = text(a.node_id)
++    if (!nodeId) throw new Error('Missing "node_id"')
++    const { node_id: _n, index, fallback, ...definition } = a
++    const store = target.store
++    const result = await undoable(store, 'Set fill', () =>
++      setProceduralFill(store.graph, nodeId, definition, { index: num(index), fallback }, store.renderer?.ck)
++    )
++    return { ok: true, result }
++  },
++  async telecode_fill_list(target, args) {
++    const nodeId = text(record(args).node_id)
++    const ck = target.store.renderer?.ck
++    return {
++      ok: true,
++      result: nodeId ? describeFills(target.store.graph, nodeId, ck) : { nodes: listProceduralFills(target.store.graph, ck) }
++    }
++  },
++  async telecode_fill_remove(target, args) {
++    const a = record(args)
++    const nodeId = text(a.node_id)
++    const index = num(a.index)
++    if (!nodeId || index === undefined) throw new Error('Missing "node_id" or "index"')
++    const store = target.store
++    return { ok: true, result: await undoable(store, 'Remove fill', () => removeFill(store.graph, nodeId, index)) }
++  },
++  async telecode_fill_presets() {
++    return { ok: true, result: { presets: listShaderPresets() } }
++  },
+   async telecode_doc_open(_target, args) {
+     const { doc } = record(args)
+     if (typeof doc !== 'string' || !DOC_ID.test(doc)) throw new Error('Missing or invalid "doc"')
+diff --git a/src/app/integrations/telecode/fills.ts b/src/app/integrations/telecode/fills.ts
+new file mode 100644
+index 00000000..bda37d04
+--- /dev/null
++++ b/src/app/integrations/telecode/fills.ts
+@@ -0,0 +1,185 @@
++/**
++ * Shader and mesh-gradient fills (telecode / TeleDesign).
++ *
++ * The renderer side lives in @open-pencil/core (canvas/gradients/procedural): a
++ * procedural fill is a CUSTOM paint whose customEffectId links to a JSON
++ * definition in the node's shared plugin data (`telecode` / `fill:<id>`), and
++ * whose own colour is the fallback wherever the definition is not understood
++ * (other .fig readers, the HTML export). This module is the editing surface:
++ * validate (shaders are compiled first, so an agent gets the SkSL error back),
++ * write the paint and its definition together, list and remove them.
++ */
++import type { CanvasKit } from 'canvaskit-wasm'
++
++import {
++  compileShaderFill,
++  listShaderPresets,
++  normalizeProceduralFill,
++  parseProceduralColor,
++  proceduralFillOf,
++  PROCEDURAL_KEY_PREFIX,
++  PROCEDURAL_NAMESPACE,
++  SHADER_PRESETS,
++  shaderSource,
++  type ProceduralFillDef
++} from '@open-pencil/core/canvas'
++import type { Fill, SceneGraph, SceneNode } from '@open-pencil/scene-graph'
++
++export { listShaderPresets }
++
++const ENCODED_PREFIX = `${PROCEDURAL_NAMESPACE}/${PROCEDURAL_KEY_PREFIX}`
++
++type PluginEntry = SceneNode['pluginData'][number]
++
++function newEffectId(graph: SceneGraph): string {
++  const used = new Set<string>()
++  for (const node of graph.getAllNodes()) {
++    for (const fill of node.fills) if (fill.customEffectId) used.add(fill.customEffectId)
++  }
++  for (;;) {
++    const words = crypto.getRandomValues(new Uint32Array(2))
++    const id = `${9000 + (words[0] % 1000000)}:${1 + (words[1] % 1000000)}`
++    if (!used.has(id)) return id
++  }
++}
++
++/** `colors` (rows of colours) is shorthand for an evenly spaced mesh. */
++function expandShorthand(input: Record<string, unknown>): Record<string, unknown> {
++  if (input.kind !== 'mesh' || input.points || !Array.isArray(input.colors)) return input
++  const rows = input.colors as unknown[]
++  if (!rows.every((row) => Array.isArray(row))) throw new Error('"colors" must be rows of colours')
++  const grid = rows as unknown[][]
++  const columns = grid[0]?.length ?? 0
++  if (!grid.every((row) => row.length === columns)) {
++    throw new Error('Every "colors" row needs the same length')
++  }
++  return { ...input, columns, rows: grid.length, points: grid.flat().map((color) => ({ color })) }
++}
++
++function fallbackColor(def: ProceduralFillDef): Fill['color'] {
++  const colors: number[][] = []
++  if (def.kind === 'mesh') colors.push(...def.points.map((p) => p.color))
++  else {
++    const uniforms = { ...(def.preset ? SHADER_PRESETS[def.preset]?.uniforms : {}), ...def.uniforms }
++    for (const value of Object.values(uniforms)) {
++      if (Array.isArray(value) && value.length === 4) colors.push(value)
++    }
++  }
++  if (!colors.length) return { r: 0.5, g: 0.5, b: 0.5, a: 1 }
++  const avg = (i: number) => colors.reduce((sum, c) => sum + c[i], 0) / colors.length
++  return { r: avg(0), g: avg(1), b: avg(2), a: 1 }
++}
++
++/** Plugin data with `defs` written and definitions no fill links to any more dropped. */
++function withDefinitions(node: SceneNode, fills: Fill[], defs: Map<string, string>): PluginEntry[] {
++  const live = new Set(fills.filter((f) => f.type === 'CUSTOM').map((f) => f.customEffectId))
++  const kept = node.pluginData.filter((e) => {
++    if (e.pluginId !== PROCEDURAL_NAMESPACE || !e.key.startsWith(ENCODED_PREFIX)) return true
++    const id = e.key.slice(ENCODED_PREFIX.length)
++    return live.has(id) && !defs.has(id)
++  })
++  for (const [id, value] of defs) {
++    kept.push({ pluginId: PROCEDURAL_NAMESPACE, key: `${ENCODED_PREFIX}${id}`, value })
++  }
++  return kept
++}
++
++export interface SetFillOptions {
++  /** Replace the fill at this index (default: add on top). */
++  index?: number
++  /** Fallback colour other renderers show. */
++  fallback?: unknown
++}
++
++/**
++ * Add or replace a shader / mesh fill. `ck` (the editor's CanvasKit) compiles a
++ * shader first, so a broken one is refused with the compiler's message.
++ */
++export function setProceduralFill(
++  graph: SceneGraph,
++  nodeId: string,
++  input: Record<string, unknown>,
++  opts: SetFillOptions = {},
++  ck?: CanvasKit | null
++) {
++  const node = graph.getNode(nodeId)
++  if (!node) throw new Error(`Node not found: ${nodeId}`)
++  if (node.type === 'CANVAS' || node.type === 'GROUP') throw new Error(`A ${node.type} has no fills`)
++  const def = normalizeProceduralFill(expandShorthand(input))
++  if (def.kind === 'shader' && ck) {
++    const program = compileShaderFill(ck, shaderSource(def))
++    if (program.error) throw new Error(`Shader does not compile: ${program.error}`)
++  }
++  const fills = node.fills.map((f) => ({ ...f }))
++  const index = opts.index
++  const replacing =
++    index !== undefined && index >= 0 && index < fills.length ? fills[index] : undefined
++  const id =
++    replacing?.type === 'CUSTOM' && replacing.customEffectId
++      ? replacing.customEffectId
++      : newEffectId(graph)
++  const fallback = opts.fallback !== undefined ? parseProceduralColor(opts.fallback) : null
++  const fill: Fill = {
++    type: 'CUSTOM',
++    color: fallback
++      ? { r: fallback[0], g: fallback[1], b: fallback[2], a: fallback[3] }
++      : fallbackColor(def),
++    opacity: replacing?.opacity ?? 1,
++    visible: true,
++    blendMode: replacing?.blendMode ?? 'NORMAL',
++    customEffectId: id
++  }
++  if (replacing) fills[index as number] = fill
++  else fills.push(fill)
++  const pluginData = withDefinitions(node, fills, new Map([[id, JSON.stringify(def)]]))
++  graph.updateNode(nodeId, { fills, pluginData })
++  return describeFills(graph, nodeId, ck)
++}
++
++export function removeFill(graph: SceneGraph, nodeId: string, index: number) {
++  const node = graph.getNode(nodeId)
++  if (!node) throw new Error(`Node not found: ${nodeId}`)
++  if (!(index >= 0 && index < node.fills.length)) {
++    throw new Error(`No fill ${index} (the node has ${node.fills.length})`)
++  }
++  const fills = node.fills.filter((_, i) => i !== index).map((f) => ({ ...f }))
++  graph.updateNode(nodeId, { fills, pluginData: withDefinitions(node, fills, new Map()) })
++  return describeFills(graph, nodeId)
++}
++
++/** Every fill of a node; procedural ones with their definition (and compile error, if any). */
++export function describeFills(graph: SceneGraph, nodeId: string, ck?: CanvasKit | null) {
++  const node = graph.getNode(nodeId)
++  if (!node) throw new Error(`Node not found: ${nodeId}`)
++  return {
++    node_id: node.id,
++    name: node.name,
++    fills: node.fills.map((fill, index) => {
++      const def = proceduralFillOf(node, fill)
++      const base = { index, type: fill.type, visible: fill.visible, opacity: fill.opacity }
++      if (!def) return fill.type === 'CUSTOM' ? { ...base, kind: 'unknown-custom' } : base
++      const error =
++        def.kind === 'shader' && ck ? compileShaderFill(ck, shaderSource(def)).error : null
++      return { ...base, kind: def.kind, id: fill.customEffectId, definition: def, error }
++    })
++  }
++}
++
++/** Nodes carrying a procedural fill (for the shell's list and error badges). */
++export function listProceduralFills(graph: SceneGraph, ck?: CanvasKit | null) {
++  const out: Array<{ node_id: string; name: string; kinds: string[]; errors: string[] }> = []
++  for (const node of graph.getAllNodes()) {
++    const kinds: string[] = []
++    const errors: string[] = []
++    for (const fill of node.fills) {
++      const def = proceduralFillOf(node, fill)
++      if (!def) continue
++      kinds.push(def.kind === 'shader' ? `shader${def.preset ? `:${def.preset}` : ''}` : 'mesh')
++      const error =
++        def.kind === 'shader' && ck ? compileShaderFill(ck, shaderSource(def)).error : null
++      if (error) errors.push(error)
++    }
++    if (kinds.length) out.push({ node_id: node.id, name: node.name, kinds, errors })
++  }
++  return out
++}
+diff --git a/tests/engine/app/telecode/fills.test.ts b/tests/engine/app/telecode/fills.test.ts
+new file mode 100644
+index 00000000..8b559c96
+--- /dev/null
++++ b/tests/engine/app/telecode/fills.test.ts
+@@ -0,0 +1,81 @@
++import { beforeAll, describe, expect, test } from 'bun:test'
++
++import { exportFigFile, initCodec } from '@open-pencil/core'
++import { proceduralFillOf } from '@open-pencil/core/canvas'
++import { parseFigBuffer } from '@open-pencil/fig'
++import { SceneGraph } from '@open-pencil/scene-graph'
++
++import { importNodeChanges } from '#core/kiwi/fig/import'
++
++import {
++  describeFills,
++  listProceduralFills,
++  removeFill,
++  setProceduralFill
++} from '@/app/integrations/telecode/fills'
++
++beforeAll(async () => {
++  await initCodec()
++})
++
++function rect() {
++  const graph = new SceneGraph()
++  const page = graph.getPages()[0]
++  const node = graph.createNode('RECTANGLE', page.id, {
++    name: 'Hero',
++    width: 200,
++    height: 100,
++    fills: [{ type: 'SOLID', color: { r: 1, g: 1, b: 1, a: 1 }, opacity: 1, visible: true }]
++  })
++  return { graph, node }
++}
++
++describe('procedural fills (telecode)', () => {
++  test('mesh shorthand: a CUSTOM paint on top, its definition in plugin data', () => {
++    const { graph, node } = rect()
++    const out = setProceduralFill(graph, node.id, {
++      kind: 'mesh',
++      colors: [
++        ['#ff0000', '#00ff00'],
++        ['#0000ff', '#ffffff']
++      ]
++    })
++    expect(out.fills).toHaveLength(2)
++    const fill = graph.getNode(node.id)!.fills[1]
++    expect(fill.type).toBe('CUSTOM')
++    expect(fill.color.r).toBeCloseTo(0.5)
++    const def = proceduralFillOf(graph.getNode(node.id)!, fill)
++    expect(def).toMatchObject({ kind: 'mesh', columns: 2, rows: 2 })
++    expect(out.fills[1]).toMatchObject({ kind: 'mesh', index: 1 })
++    expect(listProceduralFills(graph)).toEqual([{ node_id: node.id, name: 'Hero', kinds: ['mesh'], errors: [] }])
++  })
++
++  test('replace keeps the link id, remove drops the definition', () => {
++    const { graph, node } = rect()
++    setProceduralFill(graph, node.id, { kind: 'shader', preset: 'grain' }, { index: 0, fallback: '#123456' })
++    const first = graph.getNode(node.id)!.fills[0]
++    expect(first.color.r).toBeCloseTo(0x12 / 255)
++    setProceduralFill(graph, node.id, { kind: 'shader', preset: 'stripes' }, { index: 0 })
++    const again = graph.getNode(node.id)!.fills[0]
++    expect(again.customEffectId).toBe(first.customEffectId)
++    expect(graph.getNode(node.id)!.pluginData.filter((e) => e.key.startsWith('telecode/fill:'))).toHaveLength(1)
++    expect(describeFills(graph, node.id).fills[0]).toMatchObject({ kind: 'shader', definition: { preset: 'stripes' } })
++    removeFill(graph, node.id, 0)
++    expect(graph.getNode(node.id)!.fills).toHaveLength(0)
++    expect(graph.getNode(node.id)!.pluginData.filter((e) => e.key.startsWith('telecode/fill:'))).toHaveLength(0)
++    expect(() => setProceduralFill(graph, node.id, { kind: 'mesh', colors: [['#fff']] })).toThrow(/at least 2 columns/)
++  })
++
++  test('shader and mesh fills survive a .fig round trip', async () => {
++    const { graph, node } = rect()
++    setProceduralFill(graph, node.id, { kind: 'shader', preset: 'aurora', uniforms: { u_seed: 3 } })
++    setProceduralFill(graph, node.id, { kind: 'mesh', colors: [['#000', '#fff'], ['#f00', '#00f']] })
++    const bytes = await exportFigFile(graph)
++    const parsed = parseFigBuffer(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
++    const g2 = importNodeChanges(parsed.nodeChanges, parsed.blobs, undefined, { populate: 'all' })
++    const n2 = [...g2.getAllNodes()].find((n) => n.name === 'Hero')!
++    const kinds = describeFills(g2, n2.id).fills.map((f) => ('kind' in f ? f.kind : f.type))
++    expect(kinds).toEqual(['SOLID', 'shader', 'mesh'])
++    expect(proceduralFillOf(n2, n2.fills[1])).toMatchObject({ preset: 'aurora', uniforms: { u_seed: 3 } })
++  })
++})
+diff --git a/tests/engine/render/canvas/procedural-fills.test.ts b/tests/engine/render/canvas/procedural-fills.test.ts
+new file mode 100644
+index 00000000..c7687b9f
+--- /dev/null
++++ b/tests/engine/render/canvas/procedural-fills.test.ts
+@@ -0,0 +1,140 @@
++import { expect, test } from 'bun:test'
++
++import type { Fill } from '@open-pencil/scene-graph'
++import { SceneGraph } from '@open-pencil/scene-graph'
++
++import { dirname, join } from 'node:path'
++import { fileURLToPath } from 'node:url'
++
++import type { CanvasKit } from 'canvaskit-wasm'
++import {
++  compileShaderFill,
++  meshPatches,
++  normalizeProceduralFill
++} from '#core/canvas/gradients/procedural'
++import { SkiaRenderer } from '#core/canvas/renderer'
++
++import { expectDefined } from '#tests/helpers/assert'
++
++let cachedCk: CanvasKit | null = null
++
++/** Like #cli/headless initCanvasKit, but with a wasm path that also resolves on Windows. */
++async function initCanvasKit(): Promise<CanvasKit> {
++  if (cachedCk) return cachedCk
++  const CanvasKitInit = (await import('canvaskit-wasm/full')).default
++  const dir = dirname(fileURLToPath(import.meta.resolve('canvaskit-wasm/full')))
++  cachedCk = await CanvasKitInit({ locateFile: (file: string) => join(dir, file) })
++  return cachedCk
++}
++
++const FALLBACK = { r: 0, g: 0, b: 1, a: 1 }
++
++function customFill(id: string): Fill {
++  return { type: 'CUSTOM', color: FALLBACK, opacity: 1, visible: true, customEffectId: id }
++}
++
++async function render(def: unknown, size = 100) {
++  const ck = await initCanvasKit()
++  const renderer = new SkiaRenderer(ck, expectDefined(ck.MakeSurface(size, size), 'surface'))
++  const graph = new SceneGraph()
++  const page = expectDefined(graph.getPages()[0], 'page')
++  const node = graph.createNode('RECTANGLE', page.id, {
++    width: size,
++    height: size,
++    fills: [customFill('7:1')],
++    pluginData: def === undefined ? [] : [{ pluginId: 'telecode', key: 'telecode/fill:7:1', value: JSON.stringify(def) }]
++  })
++  try {
++    const canvas = renderer.surface.getCanvas()
++    canvas.clear(ck.TRANSPARENT)
++    renderer.renderShape(canvas, node, graph)
++    renderer.surface.flush()
++    const image = renderer.surface.makeImageSnapshot()
++    try {
++      const pixels = expectDefined(
++        image.readPixels(0, 0, {
++          width: size,
++          height: size,
++          colorType: ck.ColorType.RGBA_8888,
++          alphaType: ck.AlphaType.Unpremul,
++          colorSpace: ck.ColorSpace.SRGB
++        }),
++        'pixels'
++      )
++      return (x: number, y: number) => Array.from(pixels.slice((y * size + x) * 4, (y * size + x) * 4 + 4))
++    } finally {
++      image.delete()
++    }
++  } finally {
++    renderer.destroy()
++  }
++}
++
++test('a CUSTOM fill without a definition paints its fallback colour', async () => {
++  const pixel = await render(undefined)
++  expect(pixel(50, 50)).toEqual([0, 0, 255, 255])
++})
++
++test('SkSL shader fill: custom source with u_size and named uniforms', async () => {
++  const pixel = await render({
++    kind: 'shader',
++    sksl: `uniform float2 u_size; uniform float4 u_left; uniform float4 u_right;
++half4 main(float2 p) { return half4(p.x < u_size.x * 0.5 ? u_left : u_right); }`,
++    uniforms: { u_left: '#ff0000', u_right: [0, 1, 0, 1] }
++  })
++  expect(pixel(10, 50)).toEqual([255, 0, 0, 255])
++  expect(pixel(90, 50)).toEqual([0, 255, 0, 255])
++})
++
++test('shader presets render and a broken shader falls back', async () => {
++  const stripes = await render({ kind: 'shader', preset: 'stripes', uniforms: { u_a: '#000000', u_b: '#ffffff', u_width: 10, u_angle: 0 } })
++  expect(stripes(5, 50)).toEqual([0, 0, 0, 255])
++  expect(stripes(15, 50)).toEqual([255, 255, 255, 255])
++  const broken = await render({ kind: 'shader', sksl: 'half4 main(float2 p) { return nope; }' })
++  expect(broken(50, 50)).toEqual([0, 0, 255, 255])
++  const ck = await initCanvasKit()
++  expect(compileShaderFill(ck, 'half4 main(float2 p) { return nope; }').error).toMatch(/nope/)
++  expect(compileShaderFill(ck, 'uniform float2 u_size; half4 main(float2 p) { return half4(1); }').uniforms).toEqual([
++    { name: 'u_size', floats: 2 }
++  ])
++})
++
++test('mesh gradient: corner colours, interpolation in between', async () => {
++  const pixel = await render({
++    kind: 'mesh',
++    columns: 2,
++    rows: 2,
++    points: [{ color: '#ff0000' }, { color: '#00ff00' }, { color: '#0000ff' }, { color: '#ffffff' }]
++  })
++  const near = (a: number[], b: number[]) => a.every((v, i) => Math.abs(v - b[i]) <= 12)
++  expect(near(pixel(1, 1), [255, 0, 0, 255])).toBe(true)
++  expect(near(pixel(98, 1), [0, 255, 0, 255])).toBe(true)
++  expect(near(pixel(1, 98), [0, 0, 255, 255])).toBe(true)
++  expect(near(pixel(98, 98), [255, 255, 255, 255])).toBe(true)
++  const mid = pixel(50, 50)
++  expect(mid[3]).toBe(255)
++  for (const channel of mid.slice(0, 3)) {
++    expect(channel).toBeGreaterThan(80)
++    expect(channel).toBeLessThan(180)
++  }
++})
++
++test('mesh definitions are validated and warped grids build one patch per cell', () => {
++  expect(() => normalizeProceduralFill({ kind: 'mesh', columns: 2, rows: 2, points: [] })).toThrow(/needs 4 points/)
++  expect(() => normalizeProceduralFill({ kind: 'shader', preset: 'nope' })).toThrow(/Unknown shader preset/)
++  expect(() => normalizeProceduralFill({ kind: 'gloss' })).toThrow(/"kind"/)
++  const def = normalizeProceduralFill({
++    kind: 'mesh',
++    columns: 3,
++    rows: 2,
++    points: ['#000', '#111', '#222', '#333', '#444', '#555'].map((color, i) => ({ color, ...(i === 1 ? { x: 0.3, y: 0.1 } : {}) }))
++  })
++  if (def.kind !== 'mesh') throw new Error('mesh expected')
++  expect(def.points[0]).toMatchObject({ x: 0, y: 0 })
++  expect(def.points[5]).toMatchObject({ x: 1, y: 1 })
++  const patches = meshPatches(def, 200, 100)
++  expect(patches).toHaveLength(2)
++  expect(patches[0].cubics).toHaveLength(24)
++  expect(patches[0].cubics.slice(6, 8)).toEqual([60, 10])
++  expect(patches[1].corners).toEqual([1, 2, 5, 4])
++})

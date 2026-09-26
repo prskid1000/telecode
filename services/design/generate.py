@@ -774,7 +774,7 @@ async def _post_turn(turn: Dict[str, Any], ctx: Dict[str, Any]) -> None:
         logger.exception("design: done gate failed")
     if not fixing:
         try:
-            canvas_changed = "doc.fig" in (turn.get("changed_files") or [])
+            canvas_changed = any(store.is_canvas_path(f) for f in (turn.get("changed_files") or []))
             await _verifier(turn, ctx, html_changed, canvas_changed=canvas_changed)
         except Exception:
             logger.exception("design: verifier failed")

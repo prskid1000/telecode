@@ -72,7 +72,9 @@ def test_layer_issue_mapping_is_conservative():
             "nodeB": {"id": "1:1", "name": "Card", "type": "FRAME", "x": 0, "y": 0, "width": 200, "height": 200},
             "message": 'Text "Title" extends 200px outside parent "Card"', "suggestion": "Clip it"}
     crit = eb.layer_issue(page, {**base, "category": "parent-overflow", "severity": "critical"})
-    assert crit["severity"] == "major" and crit["file"] == "doc.fig" and crit["board"] == "1:2"
+    assert crit["severity"] == "major" and crit["file"] == "docs/main.fig" and crit["board"] == "1:2"
+    assert eb.layer_issue(page, {**base, "category": "parent-overflow", "severity": "critical"},
+                          "docs/wires.fig")["file"] == "docs/wires.fig"
     assert crit["check"] == "layer_parent_overflow" and "Home" in crit["where"]
     assert eb.layer_issue(page, {**base, "category": "parent-overflow", "severity": "major"})["severity"] == "minor"
     assert eb.layer_issue(page, {**base, "category": "sibling-overlap", "severity": "major"})["severity"] == "minor"

@@ -292,8 +292,9 @@ def canvas_summary(project_dir: Path) -> str:
              if rel.lower().endswith(".html") and rel not in on_boards]
     for rel in loose[:60]:
         lines.append(f"- (file) · html · {rel} · not placed on a board yet")
-    if (project_dir / "doc.fig").is_file():
-        lines.append("- doc.fig · layer boards live in the canvas document (read them through the canvas tools)")
+    if store.has_canvas(project_dir):
+        lines.append("- docs/*.fig · layer boards live in the canvas documents (read them through the canvas tools;"
+                     " telecode_doc_list names them and says which one is open)")
     return "\n".join(lines) if lines else "The canvas is empty."
 
 
@@ -498,7 +499,7 @@ def build(project: Dict[str, Any], chat: Dict[str, Any], turn: Dict[str, Any], *
         parts.append(("persona", persona))
     parts.append(("canvas", load_prompt("canvas.md", values)))
     wants_html = kind in HTML_KINDS or bool(boards) or is_convert
-    wants_layer = kind in LAYER_KINDS or is_convert or (project_dir / "doc.fig").is_file()
+    wants_layer = kind in LAYER_KINDS or is_convert or store.has_canvas(project_dir)
     if wants_html:
         parts.append(("html_boards", load_prompt("html_boards.md", values)))
     if wants_layer:

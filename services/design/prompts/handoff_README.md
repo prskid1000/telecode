@@ -20,8 +20,9 @@ your job is to build it for real in the target codebase.
 ## What these files are
 
 The designs are **prototypes**, written in HTML/CSS/JS (React 18 via in-browser Babel) and, for
-layer boards, as a canvas document (`project/doc.fig`, open it in the TeleDesign editor or any
-open-pencil build; per-board JSX exports sit next to it when the bundle includes them). They are a precise specification of the intended
+layer boards, as canvas documents (`project/docs/<id>.fig`, open them in the TeleDesign editor or any
+open-pencil build; `docs/<id>.fig.json` is a readable JSON rendering of each, and per-board JSX exports
+sit next to them when the bundle includes them). They are a precise specification of the intended
 *result*, not code to paste. Rebuild them in the target stack's own idioms — its framework, component
 library, routing, state management and styling system — and match the visual output exactly:
 spacing, sizes, colours, type, radii, states and motion.
@@ -51,7 +52,7 @@ equivalent token, use it.
 
 - `README.md` — this file.
 - `chats/` — conversation transcripts, one file per design turn. **Start here.**
-- `project/` — the design files: HTML boards and their components, `doc.fig` (the canvas), `assets/`,
+- `project/` — the design files: HTML boards and their components, `docs/*.fig` (the canvases), `assets/`,
   `assets.json` (deliverables and their review status — `approved` items are the ones signed off).
 - `project/_ds/` — the design system the project used, if any.
 - `uploads/` — material the user supplied (screenshots, brand files, documents).

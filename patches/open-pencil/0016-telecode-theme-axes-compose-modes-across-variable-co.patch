@@ -1,0 +1,439 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Prithwiraj Samanta <prskid1000@gmail.com>
+Date: Sat, 26 Sep 2026 06:53:05 +0530
+Subject: [PATCH] telecode: theme axes - compose modes across variable
+ collections
+
+Every variable collection is one theme axis (Mode: Light/Dark x Brand: A/B).
+An alias into another collection now resolves in that collection's mode for
+the node (scene-graph resolveVariableForNode, used by colour and number
+resolution), so one variable can follow two axes. telecode_theme_get /
+_set / _active read and pin a frame's mode per axis (explicit vs inherited,
+one undo step) and set the document-wide mode.
+---
+ packages/scene-graph/src/index.ts         |   5 +
+ packages/scene-graph/src/variables.ts     |  36 +++++--
+ scripts/telecode-dump-tools.ts            |  42 ++++++++
+ src/app/integrations/telecode/commands.ts |  16 +++
+ src/app/integrations/telecode/themes.ts   | 125 ++++++++++++++++++++++
+ tests/engine/app/telecode/themes.test.ts  |  97 +++++++++++++++++
+ 6 files changed, 311 insertions(+), 10 deletions(-)
+ create mode 100644 src/app/integrations/telecode/themes.ts
+ create mode 100644 tests/engine/app/telecode/themes.test.ts
+
+diff --git a/packages/scene-graph/src/index.ts b/packages/scene-graph/src/index.ts
+index d5fe00ab..1582bd0a 100644
+--- a/packages/scene-graph/src/index.ts
++++ b/packages/scene-graph/src/index.ts
+@@ -244,6 +244,11 @@ export class SceneGraph {
+     return Variables.resolveNumberVariableForNode(this, nodeId, variableId)
+   }
+ 
++  /** Any variable type, every collection in the node's own (inherited) mode. */
++  resolveVariableForNode(nodeId: string, variableId: string): VariableValue | undefined {
++    return Variables.resolveVariableForNode(this, nodeId, variableId)
++  }
++
+   getVariablesForCollection(collectionId: string): Variable[] {
+     return Variables.getVariablesForCollection(this, collectionId)
+   }
+diff --git a/packages/scene-graph/src/variables.ts b/packages/scene-graph/src/variables.ts
+index cbbbdcab..f15bf3c2 100644
+--- a/packages/scene-graph/src/variables.ts
++++ b/packages/scene-graph/src/variables.ts
+@@ -191,7 +191,8 @@ export function resolveVariable(
+   graph: SceneGraph,
+   variableId: string,
+   modeId?: string,
+-  visited?: Set<string>
++  visited?: Set<string>,
++  modeForCollection?: (collectionId: string) => string
+ ): VariableValue | undefined {
+   if (visited?.has(variableId)) return undefined
+   const variable = graph.variables.get(variableId)
+@@ -213,11 +214,32 @@ export function resolveVariable(
+   if (value && typeof value === 'object' && 'aliasId' in value) {
+     const seen = visited ?? new Set<string>()
+     seen.add(variableId)
+-    return resolveVariable(graph, value.aliasId, preferredModeId, seen)
++    // An alias into another collection resolves in *that* collection's mode — the
++    // node's (inherited) mode for it when resolving for a node, else its active
++    // mode. That is what lets independent theme axes compose: a Density variable
++    // aliasing Mode-collection colours follows both the node's density and its mode.
++    const target = graph.variables.get(value.aliasId)
++    const nextModeId =
++      target && target.collectionId !== variable.collectionId
++        ? (modeForCollection?.(target.collectionId) ?? getActiveModeId(graph, target.collectionId))
++        : preferredModeId
++    return resolveVariable(graph, value.aliasId, nextModeId, seen, modeForCollection)
+   }
+   return value
+ }
+ 
++/** Resolve a variable as seen by `nodeId`: every collection in its own (inherited) mode. */
++export function resolveVariableForNode(
++  graph: SceneGraph,
++  nodeId: string,
++  variableId: string
++): VariableValue | undefined {
++  const variable = graph.variables.get(variableId)
++  if (!variable) return undefined
++  const modeFor = (collectionId: string) => getNodeVariableModeId(graph, nodeId, collectionId)
++  return resolveVariable(graph, variableId, modeFor(variable.collectionId), undefined, modeFor)
++}
++
+ export function resolveColorVariable(graph: SceneGraph, variableId: string): Color | undefined {
+   const value = resolveVariable(graph, variableId)
+   if (value && typeof value === 'object' && 'r' in value) return value
+@@ -234,10 +256,7 @@ export function resolveColorVariableForNode(
+   nodeId: string,
+   variableId: string
+ ): Color | undefined {
+-  const variable = graph.variables.get(variableId)
+-  if (!variable) return undefined
+-  const modeId = getNodeVariableModeId(graph, nodeId, variable.collectionId)
+-  const value = resolveVariable(graph, variableId, modeId)
++  const value = resolveVariableForNode(graph, nodeId, variableId)
+   if (value && typeof value === 'object' && 'r' in value) return value
+   return undefined
+ }
+@@ -247,10 +266,7 @@ export function resolveNumberVariableForNode(
+   nodeId: string,
+   variableId: string
+ ): number | undefined {
+-  const variable = graph.variables.get(variableId)
+-  if (!variable) return undefined
+-  const modeId = getNodeVariableModeId(graph, nodeId, variable.collectionId)
+-  const value = resolveVariable(graph, variableId, modeId)
++  const value = resolveVariableForNode(graph, nodeId, variableId)
+   return typeof value === 'number' ? value : undefined
+ }
+ 
+diff --git a/scripts/telecode-dump-tools.ts b/scripts/telecode-dump-tools.ts
+index 81fb7906..36a366e3 100644
+--- a/scripts/telecode-dump-tools.ts
++++ b/scripts/telecode-dump-tools.ts
+@@ -363,6 +363,48 @@ const extra = [
+     enabled: true,
+     input_schema: schemaOf(v.object({ node_id: v.pipe(v.string(), v.description('Script node')) }))
+   },
++  {
++    name: 'telecode_theme_get',
++    description:
++      'Theme axes: every variable collection is one axis (e.g. Mode: Light/Dark x Density: Compact/Comfortable). With node_id: {explicit:{Collection: Mode} pinned on that node, resolved:{Collection:{mode, from}} what it renders with and which ancestor it inherits from, axes}. Without: {axes:[{collection, modes, default_mode, active_mode}]}.',
++    command: 'telecode_theme_get',
++    effect: 'read',
++    availability: 'default',
++    capabilities: ['document:read'],
++    enabled: true,
++    input_schema: schemaOf(
++      v.object({ node_id: v.optional(v.pipe(v.string(), v.description('Node (default: just list the axes)'))) })
++    )
++  },
++  {
++    name: 'telecode_theme_set',
++    description:
++      'Theme a frame per axis: modes {Collection: Mode} pins that mode on the node and everything inside it inherits it; null removes the pin (inherit again). Axes compose: variables of different collections resolve in the node\u2019s mode for each, and an alias into another collection follows that collection\u2019s mode, so one variable can depend on two axes (a Density variable aliasing Mode-collection colours). One undo step. Returns the node\u2019s theme.',
++    command: 'telecode_theme_set',
++    effect: 'write',
++    availability: 'default',
++    capabilities: ['document:write'],
++    enabled: true,
++    input_schema: schemaOf(
++      v.object({
++        node_id: v.pipe(v.string(), v.description('Frame to theme')),
++        modes: v.pipe(v.record(v.string(), v.nullable(v.string())), v.description('{Collection name: Mode name | null}'))
++      })
++    )
++  },
++  {
++    name: 'telecode_theme_active',
++    description:
++      'Set the document-wide mode per axis {Collection: Mode} (what nodes without a pinned mode render with). Returns the axes.',
++    command: 'telecode_theme_active',
++    effect: 'write',
++    availability: 'default',
++    capabilities: ['document:write'],
++    enabled: true,
++    input_schema: schemaOf(
++      v.object({ modes: v.pipe(v.record(v.string(), v.string()), v.description('{Collection name: Mode name}')) })
++    )
++  },
+   {
+     name: 'get_codegen_prompt',
+     description:
+diff --git a/src/app/integrations/telecode/commands.ts b/src/app/integrations/telecode/commands.ts
+index b8f4d1e0..baba9959 100644
+--- a/src/app/integrations/telecode/commands.ts
++++ b/src/app/integrations/telecode/commands.ts
+@@ -20,6 +20,9 @@
+  *   telecode_script_run        {node_id?}                         re-run one / every script node
+  *   telecode_script_list       {}
+  *   telecode_script_convert    {node_id}                          keep the layers, drop the script
++ *   telecode_theme_get         {node_id?}          a node's theme per axis (explicit / inherited), or the axes
++ *   telecode_theme_set         {node_id, modes}    pin / clear modes per axis {Collection: Mode | null}
++ *   telecode_theme_active      {modes}             document-wide mode per axis
+  *
+  * They ride the same request/response protocol as the upstream commands; the
+  * proxy uses them to keep boards.json keyed by something that survives reloads.
+@@ -41,6 +44,7 @@ import {
+   updateScriptNode
+ } from './scripts'
+ import { listSlides, reorderSlides } from './slides'
++import { listAxes, setActiveModes, setTheme, themeOf } from './themes'
+ import { applyVariables, readVariables } from './variables'
+ 
+ type Handler = (target: AutomationTarget, args: unknown) => Promise<unknown>
+@@ -175,6 +179,18 @@ export const telecodeAutomationCommands: Partial<Record<string, Handler>> = {
+     if (!nodeId) throw new Error('Missing "node_id"')
+     return { ok: true, result: await convertScriptNode(target.store, nodeId) }
+   },
++  async telecode_theme_get(target, args) {
++    const nodeId = text(record(args).node_id)
++    return { ok: true, result: nodeId ? themeOf(target.store, nodeId) : { axes: listAxes(target.store) } }
++  },
++  async telecode_theme_set(target, args) {
++    const { node_id: nodeId, modes } = record(args)
++    if (typeof nodeId !== 'string' || !nodeId) throw new Error('Missing "node_id"')
++    return { ok: true, result: await setTheme(target.store, nodeId, record(modes)) }
++  },
++  async telecode_theme_active(target, args) {
++    return { ok: true, result: { axes: setActiveModes(target.store, record(record(args).modes)) } }
++  },
+   async telecode_doc_open(_target, args) {
+     const { doc } = record(args)
+     if (typeof doc !== 'string' || !DOC_ID.test(doc)) throw new Error('Missing or invalid "doc"')
+diff --git a/src/app/integrations/telecode/themes.ts b/src/app/integrations/telecode/themes.ts
+new file mode 100644
+index 00000000..2b071d66
+--- /dev/null
++++ b/src/app/integrations/telecode/themes.ts
+@@ -0,0 +1,125 @@
++/**
++ * Theme axes (telecode / TeleDesign).
++ *
++ * open-pencil already models what pen.dev calls theme axes: every variable
++ * collection is one axis (Mode: Light/Dark, Density: Compact/Comfortable, …), each
++ * node may pin a mode per collection (`variableModes`), and a node without one
++ * inherits its nearest ancestor's, falling back to the collection's active mode.
++ * Two things were missing, and this module plus the scene-graph patch add them:
++ *
++ *  - composition: an alias into another collection now resolves in that
++ *    collection's mode for the node (scene-graph `resolveVariableForNode`), so a
++ *    Density variable can alias Mode-dependent values and follow both axes;
++ *  - a way to set and read a frame's theme per axis (explicit vs inherited), for
++ *    agents (telecode_theme_set / telecode_theme_get) and the TeleDesign shell.
++ */
++import type { SceneNode, VariableCollection } from '@open-pencil/scene-graph'
++
++import type { EditorStore } from '@/app/editor/session'
++
++export interface ThemeAxis {
++  collection: string
++  collection_id: string
++  modes: string[]
++  default_mode: string
++  active_mode: string
++}
++
++function modeName(collection: VariableCollection, modeId: string): string {
++  return collection.modes.find((m) => m.modeId === modeId)?.name ?? modeId
++}
++
++function findCollection(store: EditorStore, ref: string): VariableCollection | undefined {
++  const byId = store.graph.variableCollections.get(ref)
++  if (byId) return byId
++  for (const collection of store.graph.variableCollections.values()) {
++    if (collection.name === ref) return collection
++  }
++  return undefined
++}
++
++export function listAxes(store: EditorStore): ThemeAxis[] {
++  return [...store.graph.variableCollections.values()].map((collection) => ({
++    collection: collection.name,
++    collection_id: collection.id,
++    modes: collection.modes.map((m) => m.name),
++    default_mode: modeName(collection, collection.defaultModeId),
++    active_mode: modeName(collection, store.graph.getActiveModeId(collection.id))
++  }))
++}
++
++/** A node's theme: the modes it pins itself, and what every axis resolves to for it (and from where). */
++export function themeOf(store: EditorStore, nodeId: string) {
++  const node = store.graph.getNode(nodeId)
++  if (!node) throw new Error(`Node not found: ${nodeId}`)
++  const explicit: Record<string, string> = {}
++  const resolved: Record<string, { mode: string; from: string | null; from_id: string | null }> = {}
++  for (const collection of store.graph.variableCollections.values()) {
++    const own = node.variableModes[collection.id]
++    if (own) explicit[collection.name] = modeName(collection, own)
++    let from: SceneNode | undefined
++    let current: SceneNode | undefined = node
++    while (current) {
++      if (current.variableModes[collection.id]) {
++        from = current
++        break
++      }
++      current = current.parentId ? store.graph.getNode(current.parentId) : undefined
++    }
++    const modeId = store.graph.getNodeVariableModeId(node.id, collection.id)
++    resolved[collection.name] = {
++      mode: modeName(collection, modeId),
++      from: from ? (from.type === 'CANVAS' ? `page ${from.name}` : from.name) : null,
++      from_id: from?.id ?? null
++    }
++  }
++  return { node_id: node.id, name: node.name, explicit, resolved, axes: listAxes(store) }
++}
++
++/**
++ * Pin (mode name) or clear (null / "") a node's mode per axis. Keys are collection
++ * names (or ids); values are mode names (or ids). One undo step.
++ */
++export async function setTheme(store: EditorStore, nodeId: string, modes: Record<string, unknown>) {
++  const node = store.graph.getNode(nodeId)
++  if (!node) throw new Error(`Node not found: ${nodeId}`)
++  if (!modes || typeof modes !== 'object' || Array.isArray(modes)) throw new Error('"modes" must be {Collection: Mode | null}')
++  const next = { ...node.variableModes }
++  for (const [ref, value] of Object.entries(modes)) {
++    const collection = findCollection(store, ref)
++    if (!collection) throw new Error(`No variable collection "${ref}"`)
++    if (value === null || value === '' || value === undefined) {
++      delete next[collection.id]
++      continue
++    }
++    if (typeof value !== 'string') throw new Error(`Mode for "${ref}" must be a mode name`)
++    const mode = collection.modes.find((m) => m.name === value || m.modeId === value)
++    if (!mode) {
++      throw new Error(`Collection "${collection.name}" has no mode "${value}" (${collection.modes.map((m) => m.name).join(', ')})`)
++    }
++    next[collection.id] = mode.modeId
++  }
++  const before = store.snapshotPage()
++  store.graph.updateNode(nodeId, { variableModes: next })
++  const after = store.snapshotPage()
++  store.pushUndoEntry({
++    label: 'Set theme',
++    forward: () => store.restorePageFromSnapshot(after),
++    inverse: () => store.restorePageFromSnapshot(before)
++  })
++  store.requestRender()
++  return themeOf(store, nodeId)
++}
++
++/** The document-wide mode per axis (what an un-themed node shows). */
++export function setActiveModes(store: EditorStore, modes: Record<string, unknown>) {
++  for (const [ref, value] of Object.entries(modes ?? {})) {
++    const collection = findCollection(store, ref)
++    if (!collection) throw new Error(`No variable collection "${ref}"`)
++    const mode = collection.modes.find((m) => m.name === value || m.modeId === value)
++    if (!mode) throw new Error(`Collection "${collection.name}" has no mode "${String(value)}"`)
++    store.graph.setActiveMode(collection.id, mode.modeId)
++  }
++  store.requestRender()
++  return listAxes(store)
++}
+diff --git a/tests/engine/app/telecode/themes.test.ts b/tests/engine/app/telecode/themes.test.ts
+new file mode 100644
+index 00000000..2d2c25dd
+--- /dev/null
++++ b/tests/engine/app/telecode/themes.test.ts
+@@ -0,0 +1,97 @@
++import { describe, expect, test } from 'bun:test'
++
++import { SceneGraph } from '@open-pencil/core'
++
++import type { EditorStore } from '@/app/editor/session'
++import { setTheme, themeOf } from '@/app/integrations/telecode/themes'
++
++const DARK = { r: 0.1, g: 0.1, b: 0.1, a: 1 }
++const LIGHT = { r: 1, g: 1, b: 1, a: 1 }
++const DARK_DENSE = { r: 0.2, g: 0.2, b: 0.2, a: 1 }
++const LIGHT_DENSE = { r: 0.9, g: 0.9, b: 0.9, a: 1 }
++
++/** Mode (Light/Dark) × Density (Comfortable/Compact); `surface` depends on both. */
++function twoAxes() {
++  const graph = new SceneGraph()
++  graph.addCollection({
++    id: 'mode',
++    name: 'Mode',
++    modes: [
++      { modeId: 'light', name: 'Light' },
++      { modeId: 'dark', name: 'Dark' }
++    ],
++    defaultModeId: 'light',
++    variableIds: []
++  })
++  graph.addCollection({
++    id: 'density',
++    name: 'Density',
++    modes: [
++      { modeId: 'comfy', name: 'Comfortable' },
++      { modeId: 'compact', name: 'Compact' }
++    ],
++    defaultModeId: 'comfy',
++    variableIds: []
++  })
++  const add = (id: string, collectionId: string, valuesByMode: Record<string, unknown>, type = 'COLOR') =>
++    graph.addVariable({
++      id,
++      name: id,
++      type: type as 'COLOR',
++      collectionId,
++      valuesByMode: valuesByMode as never,
++      description: '',
++      hiddenFromPublishing: false
++    })
++  add('surface-comfy', 'mode', { light: LIGHT, dark: DARK })
++  add('surface-compact', 'mode', { light: LIGHT_DENSE, dark: DARK_DENSE })
++  add('surface', 'density', { comfy: { aliasId: 'surface-comfy' }, compact: { aliasId: 'surface-compact' } })
++  add('gap', 'density', { comfy: 16, compact: 8 }, 'FLOAT')
++  const page = graph.getPages()[0].id
++  const outer = graph.createNode('FRAME', page, { name: 'Outer' })
++  const inner = graph.createNode('FRAME', outer.id, { name: 'Inner' })
++  const leaf = graph.createNode('RECTANGLE', inner.id, { name: 'Leaf' })
++  return { graph, outer, inner, leaf }
++}
++
++function fakeStore(graph: SceneGraph): EditorStore {
++  return {
++    graph,
++    snapshotPage: () => null,
++    restorePageFromSnapshot: () => {},
++    pushUndoEntry: () => {},
++    requestRender: () => {}
++  } as unknown as EditorStore
++}
++
++describe('theme axes', () => {
++  test('an alias into another collection follows that collection’s mode for the node', () => {
++    const { graph, outer, inner, leaf } = twoAxes()
++    expect(graph.resolveColorVariableForNode(leaf.id, 'surface')).toEqual(LIGHT)
++    graph.updateNode(outer.id, { variableModes: { mode: 'dark' } })
++    expect(graph.resolveColorVariableForNode(leaf.id, 'surface')).toEqual(DARK)
++    graph.updateNode(inner.id, { variableModes: { density: 'compact' } })
++    // Dark from Outer, Compact from Inner: both axes apply.
++    expect(graph.resolveColorVariableForNode(leaf.id, 'surface')).toEqual(DARK_DENSE)
++    expect(graph.resolveNumberVariableForNode(leaf.id, 'gap')).toBe(8)
++    // Without a node, each collection's active mode is used.
++    graph.setActiveMode('density', 'compact')
++    expect(graph.resolveColorVariable('surface')).toEqual(LIGHT_DENSE)
++  })
++
++  test('telecode_theme_set / _get: pin, inherit, clear', async () => {
++    const { graph, outer, leaf } = twoAxes()
++    const store = fakeStore(graph)
++    await setTheme(store, outer.id, { Mode: 'Dark', Density: 'Compact' })
++    const t = themeOf(store, leaf.id)
++    expect(t.explicit).toEqual({})
++    expect(t.resolved.Mode).toEqual({ mode: 'Dark', from: 'Outer', from_id: outer.id })
++    expect(t.resolved.Density.mode).toBe('Compact')
++    expect(graph.resolveColorVariableForNode(leaf.id, 'surface')).toEqual(DARK_DENSE)
++    await setTheme(store, outer.id, { Density: null })
++    expect(themeOf(store, outer.id).explicit).toEqual({ Mode: 'Dark' })
++    expect(themeOf(store, leaf.id).resolved.Density).toEqual({ mode: 'Comfortable', from: null, from_id: null })
++    await expect(setTheme(store, outer.id, { Mode: 'Sepia' })).rejects.toThrow(/no mode "Sepia"/)
++    await expect(setTheme(store, outer.id, { Nope: 'x' })).rejects.toThrow(/No variable collection/)
++  })
++})

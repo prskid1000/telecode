@@ -37,8 +37,14 @@ MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024
 MAX_ZIP_BYTES = 256 * 1024 * 1024
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{20,64}$")
 # Host bookkeeping: never part of what a recipient sees.
-_EXCLUDE = {"comments.json", "assets.json", "boards.json", "thumbnail.webp", "doc.fig"}
+_EXCLUDE = {"comments.json", "assets.json", "boards.json", "thumbnail.webp", "doc.fig", "docs/canvases.json"}
 _lock = threading.RLock()
+
+
+def _excluded(rel: str) -> bool:
+    """Host bookkeeping plus every canvas document and its JSON mirror."""
+    return rel in _EXCLUDE or store.is_canvas_path(rel) or (
+        rel.endswith(".fig.json") and store.is_canvas_path(rel[:-5]))
 
 
 def enabled() -> bool:
@@ -103,7 +109,7 @@ def _share_tree(pid: str) -> Dict[str, Any]:
     if not root:
         return out
     for rel, p in dfiles.iter_project_files(root, include_readonly=True):
-        if rel in _EXCLUDE or rel.split("/", 1)[0] in dfiles.HIDDEN_TOP:
+        if _excluded(rel) or rel.split("/", 1)[0] in dfiles.HIDDEN_TOP:
             continue
         out[rel] = p
     return out
@@ -312,7 +318,7 @@ def list_recipient_files(rec: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def read_file(rec: Dict[str, Any], rel: str) -> Optional[bytes]:
     """Bytes of `rel` as the recipient sees it (snapshot, or live for old links)."""
-    if not store.safe_relpath(rel) or rel.split("/", 1)[0] in dfiles.HIDDEN_TOP or rel in _EXCLUDE:
+    if not store.safe_relpath(rel) or rel.split("/", 1)[0] in dfiles.HIDDEN_TOP or _excluded(rel):
         return None
     snap = snapshot_files(rec)
     if snap is None:

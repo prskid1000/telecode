@@ -1,0 +1,924 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Prithwiraj Samanta <prskid1000@gmail.com>
+Date: Sat, 26 Sep 2026 06:59:31 +0530
+Subject: [PATCH] telecode: component slots on instance-swap properties
+
+A slot is a named area of a component that each instance fills with its own
+content. .fig derives instance children from the main component, so slots are
+built on what it persists - the instance-swap property: telecode_slot_create
+moves a frame's children into a default-content component (page section
+"Slot content"), replaces the frame by an exposed instance of it and marks it
+telecode/slot; telecode_slot_fill gives one instance its own content (Design
+JSX, moved layers or an existing component); telecode_slot_reset restores the
+default; telecode_slot_list reads them. Unused content components telecode
+made are removed. The Slot content section is not a slide.
+---
+ scripts/telecode-dump-tools.ts                |  63 ++
+ src/app/integrations/telecode/commands.ts     |  48 ++
+ src/app/integrations/telecode/slides.ts       |   4 +-
+ src/app/integrations/telecode/slots-editor.ts |  45 ++
+ src/app/integrations/telecode/slots.ts        | 549 ++++++++++++++++++
+ tests/engine/app/telecode/slots.test.ts       | 119 ++++
+ 6 files changed, 827 insertions(+), 1 deletion(-)
+ create mode 100644 src/app/integrations/telecode/slots-editor.ts
+ create mode 100644 src/app/integrations/telecode/slots.ts
+ create mode 100644 tests/engine/app/telecode/slots.test.ts
+
+diff --git a/scripts/telecode-dump-tools.ts b/scripts/telecode-dump-tools.ts
+index 36a366e3..e2f586e3 100644
+--- a/scripts/telecode-dump-tools.ts
++++ b/scripts/telecode-dump-tools.ts
+@@ -405,6 +405,69 @@ const extra = [
+       v.object({ modes: v.pipe(v.record(v.string(), v.string()), v.description('{Collection name: Mode name}')) })
+     )
+   },
++  {
++    name: 'telecode_slot_create',
++    description:
++      'Make a layer inside a component a named slot (a card body, dialog actions): its children become the slot’s default-content component (in the page’s "Slot content" section) and the layer is replaced by an instance of it, exposed as an instance-swap property named after the slot. Existing instances follow. Returns the component’s slots.',
++    command: 'telecode_slot_create',
++    effect: 'write',
++    availability: 'default',
++    capabilities: ['document:write'],
++    enabled: true,
++    input_schema: schemaOf(
++      v.object({
++        node_id: v.pipe(v.string(), v.description('Frame / group / instance inside a component')),
++        name: v.optional(v.pipe(v.string(), v.description('Slot name (default: the layer name)')))
++      })
++    )
++  },
++  {
++    name: 'telecode_slot_list',
++    description:
++      'Slots. node_id = a component: {kind:"component", slots:[{name, node_id, default_component}]}; an instance: {kind:"instance", slots:[{name, filled, content_component_id, content_component}]}. Without node_id: {components, instances} with slots in the document.',
++    command: 'telecode_slot_list',
++    effect: 'read',
++    availability: 'default',
++    capabilities: ['document:read'],
++    enabled: true,
++    input_schema: schemaOf(
++      v.object({ node_id: v.optional(v.pipe(v.string(), v.description('Component or instance'))) })
++    )
++  },
++  {
++    name: 'telecode_slot_fill',
++    description:
++      'Give one instance its own content for a slot: exactly one of jsx (Design JSX rendered into a new content component sized like the slot), node_ids (existing layers moved into one) or component_id (an existing component). Saved with the document (it is the instance-swap value). Edit the content by editing that component. A content component telecode made is deleted once nothing shows it. One undo step.',
++    command: 'telecode_slot_fill',
++    effect: 'write',
++    availability: 'default',
++    capabilities: ['document:write'],
++    enabled: true,
++    input_schema: schemaOf(
++      v.object({
++        instance_id: v.pipe(v.string(), v.description('Instance of a component with slots')),
++        slot: v.pipe(v.string(), v.description('Slot name')),
++        jsx: v.optional(v.pipe(v.string(), v.description('Design JSX for the content'))),
++        node_ids: v.optional(v.pipe(v.array(v.string()), v.description('Layers to move into the slot'))),
++        component_id: v.optional(v.pipe(v.string(), v.description('Existing component to show')))
++      })
++    )
++  },
++  {
++    name: 'telecode_slot_reset',
++    description: 'Put the component’s default content back into an instance’s slot (all slots without slot). One undo step.',
++    command: 'telecode_slot_reset',
++    effect: 'write',
++    availability: 'default',
++    capabilities: ['document:write'],
++    enabled: true,
++    input_schema: schemaOf(
++      v.object({
++        instance_id: v.pipe(v.string(), v.description('Instance')),
++        slot: v.optional(v.pipe(v.string(), v.description('Slot name (default: every slot)')))
++      })
++    )
++  },
+   {
+     name: 'get_codegen_prompt',
+     description:
+diff --git a/src/app/integrations/telecode/commands.ts b/src/app/integrations/telecode/commands.ts
+index baba9959..af7186c9 100644
+--- a/src/app/integrations/telecode/commands.ts
++++ b/src/app/integrations/telecode/commands.ts
+@@ -23,6 +23,10 @@
+  *   telecode_theme_get         {node_id?}          a node's theme per axis (explicit / inherited), or the axes
+  *   telecode_theme_set         {node_id, modes}    pin / clear modes per axis {Collection: Mode | null}
+  *   telecode_theme_active      {modes}             document-wide mode per axis
++ *   telecode_slot_create       {node_id, name?}    a layer inside a component becomes a named slot
++ *   telecode_slot_list         {node_id?}          a component's / instance's slots (or every one)
++ *   telecode_slot_fill         {instance_id, slot, jsx? | node_ids? | component_id?}
++ *   telecode_slot_reset        {instance_id, slot?}  default content back
+  *
+  * They ride the same request/response protocol as the upstream commands; the
+  * proxy uses them to keep boards.json keyed by something that survives reloads.
+@@ -44,6 +48,8 @@ import {
+   updateScriptNode
+ } from './scripts'
+ import { listSlides, reorderSlides } from './slides'
++import { createSlot, describeSlots, listAllSlots, resetSlot } from './slots'
++import { fillSlotInEditor, slotMutation } from './slots-editor'
+ import { listAxes, setActiveModes, setTheme, themeOf } from './themes'
+ import { applyVariables, readVariables } from './variables'
+ 
+@@ -191,6 +197,48 @@ export const telecodeAutomationCommands: Partial<Record<string, Handler>> = {
+   async telecode_theme_active(target, args) {
+     return { ok: true, result: { axes: setActiveModes(target.store, record(record(args).modes)) } }
+   },
++  async telecode_slot_create(target, args) {
++    const a = record(args)
++    const nodeId = text(a.node_id)
++    if (!nodeId) throw new Error('Missing "node_id"')
++    return {
++      ok: true,
++      result: await slotMutation(target.store, 'Create slot', (figma) =>
++        createSlot(target.store.graph, figma, nodeId, text(a.name))
++      )
++    }
++  },
++  async telecode_slot_list(target, args) {
++    const nodeId = text(record(args).node_id)
++    return {
++      ok: true,
++      result: nodeId ? describeSlots(target.store.graph, nodeId) : listAllSlots(target.store.graph)
++    }
++  },
++  async telecode_slot_fill(target, args) {
++    const a = record(args)
++    const instanceId = text(a.instance_id)
++    const slot = text(a.slot)
++    if (!instanceId || !slot) throw new Error('Missing "instance_id" or "slot"')
++    const nodeIds = Array.isArray(a.node_ids) ? a.node_ids.filter((x): x is string => typeof x === 'string') : undefined
++    const result = await fillSlotInEditor(target.store, instanceId, slot, {
++      jsx: text(a.jsx),
++      nodeIds: nodeIds?.length ? nodeIds : undefined,
++      componentId: text(a.component_id)
++    })
++    return { ok: true, result }
++  },
++  async telecode_slot_reset(target, args) {
++    const a = record(args)
++    const instanceId = text(a.instance_id)
++    if (!instanceId) throw new Error('Missing "instance_id"')
++    return {
++      ok: true,
++      result: await slotMutation(target.store, 'Reset slot', (figma) =>
++        resetSlot(target.store.graph, figma, instanceId, text(a.slot))
++      )
++    }
++  },
+   async telecode_doc_open(_target, args) {
+     const { doc } = record(args)
+     if (typeof doc !== 'string' || !DOC_ID.test(doc)) throw new Error('Missing or invalid "doc"')
+diff --git a/src/app/integrations/telecode/slides.ts b/src/app/integrations/telecode/slides.ts
+index d0140891..5f91ec8c 100644
+--- a/src/app/integrations/telecode/slides.ts
++++ b/src/app/integrations/telecode/slides.ts
+@@ -11,12 +11,14 @@ import type { SceneNode } from '@open-pencil/scene-graph'
+ import type { EditorStore } from '@/app/editor/session'
+ 
+ import { boardKeyOf } from './boards'
++import { isSlotLibrary } from './slots'
+ 
+ const SLIDE_TYPES = new Set(['FRAME', 'COMPONENT', 'COMPONENT_SET', 'SECTION', 'INSTANCE'])
+ const GAP = 100
+ 
+ function isSlide(node: SceneNode | undefined): node is SceneNode {
+-  return !!node && SLIDE_TYPES.has(node.type) && node.visible !== false
++  // The "Slot content" section holds slot content components, not a slide.
++  return !!node && SLIDE_TYPES.has(node.type) && node.visible !== false && !isSlotLibrary(node)
+ }
+ 
+ export function listSlides(store: EditorStore, pageId: string) {
+diff --git a/src/app/integrations/telecode/slots-editor.ts b/src/app/integrations/telecode/slots-editor.ts
+new file mode 100644
+index 00000000..cf2388aa
+--- /dev/null
++++ b/src/app/integrations/telecode/slots-editor.ts
+@@ -0,0 +1,45 @@
++/** Editor-side wrappers for component slots (see slots.ts): one undo step each. */
++import { renderJSX } from '@open-pencil/core/design-jsx'
++import type { FigmaAPI } from '@open-pencil/core/figma-api'
++
++import { makeFigmaFromStore } from '@/app/automation/bridge/figma-factory'
++import { ensureGraphFonts } from '@/app/editor/fonts'
++import type { EditorStore } from '@/app/editor/session'
++
++import { fillSlot, type SlotContent } from './slots'
++
++export async function slotMutation<T>(
++  store: EditorStore,
++  label: string,
++  operation: (figma: FigmaAPI) => T | Promise<T>
++): Promise<T> {
++  const pageId = store.state.currentPageId
++  const before = store.snapshotPage()
++  const result = await store.runMutationWithLayout(
++    () => operation(makeFigmaFromStore(store, pageId)),
++    pageId
++  )
++  const after = store.snapshotPage()
++  store.pushUndoEntry({
++    label,
++    forward: () => store.restorePageFromSnapshot(after),
++    inverse: () => store.restorePageFromSnapshot(before)
++  })
++  store.requestRender()
++  return result
++}
++
++export async function fillSlotInEditor(
++  store: EditorStore,
++  instanceId: string,
++  slot: string,
++  content: SlotContent
++) {
++  const result = await slotMutation(store, 'Fill slot', (figma) =>
++    fillSlot(store.graph, figma, instanceId, slot, content, renderJSX)
++  )
++  const filled =
++    result.kind === 'instance' ? result.slots.find((s) => s.name === slot)?.content_component_id : null
++  if (filled) await ensureGraphFonts(store.graph, [filled], store.renderer)
++  return result
++}
+diff --git a/src/app/integrations/telecode/slots.ts b/src/app/integrations/telecode/slots.ts
+new file mode 100644
+index 00000000..296fdde4
+--- /dev/null
++++ b/src/app/integrations/telecode/slots.ts
+@@ -0,0 +1,549 @@
++/**
++ * Component slots (telecode / TeleDesign).
++ *
++ * A slot is a named area of a component that each instance fills with its own
++ * content (a card's body, a dialog's actions). open-pencil — like the .fig format
++ * it saves — derives an instance's children from its main component, so content
++ * added straight into an instance does not survive a save. Slots are therefore
++ * built on what .fig does persist, the instance-swap component property:
++ *
++ *  - telecode_slot_create turns a frame inside a component into a slot: its
++ *    children move into a new "default content" component, the frame is replaced
++ *    by an instance of it (same place, size and layout-child settings), and that
++ *    instance is exposed as an INSTANCE_SWAP property named after the slot. The
++ *    instance carries shared plugin data `telecode/slot` = the slot name.
++ *  - telecode_slot_fill gives one instance its own content: a new content
++ *    component (Design JSX rendered into it, existing layers moved into it, or an
++ *    existing component) becomes the value of that property.
++ *  - telecode_slot_reset puts the default back.
++ *
++ * Content components live in a "Slot content" section on the host's page
++ * (plugin data `telecode/slot-library`), so editing a slot's content is editing
++ * that component — every instance showing it follows, as components do.
++ * Content components telecode created are deleted again once nothing uses them.
++ */
++import type { FigmaAPI } from '@open-pencil/core/figma-api'
++import {
++  componentPropertyDefinitions,
++  type ComponentPropertyDefinition,
++  type SceneGraph,
++  type SceneNode
++} from '@open-pencil/scene-graph'
++
++export const SLOT_NAMESPACE = 'telecode'
++export const SLOT_FIELD = 'slot'
++export const SLOT_CONTENT_FIELD = 'slot-content'
++export const SLOT_LIBRARY_FIELD = 'slot-library'
++
++const SLOT_NAME = /^[^#\n]{1,64}$/
++const LIBRARY_GAP = 200
++
++/** Frame properties a slot's content component takes over, so content lays out like the frame did. */
++const CONTAINER_PROPS = [
++  'fills',
++  'strokes',
++  'effects',
++  'opacity',
++  'cornerRadius',
++  'topLeftRadius',
++  'topRightRadius',
++  'bottomRightRadius',
++  'bottomLeftRadius',
++  'independentCorners',
++  'layoutMode',
++  'layoutWrap',
++  'primaryAxisAlign',
++  'counterAxisAlign',
++  'primaryAxisSizing',
++  'counterAxisSizing',
++  'itemSpacing',
++  'counterAxisSpacing',
++  'paddingTop',
++  'paddingRight',
++  'paddingBottom',
++  'paddingLeft',
++  'clipsContent',
++  'strokeWeight',
++  'boundVariables'
++] as const
++
++/** How the slot sits in its parent — kept on the instance that replaces the frame. */
++const CHILD_PROPS = [
++  'x',
++  'y',
++  'rotation',
++  'layoutGrow',
++  'layoutAlignSelf',
++  'layoutPositioning',
++  'horizontalConstraint',
++  'verticalConstraint',
++  'visible',
++  'locked'
++] as const
++
++function pluginValue(node: SceneNode, field: string): string | null {
++  const encoded = `${SLOT_NAMESPACE}/${field}`
++  const entry = node.pluginData.find(
++    (e) => e.pluginId === SLOT_NAMESPACE && (e.key === encoded || e.key === field)
++  )
++  return entry?.value ? entry.value : null
++}
++
++export function slotNameOf(node: SceneNode): string | null {
++  return pluginValue(node, SLOT_FIELD)
++}
++
++export function isSlotContent(node: SceneNode): boolean {
++  return pluginValue(node, SLOT_CONTENT_FIELD) !== null
++}
++
++export function isSlotLibrary(node: SceneNode | undefined): boolean {
++  return !!node && pluginValue(node, SLOT_LIBRARY_FIELD) !== null
++}
++
++function pick(node: SceneNode, keys: readonly string[]): Partial<SceneNode> {
++  const out: Record<string, unknown> = {}
++  const src = node as unknown as Record<string, unknown>
++  for (const key of keys) {
++    if (!(key in src)) continue
++    const value = src[key]
++    out[key] = value && typeof value === 'object' ? structuredClone(value) : value
++  }
++  return out as Partial<SceneNode>
++}
++
++function pageOf(graph: SceneGraph, node: SceneNode | undefined): SceneNode | undefined {
++  let current = node
++  while (current && current.type !== 'CANVAS') {
++    current = current.parentId ? graph.getNode(current.parentId) : undefined
++  }
++  return current
++}
++
++/** The component (or component set) whose properties a node inside a component belongs to. */
++function propertyHost(graph: SceneGraph, nodeId: string | null): SceneNode | undefined {
++  let current = nodeId ? graph.getNode(nodeId) : undefined
++  let component: SceneNode | undefined
++  while (current) {
++    if (current.type === 'COMPONENT_SET') return current
++    if (current.type === 'COMPONENT' && !component) component = current
++    if (current.type === 'INSTANCE') break
++    current = current.parentId ? graph.getNode(current.parentId) : undefined
++  }
++  if (component) {
++    const parent = component.parentId ? graph.getNode(component.parentId) : undefined
++    if (parent?.type === 'COMPONENT_SET') return parent
++  }
++  return component
++}
++
++function descendants(graph: SceneGraph, rootId: string): SceneNode[] {
++  const out: SceneNode[] = []
++  const walk = (id: string) => {
++    const node = graph.getNode(id)
++    if (!node) return
++    out.push(node)
++    for (const child of node.childIds) walk(child)
++  }
++  for (const child of graph.getNode(rootId)?.childIds ?? []) walk(child)
++  return out
++}
++
++/** The page's "Slot content" section, created to the right of everything on first use. */
++function slotLibrary(graph: SceneGraph, figma: FigmaAPI, pageId: string): SceneNode {
++  const page = graph.getNode(pageId)
++  if (!page) throw new Error(`Page not found: ${pageId}`)
++  for (const id of page.childIds) {
++    const node = graph.getNode(id)
++    if (isSlotLibrary(node)) return node as SceneNode
++  }
++  let right = 0
++  let top = Infinity
++  for (const id of page.childIds) {
++    const node = graph.getNode(id)
++    if (!node) continue
++    right = Math.max(right, node.x + node.width)
++    top = Math.min(top, node.y)
++  }
++  const section = graph.createNode('SECTION', pageId, {
++    name: 'Slot content',
++    x: right + LIBRARY_GAP,
++    y: Number.isFinite(top) ? top : 0,
++    width: 400,
++    height: 400
++  })
++  figma.getNodeById(section.id)?.setSharedPluginData(SLOT_NAMESPACE, SLOT_LIBRARY_FIELD, '1')
++  return section
++}
++
++/** Grow the library section around its components (they are stacked top to bottom). */
++function placeInLibrary(graph: SceneGraph, library: SceneNode, component: SceneNode): void {
++  let bottom = 40
++  for (const id of library.childIds) {
++    if (id === component.id) continue
++    const node = graph.getNode(id)
++    if (node) bottom = Math.max(bottom, node.y + node.height + 40)
++  }
++  graph.updateNode(component.id, { x: 40, y: bottom })
++  let width = 400
++  let height = 400
++  for (const id of library.childIds) {
++    const node = graph.getNode(id)
++    if (!node) continue
++    width = Math.max(width, node.x + node.width + 40)
++    height = Math.max(height, node.y + node.height + 40)
++  }
++  graph.updateNode(library.id, { width, height })
++}
++
++function slotDefinition(
++  graph: SceneGraph,
++  instance: SceneNode,
++  slot: string
++): ComponentPropertyDefinition {
++  const definition = componentPropertyDefinitions(graph, instance).find(
++    (d) => d.type === 'INSTANCE_SWAP' && d.name === slot
++  )
++  if (!definition) {
++    const names = listInstanceSlots(graph, instance).map((s) => s.name)
++    throw new Error(
++      `"${instance.name}" has no slot "${slot}"${names.length ? ` (slots: ${names.join(', ')})` : ''}`
++    )
++  }
++  return definition
++}
++
++// ── Reading ────────────────────────────────────────────────────────────
++
++export interface SlotDefinitionInfo {
++  name: string
++  node_id: string
++  property_id: string
++  default_component_id: string | null
++  default_component: string | null
++  width: number
++  height: number
++}
++
++/** Slots a component (or component set) defines. */
++export function listComponentSlots(graph: SceneGraph, host: SceneNode): SlotDefinitionInfo[] {
++  const owner =
++    host.type === 'COMPONENT' && host.parentId && graph.getNode(host.parentId)?.type === 'COMPONENT_SET'
++      ? (graph.getNode(host.parentId) as SceneNode)
++      : host
++  const roots = owner.type === 'COMPONENT_SET' ? [owner.id] : [host.id]
++  const out: SlotDefinitionInfo[] = []
++  const seen = new Set<string>()
++  for (const root of roots) {
++    for (const node of descendants(graph, root)) {
++      const name = slotNameOf(node)
++      if (!name || node.type !== 'INSTANCE') continue
++      const ref = node.componentPropertyReferences.find((r) => r.field === 'INSTANCE_SWAP')
++      const definition = owner.componentPropertyDefinitions.find((d) => d.id === ref?.propertyId)
++      if (!definition || seen.has(node.id)) continue
++      seen.add(node.id)
++      const main = graph.getNode(definition.defaultValue)
++      out.push({
++        name,
++        node_id: node.id,
++        property_id: definition.id,
++        default_component_id: main?.id ?? null,
++        default_component: main?.name ?? null,
++        width: node.width,
++        height: node.height
++      })
++    }
++  }
++  return out
++}
++
++export interface InstanceSlotInfo {
++  name: string
++  property_id: string
++  filled: boolean
++  content_component_id: string | null
++  content_component: string | null
++  node_id: string | null
++}
++
++/** An instance's slots and what each shows. */
++export function listInstanceSlots(graph: SceneGraph, instance: SceneNode): InstanceSlotInfo[] {
++  const main = instance.componentId ? graph.getNode(instance.componentId) : undefined
++  if (!main) return []
++  const defs = listComponentSlots(graph, main)
++  const inside = descendants(graph, instance.id)
++  return defs.map((slot) => {
++    const definition = componentPropertyDefinitions(graph, instance).find(
++      (d) => d.id === slot.property_id
++    )
++    const value = instance.componentPropertyAssignments[slot.property_id] ?? definition?.defaultValue
++    const content = value ? graph.getNode(value) : undefined
++    const node = inside.find(
++      (n) =>
++        n.type === 'INSTANCE' &&
++        (n.componentPropertyReferences.some((r) => r.propertyId === slot.property_id) ||
++          slotNameOf(n) === slot.name)
++    )
++    return {
++      name: slot.name,
++      property_id: slot.property_id,
++      filled: !!value && value !== definition?.defaultValue,
++      content_component_id: content?.id ?? null,
++      content_component: content?.name ?? null,
++      node_id: node?.id ?? null
++    }
++  })
++}
++
++export type SlotsDescription =
++  | { node_id: string; name: string; kind: 'instance'; slots: InstanceSlotInfo[] }
++  | { node_id: string; name: string; kind: 'component'; slots: SlotDefinitionInfo[] }
++  | { node_id: string; name: string; kind: 'none'; slots: [] }
++
++export function describeSlots(graph: SceneGraph, nodeId: string): SlotsDescription {
++  const node = graph.getNode(nodeId)
++  if (!node) throw new Error(`Node not found: ${nodeId}`)
++  if (node.type === 'INSTANCE') {
++    return { node_id: node.id, name: node.name, kind: 'instance', slots: listInstanceSlots(graph, node) }
++  }
++  const host = node.type === 'COMPONENT' || node.type === 'COMPONENT_SET' ? node : propertyHost(graph, node.id)
++  // Neither a component nor inside one: nothing to list (not an error — the shell asks for
++  // whatever layer is selected).
++  if (!host) return { node_id: node.id, name: node.name, kind: 'none', slots: [] }
++  return { node_id: host.id, name: host.name, kind: 'component', slots: listComponentSlots(graph, host) }
++}
++
++/** Every component with slots and every instance filling one, for the shell's panel. */
++export function listAllSlots(graph: SceneGraph, pageId?: string) {
++  const components: Array<{ id: string; name: string; slots: string[] }> = []
++  const instances: Array<{ id: string; name: string; filled: string[] }> = []
++  const root = pageId ?? graph.rootId
++  for (const node of descendants(graph, root)) {
++    if (node.type === 'COMPONENT' || node.type === 'COMPONENT_SET') {
++      if (node.type === 'COMPONENT' && node.parentId && graph.getNode(node.parentId)?.type === 'COMPONENT_SET') continue
++      const slots = listComponentSlots(graph, node).map((s) => s.name)
++      if (slots.length) components.push({ id: node.id, name: node.name, slots })
++    } else if (node.type === 'INSTANCE' && !propertyHost(graph, node.parentId)) {
++      const slots = listInstanceSlots(graph, node)
++      if (slots.length) instances.push({ id: node.id, name: node.name, filled: slots.filter((s) => s.filled).map((s) => s.name) })
++    }
++  }
++  return { components, instances }
++}
++
++// ── Writing ────────────────────────────────────────────────────────────
++
++function newContentComponent(
++  graph: SceneGraph,
++  figma: FigmaAPI,
++  pageId: string,
++  name: string,
++  like: SceneNode,
++  slot: string
++): SceneNode {
++  const library = slotLibrary(graph, figma, pageId)
++  const component = graph.createNode('COMPONENT', library.id, {
++    ...pick(like, CONTAINER_PROPS),
++    name,
++    width: like.width,
++    height: like.height
++  })
++  figma
++    .getNodeById(component.id)
++    ?.setSharedPluginData(SLOT_NAMESPACE, SLOT_CONTENT_FIELD, JSON.stringify({ slot }))
++  placeInLibrary(graph, library, component)
++  return component
++}
++
++/**
++ * Turn `nodeId` (a frame, group or instance inside a component) into slot `name`.
++ * Returns the component's slots.
++ */
++export function createSlot(graph: SceneGraph, figma: FigmaAPI, nodeId: string, name?: string) {
++  const node = graph.getNode(nodeId)
++  if (!node) throw new Error(`Node not found: ${nodeId}`)
++  if (node.type === 'COMPONENT' || node.type === 'COMPONENT_SET' || node.type === 'CANVAS') {
++    throw new Error('A slot is a layer inside a component, not the component itself')
++  }
++  const host = propertyHost(graph, node.parentId)
++  if (!host) throw new Error(`"${node.name}" is not inside a component`)
++  const slot = (name ?? node.name).trim()
++  if (!SLOT_NAME.test(slot)) throw new Error('Slot names are 1–64 characters, without "#"')
++  if (host.componentPropertyDefinitions.some((d) => d.name === slot)) {
++    throw new Error(`"${host.name}" already has a property named "${slot}"`)
++  }
++  const page = pageOf(graph, host)
++  if (!page) throw new Error('The component is not on a page')
++
++  let instanceId: string
++  let defaultId: string
++  if (node.type === 'INSTANCE' && node.componentId) {
++    // Already an instance: expose it as it is; its component is the default content.
++    instanceId = node.id
++    defaultId = node.componentId
++  } else {
++    const parentId = node.parentId as string
++    const parent = graph.getNode(parentId) as SceneNode
++    const index = parent.childIds.indexOf(node.id)
++    const component = newContentComponent(
++      graph,
++      figma,
++      page.id,
++      `${host.name} / ${slot} / Default`,
++      node,
++      slot
++    )
++    for (const childId of [...node.childIds]) {
++      // reparentNode keeps the absolute position; the content component is the frame's
++      // stand-in (same size), so each child keeps its position *inside* it instead.
++      const child = graph.getNode(childId)
++      const local = child ? { x: child.x, y: child.y } : null
++      graph.reparentNode(childId, component.id)
++      if (local) graph.updateNode(childId, local)
++    }
++    const instance = graph.createInstance(component.id, parentId, {
++      ...pick(node, CHILD_PROPS),
++      name: slot,
++      width: node.width,
++      height: node.height
++    })
++    if (!instance) throw new Error('Could not create the slot instance')
++    graph.reorderChild(instance.id, parentId, index)
++    // Existing instances hold a clone of the frame (linked by componentId); sync
++    // only adds what is missing, so drop those clones — the new slot instance is
++    // cloned in by the sync below.
++    const clones = [...graph.getAllNodes()].filter((n) => n.componentId === node.id && n.id !== node.id)
++    for (const clone of clones) graph.deleteNode(clone.id)
++    graph.deleteNode(node.id)
++    instanceId = instance.id
++    defaultId = component.id
++  }
++  const instanceProxy = figma.getNodeById(instanceId)
++  const defaultProxy = figma.getNodeById(defaultId)
++  if (!instanceProxy || !defaultProxy) throw new Error('Slot nodes vanished while creating the slot')
++  figma.exposeInstanceSwap([instanceProxy], [defaultProxy], slot)
++  instanceProxy.setSharedPluginData(SLOT_NAMESPACE, SLOT_FIELD, slot)
++  for (const component of host.type === 'COMPONENT_SET' ? host.childIds : [host.id]) {
++    graph.syncInstances(component)
++  }
++  return describeSlots(graph, host.id)
++}
++
++export interface SlotContent {
++  /** Design JSX rendered into a new content component. */
++  jsx?: string
++  /** Existing layers moved into a new content component. */
++  nodeIds?: string[]
++  /** An existing component used as the content. */
++  componentId?: string
++}
++
++type RenderJSX = (
++  graph: SceneGraph,
++  jsx: string,
++  opts: { parentId: string }
++) => Promise<Array<{ id: string }>>
++
++function removeIfOrphaned(graph: SceneGraph, componentId: string | null | undefined): boolean {
++  if (!componentId) return false
++  const component = graph.getNode(componentId)
++  if (!component || component.type !== 'COMPONENT' || !isSlotContent(component)) return false
++  if (graph.getInstances(componentId).length > 0) return false
++  // Still some instance's chosen value (a nested instance clone may not exist yet)?
++  for (const node of graph.getAllNodes()) {
++    if (node.type !== 'INSTANCE') continue
++    if (Object.values(node.componentPropertyAssignments).includes(componentId)) return false
++  }
++  graph.deleteNode(componentId)
++  return true
++}
++
++function setSlotValue(
++  figma: FigmaAPI,
++  instance: SceneNode,
++  definition: ComponentPropertyDefinition,
++  componentId: string
++) {
++  const proxy = figma.getNodeById(instance.id) as unknown as {
++    setProperties(values: Record<string, string>): void
++  }
++  proxy.setProperties({ [`${definition.name}#${definition.id}`]: componentId })
++}
++
++/** Give one instance its own content for `slot`. */
++export async function fillSlot(
++  graph: SceneGraph,
++  figma: FigmaAPI,
++  instanceId: string,
++  slot: string,
++  content: SlotContent,
++  renderJSX?: RenderJSX
++) {
++  const instance = graph.getNode(instanceId)
++  if (instance?.type !== 'INSTANCE') throw new Error(`Not an instance: ${instanceId}`)
++  const definition = slotDefinition(graph, instance, slot)
++  const before = listInstanceSlots(graph, instance).find((s) => s.property_id === definition.id)
++  const previous = before?.filled ? before.content_component_id : null
++  const sources = [content.jsx ? 1 : 0, content.nodeIds?.length ? 1 : 0, content.componentId ? 1 : 0]
++  if (sources.reduce((a, b) => a + b, 0) !== 1) {
++    throw new Error('Give exactly one of "jsx", "node_ids" or "component_id"')
++  }
++
++  let componentId: string
++  if (content.componentId) {
++    const component = graph.getNode(content.componentId)
++    if (component?.type !== 'COMPONENT') throw new Error(`Not a component: ${content.componentId}`)
++    componentId = component.id
++  } else {
++    const page = pageOf(graph, instance)
++    if (!page) throw new Error('The instance is not on a page')
++    const slotNode = before?.node_id ? graph.getNode(before.node_id) : undefined
++    const defaultMain = graph.getNode(definition.defaultValue)
++    const like = defaultMain ?? slotNode
++    if (!like) throw new Error(`Slot "${slot}" has no default content to size the new content by`)
++    const component = newContentComponent(graph, figma, page.id, `${instance.name} / ${slot}`, like, slot)
++    if (slotNode) graph.updateNode(component.id, { width: slotNode.width, height: slotNode.height })
++    if (content.jsx) {
++      if (!renderJSX) throw new Error('Rendering JSX is not available here')
++      await renderJSX(graph, content.jsx, { parentId: component.id })
++    } else {
++      const placed: string[] = []
++      for (const id of content.nodeIds ?? []) {
++        const node = graph.getNode(id)
++        if (!node) throw new Error(`Node not found: ${id}`)
++        if (node.id === instance.id || graph.isDescendant(instance.id, node.id)) {
++          throw new Error('The content cannot contain the instance itself')
++        }
++        graph.reparentNode(id, component.id)
++        // Moved layers land at the content's top left (keeping their offsets from each other).
++        placed.push(id)
++      }
++      if (component.layoutMode === 'NONE' && placed.length) {
++        const nodes = placed.map((id) => graph.getNode(id)).filter((n): n is SceneNode => !!n)
++        const dx = Math.min(...nodes.map((n) => n.x))
++        const dy = Math.min(...nodes.map((n) => n.y))
++        for (const n of nodes) graph.updateNode(n.id, { x: n.x - dx, y: n.y - dy })
++      }
++    }
++    componentId = component.id
++  }
++  setSlotValue(figma, instance, definition, componentId)
++  if (previous && previous !== componentId) removeIfOrphaned(graph, previous)
++  return describeSlots(graph, instance.id)
++}
++
++/** Put the component's default content back into one instance's slot (or every slot). */
++export function resetSlot(graph: SceneGraph, figma: FigmaAPI, instanceId: string, slot?: string) {
++  const instance = graph.getNode(instanceId)
++  if (instance?.type !== 'INSTANCE') throw new Error(`Not an instance: ${instanceId}`)
++  const slots = listInstanceSlots(graph, instance).filter((s) => !slot || s.name === slot)
++  if (slot && !slots.length) slotDefinition(graph, instance, slot)
++  for (const state of slots) {
++    if (!state.filled) continue
++    const definition = slotDefinition(graph, instance, state.name)
++    setSlotValue(figma, instance, definition, definition.defaultValue)
++    removeIfOrphaned(graph, state.content_component_id)
++  }
++  return describeSlots(graph, instance.id)
++}
++
+diff --git a/tests/engine/app/telecode/slots.test.ts b/tests/engine/app/telecode/slots.test.ts
+new file mode 100644
+index 00000000..100e700a
+--- /dev/null
++++ b/tests/engine/app/telecode/slots.test.ts
+@@ -0,0 +1,119 @@
++import { beforeAll, describe, expect, test } from 'bun:test'
++
++import { exportFigFile, FigmaAPI, initCodec } from '@open-pencil/core'
++import { renderJSX } from '@open-pencil/core/design-jsx'
++import { parseFigBuffer } from '@open-pencil/fig'
++import { SceneGraph } from '@open-pencil/scene-graph'
++
++import { importNodeChanges } from '#core/kiwi/fig/import'
++
++import {
++  createSlot,
++  describeSlots,
++  fillSlot,
++  listAllSlots,
++  resetSlot
++} from '@/app/integrations/telecode/slots'
++
++beforeAll(async () => {
++  await initCodec()
++})
++
++function card() {
++  const graph = new SceneGraph()
++  const page = graph.getPages()[0]
++  const figma = new FigmaAPI(graph)
++  const comp = graph.createNode('COMPONENT', page.id, { name: 'Card', width: 240, height: 200 })
++  graph.createNode('TEXT', comp.id, { name: 'Title', width: 200, height: 20 })
++  const body = graph.createNode('FRAME', comp.id, { name: 'Body', x: 20, y: 40, width: 200, height: 120 })
++  graph.createNode('RECTANGLE', body.id, { name: 'Placeholder', width: 50, height: 50 })
++  const a = graph.createInstance(comp.id, page.id, { x: 400 })!
++  return { graph, figma, page, comp, body, a }
++}
++
++const tree = (g: SceneGraph, id: string, d = 0): string[] => {
++  const n = g.getNode(id)!
++  return [`${'  '.repeat(d)}${n.type} ${n.name}`, ...n.childIds.flatMap((c) => tree(g, c, d + 1))]
++}
++
++describe('component slots', () => {
++  test('create: the frame becomes an exposed instance of a default-content component', () => {
++    const { graph, figma, comp, body, a } = card()
++    const info = createSlot(graph, figma, body.id)
++    expect(info.kind).toBe('component')
++    expect(info.slots).toHaveLength(1)
++    const slot = info.slots[0]
++    expect(slot.name).toBe('Body')
++    expect(slot.default_component).toBe('Card / Body / Default')
++    const node = graph.getNode(slot.node_id)!
++    expect(node.type).toBe('INSTANCE')
++    expect([node.x, node.y, node.width, node.height]).toEqual([20, 40, 200, 120])
++    expect(graph.getNode(comp.id)!.childIds.indexOf(node.id)).toBe(1)
++    expect(graph.getNode(body.id)).toBeUndefined()
++    // Existing instances follow, still showing the default content.
++    expect(tree(graph, a.id).join('\n')).toContain('RECTANGLE Placeholder')
++    expect(tree(graph, a.id).join('\n')).not.toContain('FRAME Body')
++    expect(describeSlots(graph, a.id).slots[0]).toMatchObject({ name: 'Body', filled: false })
++    expect(() => createSlot(graph, figma, comp.childIds[0], 'Body')).toThrow(/already has a property/)
++    // The frame's children keep their place inside the slot (not their absolute position).
++    const defaults = graph.getNode(slot.default_component_id!)!
++    const placeholder = graph.getNode(defaults.childIds[0])!
++    expect([placeholder.name, placeholder.x, placeholder.y]).toEqual(['Placeholder', 0, 0])
++    // A layer outside any component has no slots: an empty answer, not an error.
++    const loose = graph.createNode('RECTANGLE', graph.getPages()[0].id, { name: 'Loose' })
++    expect(describeSlots(graph, loose.id)).toMatchObject({ kind: 'none', slots: [] })
++  })
++
++  test('fill with layers / JSX / a component, reset, and orphan cleanup', async () => {
++    const { graph, figma, page, body, a } = card()
++    createSlot(graph, figma, body.id)
++    const b = graph.createInstance(graph.getNode(a.id)!.componentId!, page.id, { x: 800 })!
++    const loose = graph.createNode('ELLIPSE', page.id, { name: 'Avatar', x: 0, y: 600, width: 30, height: 30 })
++
++    let state = await fillSlot(graph, figma, a.id, 'Body', { nodeIds: [loose.id] })
++    expect(state.slots[0]).toMatchObject({ filled: true, content_component: 'Card / Body' })
++    const firstContent = state.slots[0].content_component_id!
++    expect(tree(graph, a.id).join('\n')).toContain('ELLIPSE Avatar')
++    expect([graph.getNode(loose.id)!.x, graph.getNode(loose.id)!.y]).toEqual([0, 0])
++    expect(tree(graph, a.id).join('\n')).not.toContain('Placeholder')
++    expect(tree(graph, b.id).join('\n')).toContain('Placeholder')
++
++    state = await fillSlot(graph, figma, a.id, 'Body', { jsx: '<Rectangle name="Hero" w={80} h={40} bg="#f00" />' }, renderJSX)
++    expect(tree(graph, a.id).join('\n')).toContain('RECTANGLE Hero')
++    // The first content component was ours and is unused now: gone.
++    expect(graph.getNode(firstContent)).toBeUndefined()
++
++    const shared = state.slots[0].content_component_id!
++    await fillSlot(graph, figma, b.id, 'Body', { componentId: shared })
++    expect(tree(graph, b.id).join('\n')).toContain('RECTANGLE Hero')
++
++    state = resetSlot(graph, figma, a.id, 'Body')
++    expect(state.slots[0].filled).toBe(false)
++    expect(graph.getNode(shared)).toBeDefined() // b still shows it
++    resetSlot(graph, figma, b.id)
++    expect(graph.getNode(shared)).toBeUndefined()
++
++    await expect(fillSlot(graph, figma, a.id, 'Nope', { componentId: shared })).rejects.toThrow(/no slot "Nope"/)
++    const all = listAllSlots(graph)
++    expect(all.components.map((c) => c.name)).toEqual(['Card'])
++    // The library section holds only the default content now.
++    const library = [...graph.getAllNodes()].find((n) => n.type === 'SECTION')!
++    expect(library.name).toBe('Slot content')
++    expect(library.childIds.map((id) => graph.getNode(id)!.name)).toEqual(['Card / Body / Default'])
++  })
++
++  test('slot content survives a .fig round trip', async () => {
++    const { graph, figma, page, body, a } = card()
++    createSlot(graph, figma, body.id)
++    const loose = graph.createNode('ELLIPSE', page.id, { name: 'Avatar', width: 30, height: 30 })
++    await fillSlot(graph, figma, a.id, 'Body', { nodeIds: [loose.id] })
++    const bytes = await exportFigFile(graph)
++    const parsed = parseFigBuffer(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
++    const g2 = importNodeChanges(parsed.nodeChanges, parsed.blobs, undefined, { populate: 'all' })
++    const i2 = [...g2.getAllNodes()].find((n) => n.type === 'INSTANCE' && n.name === 'Card')!
++    expect(tree(g2, i2.id).join('\n')).toContain('ELLIPSE Avatar')
++    const s = describeSlots(g2, i2.id).slots
++    expect(s).toHaveLength(1)
++    expect(s[0]).toMatchObject({ name: 'Body', filled: true, content_component: 'Card / Body' })
++  })
++})

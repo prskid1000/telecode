@@ -1,0 +1,1 @@
+import{n as e}from"./render-BLg-ef4V.js";export{e as renderJSX};

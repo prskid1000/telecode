@@ -845,7 +845,11 @@ async def design_canvas_call(project_id: str, tool: str, args: dict | None = Non
     """Call one open-pencil canvas tool in the editor the user has open (layer boards).
 
     Requires the project open in TeleDesign's canvas. `tool` is an editor tool name (empty
-    `tool="list"` returns the available tools and their parameters).
+    `tool="list"` returns the available tools and their parameters). Besides open-pencil's own
+    tools there are TeleDesign's `telecode_*` ones: canvas documents (`telecode_doc_list`,
+    `_create`, `_open`), script nodes (`telecode_script_*`), theme axes (`telecode_theme_get`,
+    `_set`, `_active`), component slots (`telecode_slot_create`, `_list`, `_fill`, `_reset`) and
+    shader / mesh-gradient fills (`telecode_fill_set`, `_list`, `_remove`, `_presets`).
     """
     try:
         if tool == "list":

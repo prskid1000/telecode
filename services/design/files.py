@@ -122,8 +122,16 @@ def read_path(pid: str, rel: str) -> Optional[Path]:
     return p if p and p.is_file() else None
 
 
+def _canvas_owned(rel: str) -> bool:
+    """Canvas documents, their JSON mirrors and the doc index: written by their own routes only."""
+    if rel.endswith(".fig.json"):
+        rel = rel[:-5]
+    return store.is_canvas_path(rel) or rel == f"{store.DOCS_DIR}/canvases.json"
+
+
 def writable(rel: str) -> bool:
-    return store.safe_relpath(rel) and _top(rel) not in READONLY_TOP and rel not in HOST_FILES
+    return (store.safe_relpath(rel) and _top(rel) not in READONLY_TOP and rel not in HOST_FILES
+            and not _canvas_owned(rel))
 
 
 def write_file(pid: str, rel: str, data: bytes) -> bool:

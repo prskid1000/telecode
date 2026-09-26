@@ -17,6 +17,11 @@
     GET  /api/design/projects/{pid}/editor/slides         top-level frames of the current page, in order
     POST /api/design/projects/{pid}/editor/slides/order   {ids, arrange?}
     POST /api/design/projects/{pid}/editor/slides/pdf     {ids?} → application/pdf (vector, one page per slide)
+    GET  /api/design/projects/{pid}/docs                  canvas documents {default, docs:[…], open}
+    POST /api/design/projects/{pid}/docs                  {name?, copy_from?, default?} → {doc}
+    PATCH/DELETE /api/design/projects/{pid}/docs/{doc}    {name?, default?} / remove (never the last or the open one)
+    GET/PUT /api/design/projects/{pid}/docs/{doc}/canvas       the .fig bytes (octet-stream)
+    GET/PUT /api/design/projects/{pid}/docs/{doc}/canvas.json  deterministic JSON mirror (read-only, never loaded)
 
 The build is produced by tools/build_open_pencil.py and is never edited by hand.
 Serving rules: `.wasm` is `application/wasm` (streaming compile refuses anything
@@ -195,13 +200,21 @@ async def build_info(request: web.Request) -> web.Response:
 
 async def editor_status(request: web.Request) -> web.Response:
     pid = request.match_info["project_id"]
-    pdir = store.project_dir(pid) if store.valid_id(pid) else None
-    if not pdir:
+    listing = store.list_docs(pid) if store.valid_id(pid) else None
+    if not listing:
         return web.json_response({"error": "Project not found"}, status=404)
+    want = request.query.get("doc") or listing["default"]
+    doc = next((x for x in listing["docs"] if x["id"] == want), None)
+    if doc is None:
+        return web.json_response({"error": "Document not found"}, status=404)
     # has_canvas lets the editor skip a GET …/canvas that would 404 (and log a
-    # console error) for a project that has never been saved.
-    return web.json_response({"editor": {**editor_bridge.status(pid),
-                                         "has_canvas": (pdir / "doc.fig").is_file()}})
+    # console error) for a document that has never been saved.
+    # doc_id is the document asked about (?doc=, default the project's default); open_doc is
+    # the one the attached page actually has open (None when no page is attached).
+    return web.json_response({"editor": {**editor_bridge.status(pid), "doc_id": doc["id"],
+                                         "has_canvas": doc["has_canvas"],
+                                         "default_doc": listing["default"],
+                                         "open_doc": editor_bridge.open_doc(pid)}})
 
 
 async def editor_call(request: web.Request) -> web.Response:
@@ -449,6 +462,168 @@ async def slides_pdf(request: web.Request) -> web.StreamResponse:
     })
 
 
+# ── Script nodes: the files behind them ──────────────────────────────
+
+_SCRIPT_EXT = (".js", ".jsx", ".mjs", ".ts", ".tsx")
+MAX_SCRIPT_BYTES = 256_000
+MAX_SCRIPT_PATHS = 50
+
+
+async def scripts_files(request: web.Request) -> web.Response:
+    """GET …/editor/scripts?path=a.js&path=b.js[&text=1] → {files: {path: {exists, sha256, bytes, text?}}}.
+
+    What the editor polls to re-run a script node when its file changes. Read-only and
+    limited to script extensions inside the project (the same resolver as the Files API).
+    """
+    import hashlib
+    from services.design import files as dfiles
+    pid = request.match_info["project_id"]
+    if not store.valid_id(pid) or not store.get_project(pid):
+        return web.json_response({"error": "Project not found"}, status=404)
+    paths = request.query.getall("path", [])
+    if not paths or len(paths) > MAX_SCRIPT_PATHS:
+        return web.json_response({"error": f"Pass 1-{MAX_SCRIPT_PATHS} path parameters"}, status=400)
+    want_text = request.query.get("text") in ("1", "true")
+    out = {}
+    for rel in paths:
+        if not isinstance(rel, str) or not rel.lower().endswith(_SCRIPT_EXT) or not store.safe_relpath(rel):
+            out[rel] = {"exists": False, "sha256": None, "bytes": 0, "error": "not a project script path"}
+            continue
+        p = dfiles.read_path(pid, rel)
+        if not p:
+            out[rel] = {"exists": False, "sha256": None, "bytes": 0}
+            continue
+        data = p.read_bytes()
+        if len(data) > MAX_SCRIPT_BYTES:
+            out[rel] = {"exists": True, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data),
+                        "error": "script larger than 256 KB"}
+            continue
+        entry = {"exists": True, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
+        if want_text:
+            entry["text"] = data.decode("utf-8", errors="replace")
+        out[rel] = entry
+    return web.json_response({"files": out}, headers={"Cache-Control": "no-store"})
+
+
+# ── Canvas documents (several per project) ───────────────────────────
+
+def _docs_changed(pid: str, **data) -> None:
+    try:
+        from services.design import events
+        events.publish(pid, "docs", data)
+    except Exception:
+        logger.debug("docs event not published", exc_info=True)
+
+
+async def docs_list(request: web.Request) -> web.Response:
+    pid = request.match_info["project_id"]
+    listing = store.list_docs(pid) if store.valid_id(pid) else None
+    if not listing:
+        return web.json_response({"error": "Project not found"}, status=404)
+    return web.json_response({"ok": True, **listing, "open": editor_bridge.open_doc(pid)})
+
+
+async def docs_create(request: web.Request) -> web.Response:
+    """{name?, copy_from?, default?} → the new document."""
+    parsed, err = await _guarded_json(request)
+    if err:
+        return err
+    pid, data = parsed
+    copy_from = data.get("copy_from")
+    if copy_from is not None and not store.valid_doc_id(copy_from):
+        return web.json_response({"ok": False, "error": "copy_from must be a document id"}, status=400)
+    doc = store.create_doc(pid, data.get("name"), copy_from=copy_from, make_default=data.get("default") is True)
+    if not doc:
+        return web.json_response({"ok": False, "error": "Could not create the document (unknown copy_from, "
+                                  f"or {store.MAX_DOCS} documents already)"}, status=400)
+    _docs_changed(pid, created=doc["id"])
+    return web.json_response({"ok": True, "doc": doc})
+
+
+async def docs_update(request: web.Request) -> web.Response:
+    """{name?, default?: true}"""
+    parsed, err = await _guarded_json(request)
+    if err:
+        return err
+    pid, data = parsed
+    doc = store.update_doc(pid, request.match_info["doc_id"], data)
+    if not doc:
+        return web.json_response({"ok": False, "error": "Document not found"}, status=404)
+    _docs_changed(pid, updated=doc["id"])
+    return web.json_response({"ok": True, "doc": doc})
+
+
+async def docs_delete(request: web.Request) -> web.Response:
+    pid = request.match_info["project_id"]
+    if not _origin_ok(request):
+        return web.json_response({"error": "Forbidden origin"}, status=403)
+    if not store.get_project(pid):
+        return web.json_response({"error": "Project not found"}, status=404)
+    doc_id = request.match_info["doc_id"]
+    if editor_bridge.open_doc(pid) == doc_id:
+        return web.json_response({"ok": False, "error": "That document is open in the editor; open another first"},
+                                 status=409)
+    listing = store.delete_doc(pid, doc_id)
+    if not listing:
+        return web.json_response({"ok": False, "error": "Unknown document, or the only one left"}, status=400)
+    _docs_changed(pid, deleted=doc_id)
+    return web.json_response({"ok": True, **listing})
+
+
+async def doc_canvas_get(request: web.Request) -> web.Response:
+    pid, doc_id = request.match_info["project_id"], request.match_info["doc_id"]
+    if not store.valid_doc_id(doc_id) or not store.get_doc(pid, doc_id):
+        return web.json_response({"error": "Document not found"}, status=404)
+    data = store.get_canvas(pid, doc_id)
+    if data is None:
+        return web.json_response({"error": "No canvas saved yet"}, status=404)
+    return web.Response(body=data, content_type="application/octet-stream",
+                        headers={"Cache-Control": "no-store"})
+
+
+async def doc_canvas_put(request: web.Request) -> web.Response:
+    pid, doc_id = request.match_info["project_id"], request.match_info["doc_id"]
+    if not _origin_ok(request):
+        return web.json_response({"error": "Forbidden origin"}, status=403)
+    # Octet-stream is not CORS-simple: a preview page cannot forge this write.
+    if request.content_type != "application/octet-stream":
+        return web.json_response({"error": "Expected application/octet-stream"}, status=415)
+    if (request.content_length or 0) > store.MAX_CANVAS_BYTES:
+        return web.json_response({"error": "Canvas too large"}, status=413)
+    if not store.valid_doc_id(doc_id):
+        return web.json_response({"error": "Document not found"}, status=404)
+    data = await request.read()
+    if not store.save_canvas(pid, data, doc_id):
+        return web.json_response({"error": "Invalid canvas, project or document"}, status=400)
+    return web.json_response({"ok": True})
+
+
+async def doc_mirror_get(request: web.Request) -> web.Response:
+    pid, doc_id = request.match_info["project_id"], request.match_info["doc_id"]
+    text = store.get_canvas_mirror(pid, doc_id) if store.valid_doc_id(doc_id) else None
+    if text is None:
+        return web.json_response({"error": "No JSON mirror yet"}, status=404)
+    return web.Response(text=text, content_type="application/json",
+                        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+
+async def doc_mirror_put(request: web.Request) -> web.Response:
+    """The editor's deterministic JSON mirror of a document (read-only mirror, never loaded)."""
+    pid, doc_id = request.match_info["project_id"], request.match_info["doc_id"]
+    if not _origin_ok(request):
+        return web.json_response({"error": "Forbidden origin"}, status=403)
+    if request.content_type != "application/json":
+        return web.json_response({"error": "Expected application/json"}, status=415)
+    if (request.content_length or 0) > store.MAX_MIRROR_BYTES:
+        return web.json_response({"error": "Mirror too large"}, status=413)
+    if not store.valid_doc_id(doc_id) or not store.get_doc(pid, doc_id):
+        return web.json_response({"error": "Document not found"}, status=404)
+    rel = store.save_canvas_mirror(pid, doc_id, await request.read())
+    if not rel:
+        return web.json_response({"error": "Expected a JSON object"}, status=400)
+    return web.json_response({"ok": True, "path": rel})
+
+
 def register_routes(app: web.Application):
     app.router.add_get("/design/editor", redirect_editor)
     app.router.add_get("/design/editor/{path:.*}", serve_editor)
@@ -472,3 +647,13 @@ def register_routes(app: web.Application):
     app.router.add_get(P + "/slides", slides_list)
     app.router.add_post(P + "/slides/order", slides_order)
     app.router.add_post(P + "/slides/pdf", slides_pdf)
+    app.router.add_get(P + "/scripts", scripts_files)
+    D = "/api/design/projects/{project_id}/docs"
+    app.router.add_get(D, docs_list)
+    app.router.add_post(D, docs_create)
+    app.router.add_patch(D + "/{doc_id}", docs_update)
+    app.router.add_delete(D + "/{doc_id}", docs_delete)
+    app.router.add_get(D + "/{doc_id}/canvas", doc_canvas_get)
+    app.router.add_put(D + "/{doc_id}/canvas", doc_canvas_put)
+    app.router.add_get(D + "/{doc_id}/canvas.json", doc_mirror_get)
+    app.router.add_put(D + "/{doc_id}/canvas.json", doc_mirror_put)

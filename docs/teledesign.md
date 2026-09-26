@@ -27,7 +27,9 @@ models through the proxy).
 
 ## 1. The canvas and its boards
 
-A project is one infinite canvas (`doc.fig`). Everything on it is a board:
+A project holds one or more infinite canvases — canvas documents `docs/<id>.fig`, one of them the
+default, one open in the editor at a time (the canvas bar's document switcher; agents use
+`telecode_doc_list/create/open`). Everything on a canvas is a board:
 
 | Board | What it is | Edited by | Best for |
 |---|---|---|---|
@@ -83,6 +85,12 @@ Built once off-box with Bun from a pinned release tag plus `patches/open-pencil/
 | `canConnect` true + bridge URL/token from query (`src/app/automation/mcp/runtime.ts`, `bridge/server.ts`) | production web builds never attach to MCP |
 | `telecode` `StorageAdapter` (`src/app/integrations/storage/providers.ts`) → `GET/PUT /api/design/projects/{id}/canvas` | save/load to our store instead of download/IndexedDB |
 | HTML-board hooks: expose viewport + frame bounds changes to the host | overlay positioning |
+| 0013 several canvas documents: `?doc=`, storage binding `<project>/<doc>`, bridge socket per document, `telecode_doc_open` | more than one canvas per project |
+| 0014 deterministic JSON mirror PUT to `…/docs/{doc}/canvas.json` after every save | git-friendly diffs of a binary `.fig` |
+| 0015 script nodes (sandboxed iframe + Worker, `@input` header, `telecode_script_*`) | generated / data-driven layers |
+| 0016 theme axes: cross-collection aliases resolve in the node's mode for that collection; `telecode_theme_*` | light/dark × brand × density |
+| 0017 component slots on instance-swap properties (`telecode_slot_*`) | per-instance content that survives `.fig` |
+| 0018 shader (SkSL runtime effect) and mesh-gradient (Coons patch) fills as CUSTOM paints + plugin data (`telecode_fill_*`) | procedural fills |
 
 - aiohttp serves `/design/editor/*` with `application/wasm` for `.wasm` and an `index.html` fallback.
 - The editor's built-in AI chat is pointed at the proxy (`openai-compatible`, base `…:1235/v1`) or replaced
@@ -113,7 +121,11 @@ Built once off-box with Bun from a pinned release tag plus `patches/open-pencil/
 ```
 projects/<id>.json            {id,title,kind,design_system_id,agent_id,session_id,current_version,archived,…}
 projects/<id>/                ← agent cwd
-  doc.fig                     canvas (open-pencil)                                          ← done
+  docs/<doc>.fig              canvas documents (open-pencil); a legacy doc.fig moves to
+                              docs/main.fig on first access                                 ← done
+  docs/canvases.json          {default, docs:[{id, name, created_at, updated_at}]}          ← done
+  docs/<doc>.fig.json         deterministic JSON mirror, written by the editor on save      ← done
+  scripts/*.js                script-node programs (any project .js path)                   ← done
   boards.json                 {frame_node_id: {src, width, height}}                         ← done
   imports/*.pen               imported pen.dev files                                        ← done
   comments.json               [{id, board_id, anchor:{node_id|selector|source_loc}, author, note,
@@ -123,7 +135,7 @@ projects/<id>/                ← agent cwd
   chats/<chat>.md             transcripts (handoff format)
   *.html *.jsx *.css assets/ uploads/ scraps/*.napkin     HTML-board sources
   .versions/manifest.json     [{v, files{path:sha256}, prompt, parent, origin: agent|user|tweak, at}]
-  .versions/<sha>             content-addressed snapshots (incl. doc.fig)
+  .versions/<sha>             content-addressed snapshots (incl. docs/*.fig + mirrors)
   _ds/<system>/               staged copy of the attached design system (read-only to the agent)
 systems/<id>.json + systems/<id>/   see §4.4 (format mirrors seeds/)
 templates/<id>/                     saved projects with intro text + cover
@@ -157,9 +169,11 @@ Previews served from a **separate origin** (second port) with CSP, not just `san
 Inherited: CanvasKit renderer, Yoga flex + grid, pen tool / vector editing / booleans, components +
 variants + instances, variables & collections, text + fonts, image/stock fills, icons, layers/props panels,
 Code panel, XPath query, lint, token/cluster analysis, JSX/SVG/PDF/PPTX/PNG/`.fig` export, `.fig` +
-`.pen` import, 113 agent tools. To add or verify: pen.dev-parity items open-pencil lacks (slots, theme axes
-on variables, `placeholder` "working…" frames, mesh/shader fills, script nodes, Slides panel + Present,
-keyboard map parity) — tracked in parity §B.
+`.pen` import, 113 agent tools. Added by patches: `placeholder` "working…" frames, Slides panel +
+Present (0010–0011), several documents + JSON mirror (0013–0014), script nodes (0015), theme axes (0016),
+slots (0017), shader + mesh fills (0018) — the canvas bar's **Theme** menu and **Layer** panel
+(`app/canvas_extras.js`) drive the last three. Still open: keyboard map parity and the gaps listed per row
+in parity §B.
 
 ### 4.4 Design systems (creator)
 - Package (both seeds and user systems): `system.json`, `DESIGN.md` (Sources, Context, Colour, Type,

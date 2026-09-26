@@ -62,7 +62,9 @@ Need a change in someone else's file? Put it in your report as "request for <own
 
 ## 3. Data on disk (per project, `data/design/projects/<pid>/`)
 
-Already implemented by `store.py`: `<pid>.json`, `doc.fig`, `boards.json`, `imports/`, `comments.json`.
+Already implemented by `store.py`: `<pid>.json`, `docs/<doc>.fig` + `docs/canvases.json` (canvas documents;
+a legacy `doc.fig` moves to `docs/main.fig` on first access) and `docs/<doc>.fig.json` (the editor's JSON
+mirror), `boards.json`, `imports/`, `comments.json`.
 New (W1 unless noted):
 
 ```
@@ -73,7 +75,7 @@ assets.json               {"assets":[{id, name, group, path, board_id?, viewport
                             subtitle?, status:"needs-review"|"approved"|"changes-requested", versions:[v…]}]}
 .versions/manifest.json   {"versions":[{v, at, origin:"agent"|"user"|"tweak"|"restore", turn_id?, prompt?,
                             parent, files:{rel_path: sha256}}]}
-.versions/objects/<sha256>   content-addressed blobs (doc.fig included)
+.versions/objects/<sha256>   content-addressed blobs (canvas documents and mirrors included)
 _ds/<slug>/               staged copy of the attached design system (W5 provides stage function)
 .td/brief.md              staged charter for the CLI (never overwrite a user's root CLAUDE.md / AGENTS.md;
                           the CLI is pointed at it through the prompt — see §4.2)
@@ -336,17 +338,18 @@ Specimen cards render through the preview origin: W5 adds nothing there; the fro
 ## 10. W6 canvas editor (open-pencil) — as built
 
 `python tools/build_open_pencil.py` (`--check` = patches still apply; `--tag` = try another release) →
-clones into `data/design/.open-pencil-src`, applies `patches/open-pencil/0001…0012`, bun install + build,
+clones into `data/design/.open-pencil-src`, applies `patches/open-pencil/0001…0018`, bun install + build,
 vendors `proxy/static/design/editor/` (+ `NOTICE`, `BUILD_INFO.json`) and dumps
 `services/design/editor_tools.json`. Never edit inside the source dir — every build hard-resets it.
 
 - **Board keys.** open-pencil renumbers node ids on every reopen, so an HTML board is identified by a
-  permanent *board key* stored in the frame's plugin data inside `doc.fig`; `boards.json` is keyed by
+  permanent *board key* stored in the frame's plugin data inside its canvas document; `boards.json` is keyed by
   board key. Register with the canvas tool `telecode_board_mark {node_id, src, width, height}` (or
   `POST …/editor/boards`), list with `telecode_board_list`, remove with `telecode_board_unmark`.
 - **Server:** `/design/editor/{path}` (wasm MIME, immutable hashed assets, SPA fallback),
   WebSocket `/api/design/editor-bridge?project=<pid>` (same-origin only; token from `?bridge_token=` or the
-  injected meta tag), `GET …/projects/{pid}/editor` (status incl. `has_canvas`), `POST …/editor/call`,
+  injected meta tag; `&doc=<id>` names the document the page has open), `GET …/projects/{pid}/editor[?doc=]`
+  (status incl. `has_canvas` of that document, `default_doc`, `open_doc`), `POST …/editor/call`,
   `POST/DELETE …/editor/boards`, `GET /api/design/canvas/tools`, `POST …/canvas/call` (W7 aliases).
   `editor_bridge.call(pid, tool, args)` / `call_mcp()` / `call_threadsafe()`.
 - **Editor → host** messages are `{type, payload}`: `td-editor:ready`, `td-editor:viewport {x, y, zoom,
@@ -364,6 +367,33 @@ vendors `proxy/static/design/editor/` (+ `NOTICE`, `BUILD_INFO.json`) and dumps
   `POST …/editor/tokens/{push,pull}`, `GET …/editor/slides`, `POST …/editor/slides/{order,pdf}`.
   Editor → host adds `td-editor:placeholders [{node_id, label, stale, x, y, width, height}]` and
   `td-editor:present {node_id}` (Ctrl/Cmd+Enter inside the editor).
+- **Canvas documents + mirror (0013–0014):** REST `GET/POST …/docs` (`{name?, copy_from?, default?}` →
+  `{doc}`; list = `{default, docs:[{id, name, default, has_canvas, bytes, path, mirror}], open}`),
+  `PATCH/DELETE …/docs/{doc}` (never the open one → 409, never the last → 400), `GET/PUT …/docs/{doc}/canvas`
+  (octet-stream `.fig`), `GET/PUT …/docs/{doc}/canvas.json` (JSON object; stored canonically). The legacy
+  `GET/PUT …/canvas` is the default document. Tools: `telecode_doc_list {}` / `telecode_doc_create {name?,
+  copy_from?, open?}` (answered by the proxy) and `telecode_doc_open {doc}` (the page reloads on it; the call
+  returns once it has registered again). Editor → host `td-editor:ready` / `saved` carry `doc_id`; host →
+  editor `td-editor:open {pid, doc?}`.
+- **Script nodes (0015):** `telecode_script_create {file, source?, name?, x?, y?, width?, height?, inputs?,
+  seed?, parent_id?}` · `telecode_script_set {node_id, inputs?, file?, seed?: n|"new"}` · `telecode_script_run
+  {node_id?}` · `telecode_script_list` · `telecode_script_convert {node_id}`; the page polls
+  `GET …/editor/scripts?path=…[&text=1]` → `{files:{path:{exists, sha256, bytes, text?}}}` (script
+  extensions inside the project only). Editor → host `td-editor:scripts {scripts, components}`,
+  `td-editor:script-result {request_id, ok, result|error}`; host → editor `td-editor:script-create|set|run|convert`.
+- **Theme axes (0016):** `telecode_theme_get {node_id?}` → `{explicit:{Collection: Mode}, resolved:{Collection:
+  {mode, from, from_id}}, axes}` (or `{axes:[{collection, modes, default_mode, active_mode}]}`) ·
+  `telecode_theme_set {node_id, modes:{Collection: Mode|null}}` · `telecode_theme_active {modes}`.
+- **Slots (0017):** `telecode_slot_create {node_id, name?}` · `telecode_slot_list {node_id?}` → `{kind:
+  "component"|"instance"|"none", slots}` (without node_id `{components, instances}`) · `telecode_slot_fill
+  {instance_id, slot, jsx | node_ids | component_id}` · `telecode_slot_reset {instance_id, slot?}`. Plugin data
+  `telecode/slot` (the slot instance in the component), `telecode/slot-content`, `telecode/slot-library`.
+- **Procedural fills (0018):** `telecode_fill_set {node_id, kind:"shader"|"mesh", index?, fallback?, preset? |
+  sksl?, uniforms?, colors? | columns, rows, points, smooth?}` · `telecode_fill_list {node_id?}` ·
+  `telecode_fill_remove {node_id, index}` · `telecode_fill_presets`. Stored as a CUSTOM paint
+  (`customEffectId`) + plugin data `telecode/fill:<customEffectId>` (JSON definition).
+- The shell drives 0016–0018 from `app/canvas_extras.js` (canvas bar **Theme** menu, **Layer** panel) through
+  `POST …/editor/call` — no dedicated REST routes.
 - Settings: `design.editor.allow_eval` (default false — open-pencil's `eval` tool), `design.editor.disabled_tools` (list).
 - Prompts `canvas.md` + `layer_boards.md` describe the real tools via `design_canvas_call`.
 

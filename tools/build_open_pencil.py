@@ -164,8 +164,10 @@ def apply_patches(src: Path, check_only: bool) -> List[Dict[str, Any]]:
         if not ok:
             _log(f"!! {p.name} does not apply:\n{results[-1]['error']}")
             break
-        if not check_only:
-            _run([git, "apply", "--whitespace=nowarn", str(p)], src)
+        # Applied in --check mode too: later patches build on files earlier ones add
+        # (0007 creates scripts/telecode-dump-tools.ts, 0008+ extend it), so checking
+        # each against the bare tag would fail. The source tree is disposable.
+        _run([git, "apply", "--whitespace=nowarn", str(p)], src)
         _log(f"   ok  {p.name}")
     return results
 

@@ -1,0 +1,440 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Prithwiraj Samanta <app@datainsights.ae>
+Date: Fri, 25 Sep 2026 19:16:47 +0530
+Subject: [PATCH] telecode: several canvas documents per project
+
+A TeleDesign project now holds docs/<doc>.fig documents with a default.
+?doc=<id> picks the document (absent = the default); the storage binding is
+<project>/<doc>, the bridge socket reports which document the page has open,
+td-editor:open takes {pid, doc} and td-editor:ready/saved carry doc_id.
+telecode_doc_open reloads the page on another document; telecode_doc_list /
+telecode_doc_create are answered by the proxy.
+---
+ scripts/telecode-dump-tools.ts            | 42 ++++++++++++++++++-
+ src/app/integrations/telecode/commands.ts | 15 +++++++
+ src/app/integrations/telecode/config.ts   | 13 +++++-
+ src/app/integrations/telecode/host.ts     | 43 ++++++++++++++-----
+ src/app/integrations/telecode/storage.ts  | 51 +++++++++++++++++------
+ src/app/tabs/index.ts                     |  2 +
+ tests/engine/app/telecode/storage.test.ts | 27 ++++++++++++
+ 7 files changed, 168 insertions(+), 25 deletions(-)
+ create mode 100644 tests/engine/app/telecode/storage.test.ts
+
+diff --git a/scripts/telecode-dump-tools.ts b/scripts/telecode-dump-tools.ts
+index 4d89620e..1a40692b 100644
+--- a/scripts/telecode-dump-tools.ts
++++ b/scripts/telecode-dump-tools.ts
+@@ -61,7 +61,7 @@ const extra = [
+   {
+     name: 'save_file',
+     description:
+-      'Save the current document back to its TeleDesign project (doc.fig). Autosave normally does this.',
++      'Save the open canvas document back to its TeleDesign project (docs/<doc>.fig). Autosave normally does this.',
+     command: 'save_file',
+     effect: 'write',
+     availability: 'default',
+@@ -246,6 +246,46 @@ const extra = [
+     enabled: true,
+     input_schema: schemaOf(v.object({}))
+   },
++  {
++    name: 'telecode_doc_list',
++    description:
++      'List the canvas documents of this project: {default, open, docs:[{id, name, default, has_canvas, bytes, path, mirror}]}. `open` is the one the editor has loaded — every other canvas tool acts on it. Each document is docs/<id>.fig; docs/<id>.fig.json is its read-only JSON mirror (diff it, never edit it).',
++    command: 'local',
++    effect: 'read',
++    availability: 'default',
++    capabilities: ['document:read'],
++    enabled: true,
++    input_schema: { type: 'object', properties: {} }
++  },
++  {
++    name: 'telecode_doc_create',
++    description:
++      'Create another canvas document in this project (empty, or a copy of copy_from). With open=true the editor switches to it before returning. Returns {doc}.',
++    command: 'local',
++    effect: 'write',
++    availability: 'default',
++    capabilities: ['document:write'],
++    enabled: true,
++    input_schema: {
++      type: 'object',
++      properties: {
++        name: { type: 'string', description: 'Document name' },
++        copy_from: { type: 'string', description: 'Document id to copy' },
++        open: { type: 'boolean', description: 'Open it in the editor now' }
++      }
++    }
++  },
++  {
++    name: 'telecode_doc_open',
++    description:
++      'Switch the editor to another canvas document of this project (see telecode_doc_list). The editor reloads; the call returns once it is back, and later canvas tools act on that document.',
++    command: 'telecode_doc_open',
++    effect: 'read',
++    availability: 'default',
++    capabilities: ['document:read'],
++    enabled: true,
++    input_schema: schemaOf(v.object({ doc: v.pipe(v.string(), v.description('Document id')) }))
++  },
+   {
+     name: 'get_codegen_prompt',
+     description:
+diff --git a/src/app/integrations/telecode/commands.ts b/src/app/integrations/telecode/commands.ts
+index e4841728..c54085a6 100644
+--- a/src/app/integrations/telecode/commands.ts
++++ b/src/app/integrations/telecode/commands.ts
+@@ -14,6 +14,7 @@
+  *   telecode_placeholder_set   {node_id, label?}  mark a frame "working…"
+  *   telecode_placeholder_clear {node_id?}         unmark one frame, or all
+  *   telecode_placeholder_list  {}
++ *   telecode_doc_open          {doc}              reload this page on another canvas document
+  *
+  * They ride the same request/response protocol as the upstream commands; the
+  * proxy uses them to keep boards.json keyed by something that survives reloads.
+@@ -21,6 +22,7 @@
+ import type { AutomationTarget } from '@/app/automation/bridge/target'
+ 
+ import { isBoardKey, listBoards, markBoard, unmarkBoard } from './boards'
++import { DOC_ID, readTelecodeConfig } from './config'
+ import { exportHTML, importHTML, importLayout, type LayoutSnapshot } from './html-layers'
+ import { clearPlaceholders, listPlaceholders, setPlaceholder } from './placeholders'
+ import { listSlides, reorderSlides } from './slides'
+@@ -111,5 +113,18 @@ export const telecodeAutomationCommands: Partial<Record<string, Handler>> = {
+   },
+   async telecode_placeholder_list(target) {
+     return { ok: true, result: { placeholders: listPlaceholders(target.store) } }
++  },
++  async telecode_doc_open(_target, args) {
++    const { doc } = record(args)
++    if (typeof doc !== 'string' || !DOC_ID.test(doc)) throw new Error('Missing or invalid "doc"')
++    const config = readTelecodeConfig()
++    if (!config) throw new Error('Not embedded in TeleDesign')
++    // Reply first, then navigate: the page (and its bridge socket) is per document.
++    window.setTimeout(() => {
++      const params = new URLSearchParams(window.location.search)
++      params.set('doc', doc)
++      window.location.search = params.toString()
++    }, 50)
++    return { ok: true, result: { opening: doc, project_id: config.projectId } }
+   }
+ }
+diff --git a/src/app/integrations/telecode/config.ts b/src/app/integrations/telecode/config.ts
+index 397716b3..ccafc045 100644
+--- a/src/app/integrations/telecode/config.ts
++++ b/src/app/integrations/telecode/config.ts
+@@ -10,6 +10,11 @@ import { IS_BROWSER, IS_TAURI } from '@open-pencil/core/constants'
+ export interface TelecodeConfig {
+   /** TeleDesign project id (32 lowercase hex characters). */
+   projectId: string
++  /**
++   * Which of the project's canvas documents to open (`docs/<id>.fig`), from
++   * `?doc=`; null = the project's default document.
++   */
++  docId: string | null
+   /** Origin that serves the REST API — always the page's own origin. */
+   apiOrigin: string
+   /** WebSocket URL of the automation bridge (register/request/response). */
+@@ -21,6 +26,7 @@ export interface TelecodeConfig {
+ }
+ 
+ const PROJECT_ID = /^[0-9a-f]{32}$/
++export const DOC_ID = /^[a-z0-9][a-z0-9-]{0,39}$/
+ const BRIDGE_PATH = '/api/design/editor-bridge'
+ 
+ let cached: TelecodeConfig | null | undefined
+@@ -52,11 +58,16 @@ export function readTelecodeConfig(search?: string): TelecodeConfig | null {
+   const params = new URLSearchParams(search ?? window.location.search)
+   const projectId = params.get('project')?.trim().toLowerCase() ?? ''
+   if (!PROJECT_ID.test(projectId)) return (cached = null)
++  const rawDoc = params.get('doc')?.trim().toLowerCase() ?? ''
++  const docId = DOC_ID.test(rawDoc) ? rawDoc : null
+   const apiOrigin = window.location.origin
+   const wsOrigin = apiOrigin.replace(/^http/, 'ws')
+-  const defaultBridge = `${wsOrigin}${BRIDGE_PATH}?project=${projectId}`
++  // The bridge learns which document this page has open, so the proxy can report it.
++  const docQuery = docId ? `&doc=${docId}` : ''
++  const defaultBridge = `${wsOrigin}${BRIDGE_PATH}?project=${projectId}${docQuery}`
+   const config: TelecodeConfig = {
+     projectId,
++    docId,
+     apiOrigin,
+     bridgeURL: sameOriginWebSocketURL(params.get('bridge'), defaultBridge),
+     bridgeHealthURL: `${apiOrigin}${BRIDGE_PATH}/health?project=${projectId}`,
+diff --git a/src/app/integrations/telecode/host.ts b/src/app/integrations/telecode/host.ts
+index ec1512d2..938594d0 100644
+--- a/src/app/integrations/telecode/host.ts
++++ b/src/app/integrations/telecode/host.ts
+@@ -6,17 +6,17 @@
+  * This module is the editor half of that contract, over window.postMessage with
+  * the parent (same origin only):
+  *
+- *   editor → host   td-editor:ready       {project_id, version, page_id, page_name}
++ *   editor → host   td-editor:ready       {project_id, doc_id, version, page_id, page_name}
+  *                   td-editor:viewport    {x, y, zoom, canvas:{left, top, width, height}}
+  *                   td-editor:frames      [{id, node_id, name, x, y, width, height, src}]
+  *                   td-editor:selection   {ids, nodes:[{id, name, type, x, y, width, height, board?}]}
+- *                   td-editor:saved       {project_id, bytes, at}
++ *                   td-editor:saved       {project_id, doc_id, bytes, at}
+  *                   td-editor:frame-created {id, node_id, request_id?}
+  *                   td-editor:board-marked  {id, node_id, request_id?}
+  *                   td-editor:error       {message, request_id?}
+  *                   td-editor:placeholders [{node_id, name, label, stale, x, y, width, height}]
+  *                   td-editor:present     {node_id?}   (Ctrl/Cmd+Enter in the editor)
+- *   host → editor   td-editor:open        {pid}
++ *   host → editor   td-editor:open        {pid, doc?}   (doc: a canvas document id; omitted = default)
+  *                   td-editor:focus       {node_id}            (a node id or a board key)
+  *                   td-editor:insert-frame {name, width, height, x?, y?, key?, request_id?}
+  *                   td-editor:mark-board  {node_id, key?, request_id?}
+@@ -48,7 +48,8 @@ import {
+ } from './boards'
+ import type { TelecodeConfig } from './config'
+ import { listPlaceholders, onPlaceholdersChanged } from './placeholders'
+-import { onTelecodeCanvasSaved } from './storage'
++import { DOC_ID } from './config'
++import { onTelecodeCanvasSaved, telecodeDocumentId } from './storage'
+ 
+ type Boards = Record<string, { src?: string; width?: number; height?: number }>
+ 
+@@ -121,6 +122,8 @@ export async function startTelecodeHost(config: TelecodeConfig): Promise<() => v
+   let placeholderIds = new Set<string>()
+   let placeholdersQueued = false
+   let viewportQueued = false
++  // The canvas document this page has open (the project's default when ?doc= is absent).
++  let openDocId: string | null = config.docId
+ 
+   const handlers = createAutomationCommandHandlers(makeFigmaFromStore)
+ 
+@@ -247,6 +250,7 @@ export async function startTelecodeHost(config: TelecodeConfig): Promise<() => v
+     const page = store.graph.getNode(store.state.currentPageId)
+     post('ready', {
+       project_id: config.projectId,
++      doc_id: openDocId,
+       version: __OPENPENCIL_APP_VERSION__,
+       page_id: store.state.currentPageId,
+       page_name: page?.name ?? ''
+@@ -330,14 +334,17 @@ export async function startTelecodeHost(config: TelecodeConfig): Promise<() => v
+     switch (kind) {
+       case 'open': {
+         const pid = typeof msg.pid === 'string' ? msg.pid.toLowerCase() : ''
+-        if (!PROJECT_ID.test(pid) || pid === config.projectId) {
++        const doc = typeof msg.doc === 'string' && DOC_ID.test(msg.doc) ? msg.doc : null
++        if (!PROJECT_ID.test(pid) || (pid === config.projectId && (doc ?? openDocId) === openDocId)) {
+           postState()
+           return
+         }
+-        // One project per page load: the bridge socket and storage binding are
++        // One document per page load: the bridge socket and storage binding are
+         // both keyed by it, so switching is a navigation.
+         const params = new URLSearchParams(window.location.search)
+         params.set('project', pid)
++        if (doc) params.set('doc', doc)
++        else params.delete('doc')
+         window.location.search = params.toString()
+         return
+       }
+@@ -382,9 +389,9 @@ export async function startTelecodeHost(config: TelecodeConfig): Promise<() => v
+   window.addEventListener('message', listener)
+   cleanups.push(() => window.removeEventListener('message', listener))
+   cleanups.push(
+-    onTelecodeCanvasSaved((projectId, bytes) => {
+-      if (projectId === config.projectId) {
+-        post('saved', { project_id: projectId, bytes, at: new Date().toISOString() })
++    onTelecodeCanvasSaved((projectId, bytes, docId) => {
++      if (projectId === config.projectId && docId === config.docId) {
++        post('saved', { project_id: projectId, doc_id: openDocId, bytes, at: new Date().toISOString() })
+       }
+     })
+   )
+@@ -422,9 +429,25 @@ export async function startTelecodeHost(config: TelecodeConfig): Promise<() => v
+   } catch (error) {
+     console.warn('[TeleDesign] project record unavailable:', error)
+   }
++  try {
++    const res = await fetch(`${config.apiOrigin}/api/design/projects/${config.projectId}/docs`, {
++      cache: 'no-store'
++    })
++    if (res.ok) {
++      const listing = (await res.json()) as {
++        default?: string
++        docs?: Array<{ id: string; name?: string }>
++      }
++      openDocId = config.docId ?? listing.default ?? null
++      const doc = listing.docs?.find((d) => d.id === openDocId)
++      if (doc && listing.docs && listing.docs.length > 1 && doc.name) title = `${title} — ${doc.name}`
++    }
++  } catch (error) {
++    console.warn('[TeleDesign] document list unavailable:', error)
++  }
+ 
+   await loadBoards()
+-  bindStore(await openTelecodeProject(config.projectId, title))
++  bindStore(await openTelecodeProject(telecodeDocumentId(config.projectId, config.docId), title))
+   // The active tab can change under us (e.g. the user opens a second file).
+   const tabTimer = window.setInterval(() => {
+     if (activeTab.value) bindStore(getActiveStore())
+diff --git a/src/app/integrations/telecode/storage.ts b/src/app/integrations/telecode/storage.ts
+index 8f9ca882..12e9d91e 100644
+--- a/src/app/integrations/telecode/storage.ts
++++ b/src/app/integrations/telecode/storage.ts
+@@ -1,9 +1,11 @@
+ /**
+  * `telecode` storage provider: TeleDesign projects stored by the telecode proxy.
+  *
+- * A project's canvas is one .fig at GET/PUT /api/design/projects/{id}/canvas.
+- * The proxy is authoritative (it versions and restores doc.fig itself), so a
+- * write goes straight to it instead of through the local-first IndexedDB mirror
++ * A project holds one or more canvas documents. A storage document id is either
++ * `<project>` — its default document, GET/PUT /api/design/projects/{id}/canvas —
++ * or `<project>/<doc>` — GET/PUT /api/design/projects/{id}/docs/{doc}/canvas.
++ * The proxy is authoritative (it versions and restores the .fig files itself), so
++ * a write goes straight to it instead of through the local-first IndexedDB mirror
+  * the S3 provider uses — a mirror would shadow a restore made on the server.
+  */
+ import { defineStorageProvider } from '@/app/integrations/storage/registry'
+@@ -17,10 +19,11 @@ import type {
+ export const TELECODE_STORAGE_PROVIDER_ID = 'telecode'
+ 
+ const PROJECT_ID = /^[0-9a-f]{32}$/
++const DOC_ID = /^[a-z0-9][a-z0-9-]{0,39}$/
+ 
+ type ProjectRecord = { id: string; title?: string; updated_at?: string; archived?: boolean }
+ 
+-type SavedListener = (projectId: string, bytes: number) => void
++type SavedListener = (projectId: string, bytes: number, docId: string | null) => void
+ const savedListeners = new Set<SavedListener>()
+ 
+ /** Notified after every successful PUT of a project's canvas. */
+@@ -29,13 +32,32 @@ export function onTelecodeCanvasSaved(listener: SavedListener): () => void {
+   return () => savedListeners.delete(listener)
+ }
+ 
++/** The storage document id for a project's document (`null` = its default one). */
++export function telecodeDocumentId(projectId: string, docId: string | null): string {
++  return docId ? `${projectId}/${docId}` : projectId
++}
++
++/** {projectId, docId} from a storage document id; throws on anything else. */
++export function parseTelecodeDocumentId(id: string): { projectId: string; docId: string | null } {
++  const [projectId, docId = null, ...rest] = id.split('/')
++  if (!PROJECT_ID.test(projectId) || rest.length || (docId !== null && !DOC_ID.test(docId))) {
++    throw new Error(`Invalid TeleDesign document id: ${id}`)
++  }
++  return { projectId, docId }
++}
++
+ function apiURL(path: string): string {
+   return `${window.location.origin}/api/design${path}`
+ }
+ 
+ function projectPath(id: string, suffix = ''): string {
+-  if (!PROJECT_ID.test(id)) throw new Error(`Invalid TeleDesign project id: ${id}`)
+-  return `/projects/${id}${suffix}`
++  const { projectId } = parseTelecodeDocumentId(id)
++  return `/projects/${projectId}${suffix}`
++}
++
++function canvasPath(id: string): string {
++  const { projectId, docId } = parseTelecodeDocumentId(id)
++  return docId ? `/projects/${projectId}/docs/${docId}/canvas` : `/projects/${projectId}/canvas`
+ }
+ 
+ async function readJSON<T>(res: Response): Promise<T> {
+@@ -52,21 +74,23 @@ function toDocument(project: ProjectRecord): StorageDocument {
+   }
+ }
+ 
+-/** The project's saved canvas, or null when it has never been saved. */
++/** The document's saved canvas, or null when it has never been saved. */
+ export async function fetchTelecodeCanvas(
+   id: string,
+   onProgress?: (progress: StorageTransferProgress) => void,
+   signal?: AbortSignal
+ ): Promise<Uint8Array | null> {
+-  // Ask first whether a canvas exists, so a never-saved project does not log a
++  const { docId } = parseTelecodeDocumentId(id)
++  // Ask first whether a canvas exists, so a never-saved document does not log a
+   // failed request (a 404) in the console on every open.
+-  const probe = await fetch(apiURL(projectPath(id, '/editor')), { signal, cache: 'no-store' })
+-  if (probe.status === 404) throw new Error('TeleDesign project not found')
++  const query = docId ? `?doc=${docId}` : ''
++  const probe = await fetch(apiURL(projectPath(id, `/editor${query}`)), { signal, cache: 'no-store' })
++  if (probe.status === 404) throw new Error('TeleDesign project or document not found')
+   if (probe.ok) {
+     const { editor } = (await probe.json()) as { editor?: { has_canvas?: boolean } }
+     if (editor?.has_canvas === false) return null
+   }
+-  const res = await fetch(apiURL(projectPath(id, '/canvas')), { signal, cache: 'no-store' })
++  const res = await fetch(apiURL(canvasPath(id)), { signal, cache: 'no-store' })
+   if (res.status === 404) {
+     // 404 means either "no canvas yet" or "no such project"; tell them apart.
+     const project = await fetch(apiURL(projectPath(id)), { signal, cache: 'no-store' })
+@@ -84,11 +108,12 @@ export async function putTelecodeCanvas(
+   bytes: Uint8Array,
+   onProgress?: (progress: StorageTransferProgress) => void
+ ): Promise<void> {
++  const { projectId, docId } = parseTelecodeDocumentId(id)
+   const body = new Uint8Array(bytes.byteLength)
+   body.set(bytes)
+   // application/octet-stream is not CORS-simple: the proxy relies on that so a
+   // page from the preview origin cannot forge this write.
+-  const res = await fetch(apiURL(projectPath(id, '/canvas')), {
++  const res = await fetch(apiURL(canvasPath(id)), {
+     method: 'PUT',
+     headers: { 'Content-Type': 'application/octet-stream' },
+     body
+@@ -103,7 +128,7 @@ export async function putTelecodeCanvas(
+     throw new Error(`Canvas save failed: ${detail}`)
+   }
+   onProgress?.({ transferredBytes: bytes.byteLength, totalBytes: bytes.byteLength })
+-  for (const listener of savedListeners) listener(id, bytes.byteLength)
++  for (const listener of savedListeners) listener(projectId, bytes.byteLength, docId)
+ }
+ 
+ export function createTelecodeStorageAdapter(): StorageAdapter {
+diff --git a/src/app/tabs/index.ts b/src/app/tabs/index.ts
+index 1ea26628..32df4fde 100644
+--- a/src/app/tabs/index.ts
++++ b/src/app/tabs/index.ts
+@@ -402,6 +402,8 @@ export async function openStorageDocumentInNewTab(document: StorageDocument): Pr
+  * Open a TeleDesign project's canvas (telecode embedding) bound to the `telecode`
+  * storage provider, so Save and autosave write it back to the proxy. A project
+  * that has never been saved opens as an empty document with the same binding.
++ * `projectId` is a storage document id: `<project>` (its default canvas) or
++ * `<project>/<doc>` (one of its canvas documents, see telecode/storage.ts).
+  */
+ export async function openTelecodeProject(projectId: string, name: string): Promise<EditorStore> {
+   const binding = { providerId: TELECODE_STORAGE_PROVIDER_ID, documentId: projectId }
+diff --git a/tests/engine/app/telecode/storage.test.ts b/tests/engine/app/telecode/storage.test.ts
+new file mode 100644
+index 00000000..bfa73489
+--- /dev/null
++++ b/tests/engine/app/telecode/storage.test.ts
+@@ -0,0 +1,27 @@
++import { describe, expect, test } from 'bun:test'
++
++import {
++  parseTelecodeDocumentId,
++  telecodeDocumentId
++} from '@/app/integrations/telecode/storage'
++
++const PID = '0123456789abcdef0123456789abcdef'
++
++describe('telecode storage document ids', () => {
++  test('a bare project id is its default document', () => {
++    expect(parseTelecodeDocumentId(PID)).toEqual({ projectId: PID, docId: null })
++    expect(telecodeDocumentId(PID, null)).toBe(PID)
++  })
++
++  test('project/doc round-trips', () => {
++    const id = telecodeDocumentId(PID, 'wireframes-2')
++    expect(id).toBe(`${PID}/wireframes-2`)
++    expect(parseTelecodeDocumentId(id)).toEqual({ projectId: PID, docId: 'wireframes-2' })
++  })
++
++  test('anything else is refused', () => {
++    for (const bad of ['', 'x', `${PID}/`, `${PID}/UPPER`, `${PID}/a/b`, `${PID}/../x`, `../${PID}`]) {
++      expect(() => parseTelecodeDocumentId(bad)).toThrow()
++    }
++  })
++})

@@ -386,7 +386,7 @@ export function drawRail() {
     if (!boards.length) body.appendChild(h("div", { class: "faint", style: { padding: "4px 8px 8px", fontSize: "12px" } }, "Pages the agent writes appear here."));
     boards.forEach((f) => body.appendChild(fileItem(f, true)));
     // Dot-files (sketch thumbnails like scraps/.x.thumbnail.png) are support files, not listed.
-    const rest = S.files.filter((f) => !boards.includes(f) && !INTERNAL.has(f.path) && !f.path.split("/").pop().startsWith("."));
+    const rest = S.files.filter((f) => !boards.includes(f) && !isInternal(f.path) && !f.path.split("/").pop().startsWith("."));
     if (rest.length) {
       body.append(h("div", { class: "rail-group" }, icon("folder"), "All files"));
       body.append(tree(rest));
@@ -427,7 +427,10 @@ function tree(files) {
   return h("div", null, drawNode(rootNode, ""));
 }
 // Store bookkeeping files: not design sources, so not listed.
-const INTERNAL = new Set(["boards.json", "comments.json", "assets.json", "thumbnail.webp", "doc.fig"]);
+const INTERNAL = new Set(["boards.json", "comments.json", "assets.json", "thumbnail.webp", "doc.fig", "docs/canvases.json"]);
+// Canvas documents (docs/<id>.fig) open in the canvas, not as files; their read-only
+// JSON mirrors (docs/<id>.fig.json) stay listed for review and diffs.
+const isInternal = (path) => INTERNAL.has(path) || /^docs\/[^/]+\.fig$/.test(path);
 const KIND_ICON = { html: "canvas", script: "code", style: "palette", image: "image", text: "notes", json: "code", napkin: "draw", other: "file" };
 function fileItem(f, asBoard) {
   const a = assetFor(f.path);

@@ -3,8 +3,11 @@
 Layout (under <settings_dir>/data/design/):
 
     projects/<id>.json                 project record
-    projects/<id>/doc.fig              the canvas, saved by the open-pencil editor (.fig bytes:
-                                       Kiwi + Zstd + ZIP). Absent until the first save.
+    projects/<id>/docs/<doc>.fig       canvas documents, saved by the open-pencil editor (.fig bytes:
+                                       Kiwi + Zstd + ZIP); docs/canvases.json names them and the
+                                       default one; docs/<doc>.fig.json is a read-only JSON mirror
+                                       for diffs. A legacy projects/<id>/doc.fig moves to
+                                       docs/main.fig on first access.
     projects/<id>/boards.json          HTML boards: {board_key: {src, width, height}}. .fig has
                                        no node for a live page, so a frame marks the spot and the
                                        host overlays the sandboxed iframe on it. Keyed by a board
@@ -219,30 +222,312 @@ def project_dir(pid: str) -> Optional[Path]:
     return _projects_dir() / pid if get_project(pid) else None
 
 
-# ── Canvas document ──────────────────────────────────────────────────────
+# ── Canvas documents ─────────────────────────────────────────────────────
+#
+# A project holds one or more canvas documents:
+#
+#     docs/canvases.json         {"default": "<doc id>", "docs": [{id, name, created_at, updated_at}]}
+#     docs/<doc id>.fig       the document (absent until its first save)
+#     docs/<doc id>.fig.json  deterministic JSON mirror written by the editor on every save —
+#                             for diffs and review only, never loaded
+#
+# A project from before multi-doc keeps its canvas at <project>/doc.fig; the first access moves
+# it to docs/main.fig as the default document (`_migrate_docs`). Both paths live in the
+# versioned tree, so restoring a pre-migration version brings back doc.fig and the next access
+# migrates it again.
 
-def get_canvas(pid: str) -> Optional[bytes]:
+DOCS_DIR = "docs"
+LEGACY_CANVAS = "doc.fig"
+DEFAULT_DOC_ID = "main"
+MAX_DOCS = 50
+MAX_MIRROR_BYTES = 32 * 1024 * 1024
+_DOC_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+
+
+def valid_doc_id(value: Any) -> bool:
+    return isinstance(value, str) and bool(_DOC_ID_RE.match(value))
+
+
+def canvas_rel(doc_id: str) -> str:
+    return f"{DOCS_DIR}/{doc_id}.fig"
+
+
+def is_canvas_path(rel: str) -> bool:
+    """A project-relative path that is a canvas document (legacy doc.fig or docs/<id>.fig)."""
+    if rel == LEGACY_CANVAS:
+        return True
+    return rel.startswith(DOCS_DIR + "/") and rel.endswith(".fig") and "/" not in rel[len(DOCS_DIR) + 1:]
+
+
+def _doc_name(value: Any, fallback: str = "Untitled canvas") -> str:
+    s = re.sub(r"\s+", " ", value).strip() if isinstance(value, str) else ""
+    return (s or fallback)[:120]
+
+
+def _read_index(d: Path) -> Dict[str, Any]:
+    idx = _read_json(d / DOCS_DIR / "canvases.json")
+    docs = [x for x in (idx or {}).get("docs") or [] if isinstance(x, dict) and valid_doc_id(x.get("id"))]
+    seen: set = set()
+    clean = []
+    for x in docs:
+        if x["id"] in seen:
+            continue
+        seen.add(x["id"])
+        clean.append({"id": x["id"], "name": _doc_name(x.get("name"), x["id"]),
+                      "created_at": x.get("created_at") or _now_iso(),
+                      "updated_at": x.get("updated_at") or x.get("created_at") or _now_iso()})
+    default = (idx or {}).get("default")
+    return {"default": default if default in seen else None, "docs": clean}
+
+
+def _write_index(d: Path, idx: Dict[str, Any]) -> None:
+    _write_json(d / DOCS_DIR / "canvases.json", {"default": idx["default"], "docs": idx["docs"]})
+
+
+def _migrate_docs(d: Path) -> Dict[str, Any]:
+    """The project's doc index, after moving a legacy doc.fig into docs/ (caller holds _lock)."""
+    idx = _read_index(d)
+    docs_dir = d / DOCS_DIR
+    legacy = d / LEGACY_CANVAS
+    changed = False
+    if legacy.is_file():
+        target_id = idx["default"] or DEFAULT_DOC_ID
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        os.replace(legacy, docs_dir / f"{target_id}.fig")
+        if not any(x["id"] == target_id for x in idx["docs"]):
+            idx["docs"].insert(0, {"id": target_id, "name": "Main canvas", "created_at": _now_iso(),
+                                   "updated_at": _now_iso()})
+        idx["default"] = target_id
+        changed = True
+        logger.info("design: moved %s/doc.fig to docs/%s.fig", d.name, target_id)
+    # A .fig with no index entry (index lost, or restored on its own) is still a document.
+    if docs_dir.is_dir():
+        known = {x["id"] for x in idx["docs"]}
+        for f in sorted(docs_dir.glob("*.fig")):
+            if f.stem not in known and valid_doc_id(f.stem):
+                idx["docs"].append({"id": f.stem, "name": f.stem.replace("-", " ").capitalize(),
+                                    "created_at": _now_iso(), "updated_at": _now_iso()})
+                known.add(f.stem)
+                changed = True
+    if not idx["docs"]:
+        idx["docs"] = [{"id": DEFAULT_DOC_ID, "name": "Main canvas", "created_at": _now_iso(),
+                        "updated_at": _now_iso()}]
+        changed = changed or docs_dir.is_dir()
+    if not idx["default"]:
+        ids = [x["id"] for x in idx["docs"]]
+        idx["default"] = DEFAULT_DOC_ID if DEFAULT_DOC_ID in ids else ids[0]
+        changed = changed or docs_dir.is_dir()
+    if changed:
+        _write_index(d, idx)
+    return idx
+
+
+def _doc_view(d: Path, idx: Dict[str, Any], x: Dict[str, Any]) -> Dict[str, Any]:
+    f = d / canvas_rel(x["id"])
+    size = f.stat().st_size if f.is_file() else 0
+    mirror = d / (canvas_rel(x["id"]) + ".json")
+    return {**x, "default": x["id"] == idx["default"], "has_canvas": size > 0, "bytes": size,
+            "path": canvas_rel(x["id"]), "mirror": (canvas_rel(x["id"]) + ".json") if mirror.is_file() else None}
+
+
+def list_docs(pid: str) -> Optional[Dict[str, Any]]:
+    """{"default": id, "docs": [{id, name, default, has_canvas, bytes, path, mirror, …}]}."""
+    with _lock:
+        d = project_dir(pid)
+        if not d:
+            return None
+        idx = _migrate_docs(d)
+        return {"default": idx["default"], "docs": [_doc_view(d, idx, x) for x in idx["docs"]]}
+
+
+def default_doc_id(pid: str) -> Optional[str]:
+    listing = list_docs(pid)
+    return listing["default"] if listing else None
+
+
+def get_doc(pid: str, doc_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    listing = list_docs(pid)
+    if not listing:
+        return None
+    want = doc_id or listing["default"]
+    return next((x for x in listing["docs"] if x["id"] == want), None)
+
+
+def _new_doc_id(name: str, taken: set) -> str:
+    base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:32] or "canvas"
+    if not base[0].isalnum():
+        base = "c" + base
+    cand, n = base, 2
+    while cand in taken:
+        cand = f"{base[:36]}-{n}"
+        n += 1
+    return cand
+
+
+def create_doc(pid: str, name: Any = None, copy_from: Optional[str] = None,
+               make_default: bool = False) -> Optional[Dict[str, Any]]:
+    """A new canvas document (empty, or a copy of `copy_from`'s saved .fig)."""
+    with _lock:
+        d = project_dir(pid)
+        if not d:
+            return None
+        idx = _migrate_docs(d)
+        if len(idx["docs"]) >= MAX_DOCS:
+            return None
+        if copy_from is not None and not any(x["id"] == copy_from for x in idx["docs"]):
+            return None
+        label = _doc_name(name)
+        doc_id = _new_doc_id(label, {x["id"] for x in idx["docs"]})
+        now = _now_iso()
+        idx["docs"].append({"id": doc_id, "name": label, "created_at": now, "updated_at": now})
+        (d / DOCS_DIR).mkdir(parents=True, exist_ok=True)
+        if copy_from:
+            src = d / canvas_rel(copy_from)
+            if src.is_file():
+                shutil.copyfile(src, d / canvas_rel(doc_id))
+        if make_default:
+            idx["default"] = doc_id
+        _write_index(d, idx)
+        return _doc_view(d, idx, idx["docs"][-1])
+
+
+def update_doc(pid: str, doc_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    with _lock:
+        d = project_dir(pid)
+        if not d or not valid_doc_id(doc_id):
+            return None
+        idx = _migrate_docs(d)
+        rec = next((x for x in idx["docs"] if x["id"] == doc_id), None)
+        if not rec:
+            return None
+        if "name" in patch:
+            rec["name"] = _doc_name(patch.get("name"), rec["name"])
+        if patch.get("default") is True:
+            idx["default"] = doc_id
+        rec["updated_at"] = _now_iso()
+        _write_index(d, idx)
+        return _doc_view(d, idx, rec)
+
+
+def delete_doc(pid: str, doc_id: str) -> Optional[Dict[str, Any]]:
+    """Remove a document (never the last one). Returns the new listing, None if refused."""
+    with _lock:
+        d = project_dir(pid)
+        if not d or not valid_doc_id(doc_id):
+            return None
+        idx = _migrate_docs(d)
+        if len(idx["docs"]) <= 1 or not any(x["id"] == doc_id for x in idx["docs"]):
+            return None
+        idx["docs"] = [x for x in idx["docs"] if x["id"] != doc_id]
+        if idx["default"] == doc_id:
+            idx["default"] = idx["docs"][0]["id"]
+        for suffix in ("", ".json"):
+            try:
+                (d / (canvas_rel(doc_id) + suffix)).unlink()
+            except FileNotFoundError:
+                pass
+        _write_index(d, idx)
+    return list_docs(pid)
+
+
+def has_canvas(project_path: Path) -> bool:
+    """Whether a project directory holds any saved canvas document (legacy or docs/)."""
+    if (project_path / LEGACY_CANVAS).is_file():
+        return True
+    docs_dir = project_path / DOCS_DIR
+    return docs_dir.is_dir() and any(f.stat().st_size > 0 for f in docs_dir.glob("*.fig"))
+
+
+def _resolve_doc(pid: str, doc_id: Optional[str]) -> Optional["tuple[Path, str, Dict[str, Any]]"]:
     d = project_dir(pid)
     if not d:
         return None
+    idx = _migrate_docs(d)
+    want = doc_id or idx["default"]
+    if not valid_doc_id(want) or not any(x["id"] == want for x in idx["docs"]):
+        return None
+    return d, want, idx
+
+
+def get_canvas(pid: str, doc_id: Optional[str] = None) -> Optional[bytes]:
+    with _lock:
+        found = _resolve_doc(pid, doc_id)
+    if not found:
+        return None
+    d, want, _idx = found
     try:
-        return (d / "doc.fig").read_bytes()
+        return (d / canvas_rel(want)).read_bytes()
     except FileNotFoundError:
         return None
 
 
-def save_canvas(pid: str, data: bytes) -> bool:
+def save_canvas(pid: str, data: bytes, doc_id: Optional[str] = None) -> bool:
     if not data or len(data) > MAX_CANVAS_BYTES or not data.startswith(_ZIP_MAGIC):
         return False
     with _lock:
-        d = project_dir(pid)
-        if not d:
+        found = _resolve_doc(pid, doc_id)
+        if not found:
             return False
-        tmp = d / "doc.fig.tmp"
+        d, want, idx = found
+        target = d / canvas_rel(want)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + ".tmp")
         tmp.write_bytes(data)
-        os.replace(tmp, d / "doc.fig")
+        os.replace(tmp, target)
+        for x in idx["docs"]:
+            if x["id"] == want:
+                x["updated_at"] = _now_iso()
+        _write_index(d, idx)
         update_project(pid, {})
         return True
+
+
+def canonical_json(value: Any) -> str:
+    """Deterministic JSON: sorted keys, fixed indent, LF, trailing newline — diffs stay minimal."""
+    return json.dumps(value, sort_keys=True, indent=1, ensure_ascii=False, allow_nan=False,
+                      separators=(",", ": ")) + "\n"
+
+
+def save_canvas_mirror(pid: str, doc_id: Optional[str], data: bytes) -> Optional[str]:
+    """Store the editor's JSON mirror of a document next to its .fig, re-serialized canonically.
+
+    Returns the relative path written, or None when the payload is not a JSON object.
+    """
+    if not data or len(data) > MAX_MIRROR_BYTES:
+        return None
+    try:
+        value = json.loads(data.decode("utf-8"))
+        text = canonical_json(value)
+    except Exception:
+        return None
+    if not isinstance(value, dict):
+        return None
+    with _lock:
+        found = _resolve_doc(pid, doc_id)
+        if not found:
+            return None
+        d, want, _idx = found
+        rel = canvas_rel(want) + ".json"
+        target = d / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.is_file() and target.read_text(encoding="utf-8") == text:
+            return rel
+        tmp = target.with_name(target.name + ".tmp")
+        tmp.write_text(text, encoding="utf-8", newline="\n")
+        os.replace(tmp, target)
+        return rel
+
+
+def get_canvas_mirror(pid: str, doc_id: Optional[str] = None) -> Optional[str]:
+    with _lock:
+        found = _resolve_doc(pid, doc_id)
+    if not found:
+        return None
+    d, want, _idx = found
+    try:
+        return (d / (canvas_rel(want) + ".json")).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
 
 
 def get_boards(pid: str) -> Optional[Dict[str, Any]]:
