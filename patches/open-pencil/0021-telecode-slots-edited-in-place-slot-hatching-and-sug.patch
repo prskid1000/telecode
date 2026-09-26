@@ -1,0 +1,2360 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Prithwiraj Samanta <prskid1000@gmail.com>
+Date: Sat, 26 Sep 2026 08:29:39 +0530
+Subject: [PATCH] telecode: slots edited in place, slot hatching and
+ suggestions; live fills
+
+Slots no longer go through instance swaps: telecode_slot_create marks a
+frame in a component, instances fill it with real layers (JSX, moved
+layers or an instance of a component) that are edited on the canvas and
+saved per instance; a layer drawn or dropped into an unfilled slot fills
+it. telecode_slot_suggest (preferred components by name, then the
+document's), _prefer, _remove; empty slots are posted as td-editor:slots
+for hatching. Fills: telecode_fill_uniforms and telecode_fill_mesh_edit
+(begin/move/end drags are one undo step), controls and inputs in
+telecode_fill_list, an animation loop that only runs while an animated
+fill is on screen and the tab is visible (repaint, never autosave), the
+export rasteriser, and the HTML export draws shader and mesh fills live
+(WebGL runtime) over their PNG.
+---
+ scripts/telecode-dump-tools.ts                | 128 +++-
+ src/app/integrations/telecode/commands.ts     | 110 ++-
+ src/app/integrations/telecode/extras-host.ts  | 225 ++++++
+ src/app/integrations/telecode/fills.ts        | 124 ++-
+ src/app/integrations/telecode/fx-export.ts    | 154 ++++
+ src/app/integrations/telecode/host.ts         |   8 +
+ src/app/integrations/telecode/html-layers.ts  |  40 +-
+ src/app/integrations/telecode/slides.ts       |   4 +-
+ src/app/integrations/telecode/slots-editor.ts |  17 +-
+ src/app/integrations/telecode/slots.ts        | 712 +++++++-----------
+ tests/engine/app/telecode/fills.test.ts       |  51 +-
+ tests/engine/app/telecode/slots.test.ts       | 192 +++--
+ 12 files changed, 1199 insertions(+), 566 deletions(-)
+ create mode 100644 src/app/integrations/telecode/extras-host.ts
+ create mode 100644 src/app/integrations/telecode/fx-export.ts
+
+diff --git a/scripts/telecode-dump-tools.ts b/scripts/telecode-dump-tools.ts
+index 8d400b10..62fca3c7 100644
+--- a/scripts/telecode-dump-tools.ts
++++ b/scripts/telecode-dump-tools.ts
+@@ -408,7 +408,7 @@ const extra = [
+   {
+     name: 'telecode_slot_create',
+     description:
+-      'Make a layer inside a component a named slot (a card body, dialog actions): its children become the slot’s default-content component (in the page’s "Slot content" section) and the layer is replaced by an instance of it, exposed as an instance-swap property named after the slot. Existing instances follow. Returns the component’s slots.',
++      'Mark a frame inside a component as a named slot (a card body, dialog actions). Its children stay as the default content every instance shows until it fills the slot. Instances fill it with real layers of their own, edited in place on the canvas and saved with the document. preferred = component names (or ids) suggested first for the slot. Returns the component’s slots.',
+     command: 'telecode_slot_create',
+     effect: 'write',
+     availability: 'default',
+@@ -416,28 +416,29 @@ const extra = [
+     enabled: true,
+     input_schema: schemaOf(
+       v.object({
+-        node_id: v.pipe(v.string(), v.description('Frame / group / instance inside a component')),
+-        name: v.optional(v.pipe(v.string(), v.description('Slot name (default: the layer name)')))
++        node_id: v.pipe(v.string(), v.description('Frame inside a component')),
++        name: v.optional(v.pipe(v.string(), v.description('Slot name (default: the layer name)'))),
++        preferred: v.optional(v.pipe(v.array(v.string()), v.description('Preferred components (names or ids)')))
+       })
+     )
+   },
+   {
+     name: 'telecode_slot_list',
+     description:
+-      'Slots. node_id = a component: {kind:"component", slots:[{name, node_id, default_component}]}; an instance: {kind:"instance", slots:[{name, filled, content_component_id, content_component}]}. Without node_id: {components, instances} with slots in the document.',
++      'Slots. node_id = a component (or a layer in one): {kind:"component", slots:[{name, node_id, empty, default_content, preferred}]}; an instance (or its slot): {kind:"instance", slots:[{name, node_id (the slot inside the instance), filled, empty, content:[{id, name, type}], preferred}]}; anything else: {kind:"none"}. Without node_id: {components, instances}.',
+     command: 'telecode_slot_list',
+     effect: 'read',
+     availability: 'default',
+     capabilities: ['document:read'],
+     enabled: true,
+     input_schema: schemaOf(
+-      v.object({ node_id: v.optional(v.pipe(v.string(), v.description('Component or instance'))) })
++      v.object({ node_id: v.optional(v.pipe(v.string(), v.description('Component, instance or layer'))) })
+     )
+   },
+   {
+     name: 'telecode_slot_fill',
+     description:
+-      'Give one instance its own content for a slot: exactly one of jsx (Design JSX rendered into a new content component sized like the slot), node_ids (existing layers moved into one) or component_id (an existing component). Saved with the document (it is the instance-swap value). Edit the content by editing that component. A content component telecode made is deleted once nothing shows it. One undo step.',
++      'Replace one instance’s content for a slot with its own layers: exactly one of jsx (Design JSX rendered into the slot), node_ids (existing layers moved in) or component_id (an instance of that component goes in — see telecode_slot_suggest). The content is real layers inside the instance: select and edit them on the canvas; drawing or dropping a layer into an unfilled slot fills it too. One undo step.',
+     command: 'telecode_slot_fill',
+     effect: 'write',
+     availability: 'default',
+@@ -449,13 +450,14 @@ const extra = [
+         slot: v.pipe(v.string(), v.description('Slot name')),
+         jsx: v.optional(v.pipe(v.string(), v.description('Design JSX for the content'))),
+         node_ids: v.optional(v.pipe(v.array(v.string()), v.description('Layers to move into the slot'))),
+-        component_id: v.optional(v.pipe(v.string(), v.description('Existing component to show')))
++        component_id: v.optional(v.pipe(v.string(), v.description('Component to place an instance of')))
+       })
+     )
+   },
+   {
+     name: 'telecode_slot_reset',
+-    description: 'Put the component’s default content back into an instance’s slot (all slots without slot). One undo step.',
++    description:
++      'Put the component’s default content back into one slot of an instance (every filled slot without slot). One undo step.',
+     command: 'telecode_slot_reset',
+     effect: 'write',
+     availability: 'default',
+@@ -464,14 +466,60 @@ const extra = [
+     input_schema: schemaOf(
+       v.object({
+         instance_id: v.pipe(v.string(), v.description('Instance')),
+-        slot: v.optional(v.pipe(v.string(), v.description('Slot name (default: every slot)')))
++        slot: v.optional(v.pipe(v.string(), v.description('Slot name (default: every filled slot)')))
++      })
++    )
++  },
++  {
++    name: 'telecode_slot_suggest',
++    description:
++      'Components for a slot: its preferred components first, then the document’s other components (never the host component). {slot, preferred, missing (preferred names not in the document), components:[{id, name, preferred, width, height}]}.',
++    command: 'telecode_slot_suggest',
++    effect: 'read',
++    availability: 'default',
++    capabilities: ['document:read'],
++    enabled: true,
++    input_schema: schemaOf(
++      v.object({
++        node_id: v.pipe(v.string(), v.description('Instance, component or slot layer')),
++        slot: v.pipe(v.string(), v.description('Slot name'))
++      })
++    )
++  },
++  {
++    name: 'telecode_slot_prefer',
++    description:
++      'Set a slot’s preferred components (names or ids; stored by name). One undo step.',
++    command: 'telecode_slot_prefer',
++    effect: 'write',
++    availability: 'default',
++    capabilities: ['document:write'],
++    enabled: true,
++    input_schema: schemaOf(
++      v.object({
++        node_id: v.pipe(v.string(), v.description('Component, instance or slot layer')),
++        slot: v.pipe(v.string(), v.description('Slot name')),
++        components: v.pipe(v.array(v.string()), v.description('Component names or ids'))
+       })
+     )
+   },
++  {
++    name: 'telecode_slot_remove',
++    description:
++      'Unmark a slot frame (its layers stay). One undo step.',
++    command: 'telecode_slot_remove',
++    effect: 'write',
++    availability: 'default',
++    capabilities: ['document:write'],
++    enabled: true,
++    input_schema: schemaOf(
++      v.object({ node_id: v.pipe(v.string(), v.description('The slot frame inside the component')) })
++    )
++  },
+   {
+     name: 'telecode_fill_set',
+     description:
+-      'Add (on top) or replace (index) a procedural fill. kind "shader": preset (see telecode_fill_presets) or sksl = a Skia runtime effect `half4 main(float2 p)` with p in the node’s pixels, `uniform float2 u_size` supplied, other uniforms from uniforms {name: number | [..] | "#hex"}; it is compiled first and refused with the compiler message. kind "mesh": a mesh gradient — colors: rows of colours (evenly spaced), or columns + rows + points [{x, y (0..1, warps the grid), color}] row-major, max 64 points, smooth (default true). Stored as a CUSTOM paint + plugin data, saved in the .fig; fallback is the solid colour other renderers (and the HTML export) show. One undo step.',
++      'Add (on top) or replace (index) a procedural fill. kind "shader": preset (telecode_fill_presets) or source in SkSL (`half4 main(float2 p)`, p in the node’s pixels) or GLSL (Shadertoy `mainImage(out vec4 fragColor, in vec2 fragCoord)` or `void main()` with gl_FragColor; iResolution/iTime/iMouse/iChannel0, #define) — lang auto-detected. Uniforms by name {name: number | [..] | "#hex"}; annotate declarations for controls: `// @color @label X @min 0 @max 1 @step 0.1 @default ..`, inputs `// @time` (animates), `// @mouse`, `// @backdrop` (sampler/shader of what is behind the layer), and call `sdf(p)` for the signed distance to the layer outline. Translated and compiled first; refused with the error (line numbers of your source). kind "mesh": colors (rows of colours) or columns + rows + points [{x, y (0..1, warps), color}], max 64, smooth. Saved in the .fig as a solid paint (fallback, for other readers) + the definition. One undo step.',
+     command: 'telecode_fill_set',
+     effect: 'write',
+     availability: 'default',
+@@ -483,7 +531,10 @@ const extra = [
+         kind: v.pipe(v.picklist(['shader', 'mesh']), v.description('Fill kind')),
+         index: v.optional(v.pipe(v.number(), v.description('Replace the fill at this index (default: add on top)'))),
+         preset: v.optional(v.pipe(v.string(), v.description('Shader preset name'))),
+-        sksl: v.optional(v.pipe(v.string(), v.description('SkSL source'))),
++        source: v.optional(v.pipe(v.string(), v.description('Shader source, SkSL or GLSL'))),
++        lang: v.optional(v.pipe(v.picklist(['sksl', 'glsl']), v.description('Source language (default: detected)'))),
++        glsl: v.optional(v.pipe(v.string(), v.description('GLSL source (same as source + lang glsl)'))),
++        sksl: v.optional(v.pipe(v.string(), v.description('SkSL source (same as source + lang sksl)'))),
+         uniforms: v.optional(v.pipe(v.record(v.string(), v.unknown()), v.description('Shader uniforms by name'))),
+         colors: v.optional(v.pipe(v.array(v.array(v.string())), v.description('Mesh: rows of colours'))),
+         columns: v.optional(v.number()),
+@@ -497,33 +548,76 @@ const extra = [
+   {
+     name: 'telecode_fill_list',
+     description:
+-      'With node_id: its fills; shader / mesh ones carry {kind, definition, error} (error = the SkSL compiler message). Without: {nodes:[{node_id, name, kinds, errors}]} for every node with a procedural fill.',
++      'With node_id: its fills; shader / mesh ones carry {kind, definition, error}; shaders also {lang, animated, inputs:{time, mouse, backdrop, sdf}, controls:[{name, type, floats, color, label, min, max, step, value}], compiled_sksl (GLSL sources)}. Without: {nodes:[{node_id, name, kinds, errors, animated}]}.',
+     command: 'telecode_fill_list',
+     effect: 'read',
+     availability: 'default',
+     capabilities: ['document:read'],
+     enabled: true,
+-    input_schema: schemaOf(v.object({ node_id: v.optional(v.pipe(v.string(), v.description('Node'))) }))
++    input_schema: schemaOf(
++      v.object({ node_id: v.optional(v.pipe(v.string(), v.description('Node'))) })
++    )
++  },
++  {
++    name: 'telecode_fill_uniforms',
++    description:
++      'Merge uniform values into the shader fill at index ({name: number | [..] | "#hex"}); names the shader does not declare come back in unknown_uniforms. One undo step.',
++    command: 'telecode_fill_uniforms',
++    effect: 'write',
++    availability: 'default',
++    capabilities: ['document:write'],
++    enabled: true,
++    input_schema: schemaOf(
++      v.object({
++        node_id: v.pipe(v.string(), v.description('Node')),
++        index: v.pipe(v.number(), v.description('Fill index')),
++        uniforms: v.pipe(v.record(v.string(), v.unknown()), v.description('Uniform values by name'))
++      })
++    )
++  },
++  {
++    name: 'telecode_fill_mesh_edit',
++    description:
++      'Move / recolour points of the mesh fill at index: points [{i, x?, y? (0..1 of the node box), color?}]. phase "set" (default) is one undo step; a drag sends "begin", any number of "move" and "end" and becomes one undo step.',
++    command: 'telecode_fill_mesh_edit',
++    effect: 'write',
++    availability: 'default',
++    capabilities: ['document:write'],
++    enabled: true,
++    input_schema: schemaOf(
++      v.object({
++        node_id: v.pipe(v.string(), v.description('Node')),
++        index: v.pipe(v.number(), v.description('Fill index')),
++        phase: v.optional(v.pipe(v.picklist(['set', 'begin', 'move', 'end']), v.description('Edit phase'))),
++        points: v.pipe(v.array(v.record(v.string(), v.unknown())), v.description('[{i, x?, y?, color?}]'))
++      })
++    )
+   },
+   {
+     name: 'telecode_fill_remove',
+-    description: 'Remove the fill at index (its shader / mesh definition goes with it). One undo step.',
++    description:
++      'Remove the fill at index (its shader / mesh definition goes with it). One undo step.',
+     command: 'telecode_fill_remove',
+     effect: 'write',
+     availability: 'default',
+     capabilities: ['document:write'],
+     enabled: true,
+-    input_schema: schemaOf(v.object({ node_id: v.pipe(v.string(), v.description('Node')), index: v.pipe(v.number(), v.description('Fill index')) }))
++    input_schema: schemaOf(
++      v.object({ node_id: v.pipe(v.string(), v.description('Node')), index: v.pipe(v.number(), v.description('Fill index')) })
++    )
+   },
+   {
+     name: 'telecode_fill_presets',
+-    description: 'Built-in shader presets: [{name, description, uniforms (defaults)}].',
++    description:
++      'Built-in shader presets: [{name, description, lang, uniforms (defaults), animated, backdrop, sdf}].',
+     command: 'telecode_fill_presets',
+     effect: 'read',
+     availability: 'default',
+     capabilities: ['document:read'],
+     enabled: true,
+-    input_schema: schemaOf(v.object({}))
++    input_schema: schemaOf(
++      v.object({})
++    )
+   },
+   {
+     name: 'get_codegen_prompt',
+diff --git a/src/app/integrations/telecode/commands.ts b/src/app/integrations/telecode/commands.ts
+index 41db2ff9..6bd1ed7d 100644
+--- a/src/app/integrations/telecode/commands.ts
++++ b/src/app/integrations/telecode/commands.ts
+@@ -23,14 +23,19 @@
+  *   telecode_theme_get         {node_id?}          a node's theme per axis (explicit / inherited), or the axes
+  *   telecode_theme_set         {node_id, modes}    pin / clear modes per axis {Collection: Mode | null}
+  *   telecode_theme_active      {modes}             document-wide mode per axis
+- *   telecode_slot_create       {node_id, name?}    a layer inside a component becomes a named slot
++ *   telecode_slot_create       {node_id, name?, preferred?}  a frame inside a component becomes a named slot
+  *   telecode_slot_list         {node_id?}          a component's / instance's slots (or every one)
+  *   telecode_slot_fill         {instance_id, slot, jsx? | node_ids? | component_id?}
+  *   telecode_slot_reset        {instance_id, slot?}  default content back
++ *   telecode_slot_suggest      {node_id, slot}     preferred components first, then the document's others
++ *   telecode_slot_prefer       {node_id, slot, components}  set a slot's preferred components
++ *   telecode_slot_remove       {node_id}           unmark a slot frame
+  *   telecode_fill_set          {node_id, kind: shader|mesh, index?, fallback?, …definition}
+  *   telecode_fill_list         {node_id?}          a node's fills (procedural ones with definition / error)
+  *   telecode_fill_remove       {node_id, index}
+  *   telecode_fill_presets      {}                  built-in shader presets and their uniforms
++ *   telecode_fill_uniforms     {node_id, index, uniforms}          merge shader uniform values
++ *   telecode_fill_mesh_edit    {node_id, index, phase?, points:[{i, x?, y?, color?}]}  move / recolour mesh points
+  *
+  * They ride the same request/response protocol as the upstream commands; the
+  * proxy uses them to keep boards.json keyed by something that survives reloads.
+@@ -41,10 +46,12 @@ import { isBoardKey, listBoards, markBoard, unmarkBoard } from './boards'
+ import { DOC_ID, readTelecodeConfig } from './config'
+ import {
+   describeFills,
++  editMeshPoints,
+   listProceduralFills,
+   listShaderPresets,
+   removeFill,
+-  setProceduralFill
++  setProceduralFill,
++  setShaderUniforms
+ } from './fills'
+ import { exportHTML, importHTML, importLayout, type LayoutSnapshot } from './html-layers'
+ import { clearPlaceholders, listPlaceholders, setPlaceholder } from './placeholders'
+@@ -59,13 +66,24 @@ import {
+   updateScriptNode
+ } from './scripts'
+ import { listSlides, reorderSlides } from './slides'
+-import { createSlot, describeSlots, listAllSlots, resetSlot } from './slots'
++import {
++  createSlot,
++  describeSlots,
++  listAllSlots,
++  removeSlot,
++  resetSlot,
++  setPreferred,
++  suggestComponents
++} from './slots'
+ import { fillSlotInEditor, slotMutation } from './slots-editor'
+ import { listAxes, setActiveModes, setTheme, themeOf } from './themes'
+ import { applyVariables, readVariables } from './variables'
+ 
+ type Handler = (target: AutomationTarget, args: unknown) => Promise<unknown>
+ 
++/** Page snapshots taken when a mesh-point drag begins, for its single undo step. */
++const meshDrags = new Map<string, ReturnType<AutomationTarget['store']['snapshotPage']>>()
++
+ /** Run a synchronous graph edit as one undo step (page snapshots, as the in-app AI tools do). */
+ async function undoable<T>(store: AutomationTarget['store'], label: string, edit: () => T): Promise<T> {
+   const before = store.snapshotPage()
+@@ -88,6 +106,10 @@ function text(value: unknown): string | undefined {
+   return typeof value === 'string' && value ? value : undefined
+ }
+ 
++function strings(value: unknown): string[] | undefined {
++  return Array.isArray(value) ? value.filter((x): x is string => typeof x === 'string' && !!x) : undefined
++}
++
+ function record(args: unknown): Record<string, unknown> {
+   return args && typeof args === 'object' && !Array.isArray(args)
+     ? (args as Record<string, unknown>)
+@@ -228,8 +250,8 @@ export const telecodeAutomationCommands: Partial<Record<string, Handler>> = {
+     if (!nodeId) throw new Error('Missing "node_id"')
+     return {
+       ok: true,
+-      result: await slotMutation(target.store, 'Create slot', (figma) =>
+-        createSlot(target.store.graph, figma, nodeId, text(a.name))
++      result: await slotMutation(target.store, 'Create slot', () =>
++        createSlot(target.store.graph, nodeId, text(a.name), strings(a.preferred))
+       )
+     }
+   },
+@@ -259,11 +281,35 @@ export const telecodeAutomationCommands: Partial<Record<string, Handler>> = {
+     if (!instanceId) throw new Error('Missing "instance_id"')
+     return {
+       ok: true,
+-      result: await slotMutation(target.store, 'Reset slot', (figma) =>
+-        resetSlot(target.store.graph, figma, instanceId, text(a.slot))
++      result: await slotMutation(target.store, 'Reset slot', () =>
++        resetSlot(target.store.graph, instanceId, text(a.slot))
+       )
+     }
+   },
++  async telecode_slot_suggest(target, args) {
++    const a = record(args)
++    const nodeId = text(a.node_id) ?? text(a.instance_id)
++    const slot = text(a.slot)
++    if (!nodeId || !slot) throw new Error('Missing "node_id" or "slot"')
++    return { ok: true, result: suggestComponents(target.store.graph, nodeId, slot) }
++  },
++  async telecode_slot_prefer(target, args) {
++    const a = record(args)
++    const nodeId = text(a.node_id)
++    const slot = text(a.slot)
++    if (!nodeId || !slot) throw new Error('Missing "node_id" or "slot"')
++    return {
++      ok: true,
++      result: await slotMutation(target.store, 'Slot suggestions', () =>
++        setPreferred(target.store.graph, nodeId, slot, strings(a.components) ?? [])
++      )
++    }
++  },
++  async telecode_slot_remove(target, args) {
++    const nodeId = text(record(args).node_id)
++    if (!nodeId) throw new Error('Missing "node_id"')
++    return { ok: true, result: await slotMutation(target.store, 'Remove slot', () => removeSlot(target.store.graph, nodeId)) }
++  },
+   async telecode_fill_set(target, args) {
+     const a = record(args)
+     const nodeId = text(a.node_id)
+@@ -291,6 +337,56 @@ export const telecodeAutomationCommands: Partial<Record<string, Handler>> = {
+     const store = target.store
+     return { ok: true, result: await undoable(store, 'Remove fill', () => removeFill(store.graph, nodeId, index)) }
+   },
++  async telecode_fill_uniforms(target, args) {
++    const a = record(args)
++    const nodeId = text(a.node_id)
++    const index = num(a.index)
++    if (!nodeId || index === undefined) throw new Error('Missing "node_id" or "index"')
++    const store = target.store
++    const result = await undoable(store, 'Shader uniforms', () =>
++      setShaderUniforms(store.graph, nodeId, index, record(a.uniforms), store.renderer?.ck)
++    )
++    return { ok: true, result }
++  },
++  async telecode_fill_mesh_edit(target, args) {
++    const a = record(args)
++    const nodeId = text(a.node_id)
++    const index = num(a.index)
++    if (!nodeId || index === undefined) throw new Error('Missing "node_id" or "index"')
++    const phase = text(a.phase) ?? 'set'
++    const points = (Array.isArray(a.points) ? a.points : []).map((p) => record(p)).map((p) => ({
++      i: num(p.i) ?? -1,
++      x: num(p.x),
++      y: num(p.y),
++      color: p.color
++    }))
++    const store = target.store
++    const key = `${nodeId}#${index}`
++    // A drag is begin → move… → end: live edits in between, one undo step for the whole drag.
++    if (phase === 'begin') {
++      meshDrags.set(key, store.snapshotPage())
++      return { ok: true, result: points.length ? editMeshPoints(store.graph, nodeId, index, points) : { started: true } }
++    }
++    if (phase === 'move') {
++      const result = editMeshPoints(store.graph, nodeId, index, points)
++      store.requestRender()
++      return { ok: true, result }
++    }
++    if (phase === 'end') {
++      const before = meshDrags.get(key) ?? store.snapshotPage()
++      meshDrags.delete(key)
++      const result = points.length ? editMeshPoints(store.graph, nodeId, index, points) : { ended: true }
++      const after = store.snapshotPage()
++      store.pushUndoEntry({
++        label: 'Move mesh point',
++        forward: () => store.restorePageFromSnapshot(after),
++        inverse: () => store.restorePageFromSnapshot(before)
++      })
++      store.requestRender()
++      return { ok: true, result }
++    }
++    return { ok: true, result: await undoable(store, 'Edit mesh', () => editMeshPoints(store.graph, nodeId, index, points)) }
++  },
+   async telecode_fill_presets() {
+     return { ok: true, result: { presets: listShaderPresets() } }
+   },
+diff --git a/src/app/integrations/telecode/extras-host.ts b/src/app/integrations/telecode/extras-host.ts
+new file mode 100644
+index 00000000..abb0d9f6
+--- /dev/null
++++ b/src/app/integrations/telecode/extras-host.ts
+@@ -0,0 +1,225 @@
++/**
++ * Editor-side runtime for slots and procedural fills (telecode / TeleDesign).
++ *
++ *  - Empty slots (component slot frames and instance clones with no layers) are
++ *    posted to the host as `td-editor:slots` so the shell can hatch them.
++ *  - A layer drawn, pasted or dropped into an instance's unfilled slot fills
++ *    that slot (the instance keeps it as its own content, see slots.ts).
++ *  - Shader fills that read `@time` / `@mouse` are animated: a frame loop runs
++ *    only while such a fill is on the current page, inside the viewport, and the
++ *    tab is visible. It repaints (renderVersion) rather than re-rendering the
++ *    scene version, so it never marks the document dirty or triggers autosave.
++ *  - The SVG / PDF writers get a rasteriser for procedural fills.
++ */
++import {
++  rasterizeBackdrop,
++  rasterizeDistanceField,
++  rasterizeProceduralFill,
++  setProceduralMouse,
++  setProceduralRasterizer,
++  setProceduralTextures,
++  setProceduralTime,
++  type SkiaRenderer
++} from '@open-pencil/core/canvas'
++
++import type { EditorStore } from '@/app/editor/session'
++
++import { animatedNodes } from './fills'
++import { adoptSlotContent, emptySlots } from './slots'
++
++type Post = (type: string, payload: unknown) => void
++
++export interface ExtrasHost {
++  bind(store: EditorStore): void
++  post(): void
++  cleanup(): void
++}
++
++export function installExtras(post: Post, canvasRect: () => { left: number; top: number; width: number; height: number }): ExtrasHost {
++  let store: EditorStore | null = null
++  let offs: Array<() => void> = []
++  let slotsQueued = false
++  let animated: string[] = []
++  let animatedQueued = false
++  let frame = 0
++  const t0 = performance.now()
++
++  function postSlots(): void {
++    if (!store) return
++    post('slots', { items: emptySlots(store.graph, store.state.currentPageId) })
++  }
++
++  function queueSlots(): void {
++    if (slotsQueued) return
++    slotsQueued = true
++    requestAnimationFrame(() => {
++      slotsQueued = false
++      postSlots()
++    })
++  }
++
++  function refreshAnimated(): void {
++    if (animatedQueued) return
++    animatedQueued = true
++    requestAnimationFrame(() => {
++      animatedQueued = false
++      animated = store ? animatedNodes(store.graph, store.state.currentPageId) : []
++      schedule()
++    })
++  }
++
++  function inViewport(s: EditorStore, id: string): boolean {
++    const node = s.graph.getNode(id)
++    if (!node) return false
++    const abs = s.graph.getAbsolutePosition(id)
++    const rect = canvasRect()
++    const { panX, panY, zoom } = s.state
++    const x = abs.x * zoom + panX
++    const y = abs.y * zoom + panY
++    return x < rect.width && y < rect.height && x + node.width * zoom > 0 && y + node.height * zoom > 0
++  }
++
++  function tick(): void {
++    frame = 0
++    const s = store
++    if (!s || document.visibilityState !== 'visible') return
++    const visible = animated.filter((id) => inViewport(s, id))
++    if (visible.length) {
++      // Frames drawn, readable by tests and diagnostics (window.__tdFxFrames).
++      const w = window as unknown as { __tdFxFrames?: number }
++      w.__tdFxFrames = (w.__tdFxFrames ?? 0) + 1
++      setProceduralTime((performance.now() - t0) / 1000)
++      // Every canvas surface (scene layer, overlays, split panes) has its own caches.
++      const renderers = (s as unknown as { canvasRenderers?: SkiaRenderer[] }).canvasRenderers ?? (s.renderer ? [s.renderer] : [])
++      for (const renderer of renderers) {
++        for (const id of visible) {
++          renderer.invalidateNodePicture(id)
++          renderer.tiledScene.refreshNode(id)
++        }
++        renderer.invalidateScenePicture()
++      }
++      const repaint = (s as unknown as { requestRepaint?: () => void }).requestRepaint
++      if (repaint) repaint.call(s)
++      else s.requestRender()
++    }
++    // Keep ticking while something animated exists on the page; a viewport or
++    // visibility change restarts the loop from `schedule`.
++    if (animated.length && visible.length) frame = requestAnimationFrame(tick)
++  }
++
++  function schedule(): void {
++    if (frame || !animated.length || document.visibilityState !== 'visible') return
++    frame = requestAnimationFrame(tick)
++  }
++
++  function stop(): void {
++    if (frame) cancelAnimationFrame(frame)
++    frame = 0
++  }
++
++  function maybeAdopt(nodeId: string): void {
++    const s = store
++    const node = s?.graph.getNode(nodeId)
++    if (!s || !node?.parentId) return
++    const result = adoptSlotContent(s.graph, node.parentId)
++    if (result) {
++      s.requestRender()
++      queueSlots()
++    }
++  }
++
++  const onVisibility = () => {
++    setProceduralTime(document.visibilityState === 'visible' ? null : (performance.now() - t0) / 1000)
++    if (document.visibilityState === 'visible') schedule()
++    else stop()
++  }
++  document.addEventListener('visibilitychange', onVisibility)
++
++  const onPointer = (event: PointerEvent) => {
++    const s = store
++    if (!s) return
++    const rect = canvasRect()
++    const lx = event.clientX - rect.left
++    const ly = event.clientY - rect.top
++    if (lx < 0 || ly < 0 || lx > rect.width || ly > rect.height) {
++      setProceduralMouse(null)
++      return
++    }
++    const { panX, panY, zoom } = s.state
++    setProceduralMouse({ x: (lx - panX) / zoom, y: (ly - panY) / zoom })
++    schedule()
++  }
++  const onLeave = () => setProceduralMouse(null)
++  window.addEventListener('pointermove', onPointer, { passive: true })
++  document.addEventListener('pointerleave', onLeave)
++
++  // Diagnostics: what the animation loop sees (tests read it).
++  ;(window as unknown as { __tdFxState?: () => unknown }).__tdFxState = () => ({
++    animated: [...animated],
++    running: frame !== 0,
++    visibility: document.visibilityState,
++    visible: store ? animated.filter((id) => inViewport(store as EditorStore, id)) : []
++  })
++
++  setProceduralRasterizer((graph, node, fill) => {
++    const renderer = store?.renderer
++    return renderer ? rasterizeProceduralFill(renderer, graph, node, fill, 2) : null
++  })
++  setProceduralTextures({
++    backdrop: (graph, node) => (store?.renderer ? rasterizeBackdrop(store.renderer, graph, node, 1) : null),
++    sdf: (node) => (store?.renderer ? rasterizeDistanceField(store.renderer, node) : null)
++  })
++
++  return {
++    bind(next) {
++      if (store === next) return
++      for (const off of offs) off()
++      store = next
++      offs = [
++        next.onEditorEvent('page:changed', () => {
++          queueSlots()
++          refreshAnimated()
++        }),
++        next.onEditorEvent('graph:replaced', () => {
++          queueSlots()
++          refreshAnimated()
++        }),
++        next.onEditorEvent('viewport:changed', schedule),
++        next.onEditorEvent('node:created', (node: { id: string }) => {
++          maybeAdopt(node.id)
++          queueSlots()
++          refreshAnimated()
++        }),
++        next.onEditorEvent('node:reparented', (id: string) => {
++          maybeAdopt(id)
++          queueSlots()
++        }),
++        next.onEditorEvent('node:deleted', () => {
++          queueSlots()
++          refreshAnimated()
++        }),
++        next.onEditorEvent('node:updated', (_id: string, changes: Record<string, unknown>) => {
++          if ('fills' in changes || 'pluginData' in changes || 'visible' in changes) refreshAnimated()
++          if ('pluginData' in changes || 'width' in changes || 'height' in changes || 'x' in changes || 'y' in changes) queueSlots()
++        })
++      ]
++      queueSlots()
++      refreshAnimated()
++    },
++    post() {
++      postSlots()
++    },
++    cleanup() {
++      stop()
++      for (const off of offs) off()
++      offs = []
++      document.removeEventListener('visibilitychange', onVisibility)
++      window.removeEventListener('pointermove', onPointer)
++      document.removeEventListener('pointerleave', onLeave)
++      setProceduralRasterizer(null)
++      setProceduralTextures(null)
++      setProceduralMouse(null)
++      setProceduralTime(null)
++    }
++  }
++}
+diff --git a/src/app/integrations/telecode/fills.ts b/src/app/integrations/telecode/fills.ts
+index bda37d04..b4473854 100644
+--- a/src/app/integrations/telecode/fills.ts
++++ b/src/app/integrations/telecode/fills.ts
+@@ -5,14 +5,18 @@
+  * procedural fill is a CUSTOM paint whose customEffectId links to a JSON
+  * definition in the node's shared plugin data (`telecode` / `fill:<id>`), and
+  * whose own colour is the fallback wherever the definition is not understood
+- * (other .fig readers, the HTML export). This module is the editing surface:
+- * validate (shaders are compiled first, so an agent gets the SkSL error back),
+- * write the paint and its definition together, list and remove them.
++ * (other .fig readers). This module is the editing surface: validate (shaders
++ * are translated and compiled first, so an agent gets the error back), write
++ * the paint and its definition together, set uniforms, move mesh points, list
++ * and remove them.
+  */
+ import type { CanvasKit } from 'canvaskit-wasm'
+ 
+ import {
+-  compileShaderFill,
++  compileShaderDef,
++  isAnimatedFill,
++  prepareShader,
++  shaderControls,
+   listShaderPresets,
+   normalizeProceduralFill,
+   parseProceduralColor,
+@@ -20,7 +24,6 @@ import {
+   PROCEDURAL_KEY_PREFIX,
+   PROCEDURAL_NAMESPACE,
+   SHADER_PRESETS,
+-  shaderSource,
+   type ProceduralFillDef
+ } from '@open-pencil/core/canvas'
+ import type { Fill, SceneGraph, SceneNode } from '@open-pencil/scene-graph'
+@@ -72,7 +75,8 @@ function fallbackColor(def: ProceduralFillDef): Fill['color'] {
+ 
+ /** Plugin data with `defs` written and definitions no fill links to any more dropped. */
+ function withDefinitions(node: SceneNode, fills: Fill[], defs: Map<string, string>): PluginEntry[] {
+-  const live = new Set(fills.filter((f) => f.type === 'CUSTOM').map((f) => f.customEffectId))
++  // Linked paints are CUSTOM here and SOLID after a trip through .fig.
++  const live = new Set(fills.filter((f) => f.customEffectId).map((f) => f.customEffectId))
+   const kept = node.pluginData.filter((e) => {
+     if (e.pluginId !== PROCEDURAL_NAMESPACE || !e.key.startsWith(ENCODED_PREFIX)) return true
+     const id = e.key.slice(ENCODED_PREFIX.length)
+@@ -107,15 +111,18 @@ export function setProceduralFill(
+   if (node.type === 'CANVAS' || node.type === 'GROUP') throw new Error(`A ${node.type} has no fills`)
+   const def = normalizeProceduralFill(expandShorthand(input))
+   if (def.kind === 'shader' && ck) {
+-    const program = compileShaderFill(ck, shaderSource(def))
++    const program = compileShaderDef(ck, def)
+     if (program.error) throw new Error(`Shader does not compile: ${program.error}`)
++  } else if (def.kind === 'shader') {
++    const p = prepareShader(def)
++    if (p.error) throw new Error(p.error)
+   }
+   const fills = node.fills.map((f) => ({ ...f }))
+   const index = opts.index
+   const replacing =
+     index !== undefined && index >= 0 && index < fills.length ? fills[index] : undefined
+   const id =
+-    replacing?.type === 'CUSTOM' && replacing.customEffectId
++    replacing?.customEffectId && proceduralFillOf(node, replacing)
+       ? replacing.customEffectId
+       : newEffectId(graph)
+   const fallback = opts.fallback !== undefined ? parseProceduralColor(opts.fallback) : null
+@@ -158,28 +165,115 @@ export function describeFills(graph: SceneGraph, nodeId: string, ck?: CanvasKit
+       const def = proceduralFillOf(node, fill)
+       const base = { index, type: fill.type, visible: fill.visible, opacity: fill.opacity }
+       if (!def) return fill.type === 'CUSTOM' ? { ...base, kind: 'unknown-custom' } : base
+-      const error =
+-        def.kind === 'shader' && ck ? compileShaderFill(ck, shaderSource(def)).error : null
+-      return { ...base, kind: def.kind, id: fill.customEffectId, definition: def, error }
++      if (def.kind === 'mesh') {
++        return { ...base, kind: def.kind, id: fill.customEffectId, definition: def, error: null }
++      }
++      const p = prepareShader(def)
++      const error = p.error ?? (ck ? compileShaderDef(ck, def).error : null)
++      return {
++        ...base,
++        kind: def.kind,
++        id: fill.customEffectId,
++        definition: def,
++        error,
++        lang: p.lang,
++        animated: p.usesTime || p.usesMouse,
++        inputs: { time: p.usesTime, mouse: p.usesMouse, backdrop: p.usesBackdrop, sdf: p.usesSdf },
++        // SkSL the renderer runs (GLSL translated), for reading only.
++        compiled_sksl: p.lang === 'glsl' ? p.sksl : undefined,
++        controls: shaderControls(def)
++      }
+     })
+   }
+ }
+ 
+ /** Nodes carrying a procedural fill (for the shell's list and error badges). */
+ export function listProceduralFills(graph: SceneGraph, ck?: CanvasKit | null) {
+-  const out: Array<{ node_id: string; name: string; kinds: string[]; errors: string[] }> = []
++  const out: Array<{ node_id: string; name: string; kinds: string[]; errors: string[]; animated: boolean }> = []
+   for (const node of graph.getAllNodes()) {
+     const kinds: string[] = []
+     const errors: string[] = []
++    let animated = false
+     for (const fill of node.fills) {
+       const def = proceduralFillOf(node, fill)
+       if (!def) continue
+       kinds.push(def.kind === 'shader' ? `shader${def.preset ? `:${def.preset}` : ''}` : 'mesh')
+-      const error =
+-        def.kind === 'shader' && ck ? compileShaderFill(ck, shaderSource(def)).error : null
++      const error = def.kind === 'shader' ? (prepareShader(def).error ?? (ck ? compileShaderDef(ck, def).error : null)) : null
+       if (error) errors.push(error)
++      if (isAnimatedFill(def)) animated = true
+     }
+-    if (kinds.length) out.push({ node_id: node.id, name: node.name, kinds, errors })
++    if (kinds.length) out.push({ node_id: node.id, name: node.name, kinds, errors, animated })
+   }
+   return out
+ }
++
++function procedural(graph: SceneGraph, nodeId: string, index: number) {
++  const node = graph.getNode(nodeId)
++  if (!node) throw new Error(`Node not found: ${nodeId}`)
++  const fill = node.fills[index]
++  const def = fill ? proceduralFillOf(node, fill) : null
++  if (!fill || !def || !fill.customEffectId) throw new Error(`Fill ${index} of "${node.name}" is not a shader or mesh fill`)
++  return { node, fill, def, id: fill.customEffectId }
++}
++
++function writeDefinition(graph: SceneGraph, node: SceneNode, id: string, def: object): void {
++  const pluginData = withDefinitions(node, node.fills, new Map([[id, JSON.stringify(def)]]))
++  graph.updateNode(node.id, { pluginData })
++}
++
++/** Merge uniform values into a shader fill (what the Layer panel's controls send). */
++export function setShaderUniforms(
++  graph: SceneGraph,
++  nodeId: string,
++  index: number,
++  uniforms: Record<string, unknown>,
++  ck?: CanvasKit | null
++) {
++  const { node, def, id } = procedural(graph, nodeId, index)
++  if (def.kind !== 'shader') throw new Error('Uniforms belong to shader fills')
++  const next = normalizeProceduralFill({ ...def, uniforms: { ...def.uniforms, ...uniforms } })
++  const known = new Set(prepareShader(def).uniforms.map((u) => u.name))
++  const unknown = Object.keys(uniforms).filter((k) => !known.has(k))
++  writeDefinition(graph, node, id, next)
++  return { ...describeFills(graph, nodeId, ck), ...(unknown.length ? { unknown_uniforms: unknown } : {}) }
++}
++
++export interface MeshPointEdit {
++  i: number
++  x?: number
++  y?: number
++  color?: unknown
++}
++
++/** Move / recolour mesh points (x, y normalised to the node box). */
++export function editMeshPoints(graph: SceneGraph, nodeId: string, index: number, points: MeshPointEdit[]) {
++  const { node, def, id } = procedural(graph, nodeId, index)
++  if (def.kind !== 'mesh') throw new Error('Points belong to mesh fills')
++  const next = { ...def, points: def.points.map((p) => ({ ...p, color: [...p.color] as typeof p.color })) }
++  for (const edit of points) {
++    const p = next.points[edit.i]
++    if (!p) throw new Error(`No mesh point ${edit.i} (the mesh has ${next.points.length})`)
++    if (typeof edit.x === 'number' && Number.isFinite(edit.x)) p.x = Math.min(1.5, Math.max(-0.5, edit.x))
++    if (typeof edit.y === 'number' && Number.isFinite(edit.y)) p.y = Math.min(1.5, Math.max(-0.5, edit.y))
++    if (edit.color !== undefined) {
++      const c = parseProceduralColor(edit.color)
++      if (!c) throw new Error(`Point ${edit.i}: not a colour`)
++      p.color = c
++    }
++  }
++  writeDefinition(graph, node, id, normalizeProceduralFill(next))
++  return { node_id: node.id, index, points: next.points }
++}
++
++/** Every visible animated fill on a page, for the render loop. */
++export function animatedNodes(graph: SceneGraph, pageId: string): string[] {
++  const out: string[] = []
++  const walk = (id: string) => {
++    const node = graph.getNode(id)
++    if (!node || node.visible === false) return
++    if (node.fills.some((f) => f.visible && isAnimatedFill(proceduralFillOf(node, f)))) out.push(node.id)
++    for (const child of node.childIds) walk(child)
++  }
++  walk(pageId)
++  return out
++}
+diff --git a/src/app/integrations/telecode/fx-export.ts b/src/app/integrations/telecode/fx-export.ts
+new file mode 100644
+index 00000000..f492b740
+--- /dev/null
++++ b/src/app/integrations/telecode/fx-export.ts
+@@ -0,0 +1,154 @@
++/**
++ * Shader and mesh-gradient fills in the HTML export (telecode / TeleDesign).
++ *
++ * The exported element keeps a PNG of the fill (rendered by the editor's own
++ * renderer) as its CSS background, so the page looks right without script or
++ * WebGL; `data-td-fx` carries what the small runtime below needs to draw the
++ * real thing live in a <canvas> behind the element's children:
++ *
++ *  - shaders run as WebGL fragment shaders — GLSL sources as written (the
++ *    Shadertoy inputs declared), SkSL translated to GLSL ES 1.0 — with the same
++ *    uniforms; `@time` animates and `@mouse` follows the pointer while the
++ *    element is on screen and the tab is visible; `@backdrop` and `sdf()` are
++ *    textures rendered at export time (the page behind a static HTML export is
++ *    whatever the export put there, so the backdrop is frozen);
++ *  - meshes are tessellated Coons patches drawn with per-vertex colours.
++ *
++ * When a shader cannot be expressed in GLSL ES 1.0 the export keeps the PNG
++ * only and says so in `fx_warnings`.
++ */
++import {
++  glslForWebGL,
++  meshPatches,
++  prepareShader,
++  proceduralFillOf,
++  proceduralRasterizer,
++  proceduralTextures,
++  SHADER_PRESETS,
++  skslToGLSL,
++  type ProceduralFillDef
++} from '@open-pencil/core/canvas'
++import type { Fill, SceneGraph, SceneNode } from '@open-pencil/scene-graph'
++
++function base64(bytes: Uint8Array): string {
++  let s = ''
++  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
++  return btoa(s)
++}
++
++const png = (bytes: Uint8Array | null | undefined) => (bytes ? `data:image/png;base64,${base64(bytes)}` : null)
++
++function shaderConfig(graph: SceneGraph, node: SceneNode, def: Extract<ProceduralFillDef, { kind: 'shader' }>) {
++  const p = prepareShader(def)
++  if (p.error) throw new Error(p.error)
++  const glsl = p.lang === 'glsl' ? glslForWebGL(p.source) : skslToGLSL(p.sksl)
++  const presetUniforms = def.preset ? (SHADER_PRESETS[def.preset]?.uniforms ?? {}) : {}
++  const uniforms = p.uniforms
++    .filter((u) => u.floats > 0)
++    .map((u) => {
++      const v = def.uniforms?.[u.name] ?? presetUniforms[u.name] ?? u.default ?? []
++      return { name: u.name, role: u.name === '_td_sdf_range' ? 'sdf_range' : u.role, floats: u.floats, value: Array.isArray(v) ? v : [v] }
++    })
++  const textures: Record<string, string> = {}
++  const tex = proceduralTextures()
++  let sdfRange: number | undefined
++  for (const u of p.uniforms) {
++    if (u.floats > 0) continue
++    if (u.role === 'backdrop') {
++      const t = png(tex?.backdrop(graph, node))
++      if (t) textures[u.name] = t
++    } else if (u.name === '_td_sdf' || u.role === 'sdf') {
++      const sdf = tex?.sdf(node)
++      if (sdf) {
++        const t = png(sdf.png)
++        if (t) textures[u.name] = t
++        sdfRange = sdf.range
++      }
++    }
++  }
++  return { kind: 'shader' as const, glsl, uniforms, textures, sdf_range: sdfRange, glsl_coords: p.lang === 'glsl' }
++}
++
++function meshConfig(node: SceneNode, def: Extract<ProceduralFillDef, { kind: 'mesh' }>) {
++  const round = (v: number) => Math.round(v * 100) / 100
++  return {
++    kind: 'mesh' as const,
++    patches: meshPatches(def, node.width, node.height).map((patch) => ({
++      c: patch.cubics.map(round),
++      k: patch.corners.map((i) => def.points[i].color.map((v) => Math.round(v * 1000) / 1000))
++    }))
++  }
++}
++
++/**
++ * For one node: the CSS background (PNG of its procedural fills, top fill
++ * first) and the `data-td-fx` payload of the topmost one the runtime can draw.
++ */
++export function fxForNode(graph: SceneGraph, node: SceneNode): { backgrounds: string[]; fx: object | null; warnings: string[] } {
++  const backgrounds: string[] = []
++  const warnings: string[] = []
++  let fx: object | null = null
++  const raster = proceduralRasterizer()
++  const fills: Fill[] = node.fills ?? []
++  for (let i = fills.length - 1; i >= 0; i--) {
++    const fill = fills[i]
++    if (fill.visible === false) continue
++    const def = proceduralFillOf(node, fill)
++    if (!def) continue
++    const image = png(raster?.(graph, node, fill))
++    if (image) backgrounds.push(`url("${image}")`)
++    if (fx) continue
++    try {
++      fx = def.kind === 'shader' ? shaderConfig(graph, node, def) : meshConfig(node, def)
++    } catch (error) {
++      warnings.push(`${node.name}: fill ${i + 1} exported as a picture only (${error instanceof Error ? error.message : String(error)})`)
++    }
++  }
++  return { backgrounds, fx, warnings }
++}
++
++/** The runtime included once in an export that has live fills. Plain ES2017, no dependencies. */
++export const FX_RUNTIME = `(function(){
++'use strict';
++var VS='attribute vec2 a;attribute vec4 c;varying vec4 v;uniform vec2 s;void main(){v=c;gl_Position=vec4(a/s*2.0-1.0,0.0,1.0);gl_Position.y=-gl_Position.y;}';
++var FS='precision mediump float;varying vec4 v;void main(){gl_FragColor=vec4(v.rgb*v.a,v.a);}';
++var QUAD=new Float32Array([-1,-1,3,-1,-1,3]);
++var t0=performance.now();
++function sh(gl,type,src){var s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)){throw new Error(gl.getShaderInfoLog(s)||'shader');}return s;}
++function prog(gl,vs,fs){var p=gl.createProgram();gl.attachShader(p,sh(gl,gl.VERTEX_SHADER,vs));gl.attachShader(p,sh(gl,gl.FRAGMENT_SHADER,fs));gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS)){throw new Error(gl.getProgramInfoLog(p)||'link');}return p;}
++function cubic(a,b,c,d,t){var u=1-t;return u*u*u*a+3*u*u*t*b+3*u*t*t*c+t*t*t*d;}
++function coons(P,s,t){function pt(i){return [P[i*2],P[i*2+1]];}
++var top=[0,1,2,3],right=[3,4,5,6],bottom=[9,8,7,6],left=[0,11,10,9],out=[0,0];
++for(var k=0;k<2;k++){var C0=cubic(P[top[0]*2+k],P[top[1]*2+k],P[top[2]*2+k],P[top[3]*2+k],s),C1=cubic(P[bottom[0]*2+k],P[bottom[1]*2+k],P[bottom[2]*2+k],P[bottom[3]*2+k],s),D0=cubic(P[left[0]*2+k],P[left[1]*2+k],P[left[2]*2+k],P[left[3]*2+k],t),D1=cubic(P[right[0]*2+k],P[right[1]*2+k],P[right[2]*2+k],P[right[3]*2+k],t);
++var B=(1-s)*(1-t)*P[0*2+k]+s*(1-t)*P[3*2+k]+(1-s)*t*P[9*2+k]+s*t*P[6*2+k];out[k]=(1-t)*C0+t*C1+(1-s)*D0+s*D1-B;}return out;}
++function mix4(K,s,t){var r=[0,0,0,0];for(var i=0;i<4;i++){r[i]=(1-s)*(1-t)*K[0][i]+s*(1-t)*K[1][i]+s*t*K[2][i]+(1-s)*t*K[3][i];}return r;}
++function mesh(gl,cfg,w,h){var N=16,pos=[],col=[];cfg.patches.forEach(function(p){var g=[],c=[];for(var j=0;j<=N;j++){for(var i=0;i<=N;i++){g.push(coons(p.c,i/N,j/N));c.push(mix4(p.k,i/N,j/N));}}
++for(var j2=0;j2<N;j2++){for(var i2=0;i2<N;i2++){var a=j2*(N+1)+i2,b=a+1,d=a+N+1,e=d+1;[a,b,e,a,e,d].forEach(function(q){pos.push(g[q][0],g[q][1]);col.push(c[q][0],c[q][1],c[q][2],c[q][3]);});}}});
++var p=prog(gl,VS,FS);gl.useProgram(p);var bp=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,bp);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(pos),gl.STATIC_DRAW);var la=gl.getAttribLocation(p,'a');gl.enableVertexAttribArray(la);gl.vertexAttribPointer(la,2,gl.FLOAT,false,0,0);
++var bc=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,bc);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(col),gl.STATIC_DRAW);var lc=gl.getAttribLocation(p,'c');gl.enableVertexAttribArray(lc);gl.vertexAttribPointer(lc,4,gl.FLOAT,false,0,0);
++gl.uniform2f(gl.getUniformLocation(p,'s'),w,h);return function(){gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);gl.drawArrays(gl.TRIANGLES,0,pos.length/2);};}
++function shader(gl,cfg,w,h,el,state){var p=prog(gl,'attribute vec2 a;void main(){gl_Position=vec4(a,0.0,1.0);}',cfg.glsl);gl.useProgram(p);var b=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,QUAD,gl.STATIC_DRAW);var la=gl.getAttribLocation(p,'a');gl.enableVertexAttribArray(la);gl.vertexAttribPointer(la,2,gl.FLOAT,false,0,0);
++var unit=0,loaded=[];Object.keys(cfg.textures||{}).forEach(function(name){var loc=gl.getUniformLocation(p,name);if(!loc)return;var tx=gl.createTexture(),u=unit++;gl.activeTexture(gl.TEXTURE0+u);gl.bindTexture(gl.TEXTURE_2D,tx);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([0,0,0,0]));gl.uniform1i(loc,u);
++var img=new Image();loaded.push(new Promise(function(res){img.onload=function(){gl.useProgram(p);gl.activeTexture(gl.TEXTURE0+u);gl.bindTexture(gl.TEXTURE_2D,tx);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,img);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);res();};img.onerror=res;}));img.src=cfg.textures[name];});
++var locs=cfg.uniforms.map(function(u){return {u:u,l:gl.getUniformLocation(p,u.name)};});
++function set(l,f,v){if(!l)return;if(f===1)gl.uniform1f(l,v[0]||0);else if(f===2)gl.uniform2f(l,v[0]||0,v[1]||0);else if(f===3)gl.uniform3f(l,v[0]||0,v[1]||0,v[2]||0);else if(f===4)gl.uniform4f(l,v[0]||0,v[1]||0,v[2]||0,v[3]||0);else if(f===9)gl.uniformMatrix3fv(l,false,v);else if(f===16)gl.uniformMatrix4fv(l,false,v);}
++var draw=function(){gl.useProgram(p);var t=(performance.now()-t0)/1000;locs.forEach(function(x){var u=x.u,v=u.value;if(u.role==='resolution')v=[w,h,1];else if(u.role==='time')v=[t];else if(u.role==='mouse'){var m=state.mouse||[-1,-1];v=cfg.glsl_coords?[m[0],h-m[1],0,0]:[m[0],m[1],0,0];}else if(u.role==='sdf_range')v=[cfg.sdf_range||1];set(x.l,u.floats,v);});
++if(gl.getUniformLocation(p,'_td_size'))gl.uniform2f(gl.getUniformLocation(p,'_td_size'),w,h);gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);gl.drawArrays(gl.TRIANGLES,0,3);};
++Promise.all(loaded).then(function(){state.dirty=true;});return draw;}
++function start(el){var cfg;try{cfg=JSON.parse(el.getAttribute('data-td-fx'));}catch(e){return;}
++var w=el.offsetWidth||parseFloat(el.style.width)||1,h=el.offsetHeight||parseFloat(el.style.height)||1,dpr=Math.min(2,window.devicePixelRatio||1);
++var cv=document.createElement('canvas');cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr);cv.style.cssText='position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;border-radius:inherit;';cv.setAttribute('aria-hidden','true');
++var gl=cv.getContext('webgl',{premultipliedAlpha:true,antialias:true});if(!gl)return;gl.viewport(0,0,cv.width,cv.height);
++var state={mouse:null,dirty:true,visible:false},draw;
++try{draw=cfg.kind==='mesh'?mesh(gl,cfg,w,h):shader(gl,cfg,w,h,el,state);}catch(e){console.warn('td-fx:',e&&e.message||e);return;}
++el.insertBefore(cv,el.firstChild);el.setAttribute('data-td-fx-live','');
++var animated=cfg.kind==='shader'&&cfg.uniforms.some(function(u){return u.role==='time';});var follows=cfg.kind==='shader'&&cfg.uniforms.some(function(u){return u.role==='mouse';});
++if(follows){el.addEventListener('pointermove',function(e){var r=el.getBoundingClientRect();state.mouse=[(e.clientX-r.left)*w/r.width,(e.clientY-r.top)*h/r.height];state.dirty=true;});el.addEventListener('pointerleave',function(){state.mouse=null;state.dirty=true;});}
++var raf=0;function loop(){raf=0;if(!state.visible||document.hidden)return;if(animated||state.dirty){state.dirty=false;draw();}if(animated||follows)raf=requestAnimationFrame(loop);}
++function kick(){if(!raf&&state.visible&&!document.hidden)raf=requestAnimationFrame(loop);}
++draw();state.dirty=false;
++if('IntersectionObserver' in window){new IntersectionObserver(function(es){state.visible=es[0].isIntersecting;state.dirty=true;kick();}).observe(el);}else{state.visible=true;}
++document.addEventListener('visibilitychange',kick);if(follows)el.addEventListener('pointermove',kick);kick();}
++function all(){Array.prototype.forEach.call(document.querySelectorAll('[data-td-fx]'),start);}
++if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',all);else all();
++})();`
+diff --git a/src/app/integrations/telecode/host.ts b/src/app/integrations/telecode/host.ts
+index 9995651d..db9ef597 100644
+--- a/src/app/integrations/telecode/host.ts
++++ b/src/app/integrations/telecode/host.ts
+@@ -19,6 +19,8 @@
+  *                   td-editor:scripts     {scripts:[{node_id, name, file, inputs, seed, status, schema,
+  *                                         x, y, width, height}], components:[{id, name}]}  (current page)
+  *                   td-editor:script-result {request_id?, ok, result?, error?}
++ *                   td-editor:slots       {items:[{node_id, slot, owner_id, owner, kind, x, y, width, height}]}
++ *                                         (empty slots on the current page, for hatching)
+  *   host → editor   td-editor:open        {pid, doc?}   (doc: a canvas document id; omitted = default)
+  *                   td-editor:focus       {node_id}            (a node id or a board key)
+  *                   td-editor:insert-frame {name, width, height, x?, y?, key?, request_id?}
+@@ -70,6 +72,7 @@ import {
+   updateScriptNode,
+   watchScripts
+ } from './scripts'
++import { installExtras } from './extras-host'
+ import { listPlaceholders, onPlaceholdersChanged } from './placeholders'
+ import { DOC_ID } from './config'
+ import { onTelecodeCanvasSaved, telecodeDocumentId } from './storage'
+@@ -154,6 +157,9 @@ export async function startTelecodeHost(config: TelecodeConfig): Promise<() => v
+   let openDocId: string | null = config.docId
+ 
+   const handlers = createAutomationCommandHandlers(makeFigmaFromStore)
++  // Empty-slot overlays, slot adoption, animated shader fills, export rasteriser.
++  const extras = installExtras(post, canvasRect)
++  cleanups.push(() => extras.cleanup())
+ 
+   async function loadBoards(): Promise<void> {
+     try {
+@@ -340,6 +346,7 @@ export async function startTelecodeHost(config: TelecodeConfig): Promise<() => v
+     if (store === next) return
+     unbindStore?.()
+     store = next
++    extras.bind(next)
+     const offs = [
+       next.onEditorEvent('viewport:changed', queueViewport),
+       next.onEditorEvent('selection:changed', postSelection),
+@@ -393,6 +400,7 @@ export async function startTelecodeHost(config: TelecodeConfig): Promise<() => v
+     postSelection()
+     postPlaceholders()
+     postScripts()
++    extras.post()
+   }
+ 
+   function focusNode(keyOrId: string): boolean {
+diff --git a/src/app/integrations/telecode/html-layers.ts b/src/app/integrations/telecode/html-layers.ts
+index e9b02f93..d4a83908 100644
+--- a/src/app/integrations/telecode/html-layers.ts
++++ b/src/app/integrations/telecode/html-layers.ts
+@@ -26,6 +26,7 @@ import { computeImageHash } from '@open-pencil/scene-graph/images'
+ 
+ import { makeFigmaFromStore } from '@/app/automation/bridge/figma-factory'
+ import { createAutomationCommandHandlers } from '@/app/automation/bridge/handlers'
++import { FX_RUNTIME, fxForNode } from './fx-export'
+ import type { EditorStore } from '@/app/editor/session'
+ import { ensureGraphFonts } from '@/app/editor/fonts'
+ 
+@@ -507,7 +508,15 @@ export async function exportHTML(
+     (child) => child.type === 'element' && child.sourceSceneNodeId === nodeId
+   )
+   if (!own.length) throw new Error('The frame produced no HTML')
+-  const body = serializeHTML({ type: 'document', children: own.map((n) => standalone(n, true)) })
++  exportGraph = store.graph
++  exportFx = { warnings: [], live: 0 }
++  let body: string
++  try {
++    body = serializeHTML({ type: 'document', children: own.map((n) => standalone(n, true)) })
++  } finally {
++    exportGraph = null
++  }
++  const fx = exportFx
+   const w = Math.max(1, Math.round(node.width))
+   const h = Math.max(1, Math.round(node.height))
+   const css =
+@@ -516,8 +525,19 @@ export async function exportHTML(
+   const html =
+     `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=${w}">` +
+     `<title>${escapeHTML(node.name)}</title><meta name="td-layer-export" content="${w}x${h}">` +
+-    `<style>${css}</style></head><body><main data-open-pencil-html="standalone" class="op-stage">${body}</main></body></html>`
+-  return { html, name: node.name, width: node.width, height: node.height, files: 1 }
++    `<style>${css}</style></head><body><main data-open-pencil-html="standalone" class="op-stage">${body}</main>` +
++    // Shader / mesh fills draw live (WebGL) over their PNG picture; see fx-export.ts.
++    (fx.live ? `<script>${FX_RUNTIME}</script>` : '') +
++    `</body></html>`
++  return {
++    html,
++    name: node.name,
++    width: node.width,
++    height: node.height,
++    files: 1,
++    ...(fx.live ? { live_fills: fx.live } : {}),
++    ...(fx.warnings.length ? { fx_warnings: fx.warnings } : {})
++  }
+ }
+ 
+ type DomNode = { type: 'text'; text: string } | {
+@@ -569,6 +589,9 @@ function gradientCSS(fill: Fill, w: number, h: number): string | null {
+ }
+ 
+ /** Absolute placement for every projected element (as dom-css's own standalone export does). */
++let exportGraph: SceneGraph | null = null
++let exportFx: { warnings: string[]; live: number } = { warnings: [], live: 0 }
++
+ function standalone<T>(input: T, isRoot = false): T {
+   const node = input as unknown as DomNode
+   if (node.type === 'text') return input
+@@ -593,6 +616,17 @@ function standalone<T>(input: T, isRoot = false): T {
+         .map((f) => gradientCSS(f, source.width, source.height))
+         .filter((g): g is string => !!g)
+         .reverse() // CSS paints the first layer on top; the canvas paints the last fill on top
++      // Shader / mesh fills: their PNG on top, the live canvas via data-td-fx.
++      const fx = exportGraph ? fxForNode(exportGraph, source) : null
++      if (fx?.backgrounds.length) {
++        gradients.unshift(...fx.backgrounds)
++        style['background-size'] = '100% 100%'
++      }
++      if (fx) exportFx.warnings.push(...fx.warnings)
++      if (fx?.fx) {
++        node.attrs = { ...node.attrs, 'data-td-fx': JSON.stringify(fx.fx) }
++        exportFx.live++
++      }
+       if (gradients.length) style['background-image'] = gradients.join(', ')
+     }
+   }
+diff --git a/src/app/integrations/telecode/slides.ts b/src/app/integrations/telecode/slides.ts
+index 5f91ec8c..d0140891 100644
+--- a/src/app/integrations/telecode/slides.ts
++++ b/src/app/integrations/telecode/slides.ts
+@@ -11,14 +11,12 @@ import type { SceneNode } from '@open-pencil/scene-graph'
+ import type { EditorStore } from '@/app/editor/session'
+ 
+ import { boardKeyOf } from './boards'
+-import { isSlotLibrary } from './slots'
+ 
+ const SLIDE_TYPES = new Set(['FRAME', 'COMPONENT', 'COMPONENT_SET', 'SECTION', 'INSTANCE'])
+ const GAP = 100
+ 
+ function isSlide(node: SceneNode | undefined): node is SceneNode {
+-  // The "Slot content" section holds slot content components, not a slide.
+-  return !!node && SLIDE_TYPES.has(node.type) && node.visible !== false && !isSlotLibrary(node)
++  return !!node && SLIDE_TYPES.has(node.type) && node.visible !== false
+ }
+ 
+ export function listSlides(store: EditorStore, pageId: string) {
+diff --git a/src/app/integrations/telecode/slots-editor.ts b/src/app/integrations/telecode/slots-editor.ts
+index cf2388aa..066757be 100644
+--- a/src/app/integrations/telecode/slots-editor.ts
++++ b/src/app/integrations/telecode/slots-editor.ts
+@@ -1,8 +1,6 @@
+ /** Editor-side wrappers for component slots (see slots.ts): one undo step each. */
+ import { renderJSX } from '@open-pencil/core/design-jsx'
+-import type { FigmaAPI } from '@open-pencil/core/figma-api'
+ 
+-import { makeFigmaFromStore } from '@/app/automation/bridge/figma-factory'
+ import { ensureGraphFonts } from '@/app/editor/fonts'
+ import type { EditorStore } from '@/app/editor/session'
+ 
+@@ -11,14 +9,11 @@ import { fillSlot, type SlotContent } from './slots'
+ export async function slotMutation<T>(
+   store: EditorStore,
+   label: string,
+-  operation: (figma: FigmaAPI) => T | Promise<T>
++  operation: () => T | Promise<T>
+ ): Promise<T> {
+   const pageId = store.state.currentPageId
+   const before = store.snapshotPage()
+-  const result = await store.runMutationWithLayout(
+-    () => operation(makeFigmaFromStore(store, pageId)),
+-    pageId
+-  )
++  const result = await store.runMutationWithLayout(() => operation(), pageId)
+   const after = store.snapshotPage()
+   store.pushUndoEntry({
+     label,
+@@ -35,11 +30,9 @@ export async function fillSlotInEditor(
+   slot: string,
+   content: SlotContent
+ ) {
+-  const result = await slotMutation(store, 'Fill slot', (figma) =>
+-    fillSlot(store.graph, figma, instanceId, slot, content, renderJSX)
++  const result = await slotMutation(store, 'Fill slot', () =>
++    fillSlot(store.graph, instanceId, slot, content, renderJSX)
+   )
+-  const filled =
+-    result.kind === 'instance' ? result.slots.find((s) => s.name === slot)?.content_component_id : null
+-  if (filled) await ensureGraphFonts(store.graph, [filled], store.renderer)
++  if (result.created.length) await ensureGraphFonts(store.graph, result.created, store.renderer)
+   return result
+ }
+diff --git a/src/app/integrations/telecode/slots.ts b/src/app/integrations/telecode/slots.ts
+index 296fdde4..17154327 100644
+--- a/src/app/integrations/telecode/slots.ts
++++ b/src/app/integrations/telecode/slots.ts
+@@ -2,86 +2,46 @@
+  * Component slots (telecode / TeleDesign).
+  *
+  * A slot is a named area of a component that each instance fills with its own
+- * content (a card's body, a dialog's actions). open-pencil — like the .fig format
+- * it saves — derives an instance's children from its main component, so content
+- * added straight into an instance does not survive a save. Slots are therefore
+- * built on what .fig does persist, the instance-swap component property:
++ * content (a card's body, a dialog's actions).
+  *
+- *  - telecode_slot_create turns a frame inside a component into a slot: its
+- *    children move into a new "default content" component, the frame is replaced
+- *    by an instance of it (same place, size and layout-child settings), and that
+- *    instance is exposed as an INSTANCE_SWAP property named after the slot. The
+- *    instance carries shared plugin data `telecode/slot` = the slot name.
+- *  - telecode_slot_fill gives one instance its own content: a new content
+- *    component (Design JSX rendered into it, existing layers moved into it, or an
+- *    existing component) becomes the value of that property.
+- *  - telecode_slot_reset puts the default back.
+- *
+- * Content components live in a "Slot content" section on the host's page
+- * (plugin data `telecode/slot-library`), so editing a slot's content is editing
+- * that component — every instance showing it follows, as components do.
+- * Content components telecode created are deleted again once nothing uses them.
++ *  - telecode_slot_create marks a frame inside a component as slot `name`
++ *    (shared plugin data `telecode/slot`); its children are the default
++ *    content, shown by every instance that has not filled the slot. Optional
++ *    preferred components (`telecode/slot-preferred`, by name — node ids do not
++ *    survive a reload) head the slot's suggestions.
++ *  - An instance fills a slot with real layers of its own inside its clone of
++ *    that frame, and records the slot in its plugin data `telecode/slots`
++ *    {"filled": [...]}. Instance sync leaves a filled slot alone, the .fig
++ *    writer stores its layers under the instance with the schema's
++ *    `isSlotContent` flag, and the reader puts them back (scene-graph ./slots,
++ *    fig export-node, core kiwi import) — so the content is per instance and
++ *    survives saving and reopening, and it is edited in place on the canvas.
++ *    Dropping or drawing a layer into an unfilled slot of an instance fills it
++ *    (see extras-host.ts).
++ *  - telecode_slot_fill replaces a slot's content (Design JSX, existing layers
++ *    moved in, or an instance of a component); telecode_slot_reset brings the
++ *    default content back; telecode_slot_suggest lists preferred components
++ *    first, then the document's other components.
+  */
+-import type { FigmaAPI } from '@open-pencil/core/figma-api'
+ import {
+-  componentPropertyDefinitions,
+-  type ComponentPropertyDefinition,
++  filledSlotsOf,
++  owningInstance,
++  slotClones,
++  slotNameOf,
++  SLOT_FIELD,
++  SLOT_NAMESPACE,
++  SLOTS_FIELD,
+   type SceneGraph,
+   type SceneNode
+ } from '@open-pencil/scene-graph'
+ 
+-export const SLOT_NAMESPACE = 'telecode'
+-export const SLOT_FIELD = 'slot'
+-export const SLOT_CONTENT_FIELD = 'slot-content'
+-export const SLOT_LIBRARY_FIELD = 'slot-library'
++export { slotNameOf, owningInstance, filledSlotsOf }
+ 
++export const PREFERRED_FIELD = 'slot-preferred'
+ const SLOT_NAME = /^[^#\n]{1,64}$/
+-const LIBRARY_GAP = 200
+-
+-/** Frame properties a slot's content component takes over, so content lays out like the frame did. */
+-const CONTAINER_PROPS = [
+-  'fills',
+-  'strokes',
+-  'effects',
+-  'opacity',
+-  'cornerRadius',
+-  'topLeftRadius',
+-  'topRightRadius',
+-  'bottomRightRadius',
+-  'bottomLeftRadius',
+-  'independentCorners',
+-  'layoutMode',
+-  'layoutWrap',
+-  'primaryAxisAlign',
+-  'counterAxisAlign',
+-  'primaryAxisSizing',
+-  'counterAxisSizing',
+-  'itemSpacing',
+-  'counterAxisSpacing',
+-  'paddingTop',
+-  'paddingRight',
+-  'paddingBottom',
+-  'paddingLeft',
+-  'clipsContent',
+-  'strokeWeight',
+-  'boundVariables'
+-] as const
+-
+-/** How the slot sits in its parent — kept on the instance that replaces the frame. */
+-const CHILD_PROPS = [
+-  'x',
+-  'y',
+-  'rotation',
+-  'layoutGrow',
+-  'layoutAlignSelf',
+-  'layoutPositioning',
+-  'horizontalConstraint',
+-  'verticalConstraint',
+-  'visible',
+-  'locked'
+-] as const
+ 
+-function pluginValue(node: SceneNode, field: string): string | null {
++function pluginValue(node: SceneNode | undefined, field: string): string | null {
++  if (!node) return null
+   const encoded = `${SLOT_NAMESPACE}/${field}`
+   const entry = node.pluginData.find(
+     (e) => e.pluginId === SLOT_NAMESPACE && (e.key === encoded || e.key === field)
+@@ -89,391 +49,257 @@ function pluginValue(node: SceneNode, field: string): string | null {
+   return entry?.value ? entry.value : null
+ }
+ 
+-export function slotNameOf(node: SceneNode): string | null {
+-  return pluginValue(node, SLOT_FIELD)
+-}
+-
+-export function isSlotContent(node: SceneNode): boolean {
+-  return pluginValue(node, SLOT_CONTENT_FIELD) !== null
+-}
+-
+-export function isSlotLibrary(node: SceneNode | undefined): boolean {
+-  return !!node && pluginValue(node, SLOT_LIBRARY_FIELD) !== null
+-}
+-
+-function pick(node: SceneNode, keys: readonly string[]): Partial<SceneNode> {
+-  const out: Record<string, unknown> = {}
+-  const src = node as unknown as Record<string, unknown>
+-  for (const key of keys) {
+-    if (!(key in src)) continue
+-    const value = src[key]
+-    out[key] = value && typeof value === 'object' ? structuredClone(value) : value
+-  }
+-  return out as Partial<SceneNode>
+-}
+-
+-function pageOf(graph: SceneGraph, node: SceneNode | undefined): SceneNode | undefined {
+-  let current = node
+-  while (current && current.type !== 'CANVAS') {
+-    current = current.parentId ? graph.getNode(current.parentId) : undefined
+-  }
+-  return current
+-}
+-
+-/** The component (or component set) whose properties a node inside a component belongs to. */
+-function propertyHost(graph: SceneGraph, nodeId: string | null): SceneNode | undefined {
+-  let current = nodeId ? graph.getNode(nodeId) : undefined
+-  let component: SceneNode | undefined
+-  while (current) {
+-    if (current.type === 'COMPONENT_SET') return current
+-    if (current.type === 'COMPONENT' && !component) component = current
+-    if (current.type === 'INSTANCE') break
+-    current = current.parentId ? graph.getNode(current.parentId) : undefined
+-  }
+-  if (component) {
+-    const parent = component.parentId ? graph.getNode(component.parentId) : undefined
+-    if (parent?.type === 'COMPONENT_SET') return parent
+-  }
+-  return component
++function setPlugin(graph: SceneGraph, node: SceneNode, field: string, value: string | null): void {
++  const key = `${SLOT_NAMESPACE}/${field}`
++  const pluginData = node.pluginData.filter(
++    (e) => !(e.pluginId === SLOT_NAMESPACE && (e.key === key || e.key === field))
++  )
++  if (value) pluginData.push({ pluginId: SLOT_NAMESPACE, key, value })
++  graph.updateNode(node.id, { pluginData })
+ }
+ 
+-function descendants(graph: SceneGraph, rootId: string): SceneNode[] {
++function descendants(graph: SceneGraph, rootId: string, stopAtInstances = false): SceneNode[] {
+   const out: SceneNode[] = []
+   const walk = (id: string) => {
+     const node = graph.getNode(id)
+     if (!node) return
+-    out.push(node)
+-    for (const child of node.childIds) walk(child)
++    for (const childId of node.childIds) {
++      const child = graph.getNode(childId)
++      if (!child) continue
++      out.push(child)
++      if (stopAtInstances && child.type === 'INSTANCE') continue
++      walk(childId)
++    }
+   }
+-  for (const child of graph.getNode(rootId)?.childIds ?? []) walk(child)
++  walk(rootId)
+   return out
+ }
+ 
+-/** The page's "Slot content" section, created to the right of everything on first use. */
+-function slotLibrary(graph: SceneGraph, figma: FigmaAPI, pageId: string): SceneNode {
+-  const page = graph.getNode(pageId)
+-  if (!page) throw new Error(`Page not found: ${pageId}`)
+-  for (const id of page.childIds) {
+-    const node = graph.getNode(id)
+-    if (isSlotLibrary(node)) return node as SceneNode
+-  }
+-  let right = 0
+-  let top = Infinity
+-  for (const id of page.childIds) {
+-    const node = graph.getNode(id)
+-    if (!node) continue
+-    right = Math.max(right, node.x + node.width)
+-    top = Math.min(top, node.y)
++/** The component (or component set) a node inside a component belongs to. */
++function componentOf(graph: SceneGraph, node: SceneNode | undefined): SceneNode | undefined {
++  let current = node?.parentId ? graph.getNode(node.parentId) : undefined
++  while (current) {
++    if (current.type === 'INSTANCE') return undefined
++    if (current.type === 'COMPONENT') return current
++    if (current.type === 'CANVAS') return undefined
++    current = current.parentId ? graph.getNode(current.parentId) : undefined
+   }
+-  const section = graph.createNode('SECTION', pageId, {
+-    name: 'Slot content',
+-    x: right + LIBRARY_GAP,
+-    y: Number.isFinite(top) ? top : 0,
+-    width: 400,
+-    height: 400
+-  })
+-  figma.getNodeById(section.id)?.setSharedPluginData(SLOT_NAMESPACE, SLOT_LIBRARY_FIELD, '1')
+-  return section
++  return undefined
+ }
+ 
+-/** Grow the library section around its components (they are stacked top to bottom). */
+-function placeInLibrary(graph: SceneGraph, library: SceneNode, component: SceneNode): void {
+-  let bottom = 40
+-  for (const id of library.childIds) {
+-    if (id === component.id) continue
+-    const node = graph.getNode(id)
+-    if (node) bottom = Math.max(bottom, node.y + node.height + 40)
+-  }
+-  graph.updateNode(component.id, { x: 40, y: bottom })
+-  let width = 400
+-  let height = 400
+-  for (const id of library.childIds) {
+-    const node = graph.getNode(id)
+-    if (!node) continue
+-    width = Math.max(width, node.x + node.width + 40)
+-    height = Math.max(height, node.y + node.height + 40)
+-  }
+-  graph.updateNode(library.id, { width, height })
++function mainComponentOf(graph: SceneGraph, instance: SceneNode): SceneNode | undefined {
++  return instance.componentId ? graph.getNode(instance.componentId) : undefined
+ }
+ 
+-function slotDefinition(
+-  graph: SceneGraph,
+-  instance: SceneNode,
+-  slot: string
+-): ComponentPropertyDefinition {
+-  const definition = componentPropertyDefinitions(graph, instance).find(
+-    (d) => d.type === 'INSTANCE_SWAP' && d.name === slot
+-  )
+-  if (!definition) {
+-    const names = listInstanceSlots(graph, instance).map((s) => s.name)
+-    throw new Error(
+-      `"${instance.name}" has no slot "${slot}"${names.length ? ` (slots: ${names.join(', ')})` : ''}`
+-    )
++export function preferredOf(node: SceneNode | undefined): string[] {
++  const raw = pluginValue(node, PREFERRED_FIELD)
++  if (!raw) return []
++  try {
++    const parsed = JSON.parse(raw) as unknown
++    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : []
++  } catch {
++    return []
+   }
+-  return definition
+ }
+ 
+-// ── Reading ────────────────────────────────────────────────────────────
+-
+-export interface SlotDefinitionInfo {
+-  name: string
+-  node_id: string
+-  property_id: string
+-  default_component_id: string | null
+-  default_component: string | null
+-  width: number
+-  height: number
++function setFilled(graph: SceneGraph, instance: SceneNode, slot: string, filled: boolean): void {
++  const set = new Set(filledSlotsOf(instance))
++  if (filled) set.add(slot)
++  else set.delete(slot)
++  setPlugin(graph, instance, SLOTS_FIELD, set.size ? JSON.stringify({ filled: [...set].sort() }) : null)
+ }
+ 
+-/** Slots a component (or component set) defines. */
+-export function listComponentSlots(graph: SceneGraph, host: SceneNode): SlotDefinitionInfo[] {
+-  const owner =
+-    host.type === 'COMPONENT' && host.parentId && graph.getNode(host.parentId)?.type === 'COMPONENT_SET'
+-      ? (graph.getNode(host.parentId) as SceneNode)
+-      : host
+-  const roots = owner.type === 'COMPONENT_SET' ? [owner.id] : [host.id]
+-  const out: SlotDefinitionInfo[] = []
+-  const seen = new Set<string>()
++/** The component's slot frames, by name. */
++export function componentSlots(graph: SceneGraph, component: SceneNode): Map<string, SceneNode> {
++  const out = new Map<string, SceneNode>()
++  const roots = component.type === 'COMPONENT_SET' ? component.childIds : [component.id]
+   for (const root of roots) {
+-    for (const node of descendants(graph, root)) {
+-      const name = slotNameOf(node)
+-      if (!name || node.type !== 'INSTANCE') continue
+-      const ref = node.componentPropertyReferences.find((r) => r.field === 'INSTANCE_SWAP')
+-      const definition = owner.componentPropertyDefinitions.find((d) => d.id === ref?.propertyId)
+-      if (!definition || seen.has(node.id)) continue
+-      seen.add(node.id)
+-      const main = graph.getNode(definition.defaultValue)
+-      out.push({
+-        name,
+-        node_id: node.id,
+-        property_id: definition.id,
+-        default_component_id: main?.id ?? null,
+-        default_component: main?.name ?? null,
+-        width: node.width,
+-        height: node.height
+-      })
++    for (const node of descendants(graph, root, true)) {
++      const name = pluginValue(node, SLOT_FIELD)
++      if (name && node.type !== 'INSTANCE' && !out.has(name)) out.set(name, node)
+     }
+   }
+   return out
+ }
+ 
+-export interface InstanceSlotInfo {
+-  name: string
+-  property_id: string
+-  filled: boolean
+-  content_component_id: string | null
+-  content_component: string | null
+-  node_id: string | null
+-}
++// ── Reading ────────────────────────────────────────────────────────────
+ 
+-/** An instance's slots and what each shows. */
+-export function listInstanceSlots(graph: SceneGraph, instance: SceneNode): InstanceSlotInfo[] {
+-  const main = instance.componentId ? graph.getNode(instance.componentId) : undefined
+-  if (!main) return []
+-  const defs = listComponentSlots(graph, main)
+-  const inside = descendants(graph, instance.id)
+-  return defs.map((slot) => {
+-    const definition = componentPropertyDefinitions(graph, instance).find(
+-      (d) => d.id === slot.property_id
+-    )
+-    const value = instance.componentPropertyAssignments[slot.property_id] ?? definition?.defaultValue
+-    const content = value ? graph.getNode(value) : undefined
+-    const node = inside.find(
+-      (n) =>
+-        n.type === 'INSTANCE' &&
+-        (n.componentPropertyReferences.some((r) => r.propertyId === slot.property_id) ||
+-          slotNameOf(n) === slot.name)
+-    )
+-    return {
+-      name: slot.name,
+-      property_id: slot.property_id,
+-      filled: !!value && value !== definition?.defaultValue,
+-      content_component_id: content?.id ?? null,
+-      content_component: content?.name ?? null,
+-      node_id: node?.id ?? null
+-    }
+-  })
++function rect(graph: SceneGraph, node: SceneNode) {
++  const abs = graph.getAbsolutePosition(node.id)
++  return { x: abs.x, y: abs.y, width: node.width, height: node.height }
+ }
+ 
+-export type SlotsDescription =
+-  | { node_id: string; name: string; kind: 'instance'; slots: InstanceSlotInfo[] }
+-  | { node_id: string; name: string; kind: 'component'; slots: SlotDefinitionInfo[] }
+-  | { node_id: string; name: string; kind: 'none'; slots: [] }
+-
+-export function describeSlots(graph: SceneGraph, nodeId: string): SlotsDescription {
++export function describeSlots(graph: SceneGraph, nodeId: string) {
+   const node = graph.getNode(nodeId)
+   if (!node) throw new Error(`Node not found: ${nodeId}`)
+   if (node.type === 'INSTANCE') {
+-    return { node_id: node.id, name: node.name, kind: 'instance', slots: listInstanceSlots(graph, node) }
++    const main = mainComponentOf(graph, node)
++    const defs = main ? componentSlots(graph, main) : new Map<string, SceneNode>()
++    const clones = slotClones(graph, node)
++    const filled = new Set(filledSlotsOf(node))
++    const slots = [...defs.entries()].map(([name, def]) => {
++      const clone = clones.get(name)
++      const content = clone ? clone.childIds.map((id) => graph.getNode(id)).filter((n): n is SceneNode => !!n) : []
++      return {
++        name,
++        node_id: clone?.id ?? null,
++        filled: filled.has(name),
++        empty: content.length === 0,
++        content: content.map((c) => ({ id: c.id, name: c.name, type: c.type })),
++        preferred: preferredOf(def)
++      }
++    })
++    return { node_id: node.id, name: node.name, kind: 'instance' as const, slots }
++  }
++  const host = node.type === 'COMPONENT' || node.type === 'COMPONENT_SET' ? node : componentOf(graph, node)
++  if (!host) {
++    // A layer inside an instance may be a slot clone: describe its instance.
++    const inst = owningInstance(graph, node)
++    if (inst && slotNameOf(graph, node)) return describeSlots(graph, inst.id)
++    return { node_id: node.id, name: node.name, kind: 'none' as const, slots: [] }
+   }
+-  const host = node.type === 'COMPONENT' || node.type === 'COMPONENT_SET' ? node : propertyHost(graph, node.id)
+-  // Neither a component nor inside one: nothing to list (not an error — the shell asks for
+-  // whatever layer is selected).
+-  if (!host) return { node_id: node.id, name: node.name, kind: 'none', slots: [] }
+-  return { node_id: host.id, name: host.name, kind: 'component', slots: listComponentSlots(graph, host) }
++  const slots = [...componentSlots(graph, host).entries()].map(([name, def]) => ({
++    name,
++    node_id: def.id,
++    empty: def.childIds.length === 0,
++    default_content: def.childIds.map((id) => graph.getNode(id)?.name ?? id),
++    preferred: preferredOf(def)
++  }))
++  return { node_id: host.id, name: host.name, kind: 'component' as const, slots }
+ }
+ 
+-/** Every component with slots and every instance filling one, for the shell's panel. */
+-export function listAllSlots(graph: SceneGraph, pageId?: string) {
++export type SlotsDescription = ReturnType<typeof describeSlots>
++
++/** Every component with slots and every instance that filled one. */
++export function listAllSlots(graph: SceneGraph) {
+   const components: Array<{ id: string; name: string; slots: string[] }> = []
+   const instances: Array<{ id: string; name: string; filled: string[] }> = []
+-  const root = pageId ?? graph.rootId
+-  for (const node of descendants(graph, root)) {
+-    if (node.type === 'COMPONENT' || node.type === 'COMPONENT_SET') {
+-      if (node.type === 'COMPONENT' && node.parentId && graph.getNode(node.parentId)?.type === 'COMPONENT_SET') continue
+-      const slots = listComponentSlots(graph, node).map((s) => s.name)
++  for (const node of graph.getAllNodes()) {
++    if (node.type === 'COMPONENT') {
++      const slots = [...componentSlots(graph, node).keys()]
+       if (slots.length) components.push({ id: node.id, name: node.name, slots })
+-    } else if (node.type === 'INSTANCE' && !propertyHost(graph, node.parentId)) {
+-      const slots = listInstanceSlots(graph, node)
+-      if (slots.length) instances.push({ id: node.id, name: node.name, filled: slots.filter((s) => s.filled).map((s) => s.name) })
++    } else if (node.type === 'INSTANCE') {
++      const main = mainComponentOf(graph, node)
++      if (!main || !componentSlots(graph, main).size) continue
++      instances.push({ id: node.id, name: node.name, filled: filledSlotsOf(node) })
+     }
+   }
+   return { components, instances }
+ }
+ 
+-// ── Writing ────────────────────────────────────────────────────────────
++/** Empty slots on a page (component slot frames and instance clones) — the shell hatches them. */
++export function emptySlots(graph: SceneGraph, pageId: string) {
++  const out: Array<{ node_id: string; slot: string; owner_id: string; owner: string; kind: 'component' | 'instance'; x: number; y: number; width: number; height: number }> = []
++  for (const node of descendants(graph, pageId)) {
++    if (node.visible === false || node.childIds.length > 0 || node.type === 'INSTANCE') continue
++    const name = slotNameOf(graph, node)
++    if (!name) continue
++    const inst = owningInstance(graph, node)
++    const owner = inst ?? componentOf(graph, node)
++    if (!owner) continue
++    out.push({ node_id: node.id, slot: name, owner_id: owner.id, owner: owner.name, kind: inst ? 'instance' : 'component', ...rect(graph, node) })
++  }
++  return out
++}
+ 
+-function newContentComponent(
+-  graph: SceneGraph,
+-  figma: FigmaAPI,
+-  pageId: string,
+-  name: string,
+-  like: SceneNode,
+-  slot: string
+-): SceneNode {
+-  const library = slotLibrary(graph, figma, pageId)
+-  const component = graph.createNode('COMPONENT', library.id, {
+-    ...pick(like, CONTAINER_PROPS),
+-    name,
+-    width: like.width,
+-    height: like.height
+-  })
+-  figma
+-    .getNodeById(component.id)
+-    ?.setSharedPluginData(SLOT_NAMESPACE, SLOT_CONTENT_FIELD, JSON.stringify({ slot }))
+-  placeInLibrary(graph, library, component)
+-  return component
++/** Components for a slot: its preferred ones first (by name), then the document's others. */
++export function suggestComponents(graph: SceneGraph, nodeId: string, slot: string) {
++  const node = graph.getNode(nodeId)
++  if (!node) throw new Error(`Node not found: ${nodeId}`)
++  const host = node.type === 'INSTANCE' ? mainComponentOf(graph, node) : node.type === 'COMPONENT' ? node : componentOf(graph, node)
++  const def = host ? componentSlots(graph, host).get(slot) : undefined
++  if (!def) throw new Error(`No slot "${slot}" on "${node.name}"`)
++  const preferred = preferredOf(def)
++  const blocked = new Set<string>()
++  // Never suggest the component itself (or its set), nor one containing the node.
++  let up: SceneNode | undefined = host
++  while (up) {
++    blocked.add(up.id)
++    up = up.parentId ? graph.getNode(up.parentId) : undefined
++  }
++  const all = [...graph.getAllNodes()].filter((n) => n.type === 'COMPONENT' && !blocked.has(n.id) && !n.internalOnly)
++  const byName = new Map(all.map((c) => [c.name, c]))
++  const out: Array<{ id: string; name: string; preferred: boolean; width: number; height: number }> = []
++  for (const name of preferred) {
++    const c = byName.get(name)
++    if (c) out.push({ id: c.id, name: c.name, preferred: true, width: c.width, height: c.height })
++  }
++  for (const c of all) {
++    if (!preferred.includes(c.name)) out.push({ id: c.id, name: c.name, preferred: false, width: c.width, height: c.height })
++  }
++  return { slot, preferred, missing: preferred.filter((n) => !byName.has(n)), components: out }
+ }
+ 
+-/**
+- * Turn `nodeId` (a frame, group or instance inside a component) into slot `name`.
+- * Returns the component's slots.
+- */
+-export function createSlot(graph: SceneGraph, figma: FigmaAPI, nodeId: string, name?: string) {
++// ── Writing ────────────────────────────────────────────────────────────
++
++/** Mark a frame inside a component as slot `name` (its children = the default content). */
++export function createSlot(graph: SceneGraph, nodeId: string, name?: string, preferred?: string[]) {
+   const node = graph.getNode(nodeId)
+   if (!node) throw new Error(`Node not found: ${nodeId}`)
+-  if (node.type === 'COMPONENT' || node.type === 'COMPONENT_SET' || node.type === 'CANVAS') {
+-    throw new Error('A slot is a layer inside a component, not the component itself')
++  if (node.type === 'COMPONENT' || node.type === 'COMPONENT_SET' || node.type === 'CANVAS' || node.type === 'INSTANCE') {
++    throw new Error('A slot is a frame inside a component (not the component, a page or an instance)')
+   }
+-  const host = propertyHost(graph, node.parentId)
++  const host = componentOf(graph, node)
+   if (!host) throw new Error(`"${node.name}" is not inside a component`)
+   const slot = (name ?? node.name).trim()
+   if (!SLOT_NAME.test(slot)) throw new Error('Slot names are 1–64 characters, without "#"')
+-  if (host.componentPropertyDefinitions.some((d) => d.name === slot)) {
+-    throw new Error(`"${host.name}" already has a property named "${slot}"`)
++  const existing = componentSlots(graph, host).get(slot)
++  if (existing && existing.id !== node.id) throw new Error(`"${host.name}" already has a slot "${slot}"`)
++  setPlugin(graph, node, SLOT_FIELD, slot)
++  if (preferred) setPlugin(graph, node, PREFERRED_FIELD, preferred.length ? JSON.stringify(preferred) : null)
++  // Instance clones copied the frame's plugin data when they were made; keep them
++  // in step so an older clone reads as the slot too.
++  for (const other of graph.getAllNodes()) {
++    if (other.componentId === node.id && other.type !== 'INSTANCE') setPlugin(graph, other, SLOT_FIELD, slot)
+   }
+-  const page = pageOf(graph, host)
+-  if (!page) throw new Error('The component is not on a page')
++  return describeSlots(graph, host.id)
++}
+ 
+-  let instanceId: string
+-  let defaultId: string
+-  if (node.type === 'INSTANCE' && node.componentId) {
+-    // Already an instance: expose it as it is; its component is the default content.
+-    instanceId = node.id
+-    defaultId = node.componentId
+-  } else {
+-    const parentId = node.parentId as string
+-    const parent = graph.getNode(parentId) as SceneNode
+-    const index = parent.childIds.indexOf(node.id)
+-    const component = newContentComponent(
+-      graph,
+-      figma,
+-      page.id,
+-      `${host.name} / ${slot} / Default`,
+-      node,
+-      slot
+-    )
+-    for (const childId of [...node.childIds]) {
+-      // reparentNode keeps the absolute position; the content component is the frame's
+-      // stand-in (same size), so each child keeps its position *inside* it instead.
+-      const child = graph.getNode(childId)
+-      const local = child ? { x: child.x, y: child.y } : null
+-      graph.reparentNode(childId, component.id)
+-      if (local) graph.updateNode(childId, local)
+-    }
+-    const instance = graph.createInstance(component.id, parentId, {
+-      ...pick(node, CHILD_PROPS),
+-      name: slot,
+-      width: node.width,
+-      height: node.height
+-    })
+-    if (!instance) throw new Error('Could not create the slot instance')
+-    graph.reorderChild(instance.id, parentId, index)
+-    // Existing instances hold a clone of the frame (linked by componentId); sync
+-    // only adds what is missing, so drop those clones — the new slot instance is
+-    // cloned in by the sync below.
+-    const clones = [...graph.getAllNodes()].filter((n) => n.componentId === node.id && n.id !== node.id)
+-    for (const clone of clones) graph.deleteNode(clone.id)
+-    graph.deleteNode(node.id)
+-    instanceId = instance.id
+-    defaultId = component.id
+-  }
+-  const instanceProxy = figma.getNodeById(instanceId)
+-  const defaultProxy = figma.getNodeById(defaultId)
+-  if (!instanceProxy || !defaultProxy) throw new Error('Slot nodes vanished while creating the slot')
+-  figma.exposeInstanceSwap([instanceProxy], [defaultProxy], slot)
+-  instanceProxy.setSharedPluginData(SLOT_NAMESPACE, SLOT_FIELD, slot)
+-  for (const component of host.type === 'COMPONENT_SET' ? host.childIds : [host.id]) {
+-    graph.syncInstances(component)
+-  }
++export function setPreferred(graph: SceneGraph, nodeId: string, slot: string, components: string[]) {
++  const node = graph.getNode(nodeId)
++  if (!node) throw new Error(`Node not found: ${nodeId}`)
++  const host = node.type === 'COMPONENT' ? node : node.type === 'INSTANCE' ? mainComponentOf(graph, node) : componentOf(graph, node)
++  const def = host ? componentSlots(graph, host).get(slot) : undefined
++  if (!def || !host) throw new Error(`No slot "${slot}" on "${node.name}"`)
++  // Ids are accepted but stored by name: node ids are renumbered on every reopen.
++  const names = components.map((ref) => graph.getNode(ref)?.name ?? ref).filter(Boolean)
++  setPlugin(graph, def, PREFERRED_FIELD, names.length ? JSON.stringify([...new Set(names)]) : null)
+   return describeSlots(graph, host.id)
+ }
+ 
++export function removeSlot(graph: SceneGraph, nodeId: string) {
++  const node = graph.getNode(nodeId)
++  if (!node || !pluginValue(node, SLOT_FIELD)) throw new Error(`Not a slot: ${nodeId}`)
++  const host = componentOf(graph, node)
++  setPlugin(graph, node, SLOT_FIELD, null)
++  setPlugin(graph, node, PREFERRED_FIELD, null)
++  return host ? describeSlots(graph, host.id) : { node_id: nodeId, name: node.name, kind: 'none' as const, slots: [] }
++}
++
+ export interface SlotContent {
+-  /** Design JSX rendered into a new content component. */
++  /** Design JSX rendered into the slot. */
+   jsx?: string
+-  /** Existing layers moved into a new content component. */
++  /** Existing layers moved into the slot. */
+   nodeIds?: string[]
+-  /** An existing component used as the content. */
++  /** A component: an instance of it goes into the slot. */
+   componentId?: string
+ }
+ 
+-type RenderJSX = (
+-  graph: SceneGraph,
+-  jsx: string,
+-  opts: { parentId: string }
+-) => Promise<Array<{ id: string }>>
+-
+-function removeIfOrphaned(graph: SceneGraph, componentId: string | null | undefined): boolean {
+-  if (!componentId) return false
+-  const component = graph.getNode(componentId)
+-  if (!component || component.type !== 'COMPONENT' || !isSlotContent(component)) return false
+-  if (graph.getInstances(componentId).length > 0) return false
+-  // Still some instance's chosen value (a nested instance clone may not exist yet)?
+-  for (const node of graph.getAllNodes()) {
+-    if (node.type !== 'INSTANCE') continue
+-    if (Object.values(node.componentPropertyAssignments).includes(componentId)) return false
+-  }
+-  graph.deleteNode(componentId)
+-  return true
+-}
++export type RenderJSX = (graph: SceneGraph, jsx: string, opts: { parentId: string }) => Promise<Array<{ id: string }>>
+ 
+-function setSlotValue(
+-  figma: FigmaAPI,
+-  instance: SceneNode,
+-  definition: ComponentPropertyDefinition,
+-  componentId: string
+-) {
+-  const proxy = figma.getNodeById(instance.id) as unknown as {
+-    setProperties(values: Record<string, string>): void
++function cloneFor(graph: SceneGraph, instance: SceneNode, slot: string): SceneNode {
++  const clone = slotClones(graph, instance).get(slot)
++  if (!clone) {
++    const main = mainComponentOf(graph, instance)
++    const names = main ? [...componentSlots(graph, main).keys()] : []
++    throw new Error(`"${instance.name}" has no slot "${slot}"${names.length ? ` (slots: ${names.join(', ')})` : ''}`)
+   }
+-  proxy.setProperties({ [`${definition.name}#${definition.id}`]: componentId })
++  return clone
+ }
+ 
+-/** Give one instance its own content for `slot`. */
++/** Replace one instance's content for `slot` with its own layers. */
+ export async function fillSlot(
+   graph: SceneGraph,
+-  figma: FigmaAPI,
+   instanceId: string,
+   slot: string,
+   content: SlotContent,
+@@ -481,69 +307,87 @@ export async function fillSlot(
+ ) {
+   const instance = graph.getNode(instanceId)
+   if (instance?.type !== 'INSTANCE') throw new Error(`Not an instance: ${instanceId}`)
+-  const definition = slotDefinition(graph, instance, slot)
+-  const before = listInstanceSlots(graph, instance).find((s) => s.property_id === definition.id)
+-  const previous = before?.filled ? before.content_component_id : null
+   const sources = [content.jsx ? 1 : 0, content.nodeIds?.length ? 1 : 0, content.componentId ? 1 : 0]
+   if (sources.reduce((a, b) => a + b, 0) !== 1) {
+     throw new Error('Give exactly one of "jsx", "node_ids" or "component_id"')
+   }
+-
+-  let componentId: string
++  const clone = cloneFor(graph, instance, slot)
+   if (content.componentId) {
+     const component = graph.getNode(content.componentId)
+     if (component?.type !== 'COMPONENT') throw new Error(`Not a component: ${content.componentId}`)
+-    componentId = component.id
++    if (component.id === instance.componentId || graph.isDescendant(instance.id, component.id)) {
++      throw new Error('A slot cannot hold its own component')
++    }
++  }
++  for (const id of content.nodeIds ?? []) {
++    const node = graph.getNode(id)
++    if (!node) throw new Error(`Node not found: ${id}`)
++    if (node.id === instance.id || graph.isDescendant(instance.id, node.id)) {
++      throw new Error('The content cannot contain the instance itself')
++    }
++  }
++  // Mark first: sync must not put the default content back while we work.
++  setFilled(graph, instance, slot, true)
++  for (const childId of [...clone.childIds]) graph.deleteNode(childId)
++  const created: string[] = []
++  if (content.jsx) {
++    if (!renderJSX) throw new Error('Rendering JSX is not available here')
++    for (const r of await renderJSX(graph, content.jsx, { parentId: clone.id })) created.push(r.id)
++  } else if (content.componentId) {
++    const inst = graph.createInstance(content.componentId, clone.id, { x: 0, y: 0 })
++    if (inst) created.push(inst.id)
+   } else {
+-    const page = pageOf(graph, instance)
+-    if (!page) throw new Error('The instance is not on a page')
+-    const slotNode = before?.node_id ? graph.getNode(before.node_id) : undefined
+-    const defaultMain = graph.getNode(definition.defaultValue)
+-    const like = defaultMain ?? slotNode
+-    if (!like) throw new Error(`Slot "${slot}" has no default content to size the new content by`)
+-    const component = newContentComponent(graph, figma, page.id, `${instance.name} / ${slot}`, like, slot)
+-    if (slotNode) graph.updateNode(component.id, { width: slotNode.width, height: slotNode.height })
+-    if (content.jsx) {
+-      if (!renderJSX) throw new Error('Rendering JSX is not available here')
+-      await renderJSX(graph, content.jsx, { parentId: component.id })
+-    } else {
+-      const placed: string[] = []
+-      for (const id of content.nodeIds ?? []) {
+-        const node = graph.getNode(id)
+-        if (!node) throw new Error(`Node not found: ${id}`)
+-        if (node.id === instance.id || graph.isDescendant(instance.id, node.id)) {
+-          throw new Error('The content cannot contain the instance itself')
+-        }
+-        graph.reparentNode(id, component.id)
+-        // Moved layers land at the content's top left (keeping their offsets from each other).
+-        placed.push(id)
+-      }
+-      if (component.layoutMode === 'NONE' && placed.length) {
+-        const nodes = placed.map((id) => graph.getNode(id)).filter((n): n is SceneNode => !!n)
+-        const dx = Math.min(...nodes.map((n) => n.x))
+-        const dy = Math.min(...nodes.map((n) => n.y))
+-        for (const n of nodes) graph.updateNode(n.id, { x: n.x - dx, y: n.y - dy })
+-      }
++    const placed: SceneNode[] = []
++    for (const id of content.nodeIds ?? []) {
++      graph.reparentNode(id, clone.id)
++      const node = graph.getNode(id)
++      if (node) placed.push(node)
+     }
+-    componentId = component.id
++    if (clone.layoutMode === 'NONE' && placed.length) {
++      const dx = Math.min(...placed.map((n) => n.x))
++      const dy = Math.min(...placed.map((n) => n.y))
++      for (const n of placed) graph.updateNode(n.id, { x: n.x - dx, y: n.y - dy })
++    }
++    created.push(...placed.map((n) => n.id))
+   }
+-  setSlotValue(figma, instance, definition, componentId)
+-  if (previous && previous !== componentId) removeIfOrphaned(graph, previous)
+-  return describeSlots(graph, instance.id)
++  return { ...describeSlots(graph, instance.id), created }
++}
++
++/** The instance filled `slot` on the canvas (a layer was dropped or drawn into it). */
++export function adoptSlotContent(graph: SceneGraph, cloneId: string): { instance_id: string; slot: string } | null {
++  const clone = graph.getNode(cloneId)
++  const slot = slotNameOf(graph, clone)
++  const instance = owningInstance(graph, clone)
++  if (!clone || !slot || !instance || filledSlotsOf(instance).includes(slot)) return null
++  const own = clone.childIds.map((id) => graph.getNode(id)).filter((n): n is SceneNode => !!n)
++  // Default content is linked to the component's children; the new layer is not.
++  const mainSlot = clone.componentId ? graph.getNode(clone.componentId) : undefined
++  const defaults = new Set(mainSlot?.childIds ?? [])
++  const isDefault = (n: SceneNode) => (n.componentId !== null && defaults.has(n.componentId)) ||
++    (n.type === 'INSTANCE' && [...defaults].some((d) => graph.getNode(d)?.name === n.name && graph.getNode(d)?.type === 'INSTANCE'))
++  const fresh = own.filter((n) => !isDefault(n))
++  if (!fresh.length) return null
++  setFilled(graph, instance, slot, true)
++  for (const n of own) if (isDefault(n)) graph.deleteNode(n.id)
++  return { instance_id: instance.id, slot }
+ }
+ 
+-/** Put the component's default content back into one instance's slot (or every slot). */
+-export function resetSlot(graph: SceneGraph, figma: FigmaAPI, instanceId: string, slot?: string) {
++/** Default content back into one slot (or every filled slot) of an instance. */
++export function resetSlot(graph: SceneGraph, instanceId: string, slot?: string) {
+   const instance = graph.getNode(instanceId)
+   if (instance?.type !== 'INSTANCE') throw new Error(`Not an instance: ${instanceId}`)
+-  const slots = listInstanceSlots(graph, instance).filter((s) => !slot || s.name === slot)
+-  if (slot && !slots.length) slotDefinition(graph, instance, slot)
+-  for (const state of slots) {
+-    if (!state.filled) continue
+-    const definition = slotDefinition(graph, instance, state.name)
+-    setSlotValue(figma, instance, definition, definition.defaultValue)
+-    removeIfOrphaned(graph, state.content_component_id)
++  const names = slot ? [slot] : filledSlotsOf(instance)
++  for (const name of names) {
++    const clone = cloneFor(graph, instance, name)
++    setFilled(graph, instance, name, false)
++    for (const childId of [...clone.childIds]) graph.deleteNode(childId)
+   }
++  // Sync clones the component's default content back into the emptied clones.
++  if (instance.componentId) graph.syncInstances(instance.componentId)
+   return describeSlots(graph, instance.id)
+ }
+ 
++export function isSlotFrame(node: SceneNode | undefined): boolean {
++  return !!pluginValue(node, SLOT_FIELD)
++}
++
+diff --git a/tests/engine/app/telecode/fills.test.ts b/tests/engine/app/telecode/fills.test.ts
+index 8b559c96..a1e2fbc1 100644
+--- a/tests/engine/app/telecode/fills.test.ts
++++ b/tests/engine/app/telecode/fills.test.ts
+@@ -8,10 +8,13 @@ import { SceneGraph } from '@open-pencil/scene-graph'
+ import { importNodeChanges } from '#core/kiwi/fig/import'
+ 
+ import {
++  animatedNodes,
+   describeFills,
++  editMeshPoints,
+   listProceduralFills,
+   removeFill,
+-  setProceduralFill
++  setProceduralFill,
++  setShaderUniforms
+ } from '@/app/integrations/telecode/fills'
+ 
+ beforeAll(async () => {
+@@ -47,7 +50,7 @@ describe('procedural fills (telecode)', () => {
+     const def = proceduralFillOf(graph.getNode(node.id)!, fill)
+     expect(def).toMatchObject({ kind: 'mesh', columns: 2, rows: 2 })
+     expect(out.fills[1]).toMatchObject({ kind: 'mesh', index: 1 })
+-    expect(listProceduralFills(graph)).toEqual([{ node_id: node.id, name: 'Hero', kinds: ['mesh'], errors: [] }])
++    expect(listProceduralFills(graph)).toEqual([{ node_id: node.id, name: 'Hero', kinds: ['mesh'], errors: [], animated: false }])
+   })
+ 
+   test('replace keeps the link id, remove drops the definition', () => {
+@@ -78,4 +81,48 @@ describe('procedural fills (telecode)', () => {
+     expect(kinds).toEqual(['SOLID', 'shader', 'mesh'])
+     expect(proceduralFillOf(n2, n2.fills[1])).toMatchObject({ preset: 'aurora', uniforms: { u_seed: 3 } })
+   })
++
++  test('uniforms merge into a shader; mesh points move and recolour; GLSL is accepted', () => {
++    const { graph, node } = rect()
++    setProceduralFill(graph, node.id, { kind: 'shader', preset: 'stripes' }, { index: 0 })
++    const out = setShaderUniforms(graph, node.id, 0, { u_width: 40, u_a: '#ff0000', nope: 1 })
++    expect(out.unknown_uniforms).toEqual(['nope'])
++    const shader = describeFills(graph, node.id).fills[0] as { controls: Array<{ name: string; value: number[] }> }
++    expect(shader.controls.find((c) => c.name === 'u_width')?.value).toEqual([40])
++    expect(shader.controls.find((c) => c.name === 'u_a')?.value).toEqual([1, 0, 0, 1])
++
++    setProceduralFill(graph, node.id, { kind: 'mesh', colors: [['#000', '#fff'], ['#f00', '#00f']] })
++    const moved = editMeshPoints(graph, node.id, 1, [{ i: 3, x: 0.8, y: 0.9, color: '#00ff00' }])
++    expect(moved.points[3]).toEqual({ x: 0.8, y: 0.9, color: [0, 1, 0, 1] })
++    expect(() => editMeshPoints(graph, node.id, 1, [{ i: 9 }])).toThrow(/No mesh point 9/)
++    expect(() => editMeshPoints(graph, node.id, 0, [{ i: 0 }])).toThrow(/mesh fills/)
++
++    const glsl = setProceduralFill(graph, node.id, {
++      kind: 'shader',
++      source: 'uniform float speed; // @min 0 @max 2\nvoid mainImage(out vec4 c, in vec2 f) { c = vec4(fract(iTime * speed), 0.0, 0.0, 1.0); }'
++    })
++    const last = glsl.fills[2] as { lang: string; animated: boolean; controls: Array<{ name: string }>; compiled_sksl: string }
++    expect(last.lang).toBe('glsl')
++    expect(last.animated).toBe(true)
++    expect(last.controls.map((c) => c.name)).toEqual(['speed'])
++    expect(last.compiled_sksl).toContain('half4 main(float2 _td_p)')
++    expect(animatedNodes(graph, graph.getPages()[0].id)).toEqual([node.id])
++    expect(() => setProceduralFill(graph, node.id, { kind: 'shader', glsl: 'void mainImage(out vec4 c, in vec2 f) { discard; }' })).toThrow(/GLSL not translated: line 1/)
++  })
++
++  test('in the .fig a procedural fill is a SOLID fallback paint that keeps its link', async () => {
++    const { graph, node } = rect()
++    setProceduralFill(graph, node.id, { kind: 'mesh', colors: [['#000', '#fff'], ['#f00', '#00f']] }, { fallback: '#336699' })
++    const bytes = await exportFigFile(graph)
++    const parsed = parseFigBuffer(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
++    const nc = parsed.nodeChanges.find((n) => n.name === 'Hero') as { fillPaints?: Array<{ type: string; customEffectId?: unknown }> }
++    expect(nc.fillPaints?.map((p) => p.type)).toEqual(['SOLID', 'SOLID'])
++    expect(nc.fillPaints?.[1].customEffectId).toBeDefined()
++    const g2 = importNodeChanges(parsed.nodeChanges, parsed.blobs, undefined, { populate: 'all' })
++    const n2 = [...g2.getAllNodes()].find((n) => n.name === 'Hero')!
++    expect(proceduralFillOf(n2, n2.fills[1])).toMatchObject({ kind: 'mesh' })
++    // Editing it again keeps the definition (the link survives as SOLID).
++    editMeshPoints(g2, n2.id, 1, [{ i: 0, color: '#123456' }])
++    expect(proceduralFillOf(g2.getNode(n2.id)!, g2.getNode(n2.id)!.fills[1])).toMatchObject({ kind: 'mesh' })
++  })
+ })
+diff --git a/tests/engine/app/telecode/slots.test.ts b/tests/engine/app/telecode/slots.test.ts
+index 100e700a..36e2d4ea 100644
+--- a/tests/engine/app/telecode/slots.test.ts
++++ b/tests/engine/app/telecode/slots.test.ts
+@@ -1,6 +1,6 @@
+ import { beforeAll, describe, expect, test } from 'bun:test'
+ 
+-import { exportFigFile, FigmaAPI, initCodec } from '@open-pencil/core'
++import { exportFigFile, initCodec } from '@open-pencil/core'
+ import { renderJSX } from '@open-pencil/core/design-jsx'
+ import { parseFigBuffer } from '@open-pencil/fig'
+ import { SceneGraph } from '@open-pencil/scene-graph'
+@@ -8,11 +8,15 @@ import { SceneGraph } from '@open-pencil/scene-graph'
+ import { importNodeChanges } from '#core/kiwi/fig/import'
+ 
+ import {
++  adoptSlotContent,
+   createSlot,
+   describeSlots,
++  emptySlots,
+   fillSlot,
+   listAllSlots,
+-  resetSlot
++  resetSlot,
++  setPreferred,
++  suggestComponents
+ } from '@/app/integrations/telecode/slots'
+ 
+ beforeAll(async () => {
+@@ -22,98 +26,140 @@ beforeAll(async () => {
+ function card() {
+   const graph = new SceneGraph()
+   const page = graph.getPages()[0]
+-  const figma = new FigmaAPI(graph)
+   const comp = graph.createNode('COMPONENT', page.id, { name: 'Card', width: 240, height: 200 })
+   graph.createNode('TEXT', comp.id, { name: 'Title', width: 200, height: 20 })
+   const body = graph.createNode('FRAME', comp.id, { name: 'Body', x: 20, y: 40, width: 200, height: 120 })
+   graph.createNode('RECTANGLE', body.id, { name: 'Placeholder', width: 50, height: 50 })
+   const a = graph.createInstance(comp.id, page.id, { x: 400 })!
+-  return { graph, figma, page, comp, body, a }
++  return { graph, page, comp, body, a }
+ }
+ 
+ const tree = (g: SceneGraph, id: string, d = 0): string[] => {
+   const n = g.getNode(id)!
+   return [`${'  '.repeat(d)}${n.type} ${n.name}`, ...n.childIds.flatMap((c) => tree(g, c, d + 1))]
+ }
++const text = (g: SceneGraph, id: string) => tree(g, id).join('\n')
++
++function roundTrip(graph: SceneGraph, populate: 'all' | 'first-page' = 'all') {
++  return exportFigFile(graph).then((bytes) => {
++    const parsed = parseFigBuffer(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
++    return importNodeChanges(parsed.nodeChanges, parsed.blobs, undefined, { populate })
++  })
++}
+ 
+ describe('component slots', () => {
+-  test('create: the frame becomes an exposed instance of a default-content component', () => {
+-    const { graph, figma, comp, body, a } = card()
+-    const info = createSlot(graph, figma, body.id)
++  test('create marks the frame; instances keep showing the default content', () => {
++    const { graph, comp, body, a } = card()
++    const info = createSlot(graph, body.id, undefined, ['Avatar'])
+     expect(info.kind).toBe('component')
+-    expect(info.slots).toHaveLength(1)
+-    const slot = info.slots[0]
+-    expect(slot.name).toBe('Body')
+-    expect(slot.default_component).toBe('Card / Body / Default')
+-    const node = graph.getNode(slot.node_id)!
+-    expect(node.type).toBe('INSTANCE')
+-    expect([node.x, node.y, node.width, node.height]).toEqual([20, 40, 200, 120])
+-    expect(graph.getNode(comp.id)!.childIds.indexOf(node.id)).toBe(1)
+-    expect(graph.getNode(body.id)).toBeUndefined()
+-    // Existing instances follow, still showing the default content.
+-    expect(tree(graph, a.id).join('\n')).toContain('RECTANGLE Placeholder')
+-    expect(tree(graph, a.id).join('\n')).not.toContain('FRAME Body')
+-    expect(describeSlots(graph, a.id).slots[0]).toMatchObject({ name: 'Body', filled: false })
+-    expect(() => createSlot(graph, figma, comp.childIds[0], 'Body')).toThrow(/already has a property/)
+-    // The frame's children keep their place inside the slot (not their absolute position).
+-    const defaults = graph.getNode(slot.default_component_id!)!
+-    const placeholder = graph.getNode(defaults.childIds[0])!
+-    expect([placeholder.name, placeholder.x, placeholder.y]).toEqual(['Placeholder', 0, 0])
+-    // A layer outside any component has no slots: an empty answer, not an error.
++    expect(info.slots).toEqual([{ name: 'Body', node_id: body.id, empty: false, default_content: ['Placeholder'], preferred: ['Avatar'] }])
++    // The frame stays where it is — nothing is converted.
++    expect(graph.getNode(body.id)?.type).toBe('FRAME')
++    const inst = describeSlots(graph, a.id)
++    expect(inst.kind).toBe('instance')
++    expect(inst.slots[0]).toMatchObject({ name: 'Body', filled: false, empty: false })
++    expect(inst.slots[0].content.map((c) => c.name)).toEqual(['Placeholder'])
++    expect(() => createSlot(graph, comp.childIds[0], 'Body')).toThrow(/already has a slot/)
++    expect(() => createSlot(graph, a.id)).toThrow(/frame inside a component/)
+     const loose = graph.createNode('RECTANGLE', graph.getPages()[0].id, { name: 'Loose' })
+     expect(describeSlots(graph, loose.id)).toMatchObject({ kind: 'none', slots: [] })
+   })
+ 
+-  test('fill with layers / JSX / a component, reset, and orphan cleanup', async () => {
+-    const { graph, figma, page, body, a } = card()
+-    createSlot(graph, figma, body.id)
+-    const b = graph.createInstance(graph.getNode(a.id)!.componentId!, page.id, { x: 800 })!
+-    const loose = graph.createNode('ELLIPSE', page.id, { name: 'Avatar', x: 0, y: 600, width: 30, height: 30 })
++  test('fill with JSX, layers or a component; per-instance; sync leaves filled slots alone; reset', async () => {
++    const { graph, page, comp, body, a } = card()
++    createSlot(graph, body.id)
++    const b = graph.createInstance(comp.id, page.id, { x: 800 })!
++    await fillSlot(graph, a.id, 'Body', { jsx: '<Rectangle name="Hero" w={80} h={40} bg="#f00" />' }, renderJSX)
++    expect(text(graph, a.id)).toContain('RECTANGLE Hero')
++    expect(text(graph, a.id)).not.toContain('Placeholder')
++    expect(text(graph, b.id)).toContain('Placeholder')
++
++    // An edit to the component re-syncs instances; the filled slot keeps its own content.
++    graph.createNode('ELLIPSE', body.id, { name: 'Badge', width: 10, height: 10 })
++    graph.syncInstances(comp.id)
++    expect(text(graph, a.id)).not.toContain('Badge')
++    expect(text(graph, a.id)).toContain('Hero')
++    expect(text(graph, b.id)).toContain('Badge')
++
++    const avatar = graph.createNode('COMPONENT', page.id, { name: 'Avatar', x: 0, y: 600, width: 32, height: 32 })
++    await fillSlot(graph, b.id, 'Body', { componentId: avatar.id })
++    const bs = describeSlots(graph, b.id)
++    expect(bs.slots[0]).toMatchObject({ filled: true })
++    expect(bs.slots[0].content).toEqual([expect.objectContaining({ name: 'Avatar', type: 'INSTANCE' })])
+ 
+-    let state = await fillSlot(graph, figma, a.id, 'Body', { nodeIds: [loose.id] })
+-    expect(state.slots[0]).toMatchObject({ filled: true, content_component: 'Card / Body' })
+-    const firstContent = state.slots[0].content_component_id!
+-    expect(tree(graph, a.id).join('\n')).toContain('ELLIPSE Avatar')
++    const loose = graph.createNode('ELLIPSE', page.id, { name: 'Dot', x: 300, y: 700, width: 10, height: 10 })
++    await fillSlot(graph, a.id, 'Body', { nodeIds: [loose.id] })
++    expect(text(graph, a.id)).toContain('ELLIPSE Dot')
++    expect(text(graph, a.id)).not.toContain('Hero')
+     expect([graph.getNode(loose.id)!.x, graph.getNode(loose.id)!.y]).toEqual([0, 0])
+-    expect(tree(graph, a.id).join('\n')).not.toContain('Placeholder')
+-    expect(tree(graph, b.id).join('\n')).toContain('Placeholder')
+-
+-    state = await fillSlot(graph, figma, a.id, 'Body', { jsx: '<Rectangle name="Hero" w={80} h={40} bg="#f00" />' }, renderJSX)
+-    expect(tree(graph, a.id).join('\n')).toContain('RECTANGLE Hero')
+-    // The first content component was ours and is unused now: gone.
+-    expect(graph.getNode(firstContent)).toBeUndefined()
+-
+-    const shared = state.slots[0].content_component_id!
+-    await fillSlot(graph, figma, b.id, 'Body', { componentId: shared })
+-    expect(tree(graph, b.id).join('\n')).toContain('RECTANGLE Hero')
+-
+-    state = resetSlot(graph, figma, a.id, 'Body')
+-    expect(state.slots[0].filled).toBe(false)
+-    expect(graph.getNode(shared)).toBeDefined() // b still shows it
+-    resetSlot(graph, figma, b.id)
+-    expect(graph.getNode(shared)).toBeUndefined()
+-
+-    await expect(fillSlot(graph, figma, a.id, 'Nope', { componentId: shared })).rejects.toThrow(/no slot "Nope"/)
+-    const all = listAllSlots(graph)
+-    expect(all.components.map((c) => c.name)).toEqual(['Card'])
+-    // The library section holds only the default content now.
+-    const library = [...graph.getAllNodes()].find((n) => n.type === 'SECTION')!
+-    expect(library.name).toBe('Slot content')
+-    expect(library.childIds.map((id) => graph.getNode(id)!.name)).toEqual(['Card / Body / Default'])
++    await expect(fillSlot(graph, a.id, 'Nope', { nodeIds: [loose.id] })).rejects.toThrow(/no slot "Nope"/)
++    await expect(fillSlot(graph, a.id, 'Body', { componentId: comp.id })).rejects.toThrow(/its own component/)
++
++    resetSlot(graph, a.id, 'Body')
++    expect(describeSlots(graph, a.id).slots[0]).toMatchObject({ filled: false })
++    expect(text(graph, a.id)).toContain('Placeholder')
++    expect(text(graph, a.id)).toContain('Badge')
++    expect(listAllSlots(graph).instances.map((i) => i.filled)).toEqual([[], ['Body']])
+   })
+ 
+-  test('slot content survives a .fig round trip', async () => {
+-    const { graph, figma, page, body, a } = card()
+-    createSlot(graph, figma, body.id)
+-    const loose = graph.createNode('ELLIPSE', page.id, { name: 'Avatar', width: 30, height: 30 })
+-    await fillSlot(graph, figma, a.id, 'Body', { nodeIds: [loose.id] })
+-    const bytes = await exportFigFile(graph)
+-    const parsed = parseFigBuffer(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
+-    const g2 = importNodeChanges(parsed.nodeChanges, parsed.blobs, undefined, { populate: 'all' })
+-    const i2 = [...g2.getAllNodes()].find((n) => n.type === 'INSTANCE' && n.name === 'Card')!
+-    expect(tree(g2, i2.id).join('\n')).toContain('ELLIPSE Avatar')
+-    const s = describeSlots(g2, i2.id).slots
+-    expect(s).toHaveLength(1)
+-    expect(s[0]).toMatchObject({ name: 'Body', filled: true, content_component: 'Card / Body' })
++  test('a layer drawn into an unfilled slot of an instance fills it (canvas editing)', () => {
++    const { graph, body, a } = card()
++    createSlot(graph, body.id)
++    const clone = describeSlots(graph, a.id).slots[0].node_id!
++    graph.createNode('TEXT', clone, { name: 'Typed', width: 80, height: 20 })
++    expect(adoptSlotContent(graph, clone)).toEqual({ instance_id: a.id, slot: 'Body' })
++    expect(text(graph, a.id)).toContain('TEXT Typed')
++    expect(text(graph, a.id)).not.toContain('Placeholder')
++    // Nothing new: nothing to adopt.
++    expect(adoptSlotContent(graph, clone)).toBeNull()
++  })
++
++  test('empty slots are reported for hatching; suggestions put preferred components first', async () => {
++    const { graph, page, comp, body, a } = card()
++    const actions = graph.createNode('FRAME', comp.id, { name: 'Actions', x: 20, y: 170, width: 200, height: 24 })
++    createSlot(graph, body.id)
++    createSlot(graph, actions.id)
++    graph.syncInstances(comp.id)
++    const empty = emptySlots(graph, page.id)
++    expect(empty.map((e) => [e.slot, e.kind])).toEqual([['Actions', 'component'], ['Actions', 'instance']])
++    expect(empty[1]).toMatchObject({ owner_id: a.id, width: 200, height: 24, x: 420, y: 170 })
++    const ok = graph.createNode('COMPONENT', page.id, { name: 'OK button', x: 0, y: 800, width: 60, height: 24 })
++    graph.createNode('COMPONENT', page.id, { name: 'Link', x: 100, y: 800, width: 60, height: 24 })
++    setPreferred(graph, a.id, 'Actions', [ok.id, 'Missing'])
++    const s = suggestComponents(graph, a.id, 'Actions')
++    expect(s.preferred).toEqual(['OK button', 'Missing'])
++    expect(s.missing).toEqual(['Missing'])
++    expect(s.components.map((c) => [c.name, c.preferred])).toEqual([['OK button', true], ['Link', false]])
++  })
++
++  test('per-instance slot content survives a .fig round trip (both population modes)', async () => {
++    const { graph, page, comp, body, a } = card()
++    createSlot(graph, body.id)
++    const b = graph.createInstance(comp.id, page.id, { x: 800 })!
++    b.name = 'Card B'
++    await fillSlot(graph, a.id, 'Body', { jsx: '<Frame name="Custom" w={100} h={60} bg="#0a0"><Text name="Hi">Hi</Text></Frame>' }, renderJSX)
++    const second = graph.addPage('Second')
++    const c = graph.createInstance(comp.id, second.id, { x: 0 })!
++    c.name = 'Card C'
++    await fillSlot(graph, c.id, 'Body', { jsx: '<Ellipse name="Ring" w={20} h={20} />' }, renderJSX)
++    for (const mode of ['all', 'first-page'] as const) {
++      const g2 = await roundTrip(graph, mode)
++      const byName = (n: string) => [...g2.getAllNodes()].find((x) => x.type === 'INSTANCE' && x.name === n)!
++      const a2 = byName('Card')
++      expect(text(g2, a2.id)).toContain('FRAME Custom')
++      expect(text(g2, a2.id)).toContain('TEXT Hi')
++      expect(text(g2, a2.id)).not.toContain('Placeholder')
++      expect(describeSlots(g2, a2.id).slots[0]).toMatchObject({ name: 'Body', filled: true })
++      expect(text(g2, byName('Card B').id)).toContain('Placeholder')
++      const c2 = byName('Card C')
++      expect(text(g2, c2.id)).toContain('ELLIPSE Ring')
++      expect(text(g2, c2.id)).not.toContain('Placeholder')
++      // The content is ordinary layers again (no file bookkeeping left on it).
++      const custom = [...g2.getAllNodes()].find((n) => n.name === 'Custom')!
++      expect(custom.pluginData.some((e) => e.key.includes('in-slot'))).toBe(false)
++      // And it survives a second save.
++      const g3 = await roundTrip(g2, mode)
++      expect(text(g3, [...g3.getAllNodes()].find((x) => x.type === 'INSTANCE' && x.name === 'Card')!.id)).toContain('FRAME Custom')
++    }
+   })
+ })

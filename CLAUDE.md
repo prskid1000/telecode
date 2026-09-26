@@ -522,16 +522,36 @@ interface every module codes against: [docs/teledesign-contract.md](docs/teledes
 - **Script nodes** (0015): frame + `telecode/script` plugin data → a project `.js` (`@input` header)
   run in a sandboxed iframe + Worker, returns Design JSX; `GET …/editor/scripts?path=` is what the page
   polls. Controls / badges in `app/canvas_nodes.js`.
-- **Theme axes / slots / procedural fills** (0016–0018), canvas tools only (`telecode_theme_*`,
-  `telecode_slot_*`, `telecode_fill_*`), driven from the canvas bar's **Theme** menu and **Layer** panel
-  (`app/canvas_extras.js`, over `/editor/call`). Every collection is an axis; a cross-collection alias
-  resolves in the node's mode for *that* collection. A slot = a frame in a component replaced by an
-  instance exposed as an instance-swap property (content components in a "Slot content" section) —
-  `.fig` derives instance children from the main component, so content put straight into an instance is
-  lost on reload; the swap value is not. A shader / mesh fill = a CUSTOM paint whose `customEffectId`
-  links to `telecode/fill:<id>` plugin data (SkSL runtime effect with `u_size` + named uniforms; mesh =
-  Coons patch per cell); shaders are compiled before saving (bad SkSL refused with the message); other
-  renderers and the HTML export see the fallback colour. Static only — no `@time` animation.
+- **Theme axes** (0016): every variable collection is an axis; a cross-collection alias resolves in the
+  node's mode for *that* collection. `telecode_theme_*`, canvas bar **Theme** menu.
+- **Slots** (0017, reworked by 0020–0021): a slot is a frame inside a component marked `telecode/slot`
+  (its children = default content; `telecode/slot-preferred` = preferred component *names*, ids don't
+  survive a reopen). An instance fills it with **real layers of its own** inside its clone of that frame
+  and lists it in `telecode/slots {filled}`. Scene-graph sync and fig's override propagation skip filled
+  clones (`isFilledSlotClone`); the .fig writer stores a filled slot's layers **under the instance** with
+  the schema's `isSlotContent` flag + `telecode/in-slot`; the reader (`attachImportedSlotContent`)
+  attaches them after population, populating the instance itself when the first-page lazy import skipped
+  its page (the worker's import does the same, so ids agree). Content is edited in place on the canvas;
+  a layer drawn / dropped into an unfilled slot of an instance fills it (`extras-host.ts`
+  `adoptSlotContent`). Empty slots → `td-editor:slots` → hatched in the shell. Tools
+  `telecode_slot_create/list/fill/reset/suggest/prefer/remove`. The 0017 instance-swap slots are gone
+  (old documents keep them as plain instance-swap properties).
+- **Shader / mesh fills** (0018, extended by 0019–0021): a paint whose `customEffectId` links to
+  `telecode/fill:<id>` plugin data — CUSTOM in the graph, written to .fig as **SOLID** (the fallback
+  other readers paint) keeping the link. Shaders are SkSL or GLSL (`gradients/glsl.ts`: Shadertoy
+  `mainImage` / `void main()`, `#define`, iResolution/iTime/iMouse/iChannel0, samplers; `discard`,
+  derivatives, `#if`… refused with the author's line). Inputs: annotations `@color @label @min @max
+  @step @range @default` (→ Layer-panel controls: sliders, colour pickers, vec2 pads), `@time`,
+  `@mouse`, `@backdrop` (picture of what is painted behind: earlier siblings + ancestors' fills, no
+  ancestor rotation) and `sdf(p)` (exact EDT of the rasterised outline). Animation: `extras-host.ts`
+  runs a rAF loop only while an animated fill is on the page, in the viewport and the tab visible, and
+  **repaints** (`requestRepaint` + node-picture invalidation) — `requestRender` bumps `sceneVersion`,
+  which autosave watches. Mesh points get on-canvas handles (`telecode_fill_mesh_edit` begin/move/end =
+  one undo step). Exports: PNG = renderer; SVG/PDF ask the registered rasteriser (`setProceduralRasterizer`)
+  → PNG pattern; raster export of a backdrop shader renders the whole scene (`nodeNeedsSceneBackdrop`);
+  HTML export keeps a PNG background and `data-td-fx` + an inline WebGL runtime (`fx-export.ts`: GLSL as
+  written or SkSL → GLSL ES 1.0, textures for backdrop/sdf frozen at export, meshes tessellated), animated
+  only while on screen. `window.__tdFxFrames` / `__tdFxState()` expose the loop for tests.
 - **Build notes.** `--check` applies each patch after checking it (0008+ extend files 0007 adds). Clone a
   build dir with `core.autocrlf=false` or `git apply` fails on CRLF; keep the series LF. The upstream
   headless-CanvasKit loader breaks on Windows paths (`URL.pathname` → `/C:/…`), so render tests load

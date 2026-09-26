@@ -1,0 +1,2118 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Prithwiraj Samanta <prskid1000@gmail.com>
+Date: Sat, 26 Sep 2026 08:29:38 +0530
+Subject: [PATCH] telecode: shader fill inputs - GLSL, time, mouse, backdrop,
+ SDF, export rasteriser
+
+Shader fills take GLSL as well as SkSL: a Shadertoy-style mainImage or a
+void main() writing gl_FragColor is translated (entry point, y-up
+coordinates, iResolution/iTime/iMouse/iChannel0, sampler2D, #define and
+#ifdef GL_ES), and what cannot be translated (discard, derivatives, #if,
+gl_FragCoord outside main, other channels) is refused with its line;
+compiler errors are mapped back to the author's lines. Uniform
+annotations (@color @label @min @max @step @range @default) describe
+controls; @time and @mouse (or iTime/iMouse, u_time/u_mouse) take the frame
+time and the pointer in node pixels; @backdrop (or backdrop/iChannel0)
+is a child shader of what is painted behind the layer; sdf(p) is the
+signed distance to the layer outline (exact EDT of the rasterised shape).
+Presets gain annotations and plasma (GLSL, animated), frosted (backdrop)
+and outline_glow (sdf). SkSL -> GLSL ES 1.0 and GLSL-for-WebGL for exports.
+The SVG/PDF writer asks a registered rasteriser for procedural fills
+(else paints the fallback), and the .fig writer stores a procedural paint
+as SOLID keeping customEffectId, so other readers see the fallback while
+the definition round-trips.
+---
+ packages/core/src/canvas/fills.ts             |  16 +-
+ packages/core/src/canvas/gradients/glsl.ts    | 483 ++++++++++
+ .../core/src/canvas/gradients/procedural.ts   | 907 +++++++++++++++---
+ packages/core/src/canvas/index.ts             |  18 +-
+ .../src/canvas/renderer/tiles/controller.ts   |  13 +
+ packages/core/src/canvas/scene.ts             |  10 +-
+ packages/core/src/io/formats/raster/render.ts |   9 +
+ packages/core/src/io/formats/svg/defs.ts      |  35 +
+ packages/fig/src/node-change/export-node.ts   |  14 +-
+ .../render/canvas/procedural-inputs.test.ts   | 221 +++++
+ 10 files changed, 1575 insertions(+), 151 deletions(-)
+ create mode 100644 packages/core/src/canvas/gradients/glsl.ts
+ create mode 100644 tests/engine/render/canvas/procedural-inputs.test.ts
+
+diff --git a/packages/core/src/canvas/fills.ts b/packages/core/src/canvas/fills.ts
+index 84b03270..3487890f 100644
+--- a/packages/core/src/canvas/fills.ts
++++ b/packages/core/src/canvas/fills.ts
+@@ -125,6 +125,15 @@ export function drawNodeFill(
+   }
+ }
+ 
++/** Draw a node's outline filled solid white (the SDF input of shader fills rasterises it). */
++export function drawNodeShape(r: SkiaRenderer, canvas: Canvas, node: SceneNode): void {
++  r.fillPaint.setShader(null)
++  r.fillPaint.setColor(r.ck.Color4f(1, 1, 1, 1))
++  r.fillPaint.setAlphaf(1)
++  const rect = r.ck.LTRBRect(0, 0, node.width, node.height)
++  drawNodeFill(r, canvas, node, rect, nodeHasSmoothCorners(node) || node.cornerRadius > 0)
++}
++
+ export function applyFill(
+   r: SkiaRenderer,
+   fill: Fill,
+@@ -135,6 +144,10 @@ export function applyFill(
+ ): boolean {
+   r.fillPaint.setShader(null)
+ 
++  // Shader / mesh-gradient fills: a paint linked (customEffectId) to a definition
++  // in plugin data — CUSTOM in the scene graph, SOLID once it went through .fig.
++  if (fill.customEffectId && applyProceduralFill(r, fill, node, graph)) return true
++
+   if (fill.type === 'SOLID') {
+     const c = r.resolveFillColor(fill, fillIndex, node, graph)
+     r.fillPaint.setColor(r.ck.Color4f(c.r, c.g, c.b, c.a))
+@@ -152,9 +165,6 @@ export function applyFill(
+ 
+   if (fill.type === 'PATTERN' && applyPatternFill(r, fill, node, graph, patternStack)) return true
+ 
+-  // Shader / mesh-gradient fills: a CUSTOM paint linked to a definition in plugin data.
+-  if (fill.type === 'CUSTOM' && applyProceduralFill(r, fill, node)) return true
+-
+   if (fill.type === 'PATTERN' || fill.type === 'NOISE' || fill.type === 'CUSTOM') {
+     const c = r.resolveFillColor(fill, fillIndex, node, graph)
+     r.fillPaint.setColor(r.ck.Color4f(c.r, c.g, c.b, c.a))
+diff --git a/packages/core/src/canvas/gradients/glsl.ts b/packages/core/src/canvas/gradients/glsl.ts
+new file mode 100644
+index 00000000..f944ecae
+--- /dev/null
++++ b/packages/core/src/canvas/gradients/glsl.ts
+@@ -0,0 +1,483 @@
++/**
++ * Shader sources for procedural fills: GLSL → SkSL (what the renderer runs) and
++ * SkSL → GLSL ES 1.0 (what an exported HTML page runs in WebGL), plus the
++ * uniform annotations both share.
++ *
++ * GLSL accepted: a Shadertoy-style `void mainImage(out vec4 fragColor, in vec2
++ * fragCoord)` or a plain `void main()` writing `gl_FragColor` (reading
++ * `gl_FragCoord`), `uniform` float / vecN declarations, the Shadertoy inputs
++ * `iResolution iTime iTimeDelta iMouse iChannel0`, `texture` / `texture2D` on a
++ * sampler uniform, object- and function-like `#define`, and `#ifdef GL_ES`
++ * blocks. SkSL itself understands GLSL's type names, `out` parameters and
++ * global variables, so the translation is about the entry point, the inputs and
++ * the preprocessor. Anything it cannot map (`discard`, derivatives, `#if`,
++ * `gl_FragData`, samplers other than the backdrop, `gl_FragCoord` outside
++ * `main`) is refused with the line it is on.
++ *
++ * Uniform annotations — a comment after the declaration, pen.dev style:
++ *   uniform vec4 base;    // @color @label Base colour @default #ff5500
++ *   uniform float speed;  // @min 0 @max 4 @step 0.1 @default 1
++ *   uniform float t;      // @time        (seconds since the page started)
++ *   uniform vec2 m;       // @mouse       (pointer in the node's pixels)
++ *   uniform vec2 size;    // @resolution  (the node's size in pixels)
++ *   uniform sampler2D bg; // @backdrop    (what is painted behind the layer)
++ * Conventional names bind without annotations: u_size / iResolution, u_time /
++ * iTime, u_mouse / iMouse, backdrop / iChannel0. `sdf(p)` — the signed distance
++ * in pixels from `p` to the layer's own outline, negative inside — is provided
++ * when a shader calls it without defining it (`@sdf`).
++ */
++
++export type ShaderLang = 'sksl' | 'glsl'
++
++export type UniformRole = 'resolution' | 'time' | 'mouse' | 'backdrop' | 'sdf' | 'value'
++
++export interface UniformSpec {
++  name: string
++  /** Declared type as written (float, vec2, float4, half3, sampler2D, shader…). */
++  type: string
++  /** Float components (0 for samplers / child shaders). */
++  floats: number
++  role: UniformRole
++  color: boolean
++  label?: string
++  min?: number
++  max?: number
++  step?: number
++  default?: number[]
++}
++
++export class ShaderTranslateError extends Error {
++  readonly line: number
++  constructor(message: string, line: number) {
++    super(line > 0 ? `line ${line}: ${message}` : message)
++    this.name = 'ShaderTranslateError'
++    this.line = line
++  }
++}
++
++const FLOATS: Record<string, number> = {
++  float: 1, half: 1, int: 1,
++  vec2: 2, float2: 2, half2: 2, ivec2: 2, int2: 2,
++  vec3: 3, float3: 3, half3: 3, ivec3: 3, int3: 3,
++  vec4: 4, float4: 4, half4: 4, ivec4: 4, int4: 4,
++  mat2: 4, float2x2: 4, half2x2: 4,
++  mat3: 9, float3x3: 9, half3x3: 9,
++  mat4: 16, float4x4: 16, half4x4: 16
++}
++
++const CONVENTIONAL: Record<string, UniformRole> = {
++  u_size: 'resolution', iResolution: 'resolution', u_resolution: 'resolution',
++  u_time: 'time', iTime: 'time',
++  u_mouse: 'mouse', iMouse: 'mouse',
++  backdrop: 'backdrop', iChannel0: 'backdrop', u_backdrop: 'backdrop'
++}
++
++function parseNumbers(text: string): number[] | undefined {
++  const t = text.trim()
++  const hex = t.match(/^#([0-9a-f]{3,8})$/i)
++  if (hex) {
++    const h = hex[1].length <= 4 ? [...hex[1]].map((c) => c + c).join('') : hex[1]
++    const n = (i: number) => Number.parseInt(h.slice(i, i + 2), 16) / 255
++    return [n(0), n(2), n(4), h.length >= 8 ? n(6) : 1]
++  }
++  const nums = t.split(/[\s,]+/).map(Number).filter((x) => Number.isFinite(x))
++  return nums.length ? nums : undefined
++}
++
++/** Uniform declarations (with annotations) in a GLSL or SkSL source. */
++export function parseUniforms(source: string): UniformSpec[] {
++  const out: UniformSpec[] = []
++  // Several declarations may share a line; a trailing // comment annotates the last one.
++  const re = /\buniform\s+(?:(?:lowp|mediump|highp)\s+)?(\w+)\s+(\w+)\s*(?:\[[^\]]*\])?\s*;(?:[ \t]*\/\/([^\n]*))?/g
++  let m: RegExpExecArray | null
++  while ((m = re.exec(source))) {
++    const [, type, name, comment = ''] = m
++    const isChild = type === 'shader' || type === 'sampler2D'
++    const tags = new Map<string, string>()
++    for (const t of comment.matchAll(/@(\w+)([^@]*)/g)) tags.set(t[1].toLowerCase(), t[2].trim())
++    let role: UniformRole = CONVENTIONAL[name] ?? 'value'
++    if (tags.has('time')) role = 'time'
++    else if (tags.has('mouse')) role = 'mouse'
++    else if (tags.has('resolution')) role = 'resolution'
++    else if (tags.has('backdrop')) role = 'backdrop'
++    else if (tags.has('sdf')) role = 'sdf'
++    if (isChild && role === 'value') role = 'value'
++    const floats = isChild ? 0 : (FLOATS[type] ?? 1)
++    const range = tags.get('range') ? parseNumbers(tags.get('range') ?? '') : undefined
++    const spec: UniformSpec = {
++      name,
++      type,
++      floats,
++      role,
++      color: tags.has('color') || (!isChild && (floats === 3 || floats === 4) && /colou?r|^col\b|tint/i.test(name))
++    }
++    if (tags.get('label')) spec.label = tags.get('label')
++    const min = tags.get('min') ?? (range ? String(range[0]) : undefined)
++    const max = tags.get('max') ?? (range ? String(range[1]) : undefined)
++    if (min !== undefined && Number.isFinite(Number(min))) spec.min = Number(min)
++    if (max !== undefined && Number.isFinite(Number(max))) spec.max = Number(max)
++    if (tags.get('step') && Number.isFinite(Number(tags.get('step')))) spec.step = Number(tags.get('step'))
++    if (tags.get('default')) spec.default = parseNumbers(tags.get('default') ?? '')
++    out.push(spec)
++  }
++  return out
++}
++
++export function detectLang(source: string): ShaderLang {
++  if (/\bmainImage\s*\(/.test(source) || /\bgl_Frag(Color|Coord)\b/.test(source) || /\bvoid\s+main\s*\(\s*(void)?\s*\)/.test(source) || /\bsampler2D\b/.test(source) || /^\s*#\s*(version|define|ifdef)\b/m.test(source)) {
++    return 'glsl'
++  }
++  return 'sksl'
++}
++
++// ── Preprocessor ─────────────────────────────────────────────────────────
++
++interface Macro {
++  params: string[] | null
++  body: string
++}
++
++function expandMacros(line: string, macros: Map<string, Macro>, lineNo: number, depth = 0): string {
++  if (!macros.size || depth > 16) return line
++  let changed = false
++  let out = ''
++  let i = 0
++  while (i < line.length) {
++    const m = /[A-Za-z_]\w*/y
++    m.lastIndex = i
++    const word = m.exec(line)
++    if (!word || word.index !== i || (i > 0 && /\w/.test(line[i - 1]))) {
++      out += line[i]
++      i++
++      continue
++    }
++    const name = word[0]
++    const macro = macros.get(name)
++    i += name.length
++    if (!macro) {
++      out += name
++      continue
++    }
++    if (macro.params === null) {
++      out += `(${macro.body})`
++      changed = true
++      continue
++    }
++    let j = i
++    while (line[j] === ' ' || line[j] === '\t') j++
++    if (line[j] !== '(') {
++      out += name
++      continue
++    }
++    // Collect arguments up to the matching parenthesis.
++    let level = 0
++    const args: string[] = []
++    let cur = ''
++    let k = j
++    for (; k < line.length; k++) {
++      const c = line[k]
++      if (c === '(') {
++        if (level++ > 0) cur += c
++      } else if (c === ')') {
++        if (--level === 0) break
++        cur += c
++      } else if (c === ',' && level === 1) {
++        args.push(cur)
++        cur = ''
++      } else cur += c
++    }
++    if (level !== 0) throw new ShaderTranslateError(`unbalanced parentheses in a call to macro ${name}`, lineNo)
++    if (cur.trim() || args.length) args.push(cur)
++    if (args.length !== macro.params.length) {
++      throw new ShaderTranslateError(`macro ${name} takes ${macro.params.length} argument(s), got ${args.length}`, lineNo)
++    }
++    let body = macro.body
++    macro.params.forEach((p, idx) => {
++      body = body.replace(new RegExp(`\\b${p}\\b`, 'g'), `(${args[idx].trim()})`)
++    })
++    out += `(${body})`
++    i = k + 1
++    changed = true
++  }
++  return changed ? expandMacros(out, macros, lineNo, depth + 1) : out
++}
++
++/** Run the preprocessor; returns one output line per input line (line numbers stay). */
++function preprocess(source: string): string[] {
++  const lines = source.replace(/\r\n?/g, '\n').split('\n')
++  const macros = new Map<string, Macro>()
++  const out: string[] = []
++  const skip: boolean[] = []
++  for (let n = 0; n < lines.length; n++) {
++    let line = lines[n]
++    const lineNo = n + 1
++    // Join continuation lines of a directive.
++    while (/^\s*#/.test(line) && line.endsWith('\\') && n + 1 < lines.length) {
++      line = line.slice(0, -1) + ' ' + lines[++n]
++      out.push('')
++    }
++    const d = line.match(/^\s*#\s*(\w+)\s*(.*)$/)
++    const skipping = skip.includes(true)
++    if (d) {
++      const [, dir, rest] = d
++      if (dir === 'ifdef' || dir === 'ifndef') {
++        const defined = rest.trim() === 'GL_ES' ? false : macros.has(rest.trim())
++        skip.push(dir === 'ifdef' ? !defined : defined)
++      } else if (dir === 'else') {
++        if (!skip.length) throw new ShaderTranslateError('#else without #ifdef', lineNo)
++        skip[skip.length - 1] = !skip[skip.length - 1]
++      } else if (dir === 'endif') {
++        if (!skip.length) throw new ShaderTranslateError('#endif without #ifdef', lineNo)
++        skip.pop()
++      } else if (skipping) {
++        // inside a skipped block
++      } else if (dir === 'define') {
++        const fm = rest.match(/^([A-Za-z_]\w*)\(([^)]*)\)\s*(.*)$/)
++        const om = rest.match(/^([A-Za-z_]\w*)\s*(.*)$/)
++        if (fm) macros.set(fm[1], { params: fm[2].split(',').map((p) => p.trim()).filter(Boolean), body: fm[3] })
++        else if (om) macros.set(om[1], { params: null, body: om[2] })
++        else throw new ShaderTranslateError(`cannot read #define ${rest}`, lineNo)
++      } else if (dir === 'undef') {
++        macros.delete(rest.trim())
++      } else if (dir === 'version' || dir === 'extension' || dir === 'pragma' || dir === 'line') {
++        // dropped
++      } else {
++        throw new ShaderTranslateError(`#${dir} is not supported (only #define, #undef, #ifdef/#ifndef/#else/#endif)`, lineNo)
++      }
++      out.push('')
++      continue
++    }
++    if (skipping) {
++      out.push('')
++      continue
++    }
++    out.push(expandMacros(line, macros, lineNo))
++  }
++  if (skip.length) throw new ShaderTranslateError('#ifdef without #endif', lines.length)
++  return out
++}
++
++function stripComments(line: string): string {
++  return line.replace(/\/\/.*$/, '')
++}
++
++// ── GLSL → SkSL ──────────────────────────────────────────────────────────
++
++export interface TranslatedShader {
++  /** The SkSL the renderer compiles. */
++  sksl: string
++  /** Lines of prelude before the user's first line (to map compiler errors back). */
++  lineOffset: number
++  uniforms: UniformSpec[]
++  usesTime: boolean
++  usesMouse: boolean
++  usesBackdrop: boolean
++  usesSdf: boolean
++  warnings: string[]
++}
++
++const UNSUPPORTED: Array<[RegExp, string]> = [
++  [/\bdiscard\b/, '`discard` has no SkSL equivalent — return a transparent colour instead'],
++  [/\b(dFdx|dFdy|fwidth)\s*\(/, 'derivatives (dFdx/dFdy/fwidth) are not available in SkSL runtime effects'],
++  [/\bgl_FragData\b/, 'gl_FragData (multiple render targets) is not supported'],
++  [/\bgl_PointCoord\b/, 'gl_PointCoord is not available'],
++  [/\b(textureLod|texelFetch|textureSize|textureGrad)\s*\(/, 'only texture()/texture2D() sampling is supported'],
++  [/\biChannel[123]\b/, 'only iChannel0 (bound to the backdrop) is available'],
++  [/\biChannelResolution\b|\biDate\b|\biSampleRate\b|\biFrameRate\b/, 'this Shadertoy input is not provided (iResolution, iTime, iTimeDelta, iMouse, iChannel0 are)']
++]
++
++const SDF_HELPER = [
++  'uniform shader _td_sdf;',
++  'uniform float _td_sdf_range;',
++  'float sdf(float2 p) { return (_td_sdf.eval(p).r - 0.5) * 2.0 * _td_sdf_range; }'
++]
++
++function needsSdf(code: string): boolean {
++  return /\bsdf\s*\(/.test(code) && !/\bfloat\s+sdf\s*\(/.test(code)
++}
++
++/** Translate GLSL (Shadertoy `mainImage` or `void main()`) into an SkSL runtime effect. */
++export function translateGLSL(source: string): TranslatedShader {
++  const lines = preprocess(source)
++  const warnings: string[] = []
++  lines.forEach((line, i) => {
++    const code = stripComments(line)
++    for (const [re, message] of UNSUPPORTED) {
++      if (re.test(code)) throw new ShaderTranslateError(message, i + 1)
++    }
++  })
++  let body = lines.map((l) => l.replace(/^\s*precision\s+\w+\s+\w+\s*;/, '')).join('\n')
++  const declared = parseUniforms(body)
++  const has = (name: string) => declared.some((u) => u.name === name) || new RegExp(`\\b(float|vec\\d|int)\\s+${name}\\b`).test(body)
++  const uses = (name: string) => new RegExp(`\\b${name}\\b`).test(body)
++
++  // Samplers become child shaders sampled in pixels; texture(s, uv) takes 0..1 uv
++  // with y up (GL convention), so the helper flips and scales.
++  const samplers = declared.filter((u) => u.type === 'sampler2D').map((u) => u.name)
++  if (uses('iChannel0') && !samplers.includes('iChannel0')) samplers.push('iChannel0')
++  body = body.replace(/^\s*uniform\s+(?:(?:lowp|mediump|highp)\s+)?sampler2D\s+(\w+)\s*;/gm, '')
++  for (const s of samplers) {
++    body = body.replace(new RegExp(`\\b(texture2D|texture)\\s*\\(\\s*${s}\\s*,`, 'g'), `_td_tex_${s}(`)
++  }
++  if (/\b(texture2D|texture)\s*\(/.test(body)) {
++    const line = body.split('\n').findIndex((l) => /\b(texture2D|texture)\s*\(/.test(stripComments(l))) + 1
++    throw new ShaderTranslateError('texture() on something that is not a declared sampler', line)
++  }
++
++  const prelude: string[] = []
++  const add = (decl: string) => prelude.push(decl)
++  const resName = has('iResolution') ? null : uses('iResolution') ? 'iResolution' : null
++  if (resName) add('uniform float3 iResolution;')
++  if (!has('iTime') && uses('iTime')) add('uniform float iTime;')
++  if (!has('iTimeDelta') && uses('iTimeDelta')) add('uniform float iTimeDelta; // @delta')
++  if (!has('iMouse') && uses('iMouse')) add('uniform float4 iMouse;')
++  if (!has('iFrame') && uses('iFrame')) add('uniform float iFrame; // @frame')
++  // The entry point needs the node size for the y flip.
++  const sizeUniform = declared.find((u) => u.role === 'resolution')?.name ?? (resName || has('iResolution') ? 'iResolution' : null)
++  const sizeExpr = sizeUniform ? `${sizeUniform}.y` : '_td_size.y'
++  if (!sizeUniform) add('uniform float2 _td_size; // @resolution')
++  for (const s of samplers) {
++    const res = sizeUniform ? `${sizeUniform}.xy` : '_td_size'
++    add(`uniform shader ${s};`)
++    add(`float4 _td_tex_${s}(float2 uv) { return float4(${s}.eval(float2(uv.x, 1.0 - uv.y) * ${res})); }`)
++  }
++  if (needsSdf(body)) {
++    // GL coordinates (y up) → the renderer's pixels (y down).
++    prelude.push('uniform shader _td_sdf;', 'uniform float _td_sdf_range;')
++    prelude.push(`float sdf(float2 p) { return (_td_sdf.eval(float2(p.x, ${sizeExpr} - p.y)).r - 0.5) * 2.0 * _td_sdf_range; }`)
++  }
++
++  let entry: string
++  if (/\bvoid\s+mainImage\s*\(/.test(body)) {
++    entry = `half4 main(float2 _td_p) { float4 _td_c = float4(0.0); mainImage(_td_c, float2(_td_p.x, ${sizeExpr} - _td_p.y)); return half4(_td_c.rgb * _td_c.a, _td_c.a); }`
++  } else if (/\bvoid\s+main\s*\(\s*(void)?\s*\)/.test(body)) {
++    // gl_FragColor / gl_FragCoord become parameters of the renamed main.
++    const mainAt = body.search(/\bvoid\s+main\s*\(/)
++    const before = body.slice(0, mainAt)
++    if (/\bgl_FragCoord\b/.test(before)) {
++      const line = before.split('\n').findIndex((l) => /\bgl_FragCoord\b/.test(l)) + 1
++      throw new ShaderTranslateError('gl_FragCoord is only supported inside main()', line)
++    }
++    body =
++      before +
++      body
++        .slice(mainAt)
++        .replace(/\bvoid\s+main\s*\(\s*(void)?\s*\)/, 'void _td_main(inout float4 _td_color, float4 _td_coord)')
++        .replace(/\bgl_FragColor\b/g, '_td_color')
++        .replace(/\bgl_FragCoord\b/g, '_td_coord')
++    entry = `half4 main(float2 _td_p) { float4 _td_c = float4(0.0); _td_main(_td_c, float4(_td_p.x, ${sizeExpr} - _td_p.y, 0.0, 1.0)); return half4(_td_c.rgb * _td_c.a, _td_c.a); }`
++  } else {
++    throw new ShaderTranslateError('GLSL needs `void mainImage(out vec4 fragColor, in vec2 fragCoord)` or `void main()`', 0)
++  }
++  const sksl = [...prelude, body, entry].join('\n')
++  const uniforms = parseUniforms(sksl)
++  return {
++    sksl,
++    lineOffset: prelude.length,
++    uniforms,
++    usesTime: uniforms.some((u) => u.role === 'time'),
++    usesMouse: uniforms.some((u) => u.role === 'mouse'),
++    usesBackdrop: uniforms.some((u) => u.role === 'backdrop') || samplers.length > 0,
++    usesSdf: /\b_td_sdf\b/.test(sksl),
++    warnings
++  }
++}
++
++/** An SkSL source as the renderer compiles it (sdf helper injected when used). */
++export function prepareSKSL(source: string): TranslatedShader {
++  const prelude = needsSdf(source) ? [...SDF_HELPER] : []
++  const sksl = [...prelude, source].join('\n')
++  const uniforms = parseUniforms(sksl)
++  return {
++    sksl,
++    lineOffset: prelude.length,
++    uniforms,
++    usesTime: uniforms.some((u) => u.role === 'time'),
++    usesMouse: uniforms.some((u) => u.role === 'mouse'),
++    usesBackdrop: uniforms.some((u) => u.role === 'backdrop'),
++    usesSdf: prelude.length > 0 || uniforms.some((u) => u.role === 'sdf'),
++    warnings: []
++  }
++}
++
++/** Map an SkSL compiler message's line numbers back to the author's source. */
++export function mapCompilerError(message: string, lineOffset: number): string {
++  if (!lineOffset) return message
++  return message.replace(/(error|warning): (\d+):/g, (_m, kind: string, n: string) => {
++    const line = Number(n) - lineOffset
++    return line > 0 ? `${kind}: line ${line}:` : `${kind}: (prelude):`
++  })
++}
++
++// ── SkSL → GLSL ES 1.0 (HTML export) ─────────────────────────────────────
++
++const SKSL_TYPES: Array<[RegExp, string]> = [
++  [/\bhalf([234])x\1\b|\bfloat([234])x\2\b/g, 'mat$1$2'],
++  [/\b(?:half|float)([234])\b/g, 'vec$1'],
++  [/\bint([234])\b/g, 'ivec$1'],
++  [/\bbool([234])\b/g, 'bvec$1'],
++  [/\bhalf\b/g, 'float']
++]
++
++/**
++ * A fragment shader for WebGL from an SkSL runtime effect. Children become
++ * sampler2D uniforms (the export ships a picture of each), `x.eval(p)` becomes
++ * a pixel-space sample. Built-in uniforms keep their names. Throws when the
++ * source uses something with no GLSL ES 1.0 form; the export then keeps the
++ * picture only.
++ */
++export function skslToGLSL(sksl: string): string {
++  let src = sksl
++  const main = src.match(/\bhalf4\s+main\s*\(\s*float2\s+(\w+)\s*\)/) ?? src.match(/\bfloat4\s+main\s*\(\s*float2\s+(\w+)\s*\)/) ?? src.match(/\bvec4\s+main\s*\(\s*vec2\s+(\w+)\s*\)/)
++  if (!main) throw new Error('no `half4 main(float2 p)` entry point')
++  const children = [...src.matchAll(/^\s*uniform\s+shader\s+(\w+)\s*;/gm)].map((m) => m[1])
++  src = src.replace(/^\s*uniform\s+shader\s+(\w+)\s*;/gm, 'uniform sampler2D $1;')
++  for (const c of children) {
++    src = src.replace(new RegExp(`\\b${c}\\.eval\\s*\\(`, 'g'), `_td_sample_${c}(`)
++  }
++  if (/\.eval\s*\(/.test(src)) throw new Error('eval() on something that is not a child shader')
++  for (const [re, to] of SKSL_TYPES) {
++    src = src.replace(re, (...m: string[]) => to.replace('$1', m[1] ?? '').replace('$2', m[2] ?? m[1] ?? ''))
++  }
++  src = src.replace(/\bvec4\s+main\s*\(\s*vec2\s+(\w+)\s*\)/, 'vec4 _td_entry(vec2 $1)')
++  const size = /\buniform\s+vec2\s+u_size\s*;/.test(src) ? 'u_size' : '_td_size'
++  // p is in the renderer's pixels (y down); textures are uploaded flipped (y up).
++  const helpers = children.map((c) => `vec4 _td_sample_${c}(vec2 p) { return texture2D(${c}, vec2(p.x, ${size}.y - p.y) / ${size}); }`)
++  return [
++    'precision highp float;',
++    size === '_td_size' ? 'uniform vec2 _td_size;' : '',
++    ...src.split('\n').filter((l) => /^\s*uniform\b/.test(l)),
++    ...helpers,
++    ...src.split('\n').filter((l) => !/^\s*uniform\b/.test(l)),
++    // SkSL returns premultiplied colour, which is what WebGL's default blending over the page expects.
++    `void main() { gl_FragColor = _td_entry(vec2(gl_FragCoord.x, ${size}.y - gl_FragCoord.y)); }`
++  ]
++    .filter((l) => l !== '')
++    .join('\n')
++}
++
++/** GLSL for WebGL from a GLSL source the user wrote (declarations Shadertoy leaves implicit added). */
++export function glslForWebGL(source: string): string {
++  const lines = preprocess(source)
++  let body = lines.map((l) => l.replace(/^\s*precision\s+\w+\s+\w+\s*;/, '')).join('\n')
++  const declared = parseUniforms(body)
++  const has = (name: string) => declared.some((u) => u.name === name)
++  const uses = (name: string) => new RegExp(`\\b${name}\\b`).test(body)
++  const head = ['precision highp float;']
++  if (!has('iResolution') && uses('iResolution')) head.push('uniform vec3 iResolution;')
++  if (!has('iTime') && uses('iTime')) head.push('uniform float iTime;')
++  if (!has('iTimeDelta') && uses('iTimeDelta')) head.push('uniform float iTimeDelta;')
++  if (!has('iMouse') && uses('iMouse')) head.push('uniform vec4 iMouse;')
++  if (!has('iFrame') && uses('iFrame')) head.push('uniform float iFrame;')
++  if (!has('iChannel0') && uses('iChannel0')) head.push('uniform sampler2D iChannel0;')
++  body = body.replace(/\btexture\s*\(/g, 'texture2D(')
++  if (needsSdf(body)) {
++    head.push('uniform sampler2D _td_sdf;', 'uniform float _td_sdf_range;', 'uniform vec2 _td_size;')
++    // Textures are uploaded flipped (UNPACK_FLIP_Y), so GL coordinates sample directly.
++    head.push('float sdf(vec2 p) { return (texture2D(_td_sdf, p / _td_size).r - 0.5) * 2.0 * _td_sdf_range; }')
++  }
++  const tail = /\bvoid\s+mainImage\s*\(/.test(body)
++    ? ['void main() { vec4 c = vec4(0.0); mainImage(c, gl_FragCoord.xy); gl_FragColor = vec4(c.rgb * c.a, c.a); }']
++    : []
++  return [...head, body, ...tail].join('\n')
++}
+diff --git a/packages/core/src/canvas/gradients/procedural.ts b/packages/core/src/canvas/gradients/procedural.ts
+index 329bbc1b..d045954f 100644
+--- a/packages/core/src/canvas/gradients/procedural.ts
++++ b/packages/core/src/canvas/gradients/procedural.ts
+@@ -1,26 +1,43 @@
+ /**
+- * Procedural fills: SkSL shader fills and mesh gradients.
++ * Procedural fills: shader fills (SkSL or GLSL) and mesh gradients.
+  *
+- * Neither exists in the .fig paint model, so a procedural fill is stored as a
+- * `CUSTOM` paint (whose own colour is the fallback every other renderer shows)
+- * linked by `customEffectId` to a definition in the node's shared plugin data,
+- * `telecode` / `fill:<customEffectId>` (JSON). Both round-trip through .fig.
++ * Neither exists in the .fig paint model. A procedural fill is a paint whose
++ * `customEffectId` links to a JSON definition in the node's shared plugin data,
++ * `telecode` / `fill:<customEffectId>`. In the scene graph the paint is `CUSTOM`;
++ * the .fig writer stores it as a `SOLID` paint (its colour is the fallback other
++ * readers paint) keeping the link, and anything that finds a definition behind
++ * a linked paint renders the real fill — so the full data round-trips.
+  *
+- *  - shader: `{kind:'shader', sksl | preset, uniforms}` — a Skia runtime effect,
+- *    `half4 main(float2 p)` with `p` in the node's pixel space. `uniform float2
+- *    u_size` (the node size) is supplied; other uniforms come from `uniforms`
+- *    by name (float / float2..4, missing = 0).
+- *  - mesh: `{kind:'mesh', columns, rows, points:[{x, y, color}]}` — a grid of
+- *    control points (row-major, x/y normalised to the node box, so the grid can
+- *    be warped), drawn as one Coons patch per cell (Catmull-Rom edges unless
+- *    `smooth:false`), colours interpolated across each patch.
++ *  - shader: `{kind:'shader', lang, source | preset, uniforms}`. SkSL is a Skia
++ *    runtime effect `half4 main(float2 p)`, `p` in the node's pixels; GLSL
++ *    (Shadertoy `mainImage` or `void main()`) is translated to it (./glsl).
++ *    Inputs: declared uniforms (values from `uniforms`, annotation defaults),
++ *    the node size, `@time` (seconds, animated), `@mouse` (the pointer in node
++ *    pixels), `@backdrop` (a child shader of what is painted behind the layer)
++ *    and `sdf(p)` (signed distance to the layer's outline, negative inside).
++ *  - mesh: `{kind:'mesh', columns, rows, points:[{x, y, color}]}` — a warpable
++ *    grid (row-major, x/y normalised to the node box), one Coons patch per cell
++ *    (Catmull-Rom edges unless `smooth:false`), colours interpolated per patch.
+  */
+-import type { CanvasKit, RuntimeEffect, Shader } from 'canvaskit-wasm'
++import type { CanvasKit, Image as CKImage, RuntimeEffect, Shader } from 'canvaskit-wasm'
+ 
+-import type { Fill, SceneNode } from '@open-pencil/scene-graph'
++import type { Fill, SceneGraph, SceneNode } from '@open-pencil/scene-graph'
+ 
+ import type { SkiaRenderer } from '#core/canvas/renderer'
+ 
++import {
++  detectLang,
++  mapCompilerError,
++  prepareSKSL,
++  ShaderTranslateError,
++  translateGLSL,
++  type ShaderLang,
++  type TranslatedShader,
++  type UniformSpec
++} from './glsl'
++
++export * from './glsl'
++
+ export const PROCEDURAL_NAMESPACE = 'telecode'
+ export const PROCEDURAL_KEY_PREFIX = 'fill:'
+ 
+@@ -29,6 +46,10 @@ export type ProceduralColor = [number, number, number, number]
+ export interface ShaderFillDef {
+   v: 1
+   kind: 'shader'
++  lang?: ShaderLang
++  /** The author's source (SkSL or GLSL, see `lang`). */
++  source?: string
++  /** Older definitions: SkSL source. */
+   sksl?: string
+   preset?: string
+   uniforms?: Record<string, number | number[]>
+@@ -52,13 +73,15 @@ export interface MeshFillDef {
+ export type ProceduralFillDef = ShaderFillDef | MeshFillDef
+ 
+ export const MESH_MAX_POINTS = 64
++export const SHADER_MAX_SOURCE = 20000
+ 
+ // ── Presets (original shaders) ───────────────────────────────────────────
+ 
+ interface Preset {
+   description: string
+   uniforms: Record<string, number | number[]>
+-  sksl: string
++  lang: ShaderLang
++  source: string
+ }
+ 
+ const HASH = `
+@@ -73,13 +96,13 @@ float vnoise(float2 p) {
+ 
+ export const SHADER_PRESETS: Record<string, Preset> = {
+   grain: {
+-    description: 'Film grain over a base colour (u_color, u_amount 0..1, u_seed)',
++    description: 'Film grain over a base colour',
+     uniforms: { u_color: [0.95, 0.94, 0.9, 1], u_amount: 0.12, u_seed: 0 },
+-    sksl: `
+-uniform float2 u_size;
+-uniform float4 u_color;
+-uniform float u_amount;
+-uniform float u_seed;
++    lang: 'sksl',
++    source: `uniform float2 u_size;
++uniform float4 u_color;  // @color @label Base
++uniform float u_amount;  // @min 0 @max 0.5 @label Amount
++uniform float u_seed;    // @min 0 @max 100 @step 1 @label Seed
+ ${HASH}
+ half4 main(float2 p) {
+   float n = hash(p + u_seed * 17.0) - 0.5;
+@@ -88,18 +111,20 @@ half4 main(float2 p) {
+ }`
+   },
+   aurora: {
+-    description: 'Soft flowing colour field of three colours (u_a, u_b, u_c, u_scale, u_seed)',
+-    uniforms: { u_a: [0.1, 0.1, 0.35, 1], u_b: [0.2, 0.8, 0.7, 1], u_c: [0.8, 0.3, 0.9, 1], u_scale: 2.5, u_seed: 0 },
+-    sksl: `
+-uniform float2 u_size;
+-uniform float4 u_a;
+-uniform float4 u_b;
+-uniform float4 u_c;
+-uniform float u_scale;
+-uniform float u_seed;
++    description: 'Soft flowing field of three colours; drifts over time',
++    uniforms: { u_a: [0.1, 0.1, 0.35, 1], u_b: [0.2, 0.8, 0.7, 1], u_c: [0.8, 0.3, 0.9, 1], u_scale: 2.5, u_speed: 0.15, u_seed: 0 },
++    lang: 'sksl',
++    source: `uniform float2 u_size;
++uniform float u_time;   // @time
++uniform float4 u_a;     // @color @label Deep
++uniform float4 u_b;     // @color @label Glow
++uniform float4 u_c;     // @color @label Accent
++uniform float u_scale;  // @min 0.5 @max 8 @label Scale
++uniform float u_speed;  // @min 0 @max 1 @label Speed
++uniform float u_seed;   // @min 0 @max 100 @step 1 @label Seed
+ ${HASH}
+ half4 main(float2 p) {
+-  float2 q = p / max(u_size.x, u_size.y) * u_scale + u_seed;
++  float2 q = p / max(u_size.x, u_size.y) * u_scale + u_seed + float2(u_time * u_speed, u_time * u_speed * 0.6);
+   float n1 = vnoise(q + vnoise(q * 1.7 + 3.1));
+   float n2 = vnoise(q * 0.8 - 5.2 + n1);
+   float4 c = mix(mix(u_a, u_b, smoothstep(0.2, 0.8, n1)), u_c, smoothstep(0.35, 0.9, n2) * 0.8);
+@@ -107,14 +132,14 @@ half4 main(float2 p) {
+ }`
+   },
+   stripes: {
+-    description: 'Straight stripes (u_a, u_b, u_width px, u_angle degrees)',
++    description: 'Straight stripes',
+     uniforms: { u_a: [0.1, 0.1, 0.1, 1], u_b: [0.95, 0.8, 0.2, 1], u_width: 16, u_angle: 45 },
+-    sksl: `
+-uniform float2 u_size;
+-uniform float4 u_a;
+-uniform float4 u_b;
+-uniform float u_width;
+-uniform float u_angle;
++    lang: 'sksl',
++    source: `uniform float2 u_size;
++uniform float4 u_a;     // @color @label Colour A
++uniform float4 u_b;     // @color @label Colour B
++uniform float u_width;  // @min 1 @max 100 @label Width
++uniform float u_angle;  // @min 0 @max 180 @label Angle
+ half4 main(float2 p) {
+   float r = radians(u_angle);
+   float d = dot(p, float2(cos(r), sin(r)));
+@@ -124,14 +149,14 @@ half4 main(float2 p) {
+ }`
+   },
+   dots: {
+-    description: 'Dot grid (u_background, u_dot, u_spacing px, u_radius px)',
++    description: 'Dot grid',
+     uniforms: { u_background: [1, 1, 1, 1], u_dot: [0.2, 0.2, 0.25, 1], u_spacing: 16, u_radius: 2 },
+-    sksl: `
+-uniform float2 u_size;
+-uniform float4 u_background;
+-uniform float4 u_dot;
+-uniform float u_spacing;
+-uniform float u_radius;
++    lang: 'sksl',
++    source: `uniform float2 u_size;
++uniform float4 u_background; // @color @label Background
++uniform float4 u_dot;        // @color @label Dot
++uniform float u_spacing;     // @min 4 @max 80 @label Spacing
++uniform float u_radius;      // @min 0.5 @max 20 @label Radius
+ half4 main(float2 p) {
+   float s = max(u_spacing, 1.0);
+   float2 cell = (fract(p / s) - 0.5) * s;
+@@ -141,28 +166,89 @@ half4 main(float2 p) {
+ }`
+   },
+   radial_glow: {
+-    description: 'Glow from a point (u_inner, u_outer, u_center 0..1, u_radius 0..1 of the larger side)',
+-    uniforms: { u_inner: [1, 0.85, 0.5, 1], u_outer: [0.05, 0.05, 0.12, 1], u_center: [0.5, 0.4], u_radius: 0.7 },
+-    sksl: `
+-uniform float2 u_size;
+-uniform float4 u_inner;
+-uniform float4 u_outer;
+-uniform float2 u_center;
+-uniform float u_radius;
++    description: 'Glow from a point; follows the pointer when it is over the layer',
++    uniforms: { u_inner: [1, 0.85, 0.5, 1], u_outer: [0.05, 0.05, 0.12, 1], u_center: [0.5, 0.4], u_radius: 0.7, u_follow: 0 },
++    lang: 'sksl',
++    source: `uniform float2 u_size;
++uniform float2 u_mouse;   // @mouse
++uniform float4 u_inner;   // @color @label Inner
++uniform float4 u_outer;   // @color @label Outer
++uniform float2 u_center;  // @min 0 @max 1 @label Centre
++uniform float u_radius;   // @min 0.05 @max 2 @label Radius
++uniform float u_follow;   // @min 0 @max 1 @step 1 @label Follow pointer
++half4 main(float2 p) {
++  float2 c0 = u_center * u_size;
++  bool inside = u_mouse.x >= 0.0 && u_mouse.y >= 0.0 && u_mouse.x <= u_size.x && u_mouse.y <= u_size.y;
++  float2 c = (u_follow > 0.5 && inside) ? u_mouse : c0;
++  float d = length(p - c) / max(max(u_size.x, u_size.y) * u_radius, 1.0);
++  float4 col = mix(u_inner, u_outer, smoothstep(0.0, 1.0, d));
++  return half4(half3(col.rgb * col.a), half(col.a));
++}`
++  },
++  plasma: {
++    description: 'Animated plasma (GLSL, Shadertoy style)',
++    uniforms: { speed: 1, tint: [0.4, 0.6, 1, 1] },
++    lang: 'glsl',
++    source: `uniform float speed; // @min 0 @max 4 @label Speed
++uniform vec4 tint;    // @color @label Tint
++void mainImage(out vec4 fragColor, in vec2 fragCoord) {
++  vec2 uv = fragCoord / iResolution.xy;
++  float t = iTime * speed;
++  float v = sin(uv.x * 10.0 + t) + sin(uv.y * 8.0 - t * 1.3) + sin((uv.x + uv.y) * 7.0 + t * 0.7);
++  vec3 col = 0.5 + 0.5 * cos(v + vec3(0.0, 2.0, 4.0));
++  fragColor = vec4(mix(col, tint.rgb, 0.35), 1.0);
++}`
++  },
++  frosted: {
++    description: 'Frosted glass: blurs and tints what is behind the layer (@backdrop)',
++    uniforms: { u_tint: [1, 1, 1, 0.25], u_blur: 6 },
++    lang: 'sksl',
++    source: `uniform float2 u_size;
++uniform shader backdrop;  // @backdrop
++uniform float4 u_tint;    // @color @label Tint
++uniform float u_blur;     // @min 0 @max 20 @label Blur
+ half4 main(float2 p) {
+-  float d = length(p - u_center * u_size) / max(max(u_size.x, u_size.y) * u_radius, 1.0);
+-  float4 c = mix(u_inner, u_outer, smoothstep(0.0, 1.0, d));
++  half4 acc = half4(0);
++  for (int i = -2; i <= 2; i++) {
++    for (int j = -2; j <= 2; j++) {
++      acc += backdrop.eval(p + float2(float(i), float(j)) * u_blur * 0.5);
++    }
++  }
++  acc /= 25.0;
++  float3 c = mix(float3(acc.rgb), u_tint.rgb * acc.a + u_tint.rgb * (1.0 - acc.a), u_tint.a);
++  return half4(half3(c), 1.0);
++}`
++  },
++  outline_glow: {
++    description: 'Glow that follows the layer outline (@sdf)',
++    uniforms: { u_fill: [0.08, 0.08, 0.14, 1], u_glow: [0.3, 0.8, 1, 1], u_width: 18 },
++    lang: 'sksl',
++    source: `uniform float2 u_size;
++uniform float4 u_fill;   // @color @label Fill
++uniform float4 u_glow;   // @color @label Glow
++uniform float u_width;   // @min 1 @max 80 @label Glow width
++half4 main(float2 p) {
++  float d = sdf(p);
++  float g = exp(-max(-d, 0.0) / max(u_width, 1.0) * 3.0);
++  float4 c = mix(u_fill, u_glow, g);
+   return half4(half3(c.rgb * c.a), half(c.a));
+ }`
+   }
+ }
+ 
+ export function listShaderPresets() {
+-  return Object.entries(SHADER_PRESETS).map(([name, preset]) => ({
+-    name,
+-    description: preset.description,
+-    uniforms: preset.uniforms
+-  }))
++  return Object.entries(SHADER_PRESETS).map(([name, preset]) => {
++    const prepared = prepareShader({ v: 1, kind: 'shader', preset: name })
++    return {
++      name,
++      description: preset.description,
++      lang: preset.lang,
++      uniforms: preset.uniforms,
++      animated: prepared.usesTime || prepared.usesMouse,
++      backdrop: prepared.usesBackdrop,
++      sdf: prepared.usesSdf
++    }
++  })
+ }
+ 
+ // ── Parsing ──────────────────────────────────────────────────────────────
+@@ -184,8 +270,7 @@ export function parseProceduralColor(value: unknown): ProceduralColor | null {
+   }
+   if (typeof value === 'string') {
+     const hex = value.trim().replace(/^#/, '')
+-    const full =
+-      hex.length === 3 || hex.length === 4 ? [...hex].map((c) => c + c).join('') : hex
++    const full = hex.length === 3 || hex.length === 4 ? [...hex].map((c) => c + c).join('') : hex
+     if (!/^[0-9a-f]{6}([0-9a-f]{2})?$/i.test(full)) return null
+     const n = (i: number) => Number.parseInt(full.slice(i, i + 2), 16) / 255
+     return [n(0), n(2), n(4), full.length === 8 ? n(6) : 1]
+@@ -199,33 +284,48 @@ export function parseProceduralColor(value: unknown): ProceduralColor | null {
+   return null
+ }
+ 
++function normalizeUniforms(input: unknown): Record<string, number | number[]> {
++  const uniforms: Record<string, number | number[]> = {}
++  if (!input || typeof input !== 'object') return uniforms
++  for (const [name, value] of Object.entries(input as Record<string, unknown>)) {
++    if (!/^[A-Za-z_]\w{0,63}$/.test(name)) throw new Error(`Bad uniform name "${name}"`)
++    if (typeof value === 'number' && Number.isFinite(value)) uniforms[name] = value
++    else if (Array.isArray(value) && value.length <= 16 && value.every((x) => typeof x === 'number' && Number.isFinite(x)))
++      uniforms[name] = value as number[]
++    else {
++      const color = parseProceduralColor(value)
++      if (!color) throw new Error(`Uniform "${name}" must be a number, a number array or a colour`)
++      uniforms[name] = color
++    }
++  }
++  return uniforms
++}
++
+ /** Validate and normalise a definition; throws with a readable message. */
+ export function normalizeProceduralFill(input: unknown): ProceduralFillDef {
+   if (!input || typeof input !== 'object') throw new Error('A fill definition must be an object')
+   const raw = input as Record<string, unknown>
+   if (raw.kind === 'shader') {
+     const preset = typeof raw.preset === 'string' && raw.preset ? raw.preset : undefined
+-    const sksl = typeof raw.sksl === 'string' && raw.sksl.trim() ? raw.sksl : undefined
+-    if (!preset && !sksl) throw new Error('A shader fill needs "sksl" or "preset"')
++    const text = [raw.source, raw.glsl, raw.sksl].find((v) => typeof v === 'string' && v.trim()) as string | undefined
++    if (!preset && !text) throw new Error('A shader fill needs "source" (SkSL or GLSL), "glsl", "sksl" or "preset"')
+     if (preset && !SHADER_PRESETS[preset]) {
+       throw new Error(`Unknown shader preset "${preset}" (${Object.keys(SHADER_PRESETS).join(', ')})`)
+     }
+-    if (sksl && sksl.length > 20000) throw new Error('"sksl" is limited to 20000 characters')
+-    const uniforms: Record<string, number | number[]> = {}
+-    if (raw.uniforms && typeof raw.uniforms === 'object') {
+-      for (const [name, value] of Object.entries(raw.uniforms as Record<string, unknown>)) {
+-        if (!/^[A-Za-z_]\w{0,63}$/.test(name)) throw new Error(`Bad uniform name "${name}"`)
+-        if (typeof value === 'number' && Number.isFinite(value)) uniforms[name] = value
+-        else if (Array.isArray(value) && value.length <= 16 && value.every((x) => typeof x === 'number' && Number.isFinite(x)))
+-          uniforms[name] = value as number[]
+-        else {
+-          const color = parseProceduralColor(value)
+-          if (!color) throw new Error(`Uniform "${name}" must be a number, a number array or a colour`)
+-          uniforms[name] = color
+-        }
+-      }
++    if (text && text.length > SHADER_MAX_SOURCE) throw new Error(`Shader sources are limited to ${SHADER_MAX_SOURCE} characters`)
++    const uniforms = normalizeUniforms(raw.uniforms)
++    if (text) {
++      const lang: ShaderLang =
++        raw.lang === 'glsl' || raw.lang === 'sksl'
++          ? raw.lang
++          : typeof raw.glsl === 'string' && raw.glsl.trim()
++            ? 'glsl'
++            : typeof raw.sksl === 'string' && raw.sksl.trim() && !raw.source
++              ? 'sksl'
++              : detectLang(text)
++      return { v: 1, kind: 'shader', lang, source: text, uniforms }
+     }
+-    return { v: 1, kind: 'shader', ...(sksl ? { sksl } : { preset }), uniforms }
++    return { v: 1, kind: 'shader', preset, uniforms }
+   }
+   if (raw.kind === 'mesh') {
+     const columns = Math.round(finite(raw.columns, 0))
+@@ -242,24 +342,21 @@ export function normalizeProceduralFill(input: unknown): ProceduralFillDef {
+       if (!color) throw new Error(`Point ${index} needs a colour`)
+       const col = index % columns
+       const row = Math.floor(index / columns)
+-      return {
+-        x: finite(point.x, col / (columns - 1)),
+-        y: finite(point.y, row / (rows - 1)),
+-        color
+-      }
++      return { x: finite(point.x, col / (columns - 1)), y: finite(point.y, row / (rows - 1)), color }
+     })
+     return { v: 1, kind: 'mesh', columns, rows, points, ...(raw.smooth === false ? { smooth: false } : {}) }
+   }
+   throw new Error('"kind" must be "shader" or "mesh"')
+ }
+ 
++/** The plugin-data key of a linked paint (CUSTOM in the scene graph, SOLID once through .fig). */
+ export function proceduralKey(fill: Fill): string | null {
+-  return fill.type === 'CUSTOM' && fill.customEffectId
++  return (fill.type === 'CUSTOM' || fill.type === 'SOLID') && fill.customEffectId
+     ? `${PROCEDURAL_KEY_PREFIX}${fill.customEffectId}`
+     : null
+ }
+ 
+-/** The definition a CUSTOM fill links to, or null (then it paints its fallback colour). */
++/** The definition a linked paint points to, or null (then it paints its own colour). */
+ export function proceduralFillOf(node: SceneNode, fill: Fill): ProceduralFillDef | null {
+   const key = proceduralKey(fill)
+   if (!key) return null
+@@ -280,22 +377,72 @@ export function proceduralFillOf(node: SceneNode, fill: Fill): ProceduralFillDef
+   return def
+ }
+ 
+-// ── Shaders ──────────────────────────────────────────────────────────────
++// ── Sources ──────────────────────────────────────────────────────────────
++
++export interface PreparedShader extends TranslatedShader {
++  lang: ShaderLang
++  /** The author's source as written (the preset's for presets). */
++  source: string
++  /** A translation error (GLSL the translator refused). */
++  error: string | null
++}
++
++const prepared = new Map<string, PreparedShader>()
++
++export function shaderLangAndSource(def: ShaderFillDef): { lang: ShaderLang; source: string } {
++  if (def.preset && SHADER_PRESETS[def.preset]) {
++    return { lang: SHADER_PRESETS[def.preset].lang, source: SHADER_PRESETS[def.preset].source }
++  }
++  const source = def.source ?? def.sksl ?? ''
++  return { lang: def.lang ?? (def.sksl && !def.source ? 'sksl' : detectLang(source)), source }
++}
++
++/** The SkSL the renderer runs for a shader definition (GLSL translated), with its inputs. */
++export function prepareShader(def: ShaderFillDef): PreparedShader {
++  const { lang, source } = shaderLangAndSource(def)
++  const key = `${lang}\u0001${source}`
++  const hit = prepared.get(key)
++  if (hit) return hit
++  let result: PreparedShader
++  try {
++    const t = lang === 'glsl' ? translateGLSL(source) : prepareSKSL(source)
++    result = { ...t, lang, source, error: null }
++  } catch (error) {
++    const message = error instanceof ShaderTranslateError ? error.message : String(error)
++    result = {
++      sksl: '', lineOffset: 0, uniforms: [], usesTime: false, usesMouse: false, usesBackdrop: false,
++      usesSdf: false, warnings: [], lang, source, error: `GLSL not translated: ${message}`
++    }
++  }
++  if (prepared.size > 128) prepared.clear()
++  prepared.set(key, result)
++  return result
++}
++
++/** Back-compat name: the SkSL a definition compiles to. */
++export function shaderSource(def: ShaderFillDef): string {
++  return prepareShader(def).sksl
++}
++
++export function isAnimatedFill(def: ProceduralFillDef | null): boolean {
++  if (!def || def.kind !== 'shader') return false
++  const p = prepareShader(def)
++  return p.usesTime || p.usesMouse
++}
++
++// ── Compilation ──────────────────────────────────────────────────────────
+ 
+ interface CompiledEffect {
+   effect: RuntimeEffect | null
+   error: string | null
+   uniforms: Array<{ name: string; floats: number }>
++  children: string[]
+ }
+ 
+ const compiled = new WeakMap<CanvasKit, Map<string, CompiledEffect>>()
+ 
+-export function shaderSource(def: ShaderFillDef): string {
+-  return def.sksl ?? SHADER_PRESETS[def.preset ?? '']?.sksl ?? ''
+-}
+-
+-/** Compile (cached per CanvasKit instance) and describe an effect's uniforms. */
+-export function compileShaderFill(ck: CanvasKit, sksl: string): CompiledEffect {
++/** Compile an SkSL runtime effect (cached per CanvasKit instance). */
++export function compileShaderFill(ck: CanvasKit, sksl: string, lineOffset = 0): CompiledEffect {
+   let cache = compiled.get(ck)
+   if (!cache) {
+     cache = new Map()
+@@ -304,9 +451,7 @@ export function compileShaderFill(ck: CanvasKit, sksl: string): CompiledEffect {
+   const hit = cache.get(sksl)
+   if (hit) return hit
+   let error = ''
+-  const effect = ck.RuntimeEffect.Make(sksl, (message) => {
+-    error = message
+-  })
++  const effect = sksl ? ck.RuntimeEffect.Make(sksl, (message) => { error = message }) : null
+   const uniforms: CompiledEffect['uniforms'] = []
+   if (effect) {
+     for (let i = 0; i < effect.getUniformCount(); i++) {
+@@ -314,7 +459,13 @@ export function compileShaderFill(ck: CanvasKit, sksl: string): CompiledEffect {
+       uniforms.push({ name: effect.getUniformName(i), floats: u.columns * u.rows })
+     }
+   }
+-  const result = { effect: effect ?? null, error: effect ? null : error || 'compile failed', uniforms }
++  const children = [...sksl.matchAll(/^\s*uniform\s+shader\s+(\w+)\s*;/gm)].map((m) => m[1])
++  const result = {
++    effect: effect ?? null,
++    error: effect ? null : mapCompilerError(error || 'compile failed', lineOffset),
++    uniforms,
++    children
++  }
+   if (cache.size > 64) {
+     for (const entry of cache.values()) entry.effect?.delete()
+     cache.clear()
+@@ -323,31 +474,417 @@ export function compileShaderFill(ck: CanvasKit, sksl: string): CompiledEffect {
+   return result
+ }
+ 
++/** Translate (GLSL) and compile a shader definition; `error` explains either failure. */
++export function compileShaderDef(ck: CanvasKit, def: ShaderFillDef): CompiledEffect & { prepared: PreparedShader } {
++  const p = prepareShader(def)
++  if (p.error) return { effect: null, error: p.error, uniforms: [], children: [], prepared: p }
++  return { ...compileShaderFill(ck, p.sksl, p.lineOffset), prepared: p }
++}
++
+ /** Delete every compiled effect for this CanvasKit instance (renderer teardown). */
+ export function disposeShaderFills(ck: CanvasKit): void {
+   const cache = compiled.get(ck)
+-  if (!cache) return
+-  for (const entry of cache.values()) entry.effect?.delete()
+-  compiled.delete(ck)
++  if (cache) {
++    for (const entry of cache.values()) entry.effect?.delete()
++    compiled.delete(ck)
++  }
++  const images = sdfCaches.get(ck)
++  if (images) {
++    for (const entry of images.values()) entry.image.delete()
++    sdfCaches.delete(ck)
++  }
+ }
+ 
+-function uniformData(def: ShaderFillDef, layout: CompiledEffect['uniforms'], width: number, height: number) {
+-  const defaults = def.preset ? (SHADER_PRESETS[def.preset]?.uniforms ?? {}) : {}
+-  const values: Record<string, number | number[]> = { ...defaults, ...def.uniforms, u_size: [width, height] }
+-  const data: number[] = []
+-  for (const { name, floats } of layout) {
+-    const value = values[name]
+-    for (let i = 0; i < floats; i++) {
+-      data.push(Array.isArray(value) ? (value[i] ?? 0) : i === 0 && typeof value === 'number' ? value : 0)
++// ── Controls (the Layer panel) ───────────────────────────────────────────
++
++export interface UniformControl extends UniformSpec {
++  value: number[]
++  /** The preset's default when the definition sets nothing. */
++  preset_default?: number[]
++}
++
++/** Author-facing uniforms of a shader with their current values (built-ins left out). */
++export function shaderControls(def: ShaderFillDef): UniformControl[] {
++  const p = prepareShader(def)
++  const presetUniforms = def.preset ? (SHADER_PRESETS[def.preset]?.uniforms ?? {}) : {}
++  return p.uniforms
++    .filter((u) => u.role === 'value' && u.floats > 0 && !u.name.startsWith('_td_'))
++    .map((u) => {
++      const set = def.uniforms?.[u.name] ?? presetUniforms[u.name]
++      const value = set === undefined ? (u.default ?? new Array<number>(u.floats).fill(0)) : Array.isArray(set) ? set : [set]
++      return { ...u, value: value.slice(0, u.floats) }
++    })
++}
++
++// ── Runtime inputs: clock and pointer ────────────────────────────────────
++
++const clock = { time: null as number | null, mouse: null as { x: number; y: number } | null }
++
++/** The animation loop sets the frame time (seconds) so every node shares it. */
++export function setProceduralTime(seconds: number | null): void {
++  clock.time = seconds
++}
++
++/** The pointer in page (scene) coordinates, or null when it is off the canvas. */
++export function setProceduralMouse(point: { x: number; y: number } | null): void {
++  clock.mouse = point
++}
++
++export function proceduralTime(): number {
++  if (clock.time !== null) return clock.time
++  return typeof performance !== 'undefined' ? performance.now() / 1000 : 0
++}
++
++// ── Backdrop and SDF inputs ──────────────────────────────────────────────
++
++let backdropDepth = 0
++
++/**
++ * What is painted behind `node`, as a picture in the node's own pixels: every
++ * earlier sibling of the node and of each ancestor, plus each ancestor's own
++ * fills, drawn in paint order. Ancestor rotation is not applied.
++ */
++function makeBackdropShader(r: SkiaRenderer, graph: SceneGraph, node: SceneNode): Shader | null {
++  if (backdropDepth > 0) return null
++  const scene = sceneRenderer
++  if (!scene) return null
++  const chain: SceneNode[] = []
++  let current: SceneNode | undefined = node
++  while (current && current.type !== 'CANVAS') {
++    chain.unshift(current)
++    current = current.parentId ? graph.getNode(current.parentId) : undefined
++  }
++  const page = current
++  if (!page) return null
++  const abs = graph.getAbsolutePosition(node.id)
++  const ck = r.ck
++  const w = Math.max(1, node.width)
++  const h = Math.max(1, node.height)
++  const bounds = ck.LTRBRect(0, 0, w, h)
++  const recorder = new ck.PictureRecorder()
++  const canvas = recorder.beginRecording(bounds)
++  backdropDepth++
++  try {
++    canvas.translate(-abs.x, -abs.y)
++    let parent: SceneNode = page
++    let px = 0
++    let py = 0
++    for (const next of chain) {
++      for (const childId of parent.childIds) {
++        if (childId === next.id) break
++        scene.renderNode(r, canvas, graph, childId, {}, px, py)
++      }
++      if (next.id === node.id) break
++      scene.renderNodeSelf(r, canvas, graph, next.id, {})
++      canvas.translate(next.x, next.y)
++      px += next.x
++      py += next.y
++      parent = next
++    }
++  } finally {
++    backdropDepth--
++  }
++  const picture = recorder.finishRecordingAsPicture()
++  recorder.delete()
++  try {
++    return picture.makeShader(ck.TileMode.Clamp, ck.TileMode.Clamp, ck.FilterMode.Linear, undefined, bounds)
++  } finally {
++    picture.delete()
++  }
++}
++
++/** Renderer entry points used for the backdrop (registered by the scene module, avoiding an import cycle). */
++let sceneRenderer: {
++  renderNode: (r: SkiaRenderer, canvas: import('canvaskit-wasm').Canvas, graph: SceneGraph, id: string, overlays: object, px: number, py: number) => void
++  renderNodeSelf: (r: SkiaRenderer, canvas: import('canvaskit-wasm').Canvas, graph: SceneGraph, id: string, overlays: object) => void
++  drawNodeShape: (r: SkiaRenderer, canvas: import('canvaskit-wasm').Canvas, node: SceneNode) => void
++} | null = null
++
++export function registerProceduralSceneRenderer(renderer: NonNullable<typeof sceneRenderer>): void {
++  sceneRenderer = renderer
++}
++
++
++/**
++ * A CPU surface that works in every CanvasKit build the app ships: the editor's
++ * browser build has no `MakeSurface` (its CPU helper is not compiled in), so the
++ * pixels live in a CanvasKit-owned buffer as in the raster exporter.
++ */
++function withRasterSurface<T>(ck: CanvasKit, width: number, height: number, draw: (surface: import('canvaskit-wasm').Surface) => T): T | null {
++  const pixels = ck.Malloc(Uint8Array, width * height * 4)
++  const surface = ck.MakeRasterDirectSurface(
++    { width, height, colorType: ck.ColorType.RGBA_8888, alphaType: ck.AlphaType.Premul, colorSpace: ck.ColorSpace.SRGB },
++    pixels,
++    width * 4
++  )
++  if (!surface) {
++    ck.Free(pixels)
++    return null
++  }
++  try {
++    surface.getCanvas().clear(ck.TRANSPARENT)
++    return draw(surface)
++  } finally {
++    surface.delete()
++    ck.Free(pixels)
++  }
++}
++
++const SDF_MAX = 256
++/** Last step reached while rasterising an outline (diagnostics). */
++export let sdfStep = ''
++// Per CanvasKit instance: the editor's view and its exporter can run different
++// CanvasKit builds, and an image from one heap is garbage in another.
++const sdfCaches = new WeakMap<CanvasKit, Map<string, { image: CKImage; range: number; scale: number }>>()
++
++function sdfCacheFor(ck: CanvasKit) {
++  let cache = sdfCaches.get(ck)
++  if (!cache) {
++    cache = new Map()
++    sdfCaches.set(ck, cache)
++  }
++  return cache
++}
++
++/** 1D squared Euclidean distance transform (Felzenszwalb & Huttenlocher). */
++function edt1d(f: Float64Array, n: number, d: Float64Array, v: Int32Array, z: Float64Array): void {
++  let k = 0
++  v[0] = 0
++  z[0] = -Infinity
++  z[1] = Infinity
++  for (let q = 1; q < n; q++) {
++    let s = (f[q] + q * q - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k])
++    while (s <= z[k]) {
++      k--
++      s = (f[q] + q * q - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k])
+     }
++    k++
++    v[k] = q
++    z[k] = s
++    z[k + 1] = Infinity
++  }
++  k = 0
++  for (let q = 0; q < n; q++) {
++    while (z[k + 1] < q) k++
++    d[q] = (q - v[k]) * (q - v[k]) + f[v[k]]
+   }
+-  return data
+ }
+ 
+-export function makeShaderFill(r: SkiaRenderer, def: ShaderFillDef, width: number, height: number): Shader | null {
+-  const program = compileShaderFill(r.ck, shaderSource(def))
++/** Distance (pixels) from every cell to the nearest cell where `inside[i] === target`. */
++export function distanceField(inside: Uint8Array, w: number, h: number, target: 0 | 1): Float64Array {
++  const INF = 1e20
++  const grid = new Float64Array(w * h)
++  for (let i = 0; i < w * h; i++) grid[i] = inside[i] === target ? 0 : INF
++  const n = Math.max(w, h)
++  const f = new Float64Array(n)
++  const d = new Float64Array(n)
++  const v = new Int32Array(n)
++  const z = new Float64Array(n + 1)
++  for (let x = 0; x < w; x++) {
++    for (let y = 0; y < h; y++) f[y] = grid[y * w + x]
++    edt1d(f, h, d, v, z)
++    for (let y = 0; y < h; y++) grid[y * w + x] = d[y]
++  }
++  for (let y = 0; y < h; y++) {
++    for (let x = 0; x < w; x++) f[x] = grid[y * w + x]
++    edt1d(f, w, d, v, z)
++    for (let x = 0; x < w; x++) grid[y * w + x] = Math.sqrt(d[x])
++  }
++  return grid
++}
++
++/** Signed distance (node pixels, negative inside) sampled on a grid, for SDF inputs and export. */
++export function shapeDistanceField(r: SkiaRenderer, node: SceneNode) {
++  const ck = r.ck
++  const w = Math.max(1, node.width)
++  const h = Math.max(1, node.height)
++  const scale = Math.min(1, SDF_MAX / Math.max(w, h))
++  const sw = Math.max(1, Math.round(w * scale))
++  const sh = Math.max(1, Math.round(h * scale))
++  // A margin of outside cells: an outline that touches the box edge is still
++  // an edge (without it the nearest "outside" cell of a tangent point is far).
++  const pad = 2
++  const pw = sw + pad * 2
++  const ph = sh + pad * 2
++  const renderer = sceneRenderer
++  if (!renderer) return null
++  sdfStep = 'surface'
++  const pixels = withRasterSurface(ck, pw, ph, (surface) => {
++    sdfStep = 'draw'
++    const canvas = surface.getCanvas()
++    canvas.save()
++    canvas.translate(pad, pad)
++    canvas.scale(sw / w, sh / h)
++    renderer.drawNodeShape(r, canvas, node)
++    canvas.restore()
++    surface.flush()
++    sdfStep = 'read'
++    const read = canvas.readPixels(0, 0, {
++      width: pw,
++      height: ph,
++      colorType: ck.ColorType.RGBA_8888,
++      alphaType: ck.AlphaType.Unpremul,
++      colorSpace: ck.ColorSpace.SRGB
++    })
++    return read instanceof Uint8Array ? new Uint8Array(read) : null
++  })
++  if (!pixels) return null
++  const inside = new Uint8Array(pw * ph)
++  for (let i = 0; i < pw * ph; i++) inside[i] = pixels[i * 4 + 3] > 127 ? 1 : 0
++  const toInside = distanceField(inside, pw, ph, 1)
++  const toOutside = distanceField(inside, pw, ph, 0)
++  const signed = new Float32Array(sw * sh)
++  for (let y = 0; y < sh; y++) {
++    for (let x = 0; x < sw; x++) {
++      const i = (y + pad) * pw + x + pad
++      signed[y * sw + x] = (inside[i] ? -(toOutside[i] - 0.5) : toInside[i] - 0.5) / (sw / w)
++    }
++  }
++  return { width: sw, height: sh, signed, range: Math.max(w, h) / 2 }
++}
++
++/** Distances packed into 8 bits: v = 0.5 + d / (2 * range), in the red channel. */
++export function encodeDistanceField(field: { width: number; height: number; signed: Float32Array; range: number }): Uint8Array {
++  const out = new Uint8Array(field.width * field.height * 4)
++  for (let i = 0; i < field.signed.length; i++) {
++    const v = Math.round(Math.min(1, Math.max(0, 0.5 + field.signed[i] / (2 * field.range))) * 255)
++    out[i * 4] = v
++    out[i * 4 + 1] = v
++    out[i * 4 + 2] = v
++    out[i * 4 + 3] = 255
++  }
++  return out
++}
++
++function geometryKey(node: SceneNode): string {
++  const blobs = node.fillGeometry?.reduce((sum, g) => sum + (g.commandsBlob?.length ?? 0), 0) ?? 0
++  return `${node.id}:${node.type}:${node.width}x${node.height}:${node.cornerRadius}:${blobs}`
++}
++
++function makeSdfShader(r: SkiaRenderer, node: SceneNode): { shader: Shader; range: number } | null {
++  let step = 'start'
++  try {
++    return makeSdfShaderInner(r, node, (s) => { step = s })
++  } catch (error) {
++    // An SDF input that cannot be built paints as "far outside" rather than failing the render.
++    console.warn(`[procedural] sdf input unavailable (${step}/${sdfStep}):`, error)
++    return null
++  }
++}
++
++function makeSdfShaderInner(r: SkiaRenderer, node: SceneNode, at: (step: string) => void): { shader: Shader; range: number } | null {
++  const key = geometryKey(node)
++  const sdfCache = sdfCacheFor(r.ck)
++  let entry = sdfCache.get(key)
++  if (!entry) {
++    at('field')
++    const field = shapeDistanceField(r, node)
++    if (!field) {
++      console.warn(`[procedural] sdf input unavailable: the outline was not rasterised (${sdfStep})`)
++      return null
++    }
++    const bytes = encodeDistanceField(field)
++    at('image')
++    const image = r.ck.MakeImage(
++      { width: field.width, height: field.height, colorType: r.ck.ColorType.RGBA_8888, alphaType: r.ck.AlphaType.Unpremul, colorSpace: r.ck.ColorSpace.SRGB },
++      bytes,
++      field.width * 4
++    )
++    if (!image) return null
++    if (sdfCache.size > 32) {
++      for (const e of sdfCache.values()) e.image.delete()
++      sdfCache.clear()
++    }
++    entry = { image, range: field.range, scale: field.width / Math.max(1, node.width) }
++    sdfCache.set(key, entry)
++  }
++  at('shader')
++  const shader = entry.image.makeShaderOptions(
++    r.ck.TileMode.Clamp,
++    r.ck.TileMode.Clamp,
++    r.ck.FilterMode.Linear,
++    r.ck.MipmapMode.None,
++    r.ck.Matrix.scaled(1 / entry.scale, 1 / entry.scale)
++  )
++  return { shader, range: entry.range }
++}
++
++// ── Shader fills ─────────────────────────────────────────────────────────
++
++function uniformValue(
++  spec: UniformSpec | undefined,
++  name: string,
++  def: ShaderFillDef,
++  env: { width: number; height: number; time: number; mouse: [number, number]; sdfRange: number }
++): number | number[] | undefined {
++  if (name === '_td_sdf_range') return env.sdfRange
++  const role = spec?.role ?? 'value'
++  if (role === 'resolution') return [env.width, env.height, 1]
++  if (role === 'time') return env.time
++  if (role === 'mouse') return [env.mouse[0], env.mouse[1], 0, 0]
++  const presetUniforms = def.preset ? (SHADER_PRESETS[def.preset]?.uniforms ?? {}) : {}
++  return def.uniforms?.[name] ?? presetUniforms[name] ?? spec?.default
++}
++
++const TRANSPARENT_SKSL = 'half4 main(float2 p) { return half4(0); }'
++
++/** A transparent child shader (the browser build's Shader.MakeColor is not usable here). */
++function transparentShader(ck: CanvasKit): Shader {
++  const effect = compileShaderFill(ck, TRANSPARENT_SKSL).effect
++  if (!effect) throw new Error('cannot build a transparent shader')
++  return effect.makeShader([])
++}
++
++export interface ShaderEnv {
++  graph?: SceneGraph
++  node?: SceneNode
++}
++
++export function makeShaderFill(r: SkiaRenderer, def: ShaderFillDef, width: number, height: number, env: ShaderEnv = {}): Shader | null {
++  const program = compileShaderDef(r.ck, def)
+   if (!program.effect) return null
+-  return program.effect.makeShader(uniformData(def, program.uniforms, width, height))
++  const p = program.prepared
++  const specs = new Map(p.uniforms.map((u) => [u.name, u]))
++  let mouse: [number, number] = [-1, -1]
++  if (clock.mouse && env.graph && env.node) {
++    const abs = env.graph.getAbsolutePosition(env.node.id)
++    mouse = [clock.mouse.x - abs.x, clock.mouse.y - abs.y]
++    if (p.lang === 'glsl') mouse = [mouse[0], height - mouse[1]]
++  }
++  const children: Shader[] = []
++  const owned: Shader[] = []
++  let sdfRange = Math.max(width, height) / 2
++  for (const name of program.children) {
++    const role = specs.get(name)?.role
++    let child: Shader | null = null
++    if (name === '_td_sdf' || role === 'sdf') {
++      const sdf = env.node ? makeSdfShader(r, env.node) : null
++      if (sdf) {
++        child = sdf.shader
++        sdfRange = sdf.range
++      }
++    } else if (role === 'backdrop' && env.graph && env.node) {
++      child = makeBackdropShader(r, env.graph, env.node)
++    }
++    child ??= transparentShader(r.ck)
++    children.push(child)
++    owned.push(child)
++  }
++  const data: number[] = []
++  const envValues = { width, height, time: proceduralTime(), mouse, sdfRange }
++  for (const { name, floats } of program.uniforms) {
++    const value = uniformValue(specs.get(name), name, def, envValues)
++    for (let i = 0; i < floats; i++) {
++      data.push(Array.isArray(value) ? (value[i] ?? 0) : i === 0 && typeof value === 'number' ? value : 0)
++    }
++  }
++  try {
++    return children.length
++      ? program.effect.makeShaderWithChildren(data, children)
++      : program.effect.makeShader(data)
++  } finally {
++    for (const c of owned) c.delete()
++  }
+ }
+ 
+ // ── Mesh gradients ───────────────────────────────────────────────────────
+@@ -372,7 +909,6 @@ export function meshPatches(def: MeshFillDef, width: number, height: number) {
+   const g = meshGrid(def, width, height)
+   const smooth = def.smooth !== false
+   const at = (row: number, col: number) => g[Math.min(def.rows - 1, Math.max(0, row))][Math.min(def.columns - 1, Math.max(0, col))]
+-  // Catmull-Rom tangent along a row (dc) or a column (dr), one-sided at the edges.
+   const tangent = (row: number, col: number, dr: number, dc: number): P => {
+     const a = at(row - dr, col - dc)
+     const b = at(row + dr, col + dc)
+@@ -392,21 +928,17 @@ export function meshPatches(def: MeshFillDef, width: number, height: number) {
+   const patches: Array<{ cubics: number[]; corners: [number, number, number, number] }> = []
+   for (let row = 0; row < def.rows - 1; row++) {
+     for (let col = 0; col < def.columns - 1; col++) {
+-      const tl = at(row, col)
+-      const tr = at(row, col + 1)
+-      const br = at(row + 1, col + 1)
+-      const bl = at(row + 1, col)
+       const pts: P[] = [
+-        tl,
++        at(row, col),
+         handle(row, col, 0, 1, row, col + 1, 1),
+         handle(row, col + 1, 0, 1, row, col, -1),
+-        tr,
++        at(row, col + 1),
+         handle(row, col + 1, 1, 0, row + 1, col + 1, 1),
+         handle(row + 1, col + 1, 1, 0, row, col + 1, -1),
+-        br,
++        at(row + 1, col + 1),
+         handle(row + 1, col + 1, 0, 1, row + 1, col, -1),
+         handle(row + 1, col, 0, 1, row + 1, col + 1, 1),
+-        bl,
++        at(row + 1, col),
+         handle(row + 1, col, 1, 0, row, col, -1),
+         handle(row, col, 1, 0, row + 1, col, 1)
+       ]
+@@ -431,7 +963,6 @@ export function makeMeshFill(r: SkiaRenderer, def: MeshFillDef, width: number, h
+     for (const patch of meshPatches(def, width, height)) {
+       const colors = patch.corners.map((i) => {
+         const c = def.points[i].color
+-        // drawPatch interpolates colours; the paint's alpha is applied by the fill pass.
+         return ck.Color4f(c[0], c[1], c[2], c[3])
+       })
+       canvas.drawPatch(patch.cubics, colors, null, ck.BlendMode.Dst, paint)
+@@ -448,14 +979,22 @@ export function makeMeshFill(r: SkiaRenderer, def: MeshFillDef, width: number, h
+   }
+ }
+ 
+-/** Set `r.fillPaint`'s shader for a procedural fill; false = paint the fallback colour. */
+-export function applyProceduralFill(r: SkiaRenderer, fill: Fill, node: SceneNode): boolean {
++/** Set `r.fillPaint`'s shader for a procedural fill; false = paint the paint's own colour. */
++export function applyProceduralFill(r: SkiaRenderer, fill: Fill, node: SceneNode, graph?: SceneGraph): boolean {
+   const def = proceduralFillOf(node, fill)
+   if (!def) return false
+-  const shader =
+-    def.kind === 'shader'
+-      ? makeShaderFill(r, def, node.width, node.height)
+-      : makeMeshFill(r, def, node.width, node.height)
++  // Inputs that render other nodes (the backdrop) run before the paint is set up.
++  let shader: Shader | null = null
++  try {
++    shader =
++      def.kind === 'shader'
++        ? makeShaderFill(r, def, node.width, node.height, { graph, node })
++        : makeMeshFill(r, def, node.width, node.height)
++  } catch (error) {
++    // A fill that cannot be built paints its fallback colour instead of failing the frame.
++    console.warn('[procedural] fill not rendered:', error instanceof Error ? error.stack || error.message : error)
++    return false
++  }
+   if (!shader) return false
+   try {
+     r.fillPaint.setColor(r.ck.Color4f(1, 1, 1, 1))
+@@ -465,3 +1004,113 @@ export function applyProceduralFill(r: SkiaRenderer, fill: Fill, node: SceneNode
+   }
+   return true
+ }
++
++// ── Rasterising (SVG/PDF export, HTML fallback) ──────────────────────────
++
++/**
++ * A PNG of one procedural fill over the node's box (not clipped to its shape —
++ * the caller clips). `scale` multiplies the node size.
++ */
++export function rasterizeProceduralFill(
++  r: SkiaRenderer,
++  graph: SceneGraph,
++  node: SceneNode,
++  fill: Fill,
++  scale = 2
++): Uint8Array | null {
++  const def = proceduralFillOf(node, fill)
++  if (!def) return null
++  const w = Math.max(1, Math.round(node.width * scale))
++  const h = Math.max(1, Math.round(node.height * scale))
++  return withRasterSurface(r.ck, w, h, (surface) => {
++    const canvas = surface.getCanvas()
++    canvas.scale(w / Math.max(1, node.width), h / Math.max(1, node.height))
++    if (!applyProceduralFill(r, fill, node, graph)) return null
++    r.fillPaint.setAlphaf(1)
++    canvas.drawRect(r.ck.LTRBRect(0, 0, node.width, node.height), r.fillPaint)
++    r.fillPaint.setShader(null)
++    surface.flush()
++    const image = surface.makeImageSnapshot()
++    try {
++      return image.encodeToBytes(r.ck.ImageFormat.PNG, 100)
++    } finally {
++      image.delete()
++    }
++  })
++}
++
++/** The SVG/PDF writer asks this for procedural fills (set by the app, which has a renderer). */
++export type ProceduralRasterizer = (graph: SceneGraph, node: SceneNode, fill: Fill) => Uint8Array | null
++let rasterizer: ProceduralRasterizer | null = null
++
++export function setProceduralRasterizer(fn: ProceduralRasterizer | null): void {
++  rasterizer = fn
++}
++
++export function proceduralRasterizer(): ProceduralRasterizer | null {
++  return rasterizer
++}
++
++/** PNG of what is painted behind `node` (the `@backdrop` input), in the node's pixels. */
++export function rasterizeBackdrop(r: SkiaRenderer, graph: SceneGraph, node: SceneNode, scale = 1): Uint8Array | null {
++  const shader = makeBackdropShader(r, graph, node)
++  if (!shader) return null
++  return rasterizeShader(r, shader, node.width, node.height, scale)
++}
++
++/** PNG of the node's signed distance field (red channel, see `encodeDistanceField`) and its range. */
++export function rasterizeDistanceField(r: SkiaRenderer, node: SceneNode): { png: Uint8Array; range: number } | null {
++  const field = shapeDistanceField(r, node)
++  if (!field) return null
++  const image = r.ck.MakeImage(
++    { width: field.width, height: field.height, colorType: r.ck.ColorType.RGBA_8888, alphaType: r.ck.AlphaType.Unpremul, colorSpace: r.ck.ColorSpace.SRGB },
++    encodeDistanceField(field),
++    field.width * 4
++  )
++  if (!image) return null
++  try {
++    const png = image.encodeToBytes(r.ck.ImageFormat.PNG, 100)
++    return png ? { png, range: field.range } : null
++  } finally {
++    image.delete()
++  }
++}
++
++function rasterizeShader(r: SkiaRenderer, shader: Shader, width: number, height: number, scale: number): Uint8Array | null {
++  const w = Math.max(1, Math.round(width * scale))
++  const h = Math.max(1, Math.round(height * scale))
++  const paint = new r.ck.Paint()
++  try {
++    return withRasterSurface(r.ck, w, h, (surface) => {
++      const canvas = surface.getCanvas()
++      canvas.scale(w / Math.max(1, width), h / Math.max(1, height))
++      paint.setShader(shader)
++      canvas.drawRect(r.ck.LTRBRect(0, 0, width, height), paint)
++      surface.flush()
++      const image = surface.makeImageSnapshot()
++      try {
++        return image.encodeToBytes(r.ck.ImageFormat.PNG, 100)
++      } finally {
++        image.delete()
++      }
++    })
++  } finally {
++    paint.delete()
++    shader.delete()
++  }
++}
++
++/** Texture inputs for exports (set by the app together with the rasteriser). */
++export interface ProceduralTextures {
++  backdrop: (graph: SceneGraph, node: SceneNode) => Uint8Array | null
++  sdf: (node: SceneNode) => { png: Uint8Array; range: number } | null
++}
++let textures: ProceduralTextures | null = null
++
++export function setProceduralTextures(value: ProceduralTextures | null): void {
++  textures = value
++}
++
++export function proceduralTextures(): ProceduralTextures | null {
++  return textures
++}
+diff --git a/packages/core/src/canvas/index.ts b/packages/core/src/canvas/index.ts
+index 95ff6a44..12228143 100644
+--- a/packages/core/src/canvas/index.ts
++++ b/packages/core/src/canvas/index.ts
+@@ -15,20 +15,4 @@ export { hitTestGuides, type GuideHit } from './guides/hit-test'
+ export type { GuideOverlayState, GuidePreview, GuideSelection } from './guides/types'
+ export { canvasLabelForeground } from './labels/color'
+ export { SkiaRenderer, type RenderOverlays, type RulerTheme } from './renderer'
+-export {
+-  applyProceduralFill,
+-  compileShaderFill,
+-  listShaderPresets,
+-  MESH_MAX_POINTS,
+-  normalizeProceduralFill,
+-  parseProceduralColor,
+-  proceduralFillOf,
+-  proceduralKey,
+-  PROCEDURAL_KEY_PREFIX,
+-  PROCEDURAL_NAMESPACE,
+-  SHADER_PRESETS,
+-  shaderSource,
+-  type MeshFillDef,
+-  type ProceduralFillDef,
+-  type ShaderFillDef
+-} from './gradients/procedural'
++export * from './gradients/procedural'
+diff --git a/packages/core/src/canvas/renderer/tiles/controller.ts b/packages/core/src/canvas/renderer/tiles/controller.ts
+index b2049385..da1719ad 100644
+--- a/packages/core/src/canvas/renderer/tiles/controller.ts
++++ b/packages/core/src/canvas/renderer/tiles/controller.ts
+@@ -71,6 +71,19 @@ export class TiledSceneController {
+     })
+   }
+ 
++  /**
++   * Re-render a node's tiles on the next frame without a new content generation
++   * (animated shader fills: the scene version, and with it autosave, stays put).
++   */
++  refreshNode(nodeId: string): void {
++    const index = this.index
++    if (!index || !this.pageId) return
++    for (const chunk of index.getChunksDependingOnNode(nodeId)) {
++      this.pictureCache.invalidate(chunk.id)
++      this.tileCache.invalidateBounds(this.pageId, chunk, this.contentGeneration)
++    }
++  }
++
+   invalidateStructure(): void {
+     this.invalidate()
+   }
+diff --git a/packages/core/src/canvas/scene.ts b/packages/core/src/canvas/scene.ts
+index bdadc8b1..b1c97276 100644
+--- a/packages/core/src/canvas/scene.ts
++++ b/packages/core/src/canvas/scene.ts
+@@ -20,7 +20,8 @@ import { vectorNetworkToCenterlinePath } from '#core/vector'
+ 
+ import { figmaBlendModeToSkia, needsIsolatedBlendLayer } from './blend'
+ import { renderBooleanOperation } from './boolean'
+-import { drawVectorMultiStyleFills, paintFills } from './fills'
++import { drawNodeShape, drawVectorMultiStyleFills, paintFills } from './fills'
++import { registerProceduralSceneRenderer } from './gradients/procedural'
+ import { drawLayoutGrids } from './layout-grids'
+ import { renderMaskedChildIds } from './masks'
+ import type { SkiaRenderer, RenderOverlays } from './renderer'
+@@ -981,3 +982,10 @@ export function renderText(r: SkiaRenderer, canvas: Canvas, node: SceneNode, fil
+ 
+   canvas.restore()
+ }
++
++// Shader fills with a backdrop / SDF input render other nodes and the node's own outline.
++registerProceduralSceneRenderer({
++  renderNode: (r, canvas, graph, id, overlays, px, py) => renderNode(r, canvas, graph, id, overlays as RenderOverlays, px, py),
++  renderNodeSelf: (r, canvas, graph, id, overlays) => renderNodeSelf(r, canvas, graph, id, overlays as RenderOverlays),
++  drawNodeShape
++})
+diff --git a/packages/core/src/io/formats/raster/render.ts b/packages/core/src/io/formats/raster/render.ts
+index a2bb298f..12c0e5b3 100644
+--- a/packages/core/src/io/formats/raster/render.ts
++++ b/packages/core/src/io/formats/raster/render.ts
+@@ -2,6 +2,7 @@ import type { CanvasKit, Canvas } from 'canvaskit-wasm'
+ 
+ import {
+   getWorldMatrix,
++  type Fill,
+   type Mat3,
+   type SceneGraph,
+   type SceneNode
+@@ -9,6 +10,7 @@ import {
+ import { computeDescendantVisualBounds } from '@open-pencil/scene-graph/geometry'
+ 
+ import type { SkiaRenderer } from '#core/canvas'
++import { prepareShader, proceduralFillOf } from '#core/canvas/gradients/procedural'
+ import type { RenderColorSpace } from '#core/color/management'
+ import { extractExportGraph, findPageId } from '#core/io/subgraph'
+ 
+@@ -27,6 +29,11 @@ function ensureSinglePageSelection(graph: SceneGraph, pageId: string, nodeIds: s
+   return nodeIds.every((nodeId) => findPageId(graph, nodeId) === pageId)
+ }
+ 
++function fillUsesBackdrop(node: SceneNode, fill: Fill): boolean {
++  const def = fill.customEffectId ? proceduralFillOf(node, fill) : null
++  return def?.kind === 'shader' && prepareShader(def).usesBackdrop
++}
++
+ function nodeNeedsSceneBackdrop(graph: SceneGraph, nodeId: string): boolean {
+   const node = graph.getNode(nodeId)
+   if (!node) return false
+@@ -34,6 +41,8 @@ function nodeNeedsSceneBackdrop(graph: SceneGraph, nodeId: string): boolean {
+   if (node.effects.some((effect) => effect.visible && effect.type === 'BACKGROUND_BLUR')) {
+     return true
+   }
++  // A shader fill that samples @backdrop needs what is painted behind it.
++  if (node.fills.some((fill) => fill.visible && fillUsesBackdrop(node, fill))) return true
+   return node.childIds.some((childId) => nodeNeedsSceneBackdrop(graph, childId))
+ }
+ 
+diff --git a/packages/core/src/io/formats/svg/defs.ts b/packages/core/src/io/formats/svg/defs.ts
+index 52224bfa..41f21740 100644
+--- a/packages/core/src/io/formats/svg/defs.ts
++++ b/packages/core/src/io/formats/svg/defs.ts
+@@ -1,5 +1,6 @@
+ import type { Effect, Fill, SceneGraph, SceneNode } from '@open-pencil/scene-graph'
+ import type { Color } from '@open-pencil/scene-graph/primitives'
++import { proceduralFillOf, proceduralRasterizer } from '#core/canvas/gradients/procedural'
+ 
+ import { encodeBase64 } from '#core/bytes'
+ import { colorToHex } from '#core/color'
+@@ -203,9 +204,43 @@ export function createFilterDef(
+   }
+ }
+ 
++/** A shader / mesh fill as a raster pattern (the app registers the rasteriser; else the fallback colour). */
++function createProceduralPattern(
++  fill: Fill,
++  node: SceneNode,
++  ctx: SVGExportContext
++): { id: string; node: SVGNode } | null {
++  const raster = proceduralRasterizer()
++  const png = raster ? raster(ctx.graph, node, fill) : null
++  if (!png) return null
++  const id = nextDefId(ctx, 'fx')
++  return {
++    id,
++    node: svg(
++      'pattern',
++      { id, patternUnits: 'userSpaceOnUse', width: round(node.width), height: round(node.height) },
++      svg('image', {
++        href: `data:image/png;base64,${encodeBase64(png)}`,
++        width: round(node.width),
++        height: round(node.height),
++        preserveAspectRatio: 'none'
++      })
++    )
++  }
++}
++
+ export function resolveFill(fill: Fill, node: SceneNode, ctx: SVGExportContext): string | null {
+   if (!fill.visible) return null
+ 
++  if (fill.customEffectId && proceduralFillOf(node, fill)) {
++    const pattern = createProceduralPattern(fill, node, ctx)
++    if (pattern) {
++      ctx.defs.push(pattern.node)
++      return `url(#${pattern.id})`
++    }
++    return formatColor(fill.color, fill.opacity, ctx.colorSpace)
++  }
++
+   if (fill.type === 'SOLID') {
+     return formatColor(fill.color, fill.opacity, ctx.colorSpace)
+   }
+diff --git a/packages/fig/src/node-change/export-node.ts b/packages/fig/src/node-change/export-node.ts
+index 358f044a..fe944e5b 100644
+--- a/packages/fig/src/node-change/export-node.ts
++++ b/packages/fig/src/node-change/export-node.ts
+@@ -624,6 +624,13 @@ function convertColorVarAssetRefs<T>(values: T, assetRefToVarGuid: Map<string, G
+   return converted.some((value, index) => value !== values[index]) ? (converted as T) : values
+ }
+ 
++/** A paint linked to a telecode procedural-fill definition (plugin data `telecode/fill:<id>`). */
++function procedurallyLinked(node: SceneNode, fill: SceneNode['fills'][number]): boolean {
++  if (fill.type !== 'CUSTOM' || !fill.customEffectId) return false
++  const key = `telecode/fill:${fill.customEffectId}`
++  return node.pluginData.some((e) => e.pluginId === 'telecode' && e.key === key && !!e.value)
++}
++
+ function applyInstancePayload(
+   context: SceneNodeToKiwiContext,
+   node: SceneNode,
+@@ -888,7 +895,12 @@ function applyNodeVisualProps(
+       applyColorVariableBinding(
+         context,
+         node,
+-        context.fillToKiwiPaint(fill),
++        procedurallyLinked(node, fill)
++          ? // A telecode shader / mesh fill is written as SOLID (its colour is the
++            // fallback other readers paint); customEffectId + the plugin-data
++            // definition keep the rest. Figma's own CUSTOM paints are left alone.
++            { ...context.fillToKiwiPaint(fill), type: 'SOLID' }
++          : context.fillToKiwiPaint(fill),
+         `fills/${index}/color`
+       )
+     )
+diff --git a/tests/engine/render/canvas/procedural-inputs.test.ts b/tests/engine/render/canvas/procedural-inputs.test.ts
+new file mode 100644
+index 00000000..a4ffba52
+--- /dev/null
++++ b/tests/engine/render/canvas/procedural-inputs.test.ts
+@@ -0,0 +1,221 @@
++import { describe, expect, test } from 'bun:test'
++import { dirname, join } from 'node:path'
++import { fileURLToPath } from 'node:url'
++
++import type { CanvasKit } from 'canvaskit-wasm'
++
++import type { Fill } from '@open-pencil/scene-graph'
++import { SceneGraph } from '@open-pencil/scene-graph'
++
++import {
++  compileShaderDef,
++  distanceField,
++  glslForWebGL,
++  normalizeProceduralFill,
++  parseUniforms,
++  prepareShader,
++  rasterizeProceduralFill,
++  setProceduralMouse,
++  setProceduralRasterizer,
++  setProceduralTime,
++  shaderControls,
++  skslToGLSL,
++  translateGLSL
++} from '#core/canvas/gradients/procedural'
++import { SkiaRenderer } from '#core/canvas/renderer'
++import { renderNodesToSVG } from '#core/io/formats/svg'
++
++import { expectDefined } from '#tests/helpers/assert'
++
++let cachedCk: CanvasKit | null = null
++async function initCanvasKit(): Promise<CanvasKit> {
++  if (cachedCk) return cachedCk
++  const CanvasKitInit = (await import('canvaskit-wasm/full')).default
++  const dir = dirname(fileURLToPath(import.meta.resolve('canvaskit-wasm/full')))
++  cachedCk = await CanvasKitInit({ locateFile: (file: string) => join(dir, file) })
++  return cachedCk
++}
++
++const linked = (id: string, type: Fill['type'] = 'CUSTOM'): Fill => ({ type, color: { r: 0, g: 0, b: 1, a: 1 }, opacity: 1, visible: true, customEffectId: id })
++const defData = (id: string, def: unknown) => ({ pluginId: 'telecode', key: `telecode/fill:${id}`, value: JSON.stringify(def) })
++
++async function scene(size = 100) {
++  const ck = await initCanvasKit()
++  const renderer = new SkiaRenderer(ck, expectDefined(ck.MakeSurface(size, size), 'surface'))
++  const graph = new SceneGraph()
++  const page = expectDefined(graph.getPages()[0], 'page')
++  const draw = (ids: string[]) => {
++    const canvas = renderer.surface.getCanvas()
++    canvas.clear(ck.TRANSPARENT)
++    for (const id of ids) {
++      canvas.save()
++      const n = graph.getNode(id)!
++      canvas.translate(n.x, n.y)
++      renderer.renderShape(canvas, n, graph)
++      canvas.restore()
++    }
++    renderer.surface.flush()
++    const image = renderer.surface.makeImageSnapshot()
++    const pixels = expectDefined(
++      image.readPixels(0, 0, { width: size, height: size, colorType: ck.ColorType.RGBA_8888, alphaType: ck.AlphaType.Unpremul, colorSpace: ck.ColorSpace.SRGB }),
++      'pixels'
++    )
++    image.delete()
++    return (x: number, y: number) => Array.from(pixels.slice((y * size + x) * 4, (y * size + x) * 4 + 4))
++  }
++  return { ck, renderer, graph, page, draw }
++}
++
++const near = (a: number[], b: number[], tol = 12) => a.slice(0, b.length).every((v, i) => Math.abs(v - b[i]) <= tol)
++
++describe('GLSL → SkSL', () => {
++  test('Shadertoy mainImage with #define, iResolution, uniforms and y-up coordinates', async () => {
++    const t = translateGLSL(`#version 300 es
++precision highp float;
++#define HALF 0.5
++#define PICK(a, b, t) mix(a, b, step(HALF, t))
++uniform vec4 top; // @color @label Top
++void mainImage(out vec4 fragColor, in vec2 fragCoord) {
++  vec2 uv = fragCoord / iResolution.xy;
++  fragColor = PICK(vec4(1.0, 0.0, 0.0, 1.0), top, uv.y);
++}`)
++    expect(t.uniforms.map((u) => [u.name, u.role])).toEqual([['iResolution', 'resolution'], ['top', 'value']])
++    expect(t.uniforms[1]).toMatchObject({ color: true, label: 'Top', floats: 4 })
++    const { renderer, graph, page, draw } = await scene()
++    const def = { kind: 'shader', glsl: t && `#define HALF 0.5
++uniform vec4 top; // @color
++void mainImage(out vec4 fragColor, in vec2 fragCoord) {
++  vec2 uv = fragCoord / iResolution.xy;
++  fragColor = mix(vec4(1.0, 0.0, 0.0, 1.0), top, step(HALF, uv.y));
++}`, uniforms: { top: '#00ff00' } }
++    const node = graph.createNode('RECTANGLE', page.id, { width: 100, height: 100, fills: [linked('1:1')], pluginData: [defData('1:1', def)] })
++    const px = draw([node.id])
++    // GL's y is up: the top half is "top" (green), the bottom half red.
++    expect(near(px(50, 10), [0, 255, 0, 255])).toBe(true)
++    expect(near(px(50, 90), [255, 0, 0, 255])).toBe(true)
++    renderer.destroy()
++  })
++
++  test('void main() with gl_FragColor / gl_FragCoord', async () => {
++    const { renderer, graph, page, draw } = await scene()
++    const def = { kind: 'shader', source: `precision mediump float;
++uniform vec2 u_size;
++void main() { gl_FragColor = gl_FragCoord.x < u_size.x * 0.5 ? vec4(0.0, 0.0, 1.0, 1.0) : vec4(1.0, 1.0, 0.0, 1.0); }` }
++    expect(normalizeProceduralFill(def)).toMatchObject({ lang: 'glsl' })
++    const node = graph.createNode('RECTANGLE', page.id, { width: 100, height: 100, fills: [linked('1:2')], pluginData: [defData('1:2', def)] })
++    const px = draw([node.id])
++    expect(near(px(10, 50), [0, 0, 255])).toBe(true)
++    expect(near(px(90, 50), [255, 255, 0])).toBe(true)
++    renderer.destroy()
++  })
++
++  test('clear errors for what cannot be translated, with the author’s line numbers', async () => {
++    expect(() => translateGLSL('void mainImage(out vec4 c, in vec2 p) {\n  if (p.x > 1.0) discard;\n}')).toThrow(/line 2: `discard`/)
++    expect(() => translateGLSL('void mainImage(out vec4 c, in vec2 p) { c = vec4(dFdx(p.x)); }')).toThrow(/derivatives/)
++    expect(() => translateGLSL('#if 1\n#endif\nvoid main(){}')).toThrow(/line 1: #if is not supported/)
++    expect(() => translateGLSL('void helper() { vec4 x = gl_FragCoord; }\nvoid main() { gl_FragColor = vec4(1.0); }')).toThrow(/only supported inside main/)
++    expect(() => translateGLSL('vec4 f() { return vec4(1.0); }')).toThrow(/mainImage/)
++    const ck = await initCanvasKit()
++    const bad = normalizeProceduralFill({ kind: 'shader', glsl: 'void mainImage(out vec4 c, in vec2 p) {\n  c = vec4(nope);\n}' })
++    if (bad.kind !== 'shader') throw new Error('shader expected')
++    const r = compileShaderDef(ck, bad)
++    expect(r.error).toMatch(/line 2:.*nope/)
++    const refused = prepareShader(normalizeProceduralFill({ kind: 'shader', glsl: 'void mainImage(out vec4 c, in vec2 p) { discard; }' }) as never)
++    expect(refused.error).toMatch(/^GLSL not translated: line 1: `discard`/)
++  })
++})
++
++describe('shader inputs', () => {
++  test('@time animates and @mouse follows the pointer (node-local pixels)', async () => {
++    const { renderer, graph, page, draw } = await scene()
++    const def = { kind: 'shader', sksl: `uniform float t; // @time
++uniform float2 m; // @mouse
++half4 main(float2 p) { return half4(fract(t), distance(p, m) < 10.0 ? 1.0 : 0.0, 0.0, 1.0); }` }
++    const node = graph.createNode('RECTANGLE', page.id, { x: 0, y: 0, width: 100, height: 100, fills: [linked('2:1')], pluginData: [defData('2:1', def)] })
++    setProceduralTime(0.25)
++    setProceduralMouse({ x: 30, y: 70 })
++    let px = draw([node.id])
++    expect(px(5, 5)[0]).toBeGreaterThan(55)
++    expect(px(5, 5)[0]).toBeLessThan(75)
++    expect(px(30, 70)[1]).toBe(255)
++    expect(px(90, 10)[1]).toBe(0)
++    renderer.invalidateAllPictures()
++    setProceduralTime(0.75)
++    px = draw([node.id])
++    expect(px(5, 5)[0]).toBeGreaterThan(180)
++    setProceduralTime(null)
++    setProceduralMouse(null)
++    renderer.destroy()
++  })
++
++  test('@backdrop samples what is painted behind the layer', async () => {
++    const { renderer, graph, page, draw } = await scene()
++    const red = graph.createNode('RECTANGLE', page.id, { name: 'Behind', x: 0, y: 0, width: 50, height: 100, fills: [{ type: 'SOLID', color: { r: 1, g: 0, b: 0, a: 1 }, opacity: 1, visible: true }] })
++    const def = { kind: 'shader', sksl: `uniform shader backdrop; // @backdrop
++half4 main(float2 p) { half4 b = backdrop.eval(p); return half4(b.g, b.r, 1.0 - b.a, 1.0); }` }
++    const glass = graph.createNode('RECTANGLE', page.id, { name: 'Glass', x: 0, y: 0, width: 100, height: 100, fills: [linked('2:2')], pluginData: [defData('2:2', def)] })
++    const px = draw([red.id, glass.id])
++    // Over the red rectangle: its red becomes green; over nothing: blue.
++    expect(near(px(20, 50), [0, 255, 0])).toBe(true)
++    expect(near(px(80, 50), [0, 0, 255])).toBe(true)
++    renderer.destroy()
++  })
++
++  test('sdf(p) is the signed distance to the layer outline', async () => {
++    const { renderer, graph, page, draw } = await scene()
++    const def = { kind: 'shader', sksl: `half4 main(float2 p) { float d = sdf(p); return half4(d < -20.0 ? 1.0 : 0.0, d > -5.0 ? 1.0 : 0.0, 0.0, 1.0); }` }
++    expect(prepareShader(normalizeProceduralFill(def) as never).usesSdf).toBe(true)
++    const node = graph.createNode('ELLIPSE', page.id, { width: 100, height: 100, fills: [linked('2:3')], pluginData: [defData('2:3', def)] })
++    const px = draw([node.id])
++    expect(near(px(50, 50), [255, 0, 0])).toBe(true) // 50 px deep inside
++    expect(near(px(50, 2), [0, 255, 0])).toBe(true) // near the rim
++    renderer.destroy()
++    const field = distanceField(new Uint8Array([0, 0, 0, 0, 1, 0, 0, 0, 0]), 3, 3, 1)
++    expect(Array.from(field)).toEqual([Math.SQRT2, 1, Math.SQRT2, 1, 0, 1, Math.SQRT2, 1, Math.SQRT2])
++  })
++
++  test('controls come from the declared uniforms (built-ins left out)', () => {
++    const def = normalizeProceduralFill({ kind: 'shader', preset: 'aurora', uniforms: { u_scale: 4 } })
++    if (def.kind !== 'shader') throw new Error('shader expected')
++    const controls = shaderControls(def)
++    expect(controls.map((c) => c.name)).toEqual(['u_a', 'u_b', 'u_c', 'u_scale', 'u_speed', 'u_seed'])
++    expect(controls.find((c) => c.name === 'u_a')).toMatchObject({ color: true, label: 'Deep', floats: 4 })
++    expect(controls.find((c) => c.name === 'u_scale')).toMatchObject({ min: 0.5, max: 8, value: [4] })
++    expect(parseUniforms('uniform vec2 c; // @range 0 1 @label Centre')[0]).toMatchObject({ min: 0, max: 1, label: 'Centre', floats: 2 })
++  })
++})
++
++describe('export', () => {
++  test('SkSL → GLSL ES 1.0 and GLSL for WebGL', () => {
++    const g = skslToGLSL(`uniform float2 u_size;
++uniform shader backdrop;
++uniform float4 tint;
++half4 main(float2 p) { half4 b = backdrop.eval(p); return half4(b.rgb * tint.rgb, 1.0); }`)
++    expect(g).toContain('uniform sampler2D backdrop;')
++    expect(g).toContain('vec4 _td_entry(vec2 p)')
++    expect(g).toContain('_td_sample_backdrop(p)')
++    expect(g).toContain('gl_FragColor = _td_entry(')
++    expect(g).not.toMatch(/\bhalf4\b|\bfloat2\b/)
++    const w = glslForWebGL('void mainImage(out vec4 c, in vec2 f) { c = vec4(f / iResolution.xy, sin(iTime), 1.0); }')
++    expect(w).toContain('uniform vec3 iResolution;')
++    expect(w).toContain('uniform float iTime;')
++    expect(w).toContain('mainImage(c, gl_FragCoord.xy)')
++  })
++
++  test('PNG rasteriser and SVG / PDF export draw the real fill; .fig keeps it as a SOLID fallback', async () => {
++    const { renderer, graph, page } = await scene()
++    const def = { kind: 'mesh', colors: [['#ff0000', '#00ff00'], ['#0000ff', '#ffffff']] }
++    const mesh = graph.createNode('RECTANGLE', page.id, { width: 40, height: 40, fills: [linked('3:1', 'SOLID')], pluginData: [defData('3:1', { ...def, columns: 2, rows: 2, points: def.colors.flat().map((color) => ({ color })) })] })
++    const png = expectDefined(rasterizeProceduralFill(renderer, graph, mesh, mesh.fills[0], 1), 'png')
++    expect([...png.slice(1, 4)]).toEqual([0x50, 0x4e, 0x47])
++    setProceduralRasterizer((g, n, f) => rasterizeProceduralFill(renderer, g, n, f, 1))
++    const svg = expectDefined(renderNodesToSVG(graph, page.id, [mesh.id]), 'svg')
++    expect(svg).toContain('data:image/png;base64,')
++    expect(svg).toContain('url(#fx')
++    setProceduralRasterizer(null)
++    // Without a rasteriser the SVG still paints the fallback colour, not nothing.
++    const plain = expectDefined(renderNodesToSVG(graph, page.id, [mesh.id]), 'svg')
++    expect(plain).toMatch(/fill="#0000ff"/i)
++    renderer.destroy()
++  })
++})

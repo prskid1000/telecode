@@ -72,8 +72,8 @@ The tools you will use most:
 | Documents (§11) | `telecode_doc_list` · `telecode_doc_create` (`name`, `copy_from`, `open`) · `telecode_doc_open` (`doc`) |
 | Script nodes (§11) | `telecode_script_create` (`file`, `source`, `inputs`) · `telecode_script_set` · `telecode_script_run` · `telecode_script_list` · `telecode_script_convert` |
 | Theme axes (§11) | `telecode_theme_get` (`node_id`) · `telecode_theme_set` (`node_id`, `modes`) · `telecode_theme_active` (`modes`) |
-| Slots (§11) | `telecode_slot_create` (`node_id`, `name`) · `telecode_slot_list` · `telecode_slot_fill` (`instance_id`, `slot`, `jsx` / `node_ids` / `component_id`) · `telecode_slot_reset` |
-| Shader / mesh fills (§11) | `telecode_fill_set` (`node_id`, `kind`, …) · `telecode_fill_list` · `telecode_fill_remove` · `telecode_fill_presets` |
+| Slots (§11) | `telecode_slot_create` (`node_id`, `name`, `preferred`) · `telecode_slot_list` · `telecode_slot_fill` (`instance_id`, `slot`, `jsx` / `node_ids` / `component_id`) · `telecode_slot_reset` · `telecode_slot_suggest` · `telecode_slot_prefer` · `telecode_slot_remove` |
+| Shader / mesh fills (§11) | `telecode_fill_set` (`node_id`, `kind`, `source` / `preset`, …) · `telecode_fill_uniforms` · `telecode_fill_mesh_edit` · `telecode_fill_list` · `telecode_fill_remove` · `telecode_fill_presets` |
 | Code | `get_codegen_prompt` (read before exporting code) · `get_jsx` · `design_to_tokens` · `design_to_component_map` |
 
 `{"tool": "list"}` returns every tool with its argument schema. A misspelled tool fails with
@@ -214,17 +214,24 @@ Pin a frame's mode per axis with `telecode_theme_set` `{"node_id", "modes": {"Mo
 of another, and each alias resolves in that collection's mode for the node, so axes compose. Show a
 themed variant as a copy of the board with different modes, not as recoloured layers.
 
-**Slots.** `telecode_slot_create` `{"node_id": "<frame inside a component>", "name": "Body"}` makes
-that area a slot; each instance can then show its own content there with `telecode_slot_fill`
-`{"instance_id", "slot": "Body", "jsx": "<Frame …>…</Frame>"}` (or `node_ids`, or `component_id`) and
-go back with `telecode_slot_reset`. Content lives as components in the page's "Slot content" section;
-edit it there. Use slots for cards, dialogs and layouts whose inner content varies per use.
+**Slots.** `telecode_slot_create` `{"node_id": "<frame inside a component>", "name": "Body", "preferred":
+["Avatar"]}` makes that frame a slot; its children are the default content. Each instance fills it with
+its own real layers — `telecode_slot_fill` `{"instance_id", "slot": "Body", "jsx": "<Frame …>…</Frame>"}`
+(or `node_ids` to move layers in, or `component_id` to place an instance of a component; ask
+`telecode_slot_suggest` which components fit, preferred first). Those layers live inside the instance:
+edit them there with the ordinary tools (`telecode_slot_list` on the instance gives their ids), or render
+into the slot's node with `parent_id` — that fills it too. `telecode_slot_reset` `{"instance_id", "slot"}`
+brings the default back. Use slots for cards, dialogs and layouts whose inner content varies per use.
 
 **Shader and mesh fills.** `telecode_fill_set` adds a procedural fill: `{"kind": "mesh", "colors":
 [["#0b1026", "#3b2a7a"], ["#e0567a", "#f7b267"]]}` for a smooth mesh gradient (or `columns`, `rows`,
-`points` with `x`/`y` to warp it), or `{"kind": "shader", "preset": "aurora", "uniforms": {…}}`
-(`telecode_fill_presets` lists them) or your own SkSL in `sksl` (`half4 main(float2 p)`, `p` in node
-pixels, `uniform float2 u_size` supplied). A shader that does not compile is refused with the
-compiler's message — fix it and call again. Other tools, the HTML export and code export see only the
-fill's solid `fallback` colour, so use these for backgrounds and art, not for anything that must
-survive export.
+`points` with `x`/`y` to warp it; move points later with `telecode_fill_mesh_edit`), or `{"kind":
+"shader", "preset": "aurora"}` (`telecode_fill_presets` lists them) or your own `source` in SkSL (`half4
+main(float2 p)`, `p` in node pixels) or GLSL (Shadertoy `mainImage(out vec4 fragColor, in vec2
+fragCoord)` with iResolution / iTime / iMouse). Annotate uniforms so the user gets controls:
+`uniform vec4 base; // @color @label Base` · `uniform float speed; // @min 0 @max 3`; inputs: `// @time`
+(animates), `// @mouse`, `uniform shader backdrop; // @backdrop` (what is behind the layer) and `sdf(p)`
+(distance to the layer's outline, negative inside). Change values with `telecode_fill_uniforms`. A shader
+that does not translate or compile is refused with the message and your line numbers — fix it and call
+again. PNG, PDF, SVG and HTML exports show the real fill (HTML runs it live); other design tools that
+open the .fig see the solid `fallback` colour, and code export sees only that colour.

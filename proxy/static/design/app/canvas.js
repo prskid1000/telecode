@@ -268,8 +268,8 @@ function renderEditor(body, bar) {
   // Several canvas documents per project (0013) and script nodes (0015).
   const docs = mountDocs({ pid, bar, anchor: tb, reload: (doc) => { ready = false; status.textContent = "Loading the canvas…"; frame.src = editorUrl(doc); } });
   const scriptsUi = mountScripts({ pid, body, bar, layer, send, vp: () => vp });
-  // Theme axes (0016), slots (0017), shader / mesh fills (0018): canvas tools over /editor/call.
-  const extras = mountExtras({ pid, body, bar, vp: () => vp,
+  // Theme axes (0016), slots and shader / mesh fills (0017–0021): canvas tools over /editor/call.
+  const extras = mountExtras({ pid, body, bar, layer, vp: () => vp,
     callTool: async (tool, args = {}, timeout = 30) => (await api("POST", P_(pid) + "/editor/call", { tool, args, timeout }, { feature: "editorCall" })).result });
 
   const placedSrcs = () => new Set(Object.values(S.boards || {}).map((b) => b && b.src).filter(Boolean));
@@ -369,6 +369,7 @@ function renderEditor(body, bar) {
     if (d.source !== frame.contentWindow) return;
     const p = d.payload && typeof d.payload === "object" ? d.payload : d;
     if (scriptsUi.onMessage(d.type, p)) return;
+    if (extras.onMessage(d.type, p)) return;
     switch (d.type) {
       case "td-editor:ready":
         ready = true; status.textContent = p.page_name ? `Canvas · ${p.page_name}` : "Canvas";

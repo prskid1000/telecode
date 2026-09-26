@@ -89,8 +89,11 @@ Built once off-box with Bun from a pinned release tag plus `patches/open-pencil/
 | 0014 deterministic JSON mirror PUT to `…/docs/{doc}/canvas.json` after every save | git-friendly diffs of a binary `.fig` |
 | 0015 script nodes (sandboxed iframe + Worker, `@input` header, `telecode_script_*`) | generated / data-driven layers |
 | 0016 theme axes: cross-collection aliases resolve in the node's mode for that collection; `telecode_theme_*` | light/dark × brand × density |
-| 0017 component slots on instance-swap properties (`telecode_slot_*`) | per-instance content that survives `.fig` |
-| 0018 shader (SkSL runtime effect) and mesh-gradient (Coons patch) fills as CUSTOM paints + plugin data (`telecode_fill_*`) | procedural fills |
+| 0017 component slots (`telecode_slot_*`; its instance-swap model is replaced by 0020–0021) | slots |
+| 0018 shader (SkSL runtime effect) and mesh-gradient (Coons patch) fills as linked paints + plugin data (`telecode_fill_*`) | procedural fills |
+| 0019 shader inputs: GLSL → SkSL, `@time`, `@mouse`, `@backdrop`, `sdf()`, uniform annotations; SVG/PDF rasteriser; SOLID fallback paint in .fig | full shader fills |
+| 0020 per-instance slot content: sync leaves filled slots alone; `.fig` writes their layers under the instance (`isSlotContent`) and re-attaches them on load | slots that are real layers |
+| 0021 slot editing in place, hatching, suggestions; uniform / mesh-point editing; animation loop; live WebGL fills in the HTML export | the editing surface |
 
 - aiohttp serves `/design/editor/*` with `application/wasm` for `.wasm` and an `index.html` fallback.
 - The editor's built-in AI chat is pointed at the proxy (`openai-compatible`, base `…:1235/v1`) or replaced
@@ -172,7 +175,8 @@ Code panel, XPath query, lint, token/cluster analysis, JSX/SVG/PDF/PPTX/PNG/`.fi
 `.pen` import, 113 agent tools. Added by patches: `placeholder` "working…" frames, Slides panel +
 Present (0010–0011), several documents + JSON mirror (0013–0014), script nodes (0015), theme axes (0016),
 slots (0017), shader + mesh fills (0018) — the canvas bar's **Theme** menu and **Layer** panel
-(`app/canvas_extras.js`) drive the last three. Still open: keyboard map parity and the gaps listed per row
+(`app/canvas_extras.js`) drive the last three — per-uniform controls, mesh point handles on the canvas,
+hatched empty slots and a slot component menu included. Still open: keyboard map parity and the gaps listed per row
 in parity §B.
 
 ### 4.4 Design systems (creator)

@@ -1,7 +1,7 @@
 {
   "generated_by": "scripts/telecode-dump-tools.ts",
   "open_pencil_version": "0.15.1",
-  "count": 144,
+  "count": 149,
   "tools": [
     {
       "name": "get_selection",
@@ -6489,7 +6489,7 @@
     },
     {
       "name": "telecode_slot_create",
-      "description": "Make a layer inside a component a named slot (a card body, dialog actions): its children become the slot’s default-content component (in the page’s \"Slot content\" section) and the layer is replaced by an instance of it, exposed as an instance-swap property named after the slot. Existing instances follow. Returns the component’s slots.",
+      "description": "Mark a frame inside a component as a named slot (a card body, dialog actions). Its children stay as the default content every instance shows until it fills the slot. Instances fill it with real layers of their own, edited in place on the canvas and saved with the document. preferred = component names (or ids) suggested first for the slot. Returns the component’s slots.",
       "command": "telecode_slot_create",
       "effect": "write",
       "availability": "default",
@@ -6502,11 +6502,18 @@
         "properties": {
           "node_id": {
             "type": "string",
-            "description": "Frame / group / instance inside a component"
+            "description": "Frame inside a component"
           },
           "name": {
             "type": "string",
             "description": "Slot name (default: the layer name)"
+          },
+          "preferred": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Preferred components (names or ids)"
           },
           "document_id": {
             "type": "string",
@@ -6524,7 +6531,7 @@
     },
     {
       "name": "telecode_slot_list",
-      "description": "Slots. node_id = a component: {kind:\"component\", slots:[{name, node_id, default_component}]}; an instance: {kind:\"instance\", slots:[{name, filled, content_component_id, content_component}]}. Without node_id: {components, instances} with slots in the document.",
+      "description": "Slots. node_id = a component (or a layer in one): {kind:\"component\", slots:[{name, node_id, empty, default_content, preferred}]}; an instance (or its slot): {kind:\"instance\", slots:[{name, node_id (the slot inside the instance), filled, empty, content:[{id, name, type}], preferred}]}; anything else: {kind:\"none\"}. Without node_id: {components, instances}.",
       "command": "telecode_slot_list",
       "effect": "read",
       "availability": "default",
@@ -6537,7 +6544,7 @@
         "properties": {
           "node_id": {
             "type": "string",
-            "description": "Component or instance"
+            "description": "Component, instance or layer"
           },
           "document_id": {
             "type": "string",
@@ -6553,7 +6560,7 @@
     },
     {
       "name": "telecode_slot_fill",
-      "description": "Give one instance its own content for a slot: exactly one of jsx (Design JSX rendered into a new content component sized like the slot), node_ids (existing layers moved into one) or component_id (an existing component). Saved with the document (it is the instance-swap value). Edit the content by editing that component. A content component telecode made is deleted once nothing shows it. One undo step.",
+      "description": "Replace one instance’s content for a slot with its own layers: exactly one of jsx (Design JSX rendered into the slot), node_ids (existing layers moved in) or component_id (an instance of that component goes in — see telecode_slot_suggest). The content is real layers inside the instance: select and edit them on the canvas; drawing or dropping a layer into an unfilled slot fills it too. One undo step.",
       "command": "telecode_slot_fill",
       "effect": "write",
       "availability": "default",
@@ -6585,7 +6592,7 @@
           },
           "component_id": {
             "type": "string",
-            "description": "Existing component to show"
+            "description": "Component to place an instance of"
           },
           "document_id": {
             "type": "string",
@@ -6604,7 +6611,7 @@
     },
     {
       "name": "telecode_slot_reset",
-      "description": "Put the component’s default content back into an instance’s slot (all slots without slot). One undo step.",
+      "description": "Put the component’s default content back into one slot of an instance (every filled slot without slot). One undo step.",
       "command": "telecode_slot_reset",
       "effect": "write",
       "availability": "default",
@@ -6621,7 +6628,7 @@
           },
           "slot": {
             "type": "string",
-            "description": "Slot name (default: every slot)"
+            "description": "Slot name (default: every filled slot)"
           },
           "document_id": {
             "type": "string",
@@ -6638,8 +6645,119 @@
       }
     },
     {
+      "name": "telecode_slot_suggest",
+      "description": "Components for a slot: its preferred components first, then the document’s other components (never the host component). {slot, preferred, missing (preferred names not in the document), components:[{id, name, preferred, width, height}]}.",
+      "command": "telecode_slot_suggest",
+      "effect": "read",
+      "availability": "default",
+      "capabilities": [
+        "document:read"
+      ],
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "description": "Instance, component or slot layer"
+          },
+          "slot": {
+            "type": "string",
+            "description": "Slot name"
+          },
+          "document_id": {
+            "type": "string",
+            "description": "Optional OpenPencil document/tab ID to target"
+          },
+          "page_id": {
+            "type": "string",
+            "description": "Optional page ID to target within the document"
+          }
+        },
+        "required": [
+          "node_id",
+          "slot"
+        ]
+      }
+    },
+    {
+      "name": "telecode_slot_prefer",
+      "description": "Set a slot’s preferred components (names or ids; stored by name). One undo step.",
+      "command": "telecode_slot_prefer",
+      "effect": "write",
+      "availability": "default",
+      "capabilities": [
+        "document:write"
+      ],
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "description": "Component, instance or slot layer"
+          },
+          "slot": {
+            "type": "string",
+            "description": "Slot name"
+          },
+          "components": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Component names or ids"
+          },
+          "document_id": {
+            "type": "string",
+            "description": "Optional OpenPencil document/tab ID to target"
+          },
+          "page_id": {
+            "type": "string",
+            "description": "Optional page ID to target within the document"
+          }
+        },
+        "required": [
+          "node_id",
+          "slot",
+          "components"
+        ]
+      }
+    },
+    {
+      "name": "telecode_slot_remove",
+      "description": "Unmark a slot frame (its layers stay). One undo step.",
+      "command": "telecode_slot_remove",
+      "effect": "write",
+      "availability": "default",
+      "capabilities": [
+        "document:write"
+      ],
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "description": "The slot frame inside the component"
+          },
+          "document_id": {
+            "type": "string",
+            "description": "Optional OpenPencil document/tab ID to target"
+          },
+          "page_id": {
+            "type": "string",
+            "description": "Optional page ID to target within the document"
+          }
+        },
+        "required": [
+          "node_id"
+        ]
+      }
+    },
+    {
       "name": "telecode_fill_set",
-      "description": "Add (on top) or replace (index) a procedural fill. kind \"shader\": preset (see telecode_fill_presets) or sksl = a Skia runtime effect `half4 main(float2 p)` with p in the node’s pixels, `uniform float2 u_size` supplied, other uniforms from uniforms {name: number | [..] | \"#hex\"}; it is compiled first and refused with the compiler message. kind \"mesh\": a mesh gradient — colors: rows of colours (evenly spaced), or columns + rows + points [{x, y (0..1, warps the grid), color}] row-major, max 64 points, smooth (default true). Stored as a CUSTOM paint + plugin data, saved in the .fig; fallback is the solid colour other renderers (and the HTML export) show. One undo step.",
+      "description": "Add (on top) or replace (index) a procedural fill. kind \"shader\": preset (telecode_fill_presets) or source in SkSL (`half4 main(float2 p)`, p in the node’s pixels) or GLSL (Shadertoy `mainImage(out vec4 fragColor, in vec2 fragCoord)` or `void main()` with gl_FragColor; iResolution/iTime/iMouse/iChannel0, #define) — lang auto-detected. Uniforms by name {name: number | [..] | \"#hex\"}; annotate declarations for controls: `// @color @label X @min 0 @max 1 @step 0.1 @default ..`, inputs `// @time` (animates), `// @mouse`, `// @backdrop` (sampler/shader of what is behind the layer), and call `sdf(p)` for the signed distance to the layer outline. Translated and compiled first; refused with the error (line numbers of your source). kind \"mesh\": colors (rows of colours) or columns + rows + points [{x, y (0..1, warps), color}], max 64, smooth. Saved in the .fig as a solid paint (fallback, for other readers) + the definition. One undo step.",
       "command": "telecode_fill_set",
       "effect": "write",
       "availability": "default",
@@ -6670,9 +6788,25 @@
             "type": "string",
             "description": "Shader preset name"
           },
+          "source": {
+            "type": "string",
+            "description": "Shader source, SkSL or GLSL"
+          },
+          "lang": {
+            "enum": [
+              "sksl",
+              "glsl"
+            ],
+            "type": "string",
+            "description": "Source language (default: detected)"
+          },
+          "glsl": {
+            "type": "string",
+            "description": "GLSL source (same as source + lang glsl)"
+          },
           "sksl": {
             "type": "string",
-            "description": "SkSL source"
+            "description": "SkSL source (same as source + lang sksl)"
           },
           "uniforms": {
             "type": "object",
@@ -6733,7 +6867,7 @@
     },
     {
       "name": "telecode_fill_list",
-      "description": "With node_id: its fills; shader / mesh ones carry {kind, definition, error} (error = the SkSL compiler message). Without: {nodes:[{node_id, name, kinds, errors}]} for every node with a procedural fill.",
+      "description": "With node_id: its fills; shader / mesh ones carry {kind, definition, error}; shaders also {lang, animated, inputs:{time, mouse, backdrop, sdf}, controls:[{name, type, floats, color, label, min, max, step, value}], compiled_sksl (GLSL sources)}. Without: {nodes:[{node_id, name, kinds, errors, animated}]}.",
       "command": "telecode_fill_list",
       "effect": "read",
       "availability": "default",
@@ -6758,6 +6892,109 @@
           }
         },
         "required": []
+      }
+    },
+    {
+      "name": "telecode_fill_uniforms",
+      "description": "Merge uniform values into the shader fill at index ({name: number | [..] | \"#hex\"}); names the shader does not declare come back in unknown_uniforms. One undo step.",
+      "command": "telecode_fill_uniforms",
+      "effect": "write",
+      "availability": "default",
+      "capabilities": [
+        "document:write"
+      ],
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "description": "Node"
+          },
+          "index": {
+            "type": "number",
+            "description": "Fill index"
+          },
+          "uniforms": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "Uniform values by name"
+          },
+          "document_id": {
+            "type": "string",
+            "description": "Optional OpenPencil document/tab ID to target"
+          },
+          "page_id": {
+            "type": "string",
+            "description": "Optional page ID to target within the document"
+          }
+        },
+        "required": [
+          "node_id",
+          "index",
+          "uniforms"
+        ]
+      }
+    },
+    {
+      "name": "telecode_fill_mesh_edit",
+      "description": "Move / recolour points of the mesh fill at index: points [{i, x?, y? (0..1 of the node box), color?}]. phase \"set\" (default) is one undo step; a drag sends \"begin\", any number of \"move\" and \"end\" and becomes one undo step.",
+      "command": "telecode_fill_mesh_edit",
+      "effect": "write",
+      "availability": "default",
+      "capabilities": [
+        "document:write"
+      ],
+      "enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "description": "Node"
+          },
+          "index": {
+            "type": "number",
+            "description": "Fill index"
+          },
+          "phase": {
+            "enum": [
+              "set",
+              "begin",
+              "move",
+              "end"
+            ],
+            "type": "string",
+            "description": "Edit phase"
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "description": "[{i, x?, y?, color?}]"
+          },
+          "document_id": {
+            "type": "string",
+            "description": "Optional OpenPencil document/tab ID to target"
+          },
+          "page_id": {
+            "type": "string",
+            "description": "Optional page ID to target within the document"
+          }
+        },
+        "required": [
+          "node_id",
+          "index",
+          "points"
+        ]
       }
     },
     {
@@ -6798,7 +7035,7 @@
     },
     {
       "name": "telecode_fill_presets",
-      "description": "Built-in shader presets: [{name, description, uniforms (defaults)}].",
+      "description": "Built-in shader presets: [{name, description, lang, uniforms (defaults), animated, backdrop, sdf}].",
       "command": "telecode_fill_presets",
       "effect": "read",
       "availability": "default",

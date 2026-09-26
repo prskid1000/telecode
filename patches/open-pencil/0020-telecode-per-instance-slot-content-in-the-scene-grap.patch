@@ -1,0 +1,379 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Prithwiraj Samanta <prskid1000@gmail.com>
+Date: Sat, 26 Sep 2026 08:29:39 +0530
+Subject: [PATCH] telecode: per-instance slot content in the scene graph and
+ the .fig
+
+A slot frame (telecode/slot) filled by an instance (telecode/slots
+{filled}) keeps its own layers: instance sync and the .fig override
+propagation leave it alone, the writer stores a filled slot's layers under
+the instance with the schema's isSlotContent flag and the slot name, and
+the reader attaches them to the slot clone after population (populating
+the instance first when the lazy import skipped its page).
+---
+ packages/core/src/kiwi/fig/import.ts          |  64 ++++++++-
+ .../fig/src/instance-overrides/sync/clones.ts |   3 +-
+ .../src/instance-overrides/sync/propagate.ts  |   3 +
+ packages/fig/src/node-change/export-node.ts   |  38 +++++-
+ packages/scene-graph/src/index.ts             |   1 +
+ packages/scene-graph/src/instances.ts         |   5 +-
+ packages/scene-graph/src/slots.ts             | 125 ++++++++++++++++++
+ 7 files changed, 231 insertions(+), 8 deletions(-)
+ create mode 100644 packages/scene-graph/src/slots.ts
+
+diff --git a/packages/core/src/kiwi/fig/import.ts b/packages/core/src/kiwi/fig/import.ts
+index b8954aae..24189253 100644
+--- a/packages/core/src/kiwi/fig/import.ts
++++ b/packages/core/src/kiwi/fig/import.ts
+@@ -16,9 +16,10 @@ import {
+   setVariableColorResolver
+ } from '@open-pencil/fig/node-change'
+ import type { NodeChange, VariableDataValuesEntry, Color, GUID } from '@open-pencil/kiwi/fig/codec'
+-import { SceneGraph } from '@open-pencil/scene-graph'
++import { inSlotOf, prepareFilledSlot, SceneGraph } from '@open-pencil/scene-graph'
+ import type {
+   ComponentPropertyDefinition,
++  SceneNode,
+   VariableType,
+   VariableValue
+ } from '@open-pencil/scene-graph'
+@@ -554,9 +555,17 @@ export function importNodeChanges(
+     guidToNodeId.set(ncId, node.id)
+ 
+     for (const childId of getChildren(ncId)) {
++      // Slot content stored under an instance (telecode slots): attached to the
++      // slot's clone once the instance is populated, not as an instance child —
++      // population only runs on instances without children.
++      if (nodeType === 'INSTANCE' && (changeMap.get(childId) as { isSlotContent?: boolean } | undefined)?.isSlotContent) {
++        pendingSlotContent.push({ ncId: childId, instanceId: node.id })
++        continue
++      }
+       createSceneNode(childId, node.id)
+     }
+   }
++  const pendingSlotContent: Array<{ ncId: string; instanceId: string }> = []
+ 
+   importPages(graph, changeMap, parentMap, childrenMap, created, canvasIdToPageId, createSceneNode)
+ 
+@@ -590,6 +599,10 @@ export function importNodeChanges(
+   // Link imported instance children after population so linkage operates on the final tree state.
+   linkImportedInstanceChildren(graph)
+ 
++  if (pendingSlotContent.length > 0) {
++    attachImportedSlotContent(graph, pendingSlotContent, changeMap, guidToNodeId, blobs, createSceneNode)
++  }
++
+   if (activeRootIds)
+     rememberLazyFigImportContext(graph, changeMap, guidToNodeId, blobs, activeRootIds)
+ 
+@@ -597,3 +610,52 @@ export function importNodeChanges(
+   if (graph.getPages(true).length === 0) graph.addPage('Page 1')
+   return graph
+ }
++
++/**
++ * Put filled-slot content (telecode slots) back into the instances it belongs
++ * to: populate the instance if the lazy import skipped it, empty the slot clone
++ * of the component's default content once, build the stored subtree in it.
++ */
++function attachImportedSlotContent(
++  graph: SceneGraph,
++  pending: Array<{ ncId: string; instanceId: string }>,
++  changeMap: Map<string, NodeChange>,
++  guidToNodeId: Map<string, string>,
++  blobs: Uint8Array[],
++  createSceneNode: (ncId: string, parentId: string) => void
++): void {
++  const prepared = new Map<string, SceneNode | null>()
++  const created: string[] = []
++  for (const { ncId, instanceId } of pending) {
++    const instance = graph.getNode(instanceId)
++    const nc = changeMap.get(ncId) as NodeChange & { pluginData?: Array<{ pluginID: string; key: string; value: string }> }
++    if (!instance || !nc) continue
++    const slot = inSlotOf({
++      pluginData: (nc.pluginData ?? []).map((e) => ({ pluginId: e.pluginID, key: e.key, value: e.value }))
++    })
++    if (!slot) continue
++    if (instance.childIds.length === 0) {
++      graph.preserveSourceMetadataDuring(() => {
++        populateAndApplyOverrides(graph, changeMap as Map<string, InstanceNodeChange>, guidToNodeId, blobs, [instanceId])
++      })
++      linkImportedInstanceChildren(graph)
++    }
++    const key = `${instanceId}\u0000${slot}`
++    if (!prepared.has(key)) prepared.set(key, prepareFilledSlot(graph, instance, slot))
++    const clone = prepared.get(key)
++    if (!clone) continue
++    createSceneNode(ncId, clone.id)
++    const root = guidToNodeId.get(ncId)
++    const node = root ? graph.getNode(root) : undefined
++    if (!node) continue
++    // The slot name was only the file's link; the node is ordinary content now.
++    node.pluginData = node.pluginData.filter((e) => inSlotOf({ pluginData: [e] }) === null)
++    created.push(node.id)
++  }
++  // Content may hold instances of its own.
++  if (created.length) {
++    graph.preserveSourceMetadataDuring(() => {
++      populateAndApplyOverrides(graph, changeMap as Map<string, InstanceNodeChange>, guidToNodeId, blobs, created)
++    })
++  }
++}
+diff --git a/packages/fig/src/instance-overrides/sync/clones.ts b/packages/fig/src/instance-overrides/sync/clones.ts
+index c492fcf9..b4a1762c 100644
+--- a/packages/fig/src/instance-overrides/sync/clones.ts
++++ b/packages/fig/src/instance-overrides/sync/clones.ts
+@@ -1,4 +1,4 @@
+-import type { SceneGraph, SceneNode } from '@open-pencil/scene-graph'
++import { isFilledSlotClone, type SceneGraph, type SceneNode } from '@open-pencil/scene-graph'
+ 
+ import type { ProtectionMap } from '../patches'
+ import { overrideCandidates } from '../utils'
+@@ -60,6 +60,7 @@ export function syncChildrenDeep(
+     const srcNode = graph.getNode(src.childIds[i])
+     const tgtNode = graph.getNode(tgt.childIds[i])
+     if (!srcNode || !tgtNode || srcNode.type !== tgtNode.type) continue
++    if (isFilledSlotClone(graph, tgtNode)) continue
+ 
+     if (srcNode.type === 'INSTANCE' && srcNode.componentId !== tgtNode.componentId) {
+       recloneChildren(
+diff --git a/packages/fig/src/instance-overrides/sync/propagate.ts b/packages/fig/src/instance-overrides/sync/propagate.ts
+index fe321cf5..da942917 100644
+--- a/packages/fig/src/instance-overrides/sync/propagate.ts
++++ b/packages/fig/src/instance-overrides/sync/propagate.ts
+@@ -1,3 +1,4 @@
++import { isFilledSlotClone } from '@open-pencil/scene-graph'
+ import type { SceneGraph } from '@open-pencil/scene-graph'
+ 
+ import { isFieldProtected, type ProtectionMap } from '../patches'
+@@ -127,6 +128,8 @@ export function propagateOverridesTransitively(
+       visited.add(cloneId)
+       const node = graph.getNode(cloneId)
+       if (!node) continue
++      // A slot its instance filled keeps its own content (scene-graph ./slots).
++      if (isFilledSlotClone(graph, node)) continue
+ 
+       if (skip.has(cloneId)) {
+         // A directly overridden clone may still inherit effective text from an
+diff --git a/packages/fig/src/node-change/export-node.ts b/packages/fig/src/node-change/export-node.ts
+index fe944e5b..e643de11 100644
+--- a/packages/fig/src/node-change/export-node.ts
++++ b/packages/fig/src/node-change/export-node.ts
+@@ -6,7 +6,14 @@ import type {
+   SceneGraph,
+   SceneNode
+ } from '@open-pencil/scene-graph'
+-import { DEFAULT_STROKE_MITER_LIMIT, forEachInstanceOverride } from '@open-pencil/scene-graph'
++import {
++  DEFAULT_STROKE_MITER_LIMIT,
++  forEachInstanceOverride,
++  IN_SLOT_FIELD,
++  SLOT_NAMESPACE,
++  slotContentRoots,
++  slotNameOf
++} from '@open-pencil/scene-graph'
+ import type { Color, GUID, Matrix, Vector } from '@open-pencil/scene-graph/primitives'
+ 
+ import { effectiveFigmaRawNodeFields, effectiveFigmaSourcePayload } from '../source-metadata'
+@@ -1040,10 +1047,31 @@ export function sceneNodeToKiwiWithContext(
+   }
+ 
+   const result: KiwiNodeChange[] = [nc]
+-  const children =
+-    node.type === 'INSTANCE'
+-      ? []
+-      : context.graph.getChildren(node.id).filter((child) => !child.internalOnly)
++  if (node.type === 'INSTANCE') {
++    // An instance's children are derived from its component — except the content
++    // of slots it filled (telecode slots), which only exists here. Those subtrees
++    // are written under the instance with the schema's own `isSlotContent` flag
++    // and the slot name; the reader puts them back into the slot after population.
++    const roots = slotContentRoots(context.graph, node)
++    for (let i = 0; i < roots.length; i++) {
++      const [head, ...rest] = context.sceneNodeToKiwi(roots[i].node, guid, i, localIdCounter, context)
++      if (!head) continue
++      const tagged = head as KiwiNodeChange & { isSlotContent?: boolean }
++      tagged.isSlotContent = true
++      tagged.pluginData = [
++        ...((tagged.pluginData as KiwiNodeChange['pluginData']) ?? []).filter(
++          (e) => !(e.pluginID === SLOT_NAMESPACE && e.key === `${SLOT_NAMESPACE}/${IN_SLOT_FIELD}`)
++        ),
++        { pluginID: SLOT_NAMESPACE, key: `${SLOT_NAMESPACE}/${IN_SLOT_FIELD}`, value: roots[i].slot }
++      ] as KiwiNodeChange['pluginData']
++      result.push(tagged, ...rest)
++    }
++    return result
++  }
++  if (slotNameOf(context.graph, node) && node.componentId === null) {
++    (nc as KiwiNodeChange & { isSlot?: boolean }).isSlot = true
++  }
++  const children = context.graph.getChildren(node.id).filter((child) => !child.internalOnly)
+   for (let i = 0; i < children.length; i++) {
+     result.push(...context.sceneNodeToKiwi(children[i], guid, i, localIdCounter, context))
+   }
+diff --git a/packages/scene-graph/src/index.ts b/packages/scene-graph/src/index.ts
+index 1582bd0a..a207c173 100644
+--- a/packages/scene-graph/src/index.ts
++++ b/packages/scene-graph/src/index.ts
+@@ -29,6 +29,7 @@ export * from './guides'
+ export * from './layout-guides'
+ export * from './font-style'
+ export * from './shared-styles'
++export * from './slots'
+ export { default as TransformMatrix } from './matrix'
+ export type { Mat3 } from './matrix'
+ export { UndoManager, type UndoEntry, type UndoManagerOptions } from './undo'
+diff --git a/packages/scene-graph/src/instances.ts b/packages/scene-graph/src/instances.ts
+index 5466a2f8..e915723b 100644
+--- a/packages/scene-graph/src/instances.ts
++++ b/packages/scene-graph/src/instances.ts
+@@ -1,6 +1,7 @@
+ import type { SceneGraph, SceneNode } from './'
+ import { cloneNodeProps, copyEffects, copyFills, copyStrokes, copyStyleRuns } from './copy'
+ import type { NodeCloneMode } from './copy'
++import { isFilledSlotClone } from './slots'
+ import {
+   clearInstanceOverrides,
+   getInstanceOverride,
+@@ -297,7 +298,9 @@ function syncChildren(
+ 
+     if (
+       compChild.childIds.length > 0 &&
+-      !hasNodeInstanceOverride(overrides, instParentId, instChild.id, 'componentId')
++      !hasNodeInstanceOverride(overrides, instParentId, instChild.id, 'componentId') &&
++      // A slot the instance filled keeps its own content (see ./slots).
++      !isFilledSlotClone(graph, instChild)
+     ) {
+       syncChildren(graph, compChildId, instChild.id, overrides)
+     }
+diff --git a/packages/scene-graph/src/slots.ts b/packages/scene-graph/src/slots.ts
+new file mode 100644
+index 00000000..1aa024d0
+--- /dev/null
++++ b/packages/scene-graph/src/slots.ts
+@@ -0,0 +1,125 @@
++/**
++ * Component slots (telecode / TeleDesign), scene-graph side.
++ *
++ * A slot is a frame inside a component marked with shared plugin data
++ * `telecode` / `slot` = its name. Each instance holds a clone of that frame; an
++ * instance "fills" the slot by listing the name in its own plugin data
++ * `telecode` / `slots` = {"filled": [names]} and putting its own children into
++ * the clone. Two rules follow, and this module is where they live:
++ *
++ *  - instance sync never re-clones the component's default content into a
++ *    filled slot (`isFilledSlotClone`, checked by `syncChildren`);
++ *  - the .fig writer exports a filled slot's children as real nodes under the
++ *    instance, flagged `isSlotContent` (the .fig schema's own field) and tagged
++ *    with the slot name, and the reader puts them back into the clone after the
++ *    instance is populated — see `slotContentRoots` / `attachSlotContent`.
++ */
++import type { SceneGraph, SceneNode } from './'
++
++export const SLOT_NAMESPACE = 'telecode'
++export const SLOT_FIELD = 'slot'
++export const SLOTS_FIELD = 'slots'
++export const IN_SLOT_FIELD = 'in-slot'
++
++function pluginValue(node: SceneNode | undefined, field: string): string | null {
++  if (!node) return null
++  const encoded = `${SLOT_NAMESPACE}/${field}`
++  const entry = node.pluginData.find(
++    (e) => e.pluginId === SLOT_NAMESPACE && (e.key === encoded || e.key === field)
++  )
++  return entry?.value ? entry.value : null
++}
++
++/** The slot name of a component's slot frame, or of an instance's clone of one. */
++export function slotNameOf(graph: SceneGraph, node: SceneNode | undefined): string | null {
++  if (!node) return null
++  const own = pluginValue(node, SLOT_FIELD)
++  if (own && node.type !== 'INSTANCE') return own
++  if (node.type === 'INSTANCE') return null
++  const main = node.componentId ? graph.getNode(node.componentId) : undefined
++  return main && main.type !== 'INSTANCE' ? pluginValue(main, SLOT_FIELD) : null
++}
++
++/** Nearest INSTANCE ancestor (the instance whose component the node's clone comes from). */
++export function owningInstance(graph: SceneGraph, node: SceneNode | undefined): SceneNode | undefined {
++  let current = node?.parentId ? graph.getNode(node.parentId) : undefined
++  while (current) {
++    if (current.type === 'INSTANCE') return current
++    if (current.type === 'CANVAS') return undefined
++    current = current.parentId ? graph.getNode(current.parentId) : undefined
++  }
++  return undefined
++}
++
++export function filledSlotsOf(instance: SceneNode | undefined): string[] {
++  const raw = pluginValue(instance, SLOTS_FIELD)
++  if (!raw) return []
++  try {
++    const parsed = JSON.parse(raw) as { filled?: unknown }
++    return Array.isArray(parsed.filled) ? parsed.filled.filter((x): x is string => typeof x === 'string') : []
++  } catch {
++    return []
++  }
++}
++
++/** A slot clone inside an instance whose content is the instance's own. */
++export function isFilledSlotClone(graph: SceneGraph, node: SceneNode | undefined): boolean {
++  if (!node || node.type === 'INSTANCE') return false
++  const name = slotNameOf(graph, node)
++  if (!name) return false
++  return filledSlotsOf(owningInstance(graph, node)).includes(name)
++}
++
++/** Slot clones of `instance` (not those of nested instances), by slot name. */
++export function slotClones(graph: SceneGraph, instance: SceneNode): Map<string, SceneNode> {
++  const out = new Map<string, SceneNode>()
++  const walk = (id: string) => {
++    const node = graph.getNode(id)
++    if (!node) return
++    for (const childId of node.childIds) {
++      const child = graph.getNode(childId)
++      if (!child || child.type === 'INSTANCE') continue
++      const name = slotNameOf(graph, child)
++      if (name && !out.has(name)) out.set(name, child)
++      walk(childId)
++    }
++  }
++  walk(instance.id)
++  return out
++}
++
++/** For the .fig writer: {root node, slot name} for every filled slot's content of `instance`. */
++export function slotContentRoots(graph: SceneGraph, instance: SceneNode): Array<{ node: SceneNode; slot: string }> {
++  const filled = new Set(filledSlotsOf(instance))
++  if (!filled.size) return []
++  const out: Array<{ node: SceneNode; slot: string }> = []
++  for (const [slot, clone] of slotClones(graph, instance)) {
++    if (!filled.has(slot)) continue
++    for (const childId of clone.childIds) {
++      const child = graph.getNode(childId)
++      if (child && !child.internalOnly) out.push({ node: child, slot })
++    }
++  }
++  return out
++}
++
++export function inSlotOf(node: { pluginData?: Array<{ pluginId: string; key: string; value: string }> }): string | null {
++  const encoded = `${SLOT_NAMESPACE}/${IN_SLOT_FIELD}`
++  const entry = node.pluginData?.find(
++    (e) => e.pluginId === SLOT_NAMESPACE && (e.key === encoded || e.key === IN_SLOT_FIELD)
++  )
++  return entry?.value || null
++}
++
++/**
++ * For the .fig reader: after `instance` is populated, give its filled slots their
++ * content: returns the (emptied) clone to attach the stored subtree to.
++ */
++export function prepareFilledSlot(graph: SceneGraph, instance: SceneNode, slot: string): SceneNode | null {
++  const clone = slotClones(graph, instance).get(slot)
++  if (!clone) return null
++  // Call once per slot, before its stored content is attached: everything the
++  // population cloned in is the component's default content.
++  for (const childId of [...clone.childIds]) graph.deleteNode(childId)
++  return clone
++}

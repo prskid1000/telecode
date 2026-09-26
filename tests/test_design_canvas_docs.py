@@ -345,7 +345,9 @@ NEW_TOOLS = {
     "telecode_script_list": None, "telecode_script_convert": None,
     "telecode_theme_get": None, "telecode_theme_set": None, "telecode_theme_active": None,
     "telecode_slot_create": None, "telecode_slot_list": None, "telecode_slot_fill": None, "telecode_slot_reset": None,
+    "telecode_slot_suggest": None, "telecode_slot_prefer": None, "telecode_slot_remove": None,
     "telecode_fill_set": None, "telecode_fill_list": None, "telecode_fill_remove": None, "telecode_fill_presets": None,
+    "telecode_fill_uniforms": None, "telecode_fill_mesh_edit": None,
 }
 
 
@@ -358,13 +360,18 @@ def test_editor_tools_json_carries_the_canvas_feature_tools():
     assert by["telecode_fill_set"]["input_schema"]["required"] == ["node_id", "kind"]
     assert set(by["telecode_slot_fill"]["input_schema"]["properties"]) >= {"instance_id", "slot", "jsx", "node_ids", "component_id"}
     assert by["telecode_theme_set"]["effect"] == "write" and by["telecode_theme_get"]["effect"] == "read"
+    fill_set = by["telecode_fill_set"]["input_schema"]["properties"]
+    assert {"source", "lang", "glsl", "sksl"} <= set(fill_set)
+    assert set(by["telecode_fill_mesh_edit"]["input_schema"]["properties"]) >= {"node_id", "index", "phase", "points"}
+    assert "preferred" in by["telecode_slot_create"]["input_schema"]["properties"]
 
 
-def test_patch_series_carries_0013_to_0018():
+def test_patch_series_carries_0013_to_0021():
     names = sorted(p.name for p in (REPO / "patches" / "open-pencil").glob("*.patch"))
-    assert [n[:4] for n in names] == [f"{i:04d}" for i in range(1, 19)]
+    assert [n[:4] for n in names] == [f"{i:04d}" for i in range(1, 22)]
     tail = "\n".join(names[12:])
-    for word in ("several-canvas-documents", "JSON-mirror", "script-nodes", "theme-axes", "slots", "mesh-gradient"):
+    for word in ("several-canvas-documents", "JSON-mirror", "script-nodes", "theme-axes", "slots", "mesh-gradient",
+                 "shader-fill-inputs-GLSL", "per-instance-slot-content", "slots-edited-in-place"):
         assert word in tail, word
     for p in names[12:]:
         raw = (REPO / "patches" / "open-pencil" / p).read_bytes()
@@ -409,8 +416,13 @@ def test_shell_wires_the_canvas_extras():
     extras = (app / "canvas_extras.js").read_text(encoding="utf-8")
     assert 'from "./canvas_extras.js"' in canvas and "extras.onSelection(selNodes)" in canvas
     for tool in ("telecode_theme_get", "telecode_theme_set", "telecode_theme_active", "telecode_slot_list",
-                 "telecode_slot_create", "telecode_slot_fill", "telecode_slot_reset", "telecode_fill_set",
-                 "telecode_fill_list", "telecode_fill_remove", "telecode_fill_presets"):
+                 "telecode_slot_create", "telecode_slot_fill", "telecode_slot_reset", "telecode_slot_suggest",
+                 "telecode_slot_prefer", "telecode_slot_remove", "telecode_fill_set", "telecode_fill_list",
+                 "telecode_fill_remove", "telecode_fill_presets", "telecode_fill_uniforms", "telecode_fill_mesh_edit"):
         assert tool in extras, tool
+    # Overlays: hatched empty slots, mesh point handles; generated uniform controls.
+    for marker in ("td-editor:slots", "td-slot-hatch", "td-mesh-dot", 'type: "range"', 'type: "color"', 'class: "pad"'):
+        assert marker in extras, marker
+    assert "extras.onMessage(d.type, p)" in canvas
     ws = (app / "workspace.js").read_text(encoding="utf-8")
     assert "isInternal" in ws and "docs/canvases.json" in ws

@@ -3,7 +3,7 @@
   "tag": "v0.15.1",
   "commit": "6cf1748e31a0e43d3794d43abbd003ce9caa3c6f",
   "base": "/design/editor/",
-  "built_at": "2026-09-26T01:53:38Z",
+  "built_at": "2026-09-26T03:51:55Z",
   "bun": "1.4.2",
   "patches": [
     {
@@ -77,12 +77,24 @@
     {
       "name": "0018-telecode-shader-and-mesh-gradient-fills.patch",
       "sha256": "5c28372e318f7137faca1d2271eb5ff4ef91d5c0affc01a432218a505cc06596"
+    },
+    {
+      "name": "0019-telecode-shader-fill-inputs-GLSL-time-mouse-backdrop.patch",
+      "sha256": "6e0df4faed5f2cee58fc3ec8b1f0c15cd5864d2145a9fd16fc30ac2ec224119e"
+    },
+    {
+      "name": "0020-telecode-per-instance-slot-content-in-the-scene-grap.patch",
+      "sha256": "fc07b7e5b9b621cca5d7e8d297ce32a479efc97f5344d6ab7a6ed09f1ef31946"
+    },
+    {
+      "name": "0021-telecode-slots-edited-in-place-slot-hatching-and-sug.patch",
+      "sha256": "f9d4fedd0b3c7ef5fbf84799cb88d2f1ad532a941ec90b69c9b04cece52a8214"
     }
   ],
-  "tools": 144,
+  "tools": 149,
   "open_pencil_version": "0.15.1",
   "third_party_packages": 195,
   "files": 588,
-  "bytes": 29132524,
-  "index_sha256": "a911604dc4758cbc7d2f5e823dae5e76e068f22b8ab6ea56d37f706a80e07fb9"
+  "bytes": 29175216,
+  "index_sha256": "278cc4880e46e74ae8bd0180228567526196b08a2c79c867b8811cef6bc641e6"
 }

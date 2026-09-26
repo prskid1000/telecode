@@ -1,0 +1,1 @@
+import{n as e}from"./render-L5jsSUdJ.js";export{e as renderJSX};

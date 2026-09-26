@@ -338,7 +338,7 @@ Specimen cards render through the preview origin: W5 adds nothing there; the fro
 ## 10. W6 canvas editor (open-pencil) — as built
 
 `python tools/build_open_pencil.py` (`--check` = patches still apply; `--tag` = try another release) →
-clones into `data/design/.open-pencil-src`, applies `patches/open-pencil/0001…0018`, bun install + build,
+clones into `data/design/.open-pencil-src`, applies `patches/open-pencil/0001…0021`, bun install + build,
 vendors `proxy/static/design/editor/` (+ `NOTICE`, `BUILD_INFO.json`) and dumps
 `services/design/editor_tools.json`. Never edit inside the source dir — every build hard-resets it.
 
@@ -384,14 +384,23 @@ vendors `proxy/static/design/editor/` (+ `NOTICE`, `BUILD_INFO.json`) and dumps
 - **Theme axes (0016):** `telecode_theme_get {node_id?}` → `{explicit:{Collection: Mode}, resolved:{Collection:
   {mode, from, from_id}}, axes}` (or `{axes:[{collection, modes, default_mode, active_mode}]}`) ·
   `telecode_theme_set {node_id, modes:{Collection: Mode|null}}` · `telecode_theme_active {modes}`.
-- **Slots (0017):** `telecode_slot_create {node_id, name?}` · `telecode_slot_list {node_id?}` → `{kind:
-  "component"|"instance"|"none", slots}` (without node_id `{components, instances}`) · `telecode_slot_fill
-  {instance_id, slot, jsx | node_ids | component_id}` · `telecode_slot_reset {instance_id, slot?}`. Plugin data
-  `telecode/slot` (the slot instance in the component), `telecode/slot-content`, `telecode/slot-library`.
-- **Procedural fills (0018):** `telecode_fill_set {node_id, kind:"shader"|"mesh", index?, fallback?, preset? |
-  sksl?, uniforms?, colors? | columns, rows, points, smooth?}` · `telecode_fill_list {node_id?}` ·
-  `telecode_fill_remove {node_id, index}` · `telecode_fill_presets`. Stored as a CUSTOM paint
-  (`customEffectId`) + plugin data `telecode/fill:<customEffectId>` (JSON definition).
+- **Slots (0017, 0020–0021):** `telecode_slot_create {node_id, name?, preferred?}` · `telecode_slot_list
+  {node_id?}` → `{kind: "component"|"instance"|"none", slots}` (without node_id `{components, instances}`) ·
+  `telecode_slot_fill {instance_id, slot, jsx | node_ids | component_id}` (an instance of the component goes in) ·
+  `telecode_slot_reset {instance_id, slot?}` · `telecode_slot_suggest {node_id, slot}` → `{preferred, missing,
+  components:[{id, name, preferred}]}` · `telecode_slot_prefer {node_id, slot, components}` · `telecode_slot_remove
+  {node_id}`. Plugin data: `telecode/slot` (slot frame), `telecode/slot-preferred` (names), `telecode/slots`
+  `{filled}` (instance); in the .fig, filled content is written under the instance with `isSlotContent` +
+  `telecode/in-slot`. Editor → host `td-editor:slots {items:[{node_id, slot, owner_id, owner, kind, x, y, width,
+  height}]}` (empty slots on the page).
+- **Procedural fills (0018–0021):** `telecode_fill_set {node_id, kind:"shader"|"mesh", index?, fallback?, preset? |
+  source (+ lang sksl|glsl) | glsl | sksl, uniforms?, colors? | columns, rows, points, smooth?}` · `telecode_fill_list
+  {node_id?}` (shaders: `lang, animated, inputs{time, mouse, backdrop, sdf}, controls[{name, type, floats, color,
+  label, min, max, step, value}], compiled_sksl`) · `telecode_fill_uniforms {node_id, index, uniforms}` ·
+  `telecode_fill_mesh_edit {node_id, index, phase: set|begin|move|end, points:[{i, x?, y?, color?}]}` ·
+  `telecode_fill_remove {node_id, index}` · `telecode_fill_presets`. Stored as a linked paint (`customEffectId`;
+  CUSTOM in the graph, SOLID in the .fig) + plugin data `telecode/fill:<customEffectId>` (JSON definition). HTML
+  export: `data-td-fx` + inline WebGL runtime, `live_fills` / `fx_warnings` in the result.
 - The shell drives 0016–0018 from `app/canvas_extras.js` (canvas bar **Theme** menu, **Layer** panel) through
   `POST …/editor/call` — no dedicated REST routes.
 - Settings: `design.editor.allow_eval` (default false — open-pencil's `eval` tool), `design.editor.disabled_tools` (list).
