@@ -5,7 +5,7 @@
     optionally removes the venv + data dir.
 #>
 param(
-    [string]$InstallDir = "$env:USERPROFILE\.telecode"
+    [string]$InstallDir = $PSScriptRoot
 )
 
 function Ok($msg)   { Write-Host "  [OK] $msg"   -ForegroundColor Green }

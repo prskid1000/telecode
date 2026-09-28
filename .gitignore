@@ -19,3 +19,6 @@ telecode-venv/
 
 # llama.cpp checkout for the Patched Build card (multi-GB, disposable)
 build/
+
+# llama.cpp release install (llamacpp.binary default ./llama/llama-server.exe; updater overlays here)
+llama/

@@ -123,7 +123,7 @@
 
   "llamacpp": {
     "enabled": false,
-    "binary": "llama-server",
+    "binary": "./llama/llama-server.exe",
     "_comment_custom_build": "Tray -> llama.cpp -> Patched Build. Checks out llama.cpp at an upstream tag, applies patches/llama.cpp/*.patch, builds, and overlays the result onto the release binary (leaving a .bak-<ts> so Version Manager -> Restore undoes it). For verifying a patch before proposing it upstream, not for maintaining a fork. Note an Update Now silently replaces a custom build.",
     "custom_build": {
       "source_dir": "",

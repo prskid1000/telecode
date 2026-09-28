@@ -10,7 +10,7 @@ Repo rules that apply (from CLAUDE.md): only `settings.json` for config, read th
 validated and every caller-supplied URL goes through `proxy/media_fetch.py`; subprocesses via
 `subprocess.Popen(..., creationflags=CREATE_NO_WINDOW)` like the task handlers.
 
-Python: `C:\Users\prith\.telecode\telecode-venv\Scripts\python.exe` (Bash tool has no `python` with
+Python: `D:\Projects\telecode\telecode-venv\Scripts\python.exe` (Bash tool has no `python` with
 aiohttp; use PowerShell for the venv). Node 24 is on PATH in PowerShell (nvm). Edge:
 `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`. ffmpeg on PATH. Test with a scratch
 settings dir: `$env:TELECODE_SETTINGS = "<scratch>\settings.json"` containing `{}` — never touch the real

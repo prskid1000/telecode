@@ -38,7 +38,7 @@
   },
   "llamacpp": {
     "enabled": true,
-    "binary": "llama-server",
+    "binary": "./llama/llama-server.exe",
     "host": "127.0.0.1",
     "port": 1234,
     "auto_start": false,
@@ -475,7 +475,7 @@
     },
     "roots": [
       {
-        "path": "C:\\Users\\prith\\.docgraph",
+        "path": "D:\\Projects\\docgraph",
         "watch": true,
         "pinned": true
       }

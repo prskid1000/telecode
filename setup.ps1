@@ -22,7 +22,7 @@
     manually from a terminal).
 #>
 param(
-    [string]$InstallDir  = "$env:USERPROFILE\.telecode",
+    [string]$InstallDir  = $PSScriptRoot,
     [string]$LlamaBinary = "llama-server",
     [string]$DocgraphRoot = "",   # auto-detected; pass to override
     [switch]$SkipPin,
@@ -63,6 +63,8 @@ if (Test-Path $pyenvRoot) {
     }
 }
 foreach ($p in @(
+    "$env:LOCALAPPDATA\Programs\Python\Python314\python.exe",
+    "$env:LOCALAPPDATA\Programs\Python\Python313\python.exe",
     "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
     "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
     "$env:LOCALAPPDATA\Programs\Python\Python310\python.exe"
@@ -180,7 +182,8 @@ if (-not (Test-Path $settingsFile)) {
 # Auto-detection order:
 #   1. -DocgraphRoot param
 #   2. ~/.local/bin/docgraph.bat shim → parse the venv exe path → repo = ../../..
-#   3. ~/.docgraph (convention; matches docgraph/setup.ps1 default)
+#   3. <parent of InstallDir>\docgraph (sibling checkout, e.g. D:\Projects\docgraph)
+#   4. ~/.docgraph (legacy convention)
 
 function Resolve-DocgraphRoot {
     param([string]$Override)
@@ -198,7 +201,7 @@ function Resolve-DocgraphRoot {
             if (Test-Path $repo) { return $repo }
         }
     }
-    $conv = Join-Path $env:USERPROFILE ".docgraph"
+    $sib = Join-Path (Split-Path -Parent $InstallDir) "docgraph"
     if (Test-Path $conv) { return $conv }
     return $null
 }

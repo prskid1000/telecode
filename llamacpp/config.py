@@ -24,8 +24,17 @@ def enabled() -> bool:
 
 
 def binary() -> str:
-    """Path to llama-server executable."""
-    return str(app_config.get_nested("llamacpp.binary", "llama-server"))
+    """Path to llama-server executable.
+
+    Default is `./llama/llama-server.exe` — the install lives inside the
+    telecode dir so the updater overlays releases there, not in a stray
+    `~/.llama`. A bare name ("llama-server") is still resolved on PATH; a
+    relative path is anchored to the settings.json directory like
+    `resolve_path`, so it does not depend on the process cwd."""
+    raw = str(app_config.get_nested("llamacpp.binary", "") or "").strip() or DEFAULT_BINARY
+    if ("/" in raw or "\\" in raw) and not Path(raw).is_absolute():
+        return resolve_path(raw)
+    return raw
 
 
 def host() -> str:
