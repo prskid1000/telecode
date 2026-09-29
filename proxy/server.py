@@ -877,8 +877,11 @@ async def _prepare_internal_body(
     profile = _match_profile(request.headers)
     requested_model = body.get("model", "") or ""
 
-    # 1. Resolve model via registry / mapping (so we can apply its inference defaults)
-    active_model = llama_cfg.resolve_model(requested_model)
+    # 1. Resolve model via registry / mapping (so we can apply its inference defaults).
+    #    A `claude-*` name goes to the already-loaded model first, so subagents
+    #    and workflow agents asking for another Claude model never force a swap.
+    active_model = (await _claude_alias_to_loaded(requested_model)
+                    or llama_cfg.resolve_model(requested_model))
     if not active_model:
         raise web.HTTPBadRequest(reason=f"Unknown model: {requested_model}. Register in llamacpp.models.")
 
@@ -956,6 +959,7 @@ async def _prepare_internal_body(
     #     reach, and with the default `mid_system_messages: "demote"` they are
     #     already re-roled to `user` by now — so they are identified by
     #     POSITION (anything after the leading system block), never by role.
+    _strip_agents = bool(_pget("strip_agent_types", proxy_config.strip_agent_types()))
     _strip_skills = bool(_pget("strip_skills", proxy_config.strip_skills()))
     _strip_mcp = bool(_pget("strip_mcp_instructions",
                             proxy_config.strip_mcp_instructions()))
@@ -968,11 +972,11 @@ async def _prepare_internal_body(
         _c = _m.get("content")
         if isinstance(_c, str):
             _msgs[_i] = {**_m, "content": strip_turn_context(
-                _c, skills=_strip_skills, mcp=_strip_mcp)}
+                _c, agents=_strip_agents, skills=_strip_skills, mcp=_strip_mcp)}
         elif isinstance(_c, list):
             _msgs[_i] = {**_m, "content": [
                 {**b, "text": strip_turn_context(
-                    b.get("text", ""), skills=_strip_skills, mcp=_strip_mcp)}
+                    b.get("text", ""), agents=_strip_agents, skills=_strip_skills, mcp=_strip_mcp)}
                 if isinstance(b, dict) and b.get("type") == "text" else b
                 for b in _c
             ]}
@@ -2345,13 +2349,8 @@ def _gemini_model_from_path(model_path: str) -> str:
     return name.strip("/")
 
 
-async def _gemini_pick_model(name: str) -> str:
-    """Registered or mapped names resolve normally. Anything else — agy's
-    built-in `gemini-3.1-flash-lite-preview` title call, say — goes to the
-    model that is ALREADY loaded (else the last-active one) rather than
-    `default_model`, so a side request never forces a model swap mid-task."""
-    if name in llama_cfg.models() or name in (proxy_config.model_mapping() or {}):
-        return name
+async def _loaded_model() -> str:
+    """The model llama-server is running now, else the last-active one, else ""."""
     try:
         sup = await get_supervisor()
         if sup.alive() and sup.active_model():
@@ -2365,7 +2364,28 @@ async def _gemini_pick_model(name: str) -> str:
             return last
     except Exception:
         pass
-    return name
+    return ""
+
+
+async def _claude_alias_to_loaded(name: str) -> str:
+    """`claude-*` names (mapped or not) → the loaded model, when
+    `proxy.claude_alias_to_loaded` is on and a model is known. "" = resolve
+    normally."""
+    if (not name.lower().startswith("claude")
+            or name in llama_cfg.models()
+            or not proxy_config.claude_alias_to_loaded()):
+        return ""
+    return await _loaded_model()
+
+
+async def _gemini_pick_model(name: str) -> str:
+    """Registered or mapped names resolve normally. Anything else — agy's
+    built-in `gemini-3.1-flash-lite-preview` title call, say — goes to the
+    model that is ALREADY loaded (else the last-active one) rather than
+    `default_model`, so a side request never forces a model swap mid-task."""
+    if name in llama_cfg.models() or name in (proxy_config.model_mapping() or {}):
+        return name
+    return await _loaded_model() or name
 
 
 def _gemini_error(status: int, message: str, code: str) -> web.Response:

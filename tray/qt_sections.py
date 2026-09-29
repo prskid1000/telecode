@@ -2701,6 +2701,11 @@ _PROXY_SETTING_COPY: dict[str, tuple[str, str]] = {
         "Claude Code's session-title call, whose whole instruction lives in "
         "that block. With no System Instruction set, the model gets no system "
         "prompt at all."),
+    "strip_agent_types": (
+        "Strip Agent Roster",
+        "Drop `Available agent types for the Agent tool:`. Same carrier as the "
+        "skills catalogue. Turn off for clients that use the Agent / Workflow "
+        "tools — without it the model guesses subagent_type names."),
     "strip_skills": (
         "Strip Skills Listing",
         "Drop the `The following skills are available…` catalogue (~8.5KB). "
@@ -2889,12 +2894,14 @@ def _proxy(window) -> QWidget:
 
     # What we REMOVE from what the client sent. Each of these has a matching
     # per-profile row below, built from the same _PROXY_SETTING_COPY entry.
-    # The billing header, `# Environment`, `gitStatus:` and the agent-type
-    # roster are stripped unconditionally and have no row on either side.
+    # The billing header, `# Environment` and `gitStatus:` are stripped
+    # unconditionally and have no row on either side.
     body = _sec("Client Context",
                 "proxy.strip_* / proxy.keep_claude_md — what to drop from what the client sent")
     body.addWidget(_toggle_row("proxy.strip_client_system_prompt",
                                 *_proxy_copy("strip_client_system_prompt", "global")))
+    body.addWidget(_toggle_row("proxy.strip_agent_types",
+                                *_proxy_copy("strip_agent_types", "global"), default=True))
     body.addWidget(_toggle_row("proxy.strip_skills", *_proxy_copy("strip_skills", "global")))
     body.addWidget(_toggle_row("proxy.strip_mcp_instructions",
                                 *_proxy_copy("strip_mcp_instructions", "global")))
@@ -3024,6 +3031,11 @@ def _proxy(window) -> QWidget:
                             "One ALIAS=target per line. Useful for pointing Claude/OpenAI "
                             "clients at your local model without changing the client.",
                             typed=False))
+    body.addWidget(_toggle_row(
+        "proxy.claude_alias_to_loaded", "Claude Names → Loaded Model",
+        "Any claude-* model name (mapped or not) goes to the model already "
+        "running, so subagents and workflow agents never force a swap. The "
+        "aliases above only decide when nothing is loaded.", default=True))
 
     # Tailscale Funnel — public HTTPS URL for this machine + copy + live status
     ts_card, ts_refresh = _tailscale_funnel_card()
@@ -3181,7 +3193,9 @@ def _proxy_profiles_card() -> QFrame:
         def _toggle_field(dest: QVBoxLayout, field: str) -> None:
             """Bool row for a profile field, labelled from _PROXY_SETTING_COPY."""
             label, hlp = _proxy_copy(field, "profile")
-            t = Toggle(); t.setChecked(bool(prof.get(field, False)))
+            # An absent field inherits the global value; strip_agent_types is the
+            # one whose global default is on.
+            t = Toggle(); t.setChecked(bool(prof.get(field, field == "strip_agent_types")))
             def _h(_s: int, field=field, widget=t):
                 _patch(field, bool(widget.isChecked()))
             t.stateChanged.connect(_h)
@@ -3215,10 +3229,11 @@ def _proxy_profiles_card() -> QFrame:
             _toggle_field(sl, _f)
 
         # Client context — what we REMOVE from what the client sent.
-        # The billing header, `# Environment`, `gitStatus:` and the agent-type
-        # roster are stripped unconditionally and have no rows here.
+        # The billing header, `# Environment` and `gitStatus:` are stripped
+        # unconditionally and have no rows here.
         sl = _sec("Client Context", "what to drop from what this client sent")
-        for _f in ("strip_client_system_prompt", "strip_skills", "strip_mcp_instructions"):
+        for _f in ("strip_client_system_prompt", "strip_agent_types", "strip_skills",
+                   "strip_mcp_instructions"):
             _toggle_field(sl, _f)
 
         # All three are counts, not switches: the `# claudeMd` block carries
@@ -3633,6 +3648,7 @@ def _proxy_profiles_card() -> QFrame:
             "keep_rules": -1,
             "keep_memory": -1,
             "strip_client_system_prompt": False,
+            "strip_agent_types": True,
             "strip_skills": False,
             "strip_mcp_instructions": False,
             "inject_managed": [],

@@ -319,10 +319,11 @@ def _cut_to_boundary(text: str, start_re: "re.Pattern[str]") -> str:
     return out
 
 
-def strip_turn_context(text: str, *, skills: bool = False,
+def strip_turn_context(text: str, *, agents: bool = True, skills: bool = False,
                        mcp: bool = False) -> str:
-    """Remove the agent-type roster (always) plus any toggled-on listings."""
-    text = _cut_to_boundary(text, _AGENT_TYPES_RE)
+    """Remove the toggled-on listings (agent-type roster on by default)."""
+    if agents:
+        text = _cut_to_boundary(text, _AGENT_TYPES_RE)
     if skills:
         text = _cut_to_boundary(text, _SKILLS_LISTING_RE)
     if mcp:

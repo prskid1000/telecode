@@ -118,6 +118,29 @@ def strip_skills() -> bool:
     return bool(app_config.get_nested("proxy.strip_skills", False))
 
 
+def strip_agent_types() -> bool:
+    """Drop the `Available agent types for the Agent tool:` roster.
+
+    Same carrier as the skills catalogue. On by default (it used to be
+    unconditional). Turn it off for a client that uses the Agent / Workflow
+    tools: without the roster the model has to guess `subagent_type` names.
+    Per-profile `strip_agent_types` overrides this.
+    """
+    return bool(app_config.get_nested("proxy.strip_agent_types", True))
+
+
+def claude_alias_to_loaded() -> bool:
+    """Send every `claude-*` model name to the llama model already loaded.
+
+    Claude Code picks models per request — subagents, workflow agents, the
+    session-title call — and each name would otherwise resolve on its own
+    (mapping, else `default_model`), swapping llama models mid-task. On: any
+    `claude-*` name, mapped or not, goes to the running model; the mapping
+    and `default_model` only decide when nothing is loaded yet.
+    """
+    return bool(app_config.get_nested("proxy.claude_alias_to_loaded", True))
+
+
 def strip_mcp_instructions() -> bool:
     """Drop the `# MCP Server Instructions` block.
 
