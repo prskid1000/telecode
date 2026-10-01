@@ -182,7 +182,7 @@ if (-not (Test-Path $settingsFile)) {
 # Auto-detection order:
 #   1. -DocgraphRoot param
 #   2. ~/.local/bin/docgraph.bat shim → parse the venv exe path → repo = ../../..
-#   3. <parent of InstallDir>\docgraph (sibling checkout, e.g. D:\Projects\docgraph)
+#   3. <parent of InstallDir>\DocGraph (sibling checkout, e.g. D:\Projects\DocGraph)
 #   4. ~/.docgraph (legacy convention)
 
 function Resolve-DocgraphRoot {
@@ -201,7 +201,9 @@ function Resolve-DocgraphRoot {
             if (Test-Path $repo) { return $repo }
         }
     }
-    $sib = Join-Path (Split-Path -Parent $InstallDir) "docgraph"
+    $sib = Join-Path (Split-Path -Parent $InstallDir) "DocGraph"
+    if (Test-Path $sib) { return (Resolve-Path $sib).Path }
+    $conv = Join-Path $env:USERPROFILE ".docgraph"
     if (Test-Path $conv) { return $conv }
     return $null
 }

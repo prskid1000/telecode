@@ -1,10 +1,10 @@
 import asyncio, json, sys
 from pathlib import Path
 # Ensure docgraph package from the docgraph repo is importable
-sys.path.insert(0, r"D:\Projects\docgraph")
+sys.path.insert(0, r"D:\Projects\DocGraph")
 from docgraph.process import add_doc_for
 
-path = r"D:\Projects\docgraph"
+path = r"D:\Projects\DocGraph"
 url = "https://github.com/prskid1000/claude-claw-skill/blob/main/README.md"
 
 async def progress_cb(job):

@@ -475,7 +475,7 @@
     },
     "roots": [
       {
-        "path": "D:\\Projects\\docgraph",
+        "path": "D:\\Projects\\DocGraph",
         "watch": true,
         "pinned": true
       }
