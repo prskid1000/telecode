@@ -6839,21 +6839,31 @@ def _teledesign(window) -> QWidget:
     from services.design import mcp_registration as _reg
     # Same key as MCP → Enabled; turning it on starts the server right away
     # (_mcp_live_start), so the CLIs below can connect without a restart.
-    body.addWidget(_toggle_row("mcp_server.enabled", "Enable MCP server",
-                               "Starts / stops the MCP server right away (same switch as MCP → Enabled)."))
-    _mcp_live_start()
-    # Server reachability + "Re-check connection": re-probes the MCP endpoint and every client.
+    # Toggle + a status badge (what the probe of the CLIs' URL found; the
+    # detail is the tooltip) + "Re-check", which re-probes server and clients.
+    mcp_tg = Toggle()
+    mcp_tg.setChecked(bool(get_path(read_settings(), "mcp_server.enabled", False)))
+    mcp_tg.stateChanged.connect(lambda _s: patch_settings("mcp_server.enabled", mcp_tg.isChecked()))
     srv_state = QLabel("checking…")
-    srv_state.setStyleSheet(f"color: {FG_MUTE};")
-    recheck = QPushButton("Re-check connection")
+    recheck = QPushButton("Re-check")
     srv_right = QWidget()
     srl = QHBoxLayout(srv_right)
     srl.setContentsMargins(0, 0, 0, 0)
+    srl.setSpacing(12)
+    srl.addWidget(mcp_tg)
     srl.addWidget(srv_state)
     srl.addStretch(1)
     srl.addWidget(recheck)
-    body.addWidget(_row(row_label("MCP server", "Whether anything answers at the URL the CLIs are given.", ""),
-                        srv_right))
+    body.addWidget(_row(row_label("MCP server", "Starts / stops right away (same switch as MCP → Enabled).",
+                                  "mcp_server.enabled"), srv_right))
+    _mcp_live_start()
+
+    def _badge(text: str, color: str, tip: str = "") -> None:
+        srv_state.setText(text)
+        srv_state.setToolTip(tip)
+        srv_state.setStyleSheet(f"color: {color}; border: 1px solid {color}; border-radius: 9px; "
+                                f"padding: 1px 9px; font-size: 11px;")
+    _badge("checking…", FG_MUTE)
     for client, info in _reg.CLIENTS.items():
         state = QLabel("checking…")
         state.setStyleSheet(f"color: {FG_MUTE};")
@@ -6879,10 +6889,13 @@ def _teledesign(window) -> QWidget:
 
     def _show(client: str, res: dict) -> None:
         if client == "__server__":
-            ok = bool(res.get("reachable"))
-            srv_state.setText(f"reachable at {res.get('url')}" if ok else
-                              f"not reachable at {res.get('url', '')} — {str(res.get('error') or '')[:60]}")
-            srv_state.setStyleSheet(f"color: {OK if ok else ERR};")
+            url = res.get("url", "")
+            if res.get("reachable"):
+                _badge("Running", OK, f"Answering at {url}")
+            elif get_path(read_settings(), "mcp_server.enabled", False):
+                _badge("Not reachable", ERR, f"{url} — {res.get('error') or ''}")
+            else:
+                _badge("Off", FG_MUTE, f"Nothing at {url} — switch it on to start the server.")
             recheck.setEnabled(True)
             return
         state, btn = rows[client]
@@ -6916,8 +6929,7 @@ def _teledesign(window) -> QWidget:
 
     def _recheck(_=False) -> None:
         recheck.setEnabled(False)
-        srv_state.setText("checking…")
-        srv_state.setStyleSheet(f"color: {FG_MUTE};")
+        _badge("checking…", FG_MUTE)
         for state, btn in rows.values():
             state.setText("checking…")
             state.setStyleSheet(f"color: {FG_MUTE};")
@@ -6935,7 +6947,13 @@ def _teledesign(window) -> QWidget:
 
     def _on_setting(path: str) -> None:
         if path == "mcp_server.enabled":
-            # give uvicorn a moment to bind before re-probing
+            try:                         # flipped on the MCP page → mirror it here
+                on = bool(get_path(read_settings(), path, False))
+                if mcp_tg.isChecked() != on:
+                    mcp_tg.blockSignals(True); mcp_tg.setChecked(on); mcp_tg.blockSignals(False)
+            except RuntimeError:
+                return
+            # give uvicorn a moment to bind / release before re-probing
             QTimer.singleShot(1500, _recheck_if_alive)
     settings_bus().settingChanged.connect(_on_setting)
     return scroll
