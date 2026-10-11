@@ -6837,29 +6837,22 @@ def _teledesign(window) -> QWidget:
                        "inside these CLIs.")
     rows: dict[str, tuple[QLabel, QPushButton]] = {}
     from services.design import mcp_registration as _reg
-    # Same key as MCP → Enabled; turning it on starts the server right away
-    # (_mcp_live_start), so the CLIs below can connect without a restart.
-    # Toggle + a status badge (what the probe of the CLIs' URL found; the
-    # detail is the tooltip) + "Re-check", which re-probes server and clients.
-    mcp_tg = Toggle()
-    mcp_tg.setChecked(bool(get_path(read_settings(), "mcp_server.enabled", False)))
-    mcp_tg.stateChanged.connect(lambda _s: patch_settings("mcp_server.enabled", mcp_tg.isChecked()))
+    # Status only — the switch lives on the MCP page (one place per setting).
+    # The badge is what a probe of the CLIs' URL found (detail in the tooltip);
+    # "Re-check" re-probes the server and every client.
     srv_state = QLabel("checking…")
     recheck = QPushButton("Re-check")
     srv_right = QWidget()
     srl = QHBoxLayout(srv_right)
     srl.setContentsMargins(0, 0, 0, 0)
     srl.setSpacing(12)
-    srl.addWidget(mcp_tg)
     srv_state.setFixedHeight(22)         # a pill, not a box the row's height
     srl.addWidget(srv_state, 0, Qt.AlignmentFlag.AlignVCenter)
     srl.addStretch(1)
     srl.addWidget(recheck)
     body.addWidget(_row(row_label("MCP server", "Serves the design tools to TeleDesign's own turns and to "
-                                                "the CLIs below. Starts / stops right away (same switch as "
-                                                "MCP → Enabled).",
-                                  "mcp_server.enabled"), srv_right))
-    _mcp_live_start()
+                                                "the CLIs below. Turn it on under MCP → Enabled.", ""),
+                        srv_right))
 
     def _badge(text: str, color: str, tip: str = "") -> None:
         srv_state.setText(text)
@@ -6898,7 +6891,7 @@ def _teledesign(window) -> QWidget:
             elif get_path(read_settings(), "mcp_server.enabled", False):
                 _badge("Not reachable", ERR, f"{url} — {res.get('error') or ''}")
             else:
-                _badge("Off", FG_MUTE, f"Nothing at {url} — switch it on to start the server.")
+                _badge("Off", FG_MUTE, f"Nothing at {url} — turn it on under MCP → Enabled.")
             recheck.setEnabled(True)
             return
         state, btn = rows[client]
@@ -6949,13 +6942,7 @@ def _teledesign(window) -> QWidget:
             pass
 
     def _on_setting(path: str) -> None:
-        if path == "mcp_server.enabled":
-            try:                         # flipped on the MCP page → mirror it here
-                on = bool(get_path(read_settings(), path, False))
-                if mcp_tg.isChecked() != on:
-                    mcp_tg.blockSignals(True); mcp_tg.setChecked(on); mcp_tg.blockSignals(False)
-            except RuntimeError:
-                return
+        if path == "mcp_server.enabled":     # flipped on the MCP page
             # give uvicorn a moment to bind / release before re-probing
             QTimer.singleShot(1500, _recheck_if_alive)
     settings_bus().settingChanged.connect(_on_setting)
