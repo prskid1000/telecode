@@ -49,9 +49,11 @@
     "enabled": false,
     "host": "127.0.0.1",
     "port": 1236,
-    "cors_origins": [],
-    "tts_url": "http://127.0.0.1:6600",
-    "stt_url": "http://127.0.0.1:6600"
+    "cors_origins": []
+  },
+
+  "design": {
+    "local_tools": true
   },
 
   "docgraph": {
