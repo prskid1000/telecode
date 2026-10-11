@@ -1938,8 +1938,7 @@ def _llama(window) -> QWidget:
                                       "--load-mode: how the model is read and held. Replaces the "
                                       "deprecated Mlock / No mmap / Direct I/O toggles. mlock keeps the "
                                       "weights resident so they are never paged out; dio bypasses the OS "
-                                      "page cache during load and is mutually exclusive with mlock. "
-                                      "Existing settings using the old keys are migrated automatically."))
+                                      "page cache during load and is mutually exclusive with mlock."))
     spawn_body.addWidget(_number_row("llamacpp.main_gpu",       "Main GPU",          0,  16,  1, 0, "",
                                       "--main-gpu: index of the primary CUDA/ROCm device."))
     spawn_body.addWidget(_line_row("llamacpp.mmproj_device",   "mmproj Device",
@@ -2174,7 +2173,7 @@ def _llama(window) -> QWidget:
         ["llamacpp.spec_type"], _ngram_mod_active))
     spec_body.addWidget(_dependent(
         _number_row("llamacpp.spec_ngram_mod_n_match", "N-gram Mod N-Match", 0, 256, 1, 0, "tok",
-                     "--spec-ngram-mod-n-match: lookup length for ngram-mod (default 24). 0 = falls back to N (size-n)."),
+                     "--spec-ngram-mod-n-match: lookup length for ngram-mod (default 24). 0 = default."),
         ["llamacpp.spec_type"], _ngram_mod_active))
     # Draft-side thread knobs only matter when a draft-* spec type or ngram-cache is active.
     _draft_active = lambda st: _has_spec(st, "draft-simple", "draft-eagle3", "draft-mtp", "ngram-cache")

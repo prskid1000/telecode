@@ -14,7 +14,7 @@ Commands:
   /settings tool <key> env <VAR> --delete — remove an env var
   /settings tool <key> cmd <cmd...>       — set startup command
 
-  /settings voice stt on|off|url <url>|model <m>
+  /settings voice stt on|off|url <url>
 
   /settings validate           — check for missing/placeholder values
 """
@@ -253,7 +253,7 @@ async def _handle_voice(update: Update, args: list[str]) -> None:
     if not args:
         await update.message.reply_text(
             "<b>Voice commands:</b>\n"
-            "<code>/settings voice stt on|off|url &lt;url&gt;|model &lt;m&gt;</code>",
+            "<code>/settings voice stt on|off|url &lt;url&gt;</code>",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -287,14 +287,6 @@ async def _handle_voice(update: Update, args: list[str]) -> None:
         config.set_nested("voice.stt.base_url", args[2])
         await update.message.reply_text(
             f"✅ <code>voice.stt.base_url</code> = <code>{_esc(args[2])}</code>",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-
-    if sub == "model" and len(args) >= 3:
-        config.set_nested("voice.stt.model", args[2])
-        await update.message.reply_text(
-            f"✅ <code>voice.stt.model</code> = <code>{_esc(args[2])}</code>",
             parse_mode=ParseMode.HTML,
         )
         return

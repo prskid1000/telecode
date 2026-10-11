@@ -70,7 +70,7 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     # are a closed set (probed against b10733): auto, none, mmap, mlock,
     # mmap+mlock, dio. Arbitrary combinations are REJECTED -- "mlock+dio" and
     # "mmap+mlock+dio" both fail to parse -- so this is a choice, not a bitmask.
-    # Emitted via _emit_load_mode() so legacy settings keep working.
+    # Emitted via _emit_load_mode().
     ("no_host",          "--no-host",         "flag"),
     ("lazy_mode",        "--lazy-mode",       "value"),
     ("repack",           ("--repack", "--no-repack"),           "bool_pair"),
@@ -105,8 +105,8 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     #                            checkpoints, 0 = no minimum. (Renamed from the
     #                            removed --checkpoint-every-n-tokens.)
     # Keeping explicit emission makes intent visible in `describe()` output.
-    # defrag_thold was removed in v9243 (DEPRECATED warning + no-op upstream).
-    # Don't emit it at all; tolerate the key in old settings.json files silently.
+    # defrag_thold was removed in v9243 (DEPRECATED warning + no-op upstream);
+    # it is not emitted.
     ("cache_ram",                  "--cache-ram",                 "value"),
     ("ctx_checkpoints",            "--ctx-checkpoints",           "value"),
     ("checkpoint_min_step",        "--checkpoint-min-step",       "value"),
@@ -191,30 +191,14 @@ def _spec_types(gcfg: dict) -> list[str]:
 
 
 def _emit_load_mode(argv: list[str], gcfg: dict) -> None:
-    """Emit --load-mode, migrating the three flags it replaced.
+    """Emit --load-mode (empty = omit, llama-server's own default).
 
     Upstream deprecated --mlock / --no-mmap / --direct-io in favour of one
     --load-mode taking a closed set of values (probed against b10733): auto,
     none, mmap, mlock, mmap+mlock, dio. Combinations beyond mmap+mlock are
-    rejected by the parser, so a config that had mlock AND direct_io cannot be
-    expressed exactly -- mlock wins, because it governs runtime residency while
-    DirectIO only affects load speed.
-
-    An explicit load_mode always wins. Otherwise the legacy keys are translated
-    so existing settings.json files keep behaving as they did.
+    rejected by the parser.
     """
     mode = str(gcfg.get("load_mode", "") or "").strip()
-    if not mode:
-        mlock = bool(gcfg.get("mlock", False))
-        mmap  = not bool(gcfg.get("no_mmap", False))
-        if mlock and mmap:
-            mode = "mmap+mlock"
-        elif mlock:
-            mode = "mlock"
-        elif bool(gcfg.get("direct_io", False)):
-            mode = "dio"
-        elif not mmap:
-            mode = "none"
     if mode:
         argv += ["--load-mode", mode]
 
@@ -238,9 +222,8 @@ def _emit_spec_ngram(argv: list[str], gcfg: dict) -> None:
     For ngram-simple / ngram-map-k / ngram-map-k4v: dispatch from
     `spec_ngram_size_n/_m/_min_hits` (server-wide).
 
-    For ngram-mod: read `spec_ngram_mod_n_min/_max/_match`. As a backward-compat
-    shim, fall back to legacy `spec_ngram_size_n` for n-match if the dedicated
-    key isn't set — that matches what telecode emitted pre-v9243.
+    For ngram-mod: read `spec_ngram_mod_n_min/_max/_match` (0 = llama-server's
+    default).
     """
     active = _spec_types(gcfg)
 
@@ -258,14 +241,10 @@ def _emit_spec_ngram(argv: list[str], gcfg: dict) -> None:
             argv += [flag, str(val)]
 
     if "ngram-mod" in active:
-        # Dedicated keys override the legacy shim.
-        n_match = gcfg.get("spec_ngram_mod_n_match")
-        if n_match in (None, "", 0, "0"):
-            n_match = gcfg.get("spec_ngram_size_n")  # legacy fallback
         for key_or_val, flag in (
-            (gcfg.get("spec_ngram_mod_n_min"), "--spec-ngram-mod-n-min"),
-            (gcfg.get("spec_ngram_mod_n_max"), "--spec-ngram-mod-n-max"),
-            (n_match,                          "--spec-ngram-mod-n-match"),
+            (gcfg.get("spec_ngram_mod_n_min"),   "--spec-ngram-mod-n-min"),
+            (gcfg.get("spec_ngram_mod_n_max"),   "--spec-ngram-mod-n-max"),
+            (gcfg.get("spec_ngram_mod_n_match"), "--spec-ngram-mod-n-match"),
         ):
             if key_or_val in (None, "", 0, "0"):
                 continue

@@ -653,27 +653,14 @@ def _apply_thinking_mode(body: dict[str, Any],
     Deliberately NOT the same as `reasoning.enabled`, which only decides
     whether the proxy PARSES think blocks; the model still generates them and
     still pays the context.
-
-    The superseded `disable_thinking` shape is still honoured so existing
-    configs keep working.
     """
     cfg = defaults.get("thinking")
-    if isinstance(cfg, dict):
-        key = str(cfg.get("template_key") or "").strip()
-        if not key:
-            return
-        _merge_chat_template_kwargs(body, {key: bool(cfg.get("enabled"))})
+    if not isinstance(cfg, dict):
         return
-
-    legacy = defaults.get("disable_thinking")
-    if legacy is True:
-        _merge_chat_template_kwargs(body, {"enable_thinking": False})
+    key = str(cfg.get("template_key") or "").strip()
+    if not key:
         return
-    if isinstance(legacy, dict) and legacy.get("enabled"):
-        key = str(legacy.get("template_key") or "").strip()
-        if not key:
-            return
-        _merge_chat_template_kwargs(body, {key: legacy.get("disabled_value", False)})
+    _merge_chat_template_kwargs(body, {key: bool(cfg.get("enabled"))})
 
 
 def _apply_model_chat_template_kwargs(body: dict[str, Any],

@@ -173,8 +173,6 @@ def _ensure_model_effort_maps(data: dict[str, Any]) -> bool:
         if "template_key" not in eff:
             eff["template_key"] = "reasoning_effort"
             changed = True
-        if eff.pop("allowed", None) is not None:
-            changed = True   # superseded: values are per-model and visible now
         mapping = eff.get("map")
         if not isinstance(mapping, dict):
             mapping = {}
@@ -411,20 +409,16 @@ def computer_max_history() -> int:
 def mcp_server_enabled() -> bool: return bool(get_nested("mcp_server.enabled", False))
 def mcp_server_host()    -> str:  return get_nested("mcp_server.host", "127.0.0.1")
 def mcp_server_port()    -> int:  return int(get_nested("mcp_server.port", 1236))
-def mcp_server_tts_url() -> str:  return audio_endpoint("tts")
-def mcp_server_stt_url() -> str:  return audio_endpoint("stt")
 
 
 def audio_endpoint(kind: str) -> str:
     """Root URL (no /v1) of the STT / TTS server — ONE setting per modality,
     Audio → STT / TTS → Endpoint (voice.<kind>.base_url), shared by Telegram
-    voice and the transcribe / speak tools (MCP + proxy). The tools used to
-    have their own mcp_server.<kind>_url, which drifted (tts pointed at a dead
-    :6500); it is only read now if the voice key is missing."""
+    voice and the transcribe / speak tools (MCP + proxy)."""
     url = str(get_nested(f"voice.{kind}.base_url", "") or "").strip().rstrip("/")
-    if url:
-        return url[:-3] if url.endswith("/v1") else url
-    return str(get_nested(f"mcp_server.{kind}_url", "") or "http://127.0.0.1:6600").rstrip("/")
+    if not url:
+        return "http://127.0.0.1:6600"
+    return url[:-3] if url.endswith("/v1") else url
 
 
 def audio_enabled(kind: str) -> bool:

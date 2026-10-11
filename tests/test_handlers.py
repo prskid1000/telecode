@@ -56,7 +56,7 @@ def settings_json(tmp_path):
             "max_message_length": 3800,
             "idle_timeout_sec": 1800,
         },
-        "voice": {"stt": {"enabled": True, "base_url": "http://localhost:6600/v1", "model": "whisper-1"}},
+        "voice": {"stt": {"enabled": True, "base_url": "http://localhost:6600/v1"}},
         "capture": {"image_interval": 15, "video_interval": 60},
         "tools": {
             "claude": {

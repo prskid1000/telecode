@@ -17,8 +17,7 @@
   "voice": {
     "stt": {
       "enabled": true,
-      "base_url": "http://localhost:6600/v1",
-      "model": ""
+      "base_url": "http://localhost:6600/v1"
     },
     "tts": {
       "enabled": true,
@@ -32,9 +31,7 @@
   "mcp_server": {
     "enabled": false,
     "host": "127.0.0.1",
-    "port": 1236,
-    "tts_url": "http://127.0.0.1:6500",
-    "stt_url": "http://127.0.0.1:6600"
+    "port": 1236
   },
   "llamacpp": {
     "enabled": true,
@@ -102,7 +99,7 @@
     "spec_ngram_min_hits": 0,
     "spec_ngram_mod_n_min": 0,
     "spec_ngram_mod_n_max": 0,
-    "spec_ngram_mod_n_match": 0,
+    "spec_ngram_mod_n_match": 2,
     "threads_draft": 0,
     "threads_batch_draft": 0,
     "models": {
@@ -208,7 +205,6 @@
       "repeat_penalty": 1.0,
       "presence_penalty": 1.0,
       "context_overflow": "truncate_middle",
-      "disable_thinking": false,
       "reasoning": {
         "enabled": true,
         "start": "<think>",
@@ -264,10 +260,7 @@
   },
   "heartbeat": {
     "enabled": false,
-    "tick_seconds": 60,
-    "ephemeral_ttl_seconds": 3600,
-    "max_concurrent_fires": 2,
-    "min_fire_gap_seconds": 60
+    "ephemeral_ttl_seconds": 3600
   },
   "proxy": {
     "enabled": true,
@@ -457,21 +450,16 @@
     }
   },
   "tray": {
-    "last_section": "logs",
-    "docgraph": {
-      "last_tab": "Index"
-    }
+    "last_section": "logs"
   },
   "docgraph": {
     "binary": "",
     "host": {
       "enabled": false,
       "auto_start": false,
-      "auto_restart": false,
       "host": "127.0.0.1",
       "port": 2766,
-      "debounce": 500,
-      "auto_shutdown_on_idle": true
+      "debounce": 500
     },
     "roots": [
       {
@@ -520,8 +508,6 @@
     },
     "wiki": {
       "depth": 12
-    },
-    "groups": [],
-    "idle_unload_sec": 300
+    }
   }
 }

@@ -454,7 +454,7 @@ Pick a window from the list. The bot records at 3fps, encodes each chunk with ff
 | `/settings tool <key> flag add/remove <flag>` | Manage flags |
 | `/settings tool <key> env <VAR> <value>` | Set env var |
 | `/settings tool <key> env <VAR> --delete` | Remove env var |
-| `/settings voice stt on/off/url/model` | Voice config |
+| `/settings voice stt on/off/url` | Voice config |
 
 ### Voice
 
@@ -523,11 +523,9 @@ Activation is lazy: the first voice message hits the endpoint directly; health s
 | `enabled` | Start the MCP server |
 | `host` | Listen address (default `127.0.0.1`) |
 | `port` | Listen port (default `1236`) |
-| `tts_url` | TTS base URL — OpenAI `/v1/audio/speech` compatible (default `http://127.0.0.1:6600`, served by VoxType's embedded server) |
-| `stt_url` | STT base URL — OpenAI `/v1/audio/transcriptions` compatible (default `http://127.0.0.1:6600`, same VoxType server) |
 | `cors_origins` | CORS allowed origins — empty = disabled |
 
-Ships with `speak`, `transcribe`, `web_search`. Add new tools by dropping a `.py` file under `mcp_server/tools/`.
+Ships with `speak`, `transcribe`, `web_search` (`speak` / `transcribe` use the `voice.{tts,stt}.base_url` endpoints above). Add new tools by dropping a `.py` file under `mcp_server/tools/`.
 
 Register with CC: `claude mcp add telecode --transport streamable-http --url http://127.0.0.1:1236/mcp`
 

@@ -5,7 +5,7 @@ New shape (settings.example.json):
     "docgraph": {
       "binary": "",
       "host": {
-        "enabled": false, "auto_start": false, "auto_restart": true,
+        "enabled": false, "auto_start": false,
         "host": "127.0.0.1", "port": 5500,
         "gpu": false
       },
@@ -129,7 +129,6 @@ def default_path() -> str:
 def host_cfg() -> dict:           return _section("host")
 def host_enabled() -> bool:       return bool(host_cfg().get("enabled", False))
 def host_auto_start() -> bool:    return bool(host_cfg().get("auto_start", False))
-def host_auto_restart() -> bool:  return bool(host_cfg().get("auto_restart", True))
 def host_host() -> str:           return str(host_cfg().get("host", "127.0.0.1") or "127.0.0.1")
 def host_port() -> int:           return int(host_cfg().get("port", 5500) or 5500)
 def host_debounce() -> int:       return int(host_cfg().get("debounce", 500) or 500)

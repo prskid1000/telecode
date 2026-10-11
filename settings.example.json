@@ -39,10 +39,7 @@
 
   "heartbeat": {
     "enabled": false,
-    "tick_seconds": 60,
-    "ephemeral_ttl_seconds": 3600,
-    "max_concurrent_fires": 2,
-    "min_fire_gap_seconds": 60
+    "ephemeral_ttl_seconds": 3600
   },
 
   "mcp_server": {
@@ -164,7 +161,7 @@
     "poll_batch": 50,
     "threads_http": -1,
 
-    "_comment_load_mode": "--load-mode replaces the deprecated mlock / no_mmap / direct_io. Closed set, verified by probing the binary: auto | none | mmap | mlock | mmap+mlock | dio. Combinations beyond mmap+mlock are REJECTED, so this is a choice, not a bitmask. Empty = server default (auto). The old three keys are still honoured and translated automatically if load_mode is unset.",
+    "_comment_load_mode": "--load-mode replaces the deprecated mlock / no_mmap / direct_io. Closed set, verified by probing the binary: auto | none | mmap | mlock | mmap+mlock | dio. Combinations beyond mmap+mlock are REJECTED, so this is a choice, not a bitmask. Empty = server default (auto).",
     "load_mode": "",
     "lazy_mode": "",
     "no_host": false,
