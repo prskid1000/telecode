@@ -6826,8 +6826,8 @@ def _teledesign(window) -> QWidget:
     card, body = _card("Local models")
     body.addWidget(_toggle_row("design.local_tools", "Offer design tools to local models",
                                "Off = the design_* tools are removed from the proxy (gone from Managed "
-                               "Tools and from every local-model request). TeleDesign's own turns still "
-                               "have them, over MCP.", default=True))
+                               "Tools and from every local-model request). TeleDesign's own turns get "
+                               "them over MCP instead — keep the MCP server below on.", default=True))
     layout.addWidget(card)
     _design_local_hook()
 
@@ -6855,7 +6855,9 @@ def _teledesign(window) -> QWidget:
     srl.addWidget(srv_state, 0, Qt.AlignmentFlag.AlignVCenter)
     srl.addStretch(1)
     srl.addWidget(recheck)
-    body.addWidget(_row(row_label("MCP server", "Starts / stops right away (same switch as MCP → Enabled).",
+    body.addWidget(_row(row_label("MCP server", "Serves the design tools to TeleDesign's own turns and to "
+                                                "the CLIs below. Starts / stops right away (same switch as "
+                                                "MCP → Enabled).",
                                   "mcp_server.enabled"), srv_right))
     _mcp_live_start()
 
