@@ -6851,7 +6851,8 @@ def _teledesign(window) -> QWidget:
     srl.setContentsMargins(0, 0, 0, 0)
     srl.setSpacing(12)
     srl.addWidget(mcp_tg)
-    srl.addWidget(srv_state)
+    srv_state.setFixedHeight(22)         # a pill, not a box the row's height
+    srl.addWidget(srv_state, 0, Qt.AlignmentFlag.AlignVCenter)
     srl.addStretch(1)
     srl.addWidget(recheck)
     body.addWidget(_row(row_label("MCP server", "Starts / stops right away (same switch as MCP → Enabled).",
