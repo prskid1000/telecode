@@ -550,10 +550,9 @@ def _apply_tool_transforms(
 
     deferred: list[dict[str, Any]] = []
     if use_tool_search:
-        core_names = set(
-            (profile.get("core_tools") if profile and "core_tools" in profile else proxy_config.core_tools())
-            or []
-        )
+        # an empty profile list inherits the global one, as the tray says — its
+        # list editor stores [] when emptied and has no "unset" state
+        core_names = set((profile or {}).get("core_tools") or proxy_config.core_tools() or [])
         # Tools this conversation has already loaded stay core for its lifetime.
         # Without this the array reverts on the next request and the whole
         # prefix re-prefills a second time — see the _sticky_tools note above.

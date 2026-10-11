@@ -1890,7 +1890,9 @@ def _llama(window) -> QWidget:
     srv_body.addWidget(_line_row("llamacpp.media_path", "Media Path", "./data/media",
                                   "--media-path: directory served via file:// URLs in chat completion image refs."))
     srv_body.addWidget(_pair_list_row("llamacpp.extra_args", "Extra CLI Args",
-                                  'Appended to every spawn. One [flag, value] pair per row '
+                                  "Global — appended to every model's spawn, after that model's own "
+                                  'Extra Args (Models → Extra CLI Args), so for a flag set in both the '
+                                  'global one usually wins. One [flag, value] pair per row '
                                   '— leave value empty for flag-only switches.'))
     layout.addWidget(srv_card)
 
@@ -2189,9 +2191,11 @@ def _llama(window) -> QWidget:
     # Proxy Behavior card — global behavior knobs with NO per-model equivalent.
     # Sampling defaults (temperature/top_p/etc.) live in the Models section per
     # model since each model has its own sweet spot.
-    pb_card, pb_body = _card("Proxy Behavior",
-                              "Global proxy behavior — these have no per-model override. "
-                              "Sampler defaults moved to the Models tab per-model form.")
+    pb_card, pb_body = _card("Request Handling (all models)",
+                              "How the proxy shapes requests for every local model "
+                              "(llamacpp.inference.*) — these have no per-model override; sampler "
+                              "defaults are per model on the Models page. Client-facing proxy "
+                              "options live on the Proxy page.")
     pb_body.addWidget(_enum_row("llamacpp.inference.context_overflow", "Context Overflow",
                                  [("Truncate Middle", "truncate_middle"),
                                   ("Truncate Left",   "truncate_left"),
@@ -2211,7 +2215,10 @@ def _llama(window) -> QWidget:
     layout.addWidget(pb_card)
 
     # Structured output card
-    so_card, so_body = _card("Structured Output", "llamacpp.inference.structured_output.* — JSON schema / GBNF grammar")
+    so_card, so_body = _card("Structured Output",
+                             "llamacpp.inference.structured_output.* — global: the proxy adds this JSON "
+                             "schema / GBNF grammar to every request for every model, overriding a model's "
+                             "own --grammar (Models → Grammar). A schema the client sends wins over this.")
     so_body.addWidget(_toggle_row("llamacpp.inference.structured_output.enabled",
                                    "Enabled",
                                    "Force JSON schema or GBNF grammar on every generation."))
@@ -2243,7 +2250,9 @@ def _llama(window) -> QWidget:
         "reasoning_effort: \"low\"/\"medium\"/... Sets llama.cpp's "
         "thinking_budget_tokens (a server body param, model-agnostic). "
         "It does NOT set the template's reasoning_effort string — that "
-        "vocabulary is model-specific, so it lives on the Models tab.")
+        "vocabulary is model-specific, so it lives on the Models tab. Global; "
+        "a model's own --reasoning-budget (Models → Per-Model Reasoning "
+        "Override) takes precedence.")
 
     map_body.addWidget(_toggle_row("llamacpp.inference.thinking_budget.enabled",
         "Enable Token Budget",
@@ -3193,9 +3202,15 @@ def _proxy_profiles_card() -> QFrame:
         def _toggle_field(dest: QVBoxLayout, field: str) -> None:
             """Bool row for a profile field, labelled from _PROXY_SETTING_COPY."""
             label, hlp = _proxy_copy(field, "profile")
-            # An absent field inherits the global value; strip_agent_types is the
-            # one whose global default is on.
-            t = Toggle(); t.setChecked(bool(prof.get(field, field == "strip_agent_types")))
+            # An absent field inherits the global value (proxy/server.py _pget),
+            # so show that value rather than a bare "off"; strip_agent_types is
+            # the one whose global default is on.
+            if field in prof:
+                cur = bool(prof.get(field))
+            else:
+                cur = bool(get_path(read_settings(), f"proxy.{field}", field == "strip_agent_types"))
+                hlp += f" Not set for this profile — showing the inherited global value ({'on' if cur else 'off'})."
+            t = Toggle(); t.setChecked(cur)
             def _h(_s: int, field=field, widget=t):
                 _patch(field, bool(widget.isChecked()))
             t.stateChanged.connect(_h)
@@ -3242,10 +3257,15 @@ def _proxy_profiles_card() -> QFrame:
         # decides whether the rules or the memory index survive. Same dropdown
         # as the global rows, built from the same option list.
         def _count_field(dest: QVBoxLayout, field: str) -> None:
+            label, hlp = _proxy_copy(field, "profile")
+            inherited = field not in prof
             try:
-                cur = int(prof.get(field, -1))
+                cur = int(get_path(read_settings(), f"proxy.{field}", -1) if inherited
+                          else prof.get(field, -1))
             except (TypeError, ValueError):
                 cur = -1
+            if inherited:
+                hlp += " Not set for this profile — showing the inherited global value."
             cb = QComboBox()
             for _txt, _val in _KEEP_DOC_OPTIONS:
                 cb.addItem(_txt, _val)
@@ -3255,7 +3275,7 @@ def _proxy_profiles_card() -> QFrame:
             cb.currentIndexChanged.connect(
                 lambda _i, f=field, w=cb: _patch(f, int(w.currentData())))
             dest.addWidget(_row(
-                row_label(*_proxy_copy(field, "profile"), field),
+                row_label(label, hlp, field),
                 _wrap_align(cb, Qt.AlignmentFlag.AlignLeft)))
 
         for _f in ("keep_claude_md", "keep_rules", "keep_memory"):
@@ -3636,24 +3656,12 @@ def _proxy_profiles_card() -> QFrame:
         if any(p.get("name") == name for p in profs):
             _QMessageBox.warning(card, "Exists", f"Profile '{name}' already exists.")
             return
+        # Only what makes it a profile: every other field stays absent so it
+        # inherits the global proxy.* value (_pget) until set here. Writing
+        # them all as off/empty used to pin a new profile to "everything off".
         profs.append({
             "name": name,
             "match": {"header": "User-Agent", "contains": ""},
-            "tool_search": False,
-            "auto_load_tools": False,
-            "strip_reminders": False,
-            "sort_tools": False,
-            "inject_date_location": False,
-            "keep_claude_md": -1,
-            "keep_rules": -1,
-            "keep_memory": -1,
-            "strip_client_system_prompt": False,
-            "strip_agent_types": True,
-            "strip_skills": False,
-            "strip_mcp_instructions": False,
-            "inject_managed": [],
-            "core_tools": [],
-            "strip_tool_names": [],
         })
         _save_profiles(profs)
         _refresh_picker(preserve_idx=len(profs) - 1)
@@ -3773,14 +3781,20 @@ def _mcp(window) -> QWidget:
             t.stateChanged.connect(_toggle)
             toggles[name] = t
 
-            tw.addWidget(_row(row_label(humanize(name), "", name),
+            tw.addWidget(_row(row_label(
+                humanize(name),
+                "Loads this tool module at startup (restart required). Off removes its tools from "
+                "the MCP server AND from the proxy's Managed Tools; the Managed Tools switches are a "
+                "live, proxy-only filter on top.", name),
                                _wrap_align(t, Qt.AlignmentFlag.AlignLeft)))
 
             nl = name.lower()
             if nl == "stt":
-                tw.addWidget(_line_row("mcp_server.stt_url", "  └─ Endpoint", "http://127.0.0.1:6600"))
+                tw.addWidget(_readonly_row("voice.stt.base_url", "  └─ Endpoint",
+                                           "Audio → STT → Endpoint (shared with Telegram voice)"))
             elif nl == "tts":
-                tw.addWidget(_line_row("mcp_server.tts_url", "  └─ Endpoint", "http://127.0.0.1:6600"))
+                tw.addWidget(_readonly_row("voice.tts.base_url", "  └─ Endpoint",
+                                           "Audio → TTS → Endpoint (shared with Telegram voice)"))
 
     def refresh() -> None:
         # For now, just sync toggles with runtime_state
@@ -3801,7 +3815,11 @@ def _mcp(window) -> QWidget:
 def _managed(window) -> QWidget:
     scroll, _, layout = _page()
     card, body = _card("Managed Tools",
-                       "Proxy-injected tools — WebSearch, code_execution, speak, transcribe, + bridged MCP")
+                       "Proxy-injected tools — WebSearch, code_execution, speak, transcribe, + bridged MCP. "
+                       "A switch here is a live, proxy-only filter: a tool must also be in the request's "
+                       "Inject Managed Tools list (Proxy → Tool Set, or the matching client profile) and "
+                       "registered at all (MCP → Registered Tools loads the module; DocGraph tools need "
+                       "its host; design_* need TeleDesign → Offer design tools to local models).")
     rows_wrap = QVBoxLayout()
     rows_wrap.setSpacing(10)
     body.addLayout(rows_wrap)
@@ -3986,10 +4004,13 @@ def _managed(window) -> QWidget:
             rows_wrap.addWidget(_row(label_w,
                                       _wrap_align(t_widget, Qt.AlignmentFlag.AlignLeft)))
 
+            # Endpoint is edited on the Audio page (one place per setting).
             if nl == "transcribe":
-                rows_wrap.addWidget(_line_row("mcp_server.stt_url", "  └─ Endpoint", "http://127.0.0.1:6600"))
+                rows_wrap.addWidget(_readonly_row("voice.stt.base_url", "  └─ Endpoint",
+                                                  "Audio → STT → Endpoint"))
             elif nl == "speak":
-                rows_wrap.addWidget(_line_row("mcp_server.tts_url", "  └─ Endpoint", "http://127.0.0.1:6600"))
+                rows_wrap.addWidget(_readonly_row("voice.tts.base_url", "  └─ Endpoint",
+                                                  "Audio → TTS → Endpoint"))
 
     def refresh() -> None:
         nonlocal last_names
@@ -4135,8 +4156,10 @@ def _telegram(window) -> QWidget:
     sb.addWidget(_number_row("streaming.interval_sec",       "Edit Interval",        0.3, 3.0, 0.1, 1, "s"))
     sb.addWidget(_number_row("streaming.max_message_length", "Max Message Length",   500, 4096, 100, 0))
     sb.addWidget(_number_row("streaming.idle_timeout_sec",   "Session Idle Timeout", 60, 86400, 60, 0, "s"))
-    sb.addWidget(_number_row("streaming.idle_sec",           "PTY Idle Threshold",   0.3, 10.0, 0.1, 1, "s"))
-    sb.addWidget(_number_row("streaming.max_wait_sec",       "PTY Max Wait",         1.0, 30.0, 0.5, 1, "s"))
+    sb.addWidget(_number_row("streaming.idle_sec",           "PTY Idle Threshold",   0.3, 10.0, 0.1, 1, "s",
+                              "Global default. Tools → <tool> → Streaming Overrides can override it per tool."))
+    sb.addWidget(_number_row("streaming.max_wait_sec",       "PTY Max Wait",         1.0, 30.0, 0.5, 1, "s",
+                              "Global default. Tools → <tool> → Streaming Overrides can override it per tool."))
     sb.addWidget(_toggle_row("streaming.dump_raw_pty",       "Dump Raw PTY",
                               "Write raw PTY bytes to data/logs/pty_<cmd>_<timestamp>.bin + .txt for diagnosing missing-output issues. Restart the bot after toggling."))
     layout.addWidget(stream_card)
@@ -4178,7 +4201,8 @@ def _audio(window) -> QWidget:
     stt_card, stt_body = _card("STT",
                                 "Speech-to-text via OpenAI /v1/audio/transcriptions")
     stt_body.addWidget(_toggle_row("voice.stt.enabled", "Enabled",
-                                    "Auto-transcribe voice messages."))
+                                    "Speech-to-text for Telegram voice messages and the transcribe "
+                                    "tool (MCP and proxy)."))
 
     stt_pill = QLabel("⚪ untested")
     stt_pill.setProperty("class", "stat_pill")
@@ -4193,7 +4217,9 @@ def _audio(window) -> QWidget:
                                    "http://127.0.0.1:6600/v1",
                                    "Host + port of the STT server (VoxType by default). "
                                    "VoxType picks the STT model from its own settings — "
-                                   "telecode only addresses the endpoint."),
+                                   "telecode only addresses the endpoint. The one STT endpoint: "
+                                   "Telegram voice messages and the transcribe tool (MCP and "
+                                   "proxy) both use it."),
         ["voice.stt.enabled"], lambda e: bool(e)))
 
     # STT Test button
@@ -4229,7 +4255,8 @@ def _audio(window) -> QWidget:
     tts_card, tts_body = _card("TTS",
                                 "Text-to-speech via OpenAI /v1/audio/speech")
     tts_body.addWidget(_toggle_row("voice.tts.enabled", "Enabled",
-                                    "Allow telecode to synthesise audio via the TTS endpoint."))
+                                    "Allow telecode to synthesise audio via the TTS endpoint — "
+                                    "the speak tool (MCP and proxy) and the test below."))
 
     tts_pill = QLabel("⚪ untested")
     tts_pill.setProperty("class", "stat_pill")
@@ -4243,7 +4270,8 @@ def _audio(window) -> QWidget:
                                    "http://127.0.0.1:6600/v1",
                                    "Host + port of the TTS server (VoxType by default). "
                                    "VoxType picks the TTS model + voice from its own "
-                                   "settings — telecode only addresses the endpoint."),
+                                   "settings — telecode only addresses the endpoint. The one TTS "
+                                   "endpoint: the speak tool (MCP and proxy) uses it too."),
         ["voice.tts.enabled"], lambda e: bool(e)))
 
     # TTS Test button — synthesizes a short phrase and stores the WAV.
@@ -4809,6 +4837,29 @@ def _line_row(path: str, label: str, placeholder: str = "",
     # short values like "127.0.0.1" sit in a sparse row.
     le.setMaximumWidth(720)
     return _row(row_label(label, help_text, path, cli), _wrap_align(le, Qt.AlignmentFlag.AlignLeft))
+
+
+def _readonly_row(path: str, label: str, where: str, default: str = "") -> QWidget:
+    """Read-only mirror of a setting edited elsewhere: current value + where to
+    change it. One editable control per key — every other page uses this."""
+    val = QLabel()
+    val.setStyleSheet(f"color: {FG_MUTE};")
+    val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+    def _sync(changed: str = path) -> None:
+        if changed != path:
+            return
+        try:
+            val.setText(str(get_path(read_settings(), path, default) or default or "—"))
+        except RuntimeError:             # label destroyed with its page / row
+            try:
+                settings_bus().settingChanged.disconnect(_sync)
+            except (RuntimeError, TypeError):
+                pass
+    _sync()
+    settings_bus().settingChanged.connect(_sync)
+    return _row(row_label(label, f"Change it under {where}.", path),
+                _wrap_align(val, Qt.AlignmentFlag.AlignLeft))
 
 
 def _code_row(path: str, label: str, placeholder: str = "",
@@ -5388,7 +5439,9 @@ def _models(window) -> QWidget:
             [f"{p}.lora"], lambda l: bool(str(l or "").strip())))
 
         _sl = _sec("Grammar",
-                    "--grammar / --grammar-file — constrain generation with GBNF")
+                    "--grammar / --grammar-file — this model's default GBNF (server flag). A grammar "
+                    "or schema sent with a request overrides it — including the global "
+                    "llama.cpp → Structured Output while that is enabled.")
         _sl.addWidget(_code_row(f"{p}.grammar",       "GBNF Grammar (inline)",
                                          "(empty)",
                                          "--grammar: inline GBNF for constrained decoding.",
@@ -5411,7 +5464,8 @@ def _models(window) -> QWidget:
                     "llamacpp.models.<m>.extra_args — raw flags appended to the spawn argv")
         _sl.addWidget(_pair_list_row(f"{p}.extra_args", "Extra Args",
             'Per-model escape hatch — one [flag, value] pair per row. '
-            'Top-level llamacpp.extra_args is also appended.'))
+            'The global llamacpp.extra_args (llama.cpp → Server) is appended after these, '
+            'so for a flag set in both the global one usually wins.'))
 
         _sl = _sec("Per-Model Reasoning Override",
                     "--reasoning* — server-side reasoning flags for this model")
@@ -5425,7 +5479,9 @@ def _models(window) -> QWidget:
         _reason_not_off = lambda r: str(r or "").strip().lower() != "off"
         _sl.addWidget(_dependent(
             _number_row(f"{p}.reasoning_budget",        "Reasoning Budget",   -1, 1048576, 256, 0, "tok",
-                         "--reasoning-budget. -1 = unlimited, 0 = disable thinking."),
+                         "--reasoning-budget. -1 = unlimited, 0 = disable thinking. Per-model server "
+                         "flag: while it is emitted, the per-request token budget from the global "
+                         "llama.cpp → Reasoning Effort Map is not honoured."),
             [f"{p}.reasoning"], _reason_not_off))
         _sl.addWidget(_dependent(
             _number_row(f"{p}.reasoning_budget_message","Reasoning Budget (per message)", -1, 1048576, 256, 0, "tok",
@@ -6160,8 +6216,15 @@ def _tools(window) -> QWidget:
         form_layout.addWidget(_line_row(f"{p}.name", "Display Name", "My Tool"))
         form_layout.addWidget(_line_row(f"{p}.icon", "Icon (emoji)", "🔧"))
 
-        if is_computer:
-            # Computer-control shape
+        if is_computer and key == "computer":
+            # tools.computer.* (endpoint, loop, system prompt) is edited on the
+            # Computer page — one place per setting. Read-only mirror here.
+            form_layout.addWidget(_section_header("API"))
+            form_layout.addWidget(_readonly_row(f"{p}.api.format", "Format", "Computer → API Format"))
+            form_layout.addWidget(_readonly_row(f"{p}.api.base_url", "Base URL", "Computer → Base URL"))
+            form_layout.addWidget(_readonly_row(f"{p}.api.model", "Model", "Computer → Model"))
+        elif is_computer:
+            # Computer-control shape under another key — no other page edits it.
             form_layout.addWidget(_section_header("API"))
             form_layout.addWidget(_line_row(f"{p}.api.base_url", "Base URL",
                                              "http://localhost:1235/v1"))

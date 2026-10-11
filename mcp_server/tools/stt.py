@@ -18,7 +18,7 @@ def _stt_url() -> str:
     """Read the configured endpoint at request time (not import time)."""
     try:
         import config as _cfg
-        return _cfg.get_nested("mcp_server.stt_url", "http://127.0.0.1:6600")
+        return _cfg.audio_endpoint("stt")      # Audio → STT → Endpoint
     except Exception:
         return os.environ.get("WHISPER_URL", "http://127.0.0.1:6600")
 
@@ -57,6 +57,12 @@ async def transcribe(
     Returns:
         Transcribed text, or an error message.
     """
+    try:
+        import config as _cfg
+        if not _cfg.audio_enabled("stt"):
+            return "Error: speech-to-text is switched off (telecode Audio → STT → Enabled)."
+    except ImportError:
+        pass                                   # standalone MCP server: always on
     is_url = audio_path.startswith("http://") or audio_path.startswith("https://")
 
     if is_url:

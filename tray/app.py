@@ -48,7 +48,7 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
     from tray.qt_theme import QSS
     from tray.qt_window import SettingsWindow
     from tray import icon as icon_factory
-    from tray.qt_helpers import schedule, patch_settings, read_settings, get_path, build_status, humanize, format_protocol
+    from tray.qt_helpers import schedule, read_settings, get_path, build_status, humanize, format_protocol
 
     # Qt wants high-DPI attributes set before QApplication is instantiated
     QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
@@ -60,6 +60,12 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
 
     # Main window (hidden at start — shown by tray click)
     window = SettingsWindow(bot_app, bot_loop)
+
+    # Pages are built lazily, so install the MCP live start/stop hook now —
+    # otherwise the tray menu's MCP → Enabled would only take effect after a
+    # restart unless the MCP page had been opened first.
+    from tray.qt_sections import _mcp_live_start
+    _mcp_live_start()
 
     # Tray icon — render our PIL bolt to a QPixmap
     def _make_qicon() -> QIcon:
@@ -86,22 +92,14 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
         except Exception as exc:
             log.warning("schedule: %s", exc)
 
-    def _toggle_and_reload(path: str, value):
-        try:
-            patch_settings(path, value)
-        except Exception as exc:
-            log.error("patch %s failed: %s", path, exc)
-
     # ── Llama submenu ────────────────────────────────────────────────
     llama_menu = menu.addMenu("⬡ Llama")
     llama_header = QAction("Disabled", llama_menu); llama_header.setEnabled(False)
     llama_model  = QAction("Model: —", llama_menu); llama_model.setEnabled(False)
     llama_menu.addAction(llama_header)
     llama_menu.addAction(llama_model)
-    llama_menu.addSeparator()
-    llama_autostart = QAction("Auto Start", llama_menu); llama_autostart.setCheckable(True)
-    llama_autostart.triggered.connect(lambda checked: _toggle_and_reload("llamacpp.auto_start", bool(checked)))
-    llama_menu.addAction(llama_autostart)
+    # Auto-start is a launch preference, not a quick action: it lives only on
+    # the llama.cpp page (Lifecycle → Auto-Start On Launch).
     llama_menu.addSeparator()
     load_action    = QAction("Load Now",   llama_menu)
     unload_action  = QAction("Unload",     llama_menu)
@@ -140,11 +138,9 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
     proxy_menu.addAction(proxy_header)
     proxy_menu.addAction(proxy_protos)
     proxy_menu.addSeparator()
-    proxy_enabled = QAction("Enabled (restart required)", proxy_menu); proxy_enabled.setCheckable(True)
-    proxy_enabled.triggered.connect(lambda checked: _toggle_and_reload("proxy.enabled", bool(checked)))
-    proxy_menu.addAction(proxy_enabled)
-    proxy_debug = QAction("Debug Dumps", proxy_menu); proxy_debug.setCheckable(True)
-    proxy_debug.triggered.connect(lambda checked: _toggle_and_reload("proxy.debug", bool(checked)))
+    # Status only: every setting is edited in one place (its settings page);
+    # the menu just reports. Proxy → Debug Logging changes this one.
+    proxy_debug = QAction("Debug logging: off", proxy_menu); proxy_debug.setEnabled(False)
     proxy_menu.addAction(proxy_debug)
 
     # ── MCP submenu ──────────────────────────────────────────────────
@@ -153,10 +149,7 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
     mcp_tools  = QAction("Tools: 0", mcp_menu); mcp_tools.setEnabled(False)
     mcp_menu.addAction(mcp_header)
     mcp_menu.addAction(mcp_tools)
-    mcp_menu.addSeparator()
-    mcp_enabled = QAction("Enabled (restart required)", mcp_menu); mcp_enabled.setCheckable(True)
-    mcp_enabled.triggered.connect(lambda checked: _toggle_and_reload("mcp_server.enabled", bool(checked)))
-    mcp_menu.addAction(mcp_enabled)
+    # Status only (the header above) — MCP → Enabled is the one switch.
 
     # ── Bot submenu ──────────────────────────────────────────────────
     bot_menu = menu.addMenu("⬢ Bot")
@@ -293,9 +286,6 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
             llama_menu.setTitle("⬡ Llama: Disabled")
             llama_header.setText("Disabled")
         llama_model.setText(f"Model: {llama.get('active_model') or llama.get('default_model') or '—'}")
-        llama_autostart.blockSignals(True)
-        llama_autostart.setChecked(bool(get_path(settings, "llamacpp.auto_start", False)))
-        llama_autostart.blockSignals(False)
         load_action.setEnabled(llama_enabled and not alive_bool)
         unload_action.setEnabled(llama_enabled and alive_bool)
         restart_action.setEnabled(llama_enabled and alive_bool)
@@ -310,12 +300,7 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
             proxy_menu.setTitle("⬡ Proxy: Disabled")
             proxy_header.setText("Disabled")
             proxy_protos.setText("Protocols: —")
-        proxy_enabled.blockSignals(True)
-        proxy_enabled.setChecked(bool(get_path(settings, "proxy.enabled", False)))
-        proxy_enabled.blockSignals(False)
-        proxy_debug.blockSignals(True)
-        proxy_debug.setChecked(bool(get_path(settings, "proxy.debug", False)))
-        proxy_debug.blockSignals(False)
+        proxy_debug.setText("Debug logging: " + ("on" if get_path(settings, "proxy.debug", False) else "off"))
 
         # ── MCP ──────────────────────────────────────────────────────
         if mcp.get("enabled"):
@@ -327,9 +312,6 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
             mcp_menu.setTitle("⬡ MCP: Disabled")
             mcp_header.setText("Disabled")
             mcp_tools.setText("Tools: 0")
-        mcp_enabled.blockSignals(True)
-        mcp_enabled.setChecked(bool(get_path(settings, "mcp_server.enabled", False)))
-        mcp_enabled.blockSignals(False)
 
         # ── Bot ──────────────────────────────────────────────────────
         try:

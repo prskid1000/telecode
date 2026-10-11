@@ -319,13 +319,14 @@ def stream_max_wait_sec() -> float:
 def tool_stream_idle_sec(key: str) -> float:
     """Per-tool override for PTY idle flush; falls back to the global default."""
     override = tool_cfg(key).get("streaming", {}).get("idle_sec")
-    return float(override) if override is not None else stream_idle_sec()
+    # the tray row's 0 means "inherit global" — the slider can't store "unset"
+    return float(override) if override else stream_idle_sec()
 
 
 def tool_stream_max_wait_sec(key: str) -> float:
     """Per-tool override for PTY max-wait flush; falls back to the global default."""
     override = tool_cfg(key).get("streaming", {}).get("max_wait_sec")
-    return float(override) if override is not None else stream_max_wait_sec()
+    return float(override) if override else stream_max_wait_sec()   # 0 = inherit global
 
 
 # ── STT ───────────────────────────────────────────────────────────────────────
@@ -410,8 +411,25 @@ def computer_max_history() -> int:
 def mcp_server_enabled() -> bool: return bool(get_nested("mcp_server.enabled", False))
 def mcp_server_host()    -> str:  return get_nested("mcp_server.host", "127.0.0.1")
 def mcp_server_port()    -> int:  return int(get_nested("mcp_server.port", 1236))
-def mcp_server_tts_url() -> str:  return get_nested("mcp_server.tts_url", "http://127.0.0.1:6600")
-def mcp_server_stt_url() -> str:  return get_nested("mcp_server.stt_url", "http://127.0.0.1:6600")
+def mcp_server_tts_url() -> str:  return audio_endpoint("tts")
+def mcp_server_stt_url() -> str:  return audio_endpoint("stt")
+
+
+def audio_endpoint(kind: str) -> str:
+    """Root URL (no /v1) of the STT / TTS server — ONE setting per modality,
+    Audio → STT / TTS → Endpoint (voice.<kind>.base_url), shared by Telegram
+    voice and the transcribe / speak tools (MCP + proxy). The tools used to
+    have their own mcp_server.<kind>_url, which drifted (tts pointed at a dead
+    :6500); it is only read now if the voice key is missing."""
+    url = str(get_nested(f"voice.{kind}.base_url", "") or "").strip().rstrip("/")
+    if url:
+        return url[:-3] if url.endswith("/v1") else url
+    return str(get_nested(f"mcp_server.{kind}_url", "") or "http://127.0.0.1:6600").rstrip("/")
+
+
+def audio_enabled(kind: str) -> bool:
+    """Audio → STT / TTS → Enabled — gates Telegram voice and the tools alike."""
+    return bool(get_nested(f"voice.{kind}.enabled", True))
 
 
 # ── Triggers (the one scheduler, services/triggers) ─────────────────────────

@@ -18,7 +18,7 @@ def _tts_url() -> str:
     """Read the configured endpoint at request time."""
     try:
         import config as _cfg
-        return _cfg.get_nested("mcp_server.tts_url", "http://127.0.0.1:6600")
+        return _cfg.audio_endpoint("tts")      # Audio → TTS → Endpoint
     except Exception:
         return os.environ.get("TTS_URL", "http://127.0.0.1:6600")
 
@@ -40,6 +40,12 @@ async def speak(
     Note: the TTS server (VoxType) picks the model + voice from its own
     settings — this tool only addresses the endpoint by host + port.
     """
+    try:
+        import config as _cfg
+        if not _cfg.audio_enabled("tts"):
+            return "Error: text-to-speech is switched off (telecode Audio → TTS → Enabled)."
+    except ImportError:
+        pass                                   # standalone MCP server: always on
     base = _tts_url().rstrip("/")
     url = f"{base}/v1/audio/speech"
     payload: dict = {"input": text}
