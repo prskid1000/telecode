@@ -3717,7 +3717,9 @@ def _mcp(window) -> QWidget:
     scroll, _, layout = _page()
     card, body = _card("MCP Server")
     body.addWidget(_toggle_row("mcp_server.enabled", "Enabled",
-                                "Streamable HTTP MCP server for external clients. Restart required."))
+                                "Streamable HTTP MCP server for external clients. Starts immediately; "
+                                "turning it off (or changing host/port) needs a restart."))
+    _mcp_live_start()
 
     body.addWidget(_section_header("Network"))
     # Nothing is bound while the MCP server is off.
@@ -6816,12 +6818,31 @@ def _teledesign(window) -> QWidget:
                                "Allow view / comment / edit links. They only reach other machines if the proxy is bound beyond 127.0.0.1."))
     layout.addWidget(card)
 
+    # ── Design tools for local models ───────────────────────────────
+    # Off unregisters the design_* managed tools (managed_tools.set_design_local),
+    # so they leave local-model requests and the Managed Tools page the way
+    # DocGraph's do when its host is down. TeleDesign's own turns get the tools
+    # over MCP and are unaffected.
+    card, body = _card("Local models")
+    body.addWidget(_toggle_row("design.local_tools", "Offer design tools to local models",
+                               "Off = the design_* tools are removed from the proxy (gone from Managed "
+                               "Tools and from every local-model request). TeleDesign's own turns still "
+                               "have them, over MCP.", default=True))
+    layout.addWidget(card)
+    _design_local_hook()
+
     # ── MCP registration ─────────────────────────────────────────────
     card, body = _card("Use TeleDesign from other CLIs",
-                       "Registers telecode's MCP server (mcp_server.* — enable it in MCP) so the design_* tools "
-                       "and the /design prompt work inside these CLIs.")
+                       "Registers telecode's MCP server so the design_* tools and the /design prompt work "
+                       "inside these CLIs.")
     rows: dict[str, tuple[QLabel, QPushButton]] = {}
     from services.design import mcp_registration as _reg
+    # Same key as MCP → Enabled; turning it on starts the server right away
+    # (_mcp_live_start), so the CLIs below can connect without a restart.
+    body.addWidget(_toggle_row("mcp_server.enabled", "Enable MCP server",
+                               "Starts the MCP server now (also under MCP). Turning it off takes effect "
+                               "after a telecode restart."))
+    _mcp_live_start()
     # Server reachability + "Re-check connection": re-probes the MCP endpoint and every client.
     srv_state = QLabel("checking…")
     srv_state.setStyleSheet(f"color: {FG_MUTE};")
@@ -6906,7 +6927,68 @@ def _teledesign(window) -> QWidget:
     recheck.clicked.connect(_recheck)
     recheck.setEnabled(False)
     threading.Thread(target=_probe_all, daemon=True).start()
+
+    def _recheck_if_alive() -> None:
+        try:
+            _recheck()
+        except RuntimeError:             # page torn down since the toggle
+            pass
+
+    def _on_setting(path: str) -> None:
+        if path == "mcp_server.enabled":
+            # give uvicorn a moment to bind before re-probing
+            QTimer.singleShot(1500, _recheck_if_alive)
+    settings_bus().settingChanged.connect(_on_setting)
     return scroll
+
+
+_DESIGN_LOCAL_HOOKED = False
+
+
+def _design_local_hook() -> None:
+    """Apply `design.local_tools` to the live proxy registry on change. Idempotent."""
+    global _DESIGN_LOCAL_HOOKED
+    if _DESIGN_LOCAL_HOOKED:
+        return
+    _DESIGN_LOCAL_HOOKED = True
+
+    def _on(path: str) -> None:
+        if path != "design.local_tools":
+            return
+        on = bool(get_path(read_settings(), path, True))
+        from proxy import managed_tools
+        from proxy.runtime_state import load, set_tool
+        managed_tools.set_design_local(on)
+        if on:
+            # back on = all of them; drop per-tool "off"s left from before
+            for n, v in (load().get("managed_tools") or {}).items():
+                if n.startswith("design_") and not v:
+                    set_tool("managed_tools", n, True)
+    settings_bus().settingChanged.connect(_on)
+
+
+_MCP_LIVE_HOOKED = False
+
+
+def _mcp_live_start() -> None:
+    """Start the MCP server as soon as `mcp_server.enabled` flips on, from any
+    page. Idempotent. Stopping isn't live — FastMCP owns its uvicorn loop in a
+    daemon thread with no clean shutdown — so off waits for a restart."""
+    global _MCP_LIVE_HOOKED
+    if _MCP_LIVE_HOOKED:
+        return
+    _MCP_LIVE_HOOKED = True
+
+    def _on(path: str) -> None:
+        if path != "mcp_server.enabled" or not get_path(read_settings(), path, False):
+            return
+        try:
+            import config as app_config
+            from mcp_server.server import start_mcp_background
+            start_mcp_background(app_config.mcp_server_host(), app_config.mcp_server_port())
+        except Exception as exc:
+            log.error("MCP server live start failed: %s", exc, exc_info=True)
+    settings_bus().settingChanged.connect(_on)
 
 
 _BUILDERS: dict[str, Callable[[Any], QWidget]] = {

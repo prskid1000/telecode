@@ -9,6 +9,10 @@ log = logging.getLogger("telecode.mcp_server")
 _thread: threading.Thread | None = None
 
 
+def is_running() -> bool:
+    return _thread is not None and _thread.is_alive()
+
+
 def start_mcp_background(host: str, port: int) -> threading.Thread | None:
     """Start MCP streamable-HTTP server in a daemon thread.
 
@@ -19,6 +23,9 @@ def start_mcp_background(host: str, port: int) -> threading.Thread | None:
     but the actual values come from mcp_server.app (reads settings.json).
     """
     global _thread
+
+    if is_running():                     # tray toggles call this live; never bind twice
+        return _thread
 
     try:
         import config as cfg

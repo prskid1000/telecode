@@ -238,4 +238,26 @@ def _bridge_mcp_tools() -> None:
                  pre_llm=pre_llm, post_llm=post_llm)
 
 
+# design_* tools parked here while `design.local_tools` is off — out of the
+# registry (so out of every local-model request and the Managed Tools page,
+# like DocGraph's tools when its host is down) but kept for re-registering.
+# TeleDesign's own turns are unaffected: they reach the tools over MCP.
+_HIDDEN_DESIGN: dict[str, ManagedTool] = {}
+
+
+def set_design_local(on: bool) -> None:
+    if on:
+        _REGISTRY.update(_HIDDEN_DESIGN)
+        _HIDDEN_DESIGN.clear()
+        return
+    for name in [n for n in _REGISTRY if n.startswith("design_")]:
+        _HIDDEN_DESIGN[name] = _REGISTRY.pop(name)
+
+
 _bridge_mcp_tools()
+try:
+    import config as _cfg
+    if not _cfg.get_nested("design.local_tools", True):
+        set_design_local(False)
+except Exception:  # standalone proxy without telecode's config: keep them
+    pass
