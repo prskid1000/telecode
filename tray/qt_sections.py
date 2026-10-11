@@ -3717,8 +3717,8 @@ def _mcp(window) -> QWidget:
     scroll, _, layout = _page()
     card, body = _card("MCP Server")
     body.addWidget(_toggle_row("mcp_server.enabled", "Enabled",
-                                "Streamable HTTP MCP server for external clients. Starts immediately; "
-                                "turning it off (or changing host/port) needs a restart."))
+                                "Streamable HTTP MCP server for external clients. Starts / stops right "
+                                "away; host/port changes need a restart."))
     _mcp_live_start()
 
     body.addWidget(_section_header("Network"))
@@ -6840,8 +6840,7 @@ def _teledesign(window) -> QWidget:
     # Same key as MCP → Enabled; turning it on starts the server right away
     # (_mcp_live_start), so the CLIs below can connect without a restart.
     body.addWidget(_toggle_row("mcp_server.enabled", "Enable MCP server",
-                               "Starts the MCP server now (also under MCP). Turning it off takes effect "
-                               "after a telecode restart."))
+                               "Starts / stops the MCP server right away (same switch as MCP → Enabled)."))
     _mcp_live_start()
     # Server reachability + "Re-check connection": re-probes the MCP endpoint and every client.
     srv_state = QLabel("checking…")
@@ -6971,23 +6970,26 @@ _MCP_LIVE_HOOKED = False
 
 
 def _mcp_live_start() -> None:
-    """Start the MCP server as soon as `mcp_server.enabled` flips on, from any
-    page. Idempotent. Stopping isn't live — FastMCP owns its uvicorn loop in a
-    daemon thread with no clean shutdown — so off waits for a restart."""
+    """Start / stop the MCP server as soon as `mcp_server.enabled` flips, from
+    any page. Idempotent hook."""
     global _MCP_LIVE_HOOKED
     if _MCP_LIVE_HOOKED:
         return
     _MCP_LIVE_HOOKED = True
 
     def _on(path: str) -> None:
-        if path != "mcp_server.enabled" or not get_path(read_settings(), path, False):
+        if path != "mcp_server.enabled":
             return
         try:
+            import threading
             import config as app_config
-            from mcp_server.server import start_mcp_background
-            start_mcp_background(app_config.mcp_server_host(), app_config.mcp_server_port())
+            from mcp_server.server import start_mcp_background, stop_mcp_server
+            if get_path(read_settings(), path, False):
+                start_mcp_background(app_config.mcp_server_host(), app_config.mcp_server_port())
+            else:                        # stop joins the server thread — keep it off the Qt thread
+                threading.Thread(target=stop_mcp_server, daemon=True, name="mcp-stop").start()
         except Exception as exc:
-            log.error("MCP server live start failed: %s", exc, exc_info=True)
+            log.error("MCP server live start/stop failed: %s", exc, exc_info=True)
     settings_bus().settingChanged.connect(_on)
 
 

@@ -687,7 +687,7 @@ interface every module codes against: [docs/teledesign-contract.md](docs/teledes
 
 FastMCP streamable HTTP, port 1236. Drop-in `tools/`/`resources/`/`prompts/` auto-discovered via `pkgutil.iter_modules`. Built-ins: `speak`, `transcribe`, `web_search` (Brave). Audio defaults to VoxType (`:6600`); repoint via `mcp_server.stt_url`/`tts_url`. Local models routed through the proxy inject these via `managed_tools.py` — no MCP needed.
 
-Turning `mcp_server.enabled` on in the tray (MCP page or TeleDesign → "Enable MCP server") starts the server live (`qt_sections._mcp_live_start` → idempotent `start_mcp_background`); off still needs a restart — FastMCP owns its uvicorn loop in a daemon thread with no clean stop.
+Turning `mcp_server.enabled` on in the tray (MCP page or TeleDesign → "Enable MCP server") starts / stops the server live (`qt_sections._mcp_live_start` → idempotent `start_mcp_background` / `stop_mcp_server`). That works because `mcp_server.app.serve()` is our own uvicorn runner (FastMCP's keeps no handle): `request_stop()` sets `should_exit`, and each start clears FastMCP's cached `_session_manager`, which can only `run()` once. Host/port changes still need a restart.
 
 `design.local_tools` (default true; TeleDesign → "Offer design tools to local models") off **unregisters** the `design_*` managed tools (`managed_tools.set_design_local`, parked in `_HIDDEN_DESIGN`, applied at import too), so they leave every local-model request and the Managed Tools page the way DocGraph's tools do when its host is down. TeleDesign's own turns are unaffected — they reach the tools over MCP (`mcp_tools`, a separate key). Back on resets any per-tool `managed_tools.design_*` "off" overrides.
 

@@ -43,11 +43,13 @@ def start_mcp_background(host: str, port: int) -> threading.Thread | None:
         if sys.stderr is None:
             sys.stderr = open(os.devnull, "w")
 
-        from mcp_server.app import mcp_app, register_all
+        import asyncio
+        from mcp_server.app import mcp_app, register_all, serve
         register_all()
 
         log.info("MCP server starting on http://%s:%d/mcp", mcp_app.settings.host, mcp_app.settings.port)
-        mcp_app.run(transport="streamable-http")
+        asyncio.run(serve())
+        log.info("MCP server stopped")
 
     _thread = threading.Thread(target=_run, daemon=True, name="mcp-server")
     _thread.start()
@@ -55,7 +57,12 @@ def start_mcp_background(host: str, port: int) -> threading.Thread | None:
     return _thread
 
 
-def stop_mcp_server() -> None:
-    """Best-effort shutdown (daemon thread dies with process)."""
+def stop_mcp_server(timeout: float = 5.0) -> None:
+    """Shut the server down and wait for the port to be released. Blocking —
+    call off the Qt thread."""
     global _thread
-    _thread = None
+    from mcp_server.app import request_stop
+    request_stop()
+    t, _thread = _thread, None
+    if t is not None and t.is_alive():
+        t.join(timeout)

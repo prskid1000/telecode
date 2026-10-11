@@ -16,10 +16,15 @@ except Exception:
 
 mcp_app = FastMCP("telecode", stateless_http=True, host=_host, port=_port)
 
-# Patch run_streamable_http_async to inject CORS middleware when configured.
+# Our own uvicorn runner (FastMCP's builds the same server but keeps no handle):
+# it adds CORS when configured, and `request_stop()` lets the tray switch the
+# server off live instead of waiting for a telecode restart.
+_server = None
 
-async def _run_with_cors() -> None:  # pragma: no cover
-    """Wrap the Starlette app with CORSMiddleware before starting uvicorn."""
+
+async def serve() -> None:  # pragma: no cover
+    """Build the Starlette app (+ CORS) and serve until `request_stop()`."""
+    global _server
     import uvicorn
     import sys
 
@@ -30,6 +35,9 @@ async def _run_with_cors() -> None:  # pragma: no cover
     if sys.stderr is None:
         sys.stderr = open(os.devnull, "w")
 
+    # A session manager can only run once and FastMCP caches it, so drop the
+    # previous one — otherwise a second start (tray off → on) fails.
+    mcp_app._session_manager = None
     starlette_app = mcp_app.streamable_http_app()
 
     if _cors_origins:
@@ -50,12 +58,17 @@ async def _run_with_cors() -> None:  # pragma: no cover
         port=mcp_app.settings.port,
         log_level=mcp_app.settings.log_level.lower(),
     )
-    server = uvicorn.Server(config)
-    await server.serve()
+    _server = uvicorn.Server(config)
+    try:
+        await _server.serve()
+    finally:
+        _server = None
 
 
-if _cors_origins:
-    mcp_app.run_streamable_http_async = _run_with_cors  # type: ignore[assignment]
+def request_stop() -> None:
+    """Ask the running server to shut down (uvicorn checks this flag)."""
+    if _server is not None:
+        _server.should_exit = True
 
 
 def register_all() -> None:
