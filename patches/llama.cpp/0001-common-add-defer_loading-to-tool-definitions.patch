@@ -1,65 +1,123 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Prithwiraj Samanta <prskid1000@gmail.com>
-Date: Wed, 14 Oct 2026 09:45:08 +0530
-Subject: [PATCH] common : add defer_loading to tool definitions
+Date: Wed, 14 Oct 2026 09:55:08 +0530
+Subject: [PATCH] common : add defer_loading and tool_reference to tool
+ definitions
 
-Declares a tool to the sampling grammar while leaving its schema out of the
-rendered prompt, so a client can keep a large tool set callable without paying
-for every schema in context.
+A tool with defer_loading stays in the sampling grammar but its schema is
+left out of the rendered prompt, so a client can keep a large tool set
+callable without paying for every schema in context, and without
+invalidating the prompt cache when a tool is revealed later.
 
-Tools render at the very start of the prompt, so the declared set is part of
-the cached prefix. Adding a tool mid-conversation therefore invalidates the
-whole cache and forces a full re-prefill. Keeping the declared set constant and
-varying only what is rendered avoids that: a schema can be revealed to the
-model later (via a tool result, a system message, or a client-side search tool)
-without touching the prefix.
+Templates that handle the flag themselves (GLM-5.x) are detected with a
+caps probe and get the full tool list with the flag set; for other
+templates the deferred tools are removed before rendering. All tools may
+be deferred only when the template handles the flag.
 
-The two consumers of the tool list were already separate - the grammar builders
-read generation_params::tools, and the prompt reads it through
-common_chat_template_direct_apply_impl - so this adds
-generation_params::tools_visible for the render path and leaves the grammar
-path reading the full list.
-
-At least one tool must be left un-deferred. Templates render their tool section
-conditionally on a non-empty list, so deferring everything would produce a
-prompt that never mentions tools while the grammar still expects calls.
+A tool message made of {"type": "tool_reference", "tool_name"|"name": X}
+parts reveals a deferred tool. Templates that expand references (GLM-5.3)
+get them as is (second caps probe); for others each reference is replaced
+with the tool definition as JSON text. A reference to an undeclared tool
+is an error. The Anthropic /v1/messages conversion passes defer_loading
+and tool_reference through.
 
 Ref: #28179
 
-Rebased onto upstream b11609: after the chat API refactor (#30210) the
-test hunk's context had moved and common_chat_params::prompt became a
-common_chat_prompt (read via .str()); the README anchor line was removed
-upstream. The common/ hunks applied unchanged.
-
-Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Assisted-by: Claude Opus 5.5
 ---
- common/chat-auto-parser.h |  4 ++
- common/chat.cpp           | 42 +++++++++++++++---
- common/chat.h             | 11 ++++-
- tests/test-chat.cpp       | 92 +++++++++++++++++++++++++++++++++++++++
- tools/server/README.md    | 11 +++++
- 5 files changed, 153 insertions(+), 7 deletions(-)
+ common/chat-auto-parser.h      |   2 +
+ common/chat.cpp                | 104 +++++++++++++++--
+ common/chat.h                  |   5 +-
+ common/jinja/caps.cpp          | 104 +++++++++++++++++
+ common/jinja/caps.h            |   6 +
+ tests/test-chat.cpp            | 198 +++++++++++++++++++++++++++++++++
+ tools/server/README.md         |  18 +++
+ tools/server/server-chat.cpp   |  17 ++-
+ tools/server/server-common.cpp |   2 +-
+ 9 files changed, 443 insertions(+), 13 deletions(-)
 
 diff --git a/common/chat-auto-parser.h b/common/chat-auto-parser.h
-index 8ae15c91e..e4dee1f0c 100644
+index 8ae15c91e..696fd512b 100644
 --- a/common/chat-auto-parser.h
 +++ b/common/chat-auto-parser.h
-@@ -54,6 +54,10 @@ namespace autoparser {
+@@ -54,6 +54,8 @@ namespace autoparser {
  struct generation_params {
      json                                  messages;
      json                                  tools;
-+    // Subset of `tools` that is rendered into the prompt. Null means "render
-+    // all of them"; it differs from `tools` only when some of them set
-+    // defer_loading. The grammar is always built from the full `tools`.
++    // tools rendered in the prompt when the template cannot hide deferred tools itself; null = render `tools`
 +    json                                  tools_visible;
      common_chat_tool_choice               tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
      json                                  json_schema;
      bool                                  parallel_tool_calls = true;
 diff --git a/common/chat.cpp b/common/chat.cpp
-index 485671308..ba31f7096 100644
+index 485671308..ce2c3fb14 100644
 --- a/common/chat.cpp
 +++ b/common/chat.cpp
-@@ -524,21 +524,29 @@ json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msg
+@@ -190,6 +190,14 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
+         } else {
+             auto & parts = jmsg["content"] = json::array();
+             for (const auto & part : content_parts) {
++                if (part.type == "tool_reference") {
++                    parts.push_back({
++                        {"type", "tool_reference"},
++                        {"name", part.text},
++                        {"tool_name", part.text},
++                    });
++                    continue;
++                }
+                 parts.push_back({
+                     {"type", part.type},
+                     {"text", part.text},
+@@ -370,11 +378,20 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
+                             throw std::invalid_argument("Missing content part type: " + part.dump());
+                         }
+                         const auto & type = part.at("type");
++                        common_chat_msg_content_part msg_part;
++                        msg_part.type = type;
++                        if (type == "tool_reference") {
++                            // Anthropic uses "tool_name", GLM templates use "name"
++                            msg_part.text = part.value("tool_name", part.value("name", std::string()));
++                            if (msg_part.text.empty()) {
++                                throw std::invalid_argument("Missing tool name in tool_reference: " + part.dump());
++                            }
++                            msg.content_parts.push_back(msg_part);
++                            continue;
++                        }
+                         if (type != "text" && type != "media_marker") {
+                             throw std::invalid_argument("Unsupported content part type: " + type.dump());
+                         }
+-                        common_chat_msg_content_part msg_part;
+-                        msg_part.type = type;
+                         msg_part.text = part.at("text");
+                         msg.content_parts.push_back(msg_part);
+                     }
+@@ -467,7 +484,8 @@ struct messages_inp_normalizer {
+                             {"text", it.get<std::string>()},
+                         }
+                     });
+-                } else if (only_string && it.is_array()) {
++                } else if (only_string && it.is_array() && !has_tool_reference(it)) {
++                    // tool references are only left in for templates that expand them
+                     it = concat_content_parts(it);
+                 }
+             }
+@@ -476,6 +494,15 @@ struct messages_inp_normalizer {
+         return normalized;
+     }
+ 
++    static bool has_tool_reference(const json & parts) {
++        for (const auto & part : parts) {
++            if (part.value("type", "") == "tool_reference") {
++                return true;
++            }
++        }
++        return false;
++    }
++
+     // join parts with newline, do not add newline before or after media markers
+     static std::string concat_content_parts(const json & parts) {
+         std::string text;
+@@ -524,21 +551,31 @@ json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msg
      return render_message_to_json(msgs, c);
  }
  
@@ -84,22 +142,22 @@ index 485671308..ba31f7096 100644
              }},
 -        });
 +        };
-+        // Only emitted when set, so output for ordinary tools is unchanged.
++        // only emitted when set, so output for ordinary tools is unchanged
++        // templates differ on where they read it, so set it on both levels
 +        if (tool.defer_loading) {
++            entry["defer_loading"]             = true;
 +            entry["function"]["defer_loading"] = true;
 +        }
 +        result.push_back(std::move(entry));
      }
      return result;
  }
-@@ -574,13 +582,31 @@ std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & too
+@@ -574,10 +611,13 @@ std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & too
                  }
  
                  const auto & function = tool.at("function");
-+                // Accept the flag on the tool object or inside "function" -
-+                // clients differ on where they put it.
-+                const bool defer = tool.value("defer_loading", false) ||
-+                                   function.value("defer_loading", false);
++                // clients put the flag on the tool or inside "function"
++                const bool defer = tool.value("defer_loading", false) || function.value("defer_loading", false);
                  result.push_back({
                      /* .name = */ function.at("name"),
                      /* .description = */ function.value("description", ""),
@@ -108,80 +166,253 @@ index 485671308..ba31f7096 100644
                  });
              }
          }
-+        // Every template renders its tool section conditionally on a non-empty
-+        // tool list, so deferring all of them would produce a prompt that never
-+        // mentions tools while the grammar still expects calls.
-+        bool any_rendered = false;
-+        for (const auto & tool : result) {
-+            if (!tool.defer_loading) {
-+                any_rendered = true;
-+                break;
-+            }
-+        }
-+        if (!result.empty() && !any_rendered) {
-+            throw std::invalid_argument("All tools have defer_loading set; at least one must be rendered");
-+        }
-     } catch (const std::exception & e) {
-         throw std::runtime_error("Failed to parse tools: " + std::string(e.what()) + "; tools = " + tools.dump(2));
-     }
-@@ -891,8 +917,11 @@ common_chat_prompt common_chat_template_direct_apply_impl(
+@@ -891,8 +931,10 @@ common_chat_prompt common_chat_template_direct_apply_impl(
          {"eos_token", tmpl.eos_token()},
          {"enable_thinking", inputs.enable_thinking},
      };
 -    if (tools_override.has_value() || !inputs.tools.empty()) {
 -        inp["tools"] = tools_override.has_value() ? *tools_override : inputs.tools;
-+    // Deferred tools are declared to the grammar but not rendered, so the
-+    // prompt shows `tools_visible` while `tools` stays complete.
++    // tools_visible is set when deferred tools must be hidden from the template; the grammar still uses all tools
 +    const json & render_tools = inputs.tools_visible.is_array() ? inputs.tools_visible : inputs.tools;
 +    if (tools_override.has_value() || !render_tools.empty()) {
 +        inp["tools"] = tools_override.has_value() ? *tools_override : render_tools;
      }
      if (inputs.extra_context.is_object()) {
          // TODO: do we need to merge, or replacing is fine?
-@@ -1286,7 +1315,8 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
+@@ -1283,6 +1325,38 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
+     return tmpl.params_init(tmpl, params);
+ }
+ 
++static bool has_tool_references(const std::vector<common_chat_msg> & msgs) {
++    for (const auto & msg : msgs) {
++        for (const auto & part : msg.content_parts) {
++            if (part.type == "tool_reference") {
++                return true;
++            }
++        }
++    }
++    return false;
++}
++
++// check that every tool_reference names a declared tool; if expand is set, replace it with the tool definition as text
++static void resolve_tool_references(std::vector<common_chat_msg> & msgs, const std::vector<common_chat_tool> & tools, bool expand) {
++    for (auto & msg : msgs) {
++        for (auto & part : msg.content_parts) {
++            if (part.type != "tool_reference") {
++                continue;
++            }
++            auto it = std::find_if(tools.begin(), tools.end(), [&](const common_chat_tool & t) { return t.name == part.text; });
++            if (it == tools.end()) {
++                throw std::invalid_argument("Tool reference '" + part.text + "' not found in available tools");
++            }
++            if (expand) {
++                json def = common_chat_tools_to_json_oaicompat({ *it }).at(0).at("function");
++                def.erase("defer_loading");
++                part.type = "text";
++                part.text = def.dump();
++            }
++        }
++    }
++}
++
  static common_chat_params common_chat_templates_apply_jinja(const struct common_chat_templates *        tmpls,
                                                              const struct common_chat_templates_inputs & inputs) {
      autoparser::generation_params params;
--    params.tools = common_chat_tools_to_json_oaicompat(inputs.tools);
-+    params.tools         = common_chat_tools_to_json_oaicompat(inputs.tools);
-+    params.tools_visible = common_chat_tools_to_json_oaicompat(inputs.tools, /* skip_deferred = */ true);
-     const auto & tmpl =
+@@ -1291,6 +1365,14 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
          params.tools.is_array() && tmpls->template_tool_use ? *tmpls->template_tool_use : *tmpls->template_default;
      const auto & src             = tmpl.source();
+     const auto & caps            = tmpl.original_caps();
++    if (!caps.supports_tool_defer_loading) {
++        // template does not know defer_loading: hide deferred tools from it here
++        params.tools_visible = common_chat_tools_to_json_oaicompat(inputs.tools, /* skip_deferred = */ true);
++        if (params.tools.is_array() && params.tools_visible.empty()) {
++            // the template would drop its whole tool section while the grammar still expects calls
++            throw std::invalid_argument("All tools have defer_loading set, but the chat template does not support defer_loading; at least one tool must be rendered");
++        }
++    }
+     std::vector<common_chat_msg>        trimmed_messages;
+     const std::vector<common_chat_msg> * messages_to_render = &inputs.messages;
+     if (src.find("You have access to the following functions in JSONSchema format") != std::string::npos) {
+@@ -1300,6 +1382,12 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
+         workaround::trim_all_content(trimmed_messages);
+         messages_to_render = &trimmed_messages;
+     }
++    std::vector<common_chat_msg> resolved_messages;
++    if (has_tool_references(*messages_to_render)) {
++        resolved_messages = *messages_to_render;
++        resolve_tool_references(resolved_messages, inputs.tools, /* expand = */ !caps.supports_tool_reference);
++        messages_to_render = &resolved_messages;
++    }
+     params.messages              = render_message_to_json(*messages_to_render, tmpl.original_caps());
+     params.tool_choice           = inputs.tool_choice;
+     params.reasoning_format      = inputs.reasoning_format;
 diff --git a/common/chat.h b/common/chat.h
-index dcff94919..fcf4d0d37 100644
+index dcff94919..14b2958f8 100644
 --- a/common/chat.h
 +++ b/common/chat.h
-@@ -224,6 +224,12 @@ struct common_chat_tool {
+@@ -224,6 +224,8 @@ struct common_chat_tool {
      std::string name;
      std::string description;
      std::string parameters;
-+    // When true, the tool is still declared to the grammar (so the model can
-+    // call it) but is omitted from the rendered prompt. Lets a client keep a
-+    // large tool set available without paying for every schema in context,
-+    // and - because the declared set never changes mid-conversation - without
-+    // invalidating the prompt cache when a tool is revealed.
++    // tool stays in the grammar (callable) but is not rendered in the prompt; a "tool_reference" content part reveals it later without changing the prompt prefix
 +    bool defer_loading = false;
  };
  
  enum common_chat_tool_choice {
-@@ -460,7 +466,10 @@ common_chat_continuation common_chat_continuation_parse(const common_json & valu
+@@ -460,7 +462,8 @@ common_chat_continuation common_chat_continuation_parse(const common_json & valu
  // DEPRECATED: only used in tests
  common_json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msgs, bool concat_typed_text = false);
  
 -common_json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools);
-+// skip_deferred omits tools flagged defer_loading - used for the rendered
-+// prompt, never for the grammar.
-+common_json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools,
-+                                               bool skip_deferred = false);
++// skip_deferred omits tools with defer_loading - for the rendered prompt only, never for the grammar
++common_json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools, bool skip_deferred = false);
  
  // The parameters schema of a function tool. A tool without parameters, or with an empty {}, takes zero arguments.
  common_json common_chat_tool_parameters(const common_json & function);
+diff --git a/common/jinja/caps.cpp b/common/jinja/caps.cpp
+index 6ff17d10b..b32ec2fad 100644
+--- a/common/jinja/caps.cpp
++++ b/common/jinja/caps.cpp
+@@ -114,6 +114,8 @@ std::map<std::string, bool> caps::to_map() const {
+         {"supports_preserve_reasoning", supports_preserve_reasoning},
+         {"supports_reasoning_effort", supports_reasoning_effort},
+         {"supports_object_arguments", supports_object_arguments},
++        {"supports_tool_defer_loading", supports_tool_defer_loading},
++        {"supports_tool_reference", supports_tool_reference},
+     };
+ }
+ 
+@@ -584,6 +586,108 @@ caps caps_get(jinja::program & prog) {
+         }
+     );
+ 
++    if (result.supports_tools) {
++        JJ_DEBUG("%s\n", ">>> Running capability check: deferred tools");
++
++        static const std::string visible_name  = "visible_tool_marker";
++        static const std::string deferred_name = "deferred_tool_marker";
++        static const std::string deferred_desc = "DEFERRED_TOOL_DESC_MARKER";
++
++        static const auto make_tool = [](const std::string & name, const std::string & desc, bool deferred) {
++            json tool = {
++                {"type", "function"},
++                {"function", {
++                    {"name", name},
++                    {"description", desc},
++                    {"parameters", {
++                        {"type", "object"},
++                        {"properties", {{"arg", {{"type", "string"}}}}},
++                    }},
++                }},
++            };
++            // templates differ on where they read the flag
++            if (deferred) {
++                tool["defer_loading"]             = true;
++                tool["function"]["defer_loading"] = true;
++            }
++            return tool;
++        };
++        const caps_json_fn tools_fn = [&]() {
++            return json::array({
++                make_tool(visible_name, "Tool description", false),
++                make_tool(deferred_name, deferred_desc, true),
++            });
++        };
++
++        // case: template leaves deferred tools out of the tool list
++        caps_try_execute(
++            prog,
++            [&]() {
++                return json::array({
++                    {
++                        {"role", "user"},
++                        {"content", "User message"}
++                    },
++                });
++            },
++            nullptr, // ctx_fn
++            tools_fn,
++            [&](context &, bool success, value &, value &, const std::string & rendered) {
++                result.supports_tool_defer_loading = success &&
++                    rendered.find(visible_name) != std::string::npos &&
++                    rendered.find(deferred_name) == std::string::npos;
++            }
++        );
++
++        if (result.supports_tool_defer_loading) {
++            JJ_DEBUG("%s\n", ">>> Running capability check: tool references");
++
++            // case: template expands tool_reference parts into the tool definition
++            const json args = result.supports_object_arguments ? json{{"arg", "value"}} : json(R"({"arg": "value"})");
++            caps_try_execute(
++                prog,
++                [&]() {
++                    return json::array({
++                        {
++                            {"role", "user"},
++                            {"content", "User message"},
++                        },
++                        {
++                            {"role", "assistant"},
++                            {"content", ""},
++                            {"tool_calls", json::array({
++                                {
++                                    {"id", "call00001"},
++                                    {"type", "function"},
++                                    {"function", {
++                                        {"name", visible_name},
++                                        {"arguments", args},
++                                    }},
++                                },
++                            })},
++                        },
++                        {
++                            {"role", "tool"},
++                            {"content", json::array({
++                                {
++                                    {"type", "tool_reference"},
++                                    {"name", deferred_name},
++                                    {"tool_name", deferred_name},
++                                },
++                            })},
++                            {"tool_call_id", "call00001"},
++                        },
++                    });
++                },
++                nullptr, // ctx_fn
++                tools_fn,
++                [&](context &, bool success, value &, value &, const std::string & rendered) {
++                    result.supports_tool_reference = success && rendered.find(deferred_desc) != std::string::npos;
++                }
++            );
++        }
++    }
++
+     JJ_DEBUG("%s\n", result.to_string().c_str());
+ 
+     return result;
+diff --git a/common/jinja/caps.h b/common/jinja/caps.h
+index b81dd95f2..ac15cf190 100644
+--- a/common/jinja/caps.h
++++ b/common/jinja/caps.h
+@@ -25,6 +25,12 @@ struct caps {
+ 
+     bool supports_object_arguments = false;
+ 
++    // template hides tools with defer_loading by itself
++    bool supports_tool_defer_loading = false;
++
++    // template expands "tool_reference" content parts into the tool definition
++    bool supports_tool_reference = false;
++
+     // for reporting on server
+     std::map<std::string, bool> to_map() const;
+ 
 diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
-index 01b2220da..65396441b 100644
+index 01b2220da..b9c56f81a 100644
 --- a/tests/test-chat.cpp
 +++ b/tests/test-chat.cpp
-@@ -1833,6 +1833,97 @@ static void test_tools_oaicompat_json_conversion() {
+@@ -1833,6 +1833,203 @@ static void test_tools_oaicompat_json_conversion() {
                    common_chat_tools_to_json_oaicompat({ special_function_tool }).dump(2));
  }
  
@@ -258,20 +489,126 @@ index 01b2220da..65396441b 100644
 +        }
 +    }
 +
-+    // 5. deferring everything would render a prompt that never mentions tools
-+    //    while the grammar still expects calls - reject it instead.
-+    {
-+        common_chat_tool other = special_function_tool;
-+        other.defer_loading    = true;
-+        bool threw             = false;
++    common_chat_tool deferred_special = special_function_tool;
++    deferred_special.defer_loading    = true;
++
++    auto expect_throw = [](const std::function<void()> & fn, const std::string & what) {
++        bool threw = false;
 +        try {
-+            common_chat_tools_parse_oaicompat(
-+                common_chat_tools_to_json_oaicompat({ deferred_tool, other }));
++            fn();
 +        } catch (const std::exception &) {
 +            threw = true;
 +        }
 +        if (!threw) {
-+            throw std::runtime_error("expected an error when every tool sets defer_loading");
++            throw std::runtime_error("expected an error: " + what);
++        }
++    };
++
++    // a tool message that reveals the deferred tool, as returned by a client-side tool search
++    auto reveal_msgs = []() {
++        common_chat_msg user;
++        user.role    = "user";
++        user.content = "hey";
++        common_chat_msg search = simple_assist_msg("", "", "special_function", "{\"arg1\": 1}");
++        search.tool_calls[0].id = "call_1";
++        common_chat_msg result;
++        result.role         = "tool";
++        result.tool_call_id = "call_1";
++        result.content_parts.push_back({ "tool_reference", python_tool.name });
++        return std::vector<common_chat_msg>{ user, search, result };
++    };
++
++    // 5. tool_reference parts parse from either key and round trip
++    {
++        auto msgs = common_chat_msgs_parse_oaicompat(json::array({
++            json{
++                { "role", "tool" },
++                { "tool_call_id", "call_1" },
++                { "content", json::array({
++                    json{ { "type", "tool_reference" }, { "tool_name", "a" } },
++                    json{ { "type", "tool_reference" }, { "name", "b" } },
++                }) },
++            },
++        }));
++        assert_equals((size_t) 2, msgs[0].content_parts.size());
++        assert_equals(std::string("a"), msgs[0].content_parts[0].text);
++        assert_equals(std::string("b"), msgs[0].content_parts[1].text);
++        auto back = common_chat_msgs_to_json_oaicompat(msgs).at(0).at("content").at(1);
++        assert_equals(std::string("tool_reference"), back.at("type").get<std::string>());
++        assert_equals(std::string("b"), back.at("name").get<std::string>());
++    }
++
++    // 6. template without defer_loading support: the reference is expanded to the tool definition here,
++    //    an unknown reference is an error, and deferring every tool is rejected
++    {
++        auto tmpls = read_templates("models/templates/NousResearch-Hermes-2-Pro-Llama-3-8B-tool_use.jinja");
++        assert_equals(false, common_chat_templates_get_caps(tmpls.get()).at("supports_tool_defer_loading"));
++
++        common_chat_templates_inputs inputs;
++        inputs.messages = reveal_msgs();
++        inputs.tools    = { special_function_tool, deferred_tool };
++
++        auto params = common_chat_templates_apply(tmpls.get(), inputs);
++        assert_contains(params.prompt.str(), python_tool.description);
++
++        inputs.messages.back().content_parts[0].text = "unknown_tool";
++        expect_throw([&]() { common_chat_templates_apply(tmpls.get(), inputs); }, "unknown tool_reference");
++
++        inputs.messages = reveal_msgs();
++        inputs.tools    = { deferred_special, deferred_tool };
++        expect_throw([&]() { common_chat_templates_apply(tmpls.get(), inputs); }, "all tools deferred on a template without support");
++    }
++
++    // 7. template that handles defer_loading and tool_reference itself (same contract as GLM-5.x templates):
++    //    it gets every tool with the flag set, references are passed through, and deferring every tool is fine
++    {
++        const std::string tmpl_src =
++            "{%- if tools -%}<tools>\n"
++            "{%- for tool in tools -%}{%- if not tool.function.defer_loading -%}"
++            "{{ tool.function.name }}: {{ tool.function.description }}\n"
++            "{%- endif -%}{%- endfor -%}</tools>\n"
++            "{%- endif -%}"
++            "{%- for m in messages -%}"
++            "{%- if m.role == 'tool' -%}<response>"
++            "{%- if m.content is string -%}{{ m.content }}{%- else -%}"
++            "{%- for p in m.content -%}{%- if p.type == 'tool_reference' -%}"
++            "{%- for tool in tools -%}{%- if tool.function.name == p.name -%}"
++            "{{ tool.function.name }}: {{ tool.function.description }}"
++            "{%- endif -%}{%- endfor -%}"
++            "{%- else -%}{{ p.text }}{%- endif -%}{%- endfor -%}"
++            "{%- endif -%}</response>\n"
++            "{%- elif m.role == 'assistant' and m.tool_calls -%}"
++            "{%- for tc in m.tool_calls -%}<tool_call>{\"name\": \"{{ tc.function.name }}\", \"arguments\": {{ tc.function.arguments | tojson }}}</tool_call>{%- endfor -%}\n"
++            "{%- else -%}<{{ m.role }}>{{ m.content }}</{{ m.role }}>\n"
++            "{%- endif -%}"
++            "{%- endfor -%}"
++            "{%- if add_generation_prompt -%}<assistant>{%- endif -%}";
++        auto tmpls = common_chat_templates_ptr(common_chat_templates_init(/* model= */ nullptr, tmpl_src));
++        auto caps  = common_chat_templates_get_caps(tmpls.get());
++        assert_equals(true, caps.at("supports_tool_defer_loading"));
++        assert_equals(true, caps.at("supports_tool_reference"));
++
++        common_chat_templates_inputs inputs;
++        inputs.messages = reveal_msgs();
++        inputs.tools    = { special_function_tool, deferred_tool };
++
++        auto params = common_chat_templates_apply(tmpls.get(), inputs);
++        auto prompt = params.prompt.str();
++        auto tools_end = prompt.find("</tools>");
++        if (prompt.substr(0, tools_end).find(python_tool.name) != std::string::npos) {
++            throw std::runtime_error("deferred tool leaked into the tool list");
++        }
++        if (prompt.find(python_tool.description, tools_end) == std::string::npos) {
++            throw std::runtime_error("template did not expand the tool_reference");
++        }
++        if (params.grammar.find(python_tool.name) == std::string::npos) {
++            throw std::runtime_error("deferred tool missing from the grammar");
++        }
++
++        inputs.tools = { deferred_special, deferred_tool };
++        params = common_chat_templates_apply(tmpls.get(), inputs);
++        if (params.grammar.find(python_tool.name) == std::string::npos) {
++            throw std::runtime_error("all-deferred: tool missing from the grammar");
 +        }
 +    }
 +}
@@ -279,7 +616,7 @@ index 01b2220da..65396441b 100644
  static void test_convert_responses_to_chatcmpl() {
      LOG_DBG("%s\n", __func__);
  
-@@ -8126,6 +8217,7 @@ int main(int argc, char ** argv) {
+@@ -8126,6 +8323,7 @@ int main(int argc, char ** argv) {
          test_msgs_oaicompat_json_conversion();
          test_msg_token_delimiters_split();
          test_tools_oaicompat_json_conversion();
@@ -288,20 +625,27 @@ index 01b2220da..65396441b 100644
          test_developer_role_to_system_workaround();
          test_translate_gemma();
 diff --git a/tools/server/README.md b/tools/server/README.md
-index 48c40eda7..10f061411 100644
+index 48c40eda7..f3fe2344b 100644
 --- a/tools/server/README.md
 +++ b/tools/server/README.md
-@@ -1353,6 +1353,17 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type":
+@@ -1353,6 +1353,24 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type":
  
  `reasoning_control`: Arms realtime reasoning control for this completion so it can be ended early via `/v1/chat/completions/control`. Defaults to `false`.
  
-+`tools[].function.defer_loading`: When `true`, the tool is still declared to the sampling grammar - so the model can call it - but its schema is left out of the rendered prompt. This lets a client keep a large tool set available without paying for every schema in context, and reveal a schema to the model on demand (via a tool result, a system message, or its own search tool) without changing the declared tool set. Because the declared set is what the prompt is built from, keeping it constant is also what preserves the prompt cache: tools render at the very start of the prompt, so adding one mid-conversation invalidates the whole cached prefix. At least one tool must be left un-deferred, otherwise the request is rejected - templates render their tool section conditionally on a non-empty tool list, and deferring everything would produce a prompt that never mentions tools while the grammar still expects calls.
++`tools[].function.defer_loading` (also accepted on `tools[]`): When `true`, the tool stays in the sampling grammar - so the model can call it - but its schema is left out of the rendered prompt. A client can keep a large tool set available without paying for every schema in context. Tools render at the start of the prompt, so keeping the declared set constant also keeps the prompt cache: adding a tool mid-conversation would invalidate the whole cached prefix. If the chat template handles `defer_loading` itself (e.g. GLM-5.x), it receives every tool with the flag set, and all tools may be deferred. Otherwise the server removes deferred tools before rendering, and at least one tool must stay un-deferred, else the request is rejected (the template would drop its tool section while the grammar still expects calls).
++
++To reveal a deferred tool, return `tool_reference` parts in a tool message, e.g. from a client-side tool search tool. Every referenced tool must be declared in `tools`. Templates that support it (e.g. GLM-5.x) expand the reference themselves; for other templates the server replaces it with the tool definition as JSON text. The `/v1/messages` endpoint accepts the same in a `tool_result`, and `defer_loading` on its tools.
 +
 +```json
 +{
 +  "tools": [
 +    { "type": "function", "function": { "name": "search_tools", "description": "...", "parameters": {} } },
 +    { "type": "function", "function": { "name": "get_weather", "description": "...", "parameters": {}, "defer_loading": true } }
++  ],
++  "messages": [
++    { "role": "user", "content": "What is the weather in Paris?" },
++    { "role": "assistant", "content": "", "tool_calls": [{ "id": "call_1", "type": "function", "function": { "name": "search_tools", "arguments": "{\"query\": \"weather\"}" } }] },
++    { "role": "tool", "tool_call_id": "call_1", "content": [{ "type": "tool_reference", "tool_name": "get_weather" }] }
 +  ]
 +}
 +```
@@ -309,6 +653,70 @@ index 48c40eda7..10f061411 100644
  `parallel_tool_calls` : Whether to enable parallel/multiple tool calls (only supported on some models, verification is based on jinja template).
  
  For multimodal input (typed content, `messages[i].content[j]`):
+diff --git a/tools/server/server-chat.cpp b/tools/server/server-chat.cpp
+index a3a4ea152..903733859 100644
+--- a/tools/server/server-chat.cpp
++++ b/tools/server/server-chat.cpp
+@@ -465,6 +465,7 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
+                         std::string result_text;
+                         json content_parts = json::array();
+                         bool has_images = false;
++                        bool has_tool_refs = false;
+ 
+                         for (const auto & c : result_content) {
+                             std::string c_type = json_value(c, "type", std::string());
+@@ -493,10 +494,16 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
+                                         {"image_url", {{"url", json_value(source, "url", std::string())}}}
+                                     });
+                                 }
++                            } else if (c_type == "tool_reference") {
++                                has_tool_refs = true;
++                                content_parts.push_back({
++                                    {"type", "tool_reference"},
++                                    {"tool_name", json_value(c, "tool_name", std::string())}
++                                });
+                             }
+                         }
+ 
+-                        if (!has_images) {
++                        if (!has_images && !has_tool_refs) {
+                             // Text-only: collapse to a plain string for maximum compatibility
+                             tool_results.push_back({
+                                 {"role", "tool"},
+@@ -551,14 +558,18 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
+         if (tools.is_array()) {
+             json oai_tools = json::array();
+             for (const auto & tool : tools) {
+-                oai_tools.push_back({
++                json oai_tool = {
+                     {"type", "function"},
+                     {"function", {
+                         {"name", json_value(tool, "name", std::string())},
+                         {"description", json_value(tool, "description", std::string())},
+                         {"parameters", tool.contains("input_schema") ? tool.at("input_schema") : json::object()}
+                     }}
+-                });
++                };
++                if (json_value(tool, "defer_loading", false)) {
++                    oai_tool["function"]["defer_loading"] = true;
++                }
++                oai_tools.push_back(oai_tool);
+             }
+             oai_body["tools"] = oai_tools;
+         }
+diff --git a/tools/server/server-common.cpp b/tools/server/server-common.cpp
+index c32c0d1a5..ad9492c8f 100644
+--- a/tools/server/server-common.cpp
++++ b/tools/server/server-common.cpp
+@@ -1241,7 +1241,7 @@ static void oaicompat_content_load_media(json & content, const server_chat_param
+             p.erase("input_video");
+             p.erase("video_url");
+ 
+-        } else if (type != "text") {
++        } else if (type != "text" && type != "tool_reference") {
+             throw std::invalid_argument("unsupported content[].type");
+         }
+     }
 -- 
 2.55.0.windows.2
 

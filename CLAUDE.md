@@ -315,7 +315,10 @@ combinations (`mlock+dio`, `mmap+mlock+dio`) are rejected by the parser, so it i
   trusting a flag. Deliberately shaped as *verify a patch before proposing it upstream*, not *maintain a
   fork* — the last attempt at a permanent fork was abandoned, and the cost was never the patch, it was
   keeping it alive across upstream churn.
-   Current series: `0001-common-add-defer_loading-to-tool-definitions.patch` (ggml-org/llama.cpp#28179).
+   Current series: `0001-common-add-defer_loading-to-tool-definitions.patch` (ggml-org/llama.cpp#28179, PR #28292):
+   `defer_loading` hides a tool from the prompt but keeps it in the grammar; `tool_reference` parts in a tool message
+   reveal it. Templates that handle either themselves (GLM-5.x) are detected by caps probes; others get the
+   server-side fallback (filter / expand to JSON text). All-deferred is allowed only on templates that handle the flag.
 
 - **A subdirectory of `patches/llama.cpp/` is a whole third-party fork, vendored.** Different kind of
   thing from a top-level patch: not awaiting upstream, and thousands of lines or nothing — some GGUFs
