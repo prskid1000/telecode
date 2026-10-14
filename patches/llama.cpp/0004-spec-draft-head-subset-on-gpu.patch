@@ -5,10 +5,10 @@ is exact. Only the draft context uses it; off by default.
 Requires: 0003-moe-cache-cpu-miss-prewarm-and-adaptive-draft.patch
 
 diff --git a/common/arg.cpp b/common/arg.cpp
-index 0d10887..484b457 100644
+index 9962bae..08b1f6c 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
-@@ -3028,6 +3028,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -3085,6 +3085,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.speculative.adaptive_probe = value;
          }
      ).set_env("LLAMA_ARG_SPEC_DRAFT_ADAPTIVE_PROBE"));
@@ -26,19 +26,19 @@ index 0d10887..484b457 100644
          {"-ncffn", "--n-cpu-ffn"}, "N",
          "keep the dense FFN weights of the first N layers in the CPU\n"
 diff --git a/common/common.cpp b/common/common.cpp
-index 79f3c05..d4b9198 100644
+index fbeb3d5..64eff20 100644
 --- a/common/common.cpp
 +++ b/common/common.cpp
-@@ -1765,6 +1765,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
-     cparams.moe_cache_async_upload = params.moe_cache_async_upload;
-     cparams.moe_cache_swap_every = params.moe_cache_swap_every;
-     cparams.moe_cache_swap_max = params.moe_cache_swap_max;
+@@ -1771,6 +1771,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
+     cparams.moe_cache_prefill_share = params.moe_cache_prefill_share;
+     cparams.moe_cache_prefill_max_tokens = params.moe_cache_prefill_max_tokens;
+     cparams.moe_cache_staging_slots = params.moe_cache_staging_slots;
 +    cparams.head_subset = params.head_subset;
  
      return cparams;
  }
 diff --git a/common/common.h b/common/common.h
-index ce72d06..9e7f3fc 100644
+index 5fffadf..ba1bd25 100644
 --- a/common/common.h
 +++ b/common/common.h
 @@ -336,6 +336,8 @@ struct common_params_speculative_draft {
@@ -50,19 +50,19 @@ index ce72d06..9e7f3fc 100644
      common_params_model mparams;
  
      llama_context * ctx_tgt = nullptr;
-@@ -622,6 +624,7 @@ struct common_params {
-     bool moe_cache_async_upload = false;
-     int32_t moe_cache_swap_every = 0;
-     int32_t moe_cache_swap_max = 0;
+@@ -628,6 +630,7 @@ struct common_params {
+     float moe_cache_prefill_share = 0.0f;
+     int32_t moe_cache_prefill_max_tokens = 2048;
+     int32_t moe_cache_staging_slots = 64;
 +    int32_t head_subset = 0; // rows of the output head kept in device memory, set for the draft context
  
      common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
  
 diff --git a/common/speculative.cpp b/common/speculative.cpp
-index 45034e2..4428b2e 100644
+index d10865e..2b0d5d1 100644
 --- a/common/speculative.cpp
 +++ b/common/speculative.cpp
-@@ -2654,6 +2654,7 @@ common_params common_base_params_to_speculative(const common_params & params) {
+@@ -2666,6 +2666,7 @@ common_params common_base_params_to_speculative(const common_params & params) {
  
      result.embedding    = false;
      result.pooling_type = LLAMA_POOLING_TYPE_UNSPECIFIED;
@@ -71,13 +71,13 @@ index 45034e2..4428b2e 100644
      if (has_draft) {
          // default to global devices value
 diff --git a/include/llama.h b/include/llama.h
-index b7827dc..7dc70c4 100644
+index 7f18a8b..a4a17df 100644
 --- a/include/llama.h
 +++ b/include/llama.h
-@@ -418,6 +418,7 @@ extern "C" {
-         bool     moe_cache_async_upload;
-         int32_t  moe_cache_swap_every;
-         int32_t  moe_cache_swap_max;
+@@ -424,6 +424,7 @@ extern "C" {
+         float    moe_cache_prefill_share;
+         int32_t  moe_cache_prefill_max_tokens;
+         int32_t  moe_cache_staging_slots;
 +        int32_t  head_subset;  // rows of the output head kept in device memory for the steps of a draft head, 0 = off [EXPERIMENTAL]
  
          // Abort callback
@@ -95,7 +95,7 @@ index 97250c2..c68d64e 100644
      llama-memory-hybrid-iswa.cpp
      llama-memory-hybrid-idx.cpp
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 041d5ec..0388a3a 100644
+index 2df0681..7a81044 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -9,6 +9,7 @@
@@ -106,15 +106,15 @@ index 041d5ec..0388a3a 100644
  #include "llama-moe-cache.h"
  #include "llama-ext.h"
  #include "llama-sampler.h"
-@@ -380,6 +381,7 @@ llama_context::llama_context(
-     cparams.moe_cache_async_upload = params.moe_cache_async_upload;
-     cparams.moe_cache_swap_every = params.moe_cache_swap_every;
-     cparams.moe_cache_swap_max = params.moe_cache_swap_max;
+@@ -386,6 +387,7 @@ llama_context::llama_context(
+     cparams.moe_cache_prefill_share = params.moe_cache_prefill_share;
+     cparams.moe_cache_prefill_max_tokens = params.moe_cache_prefill_max_tokens;
+     cparams.moe_cache_staging_slots = params.moe_cache_staging_slots;
 +    cparams.head_subset = params.head_subset;
  
      // initialized later
      cparams.pipeline_parallel = false;
-@@ -577,6 +579,22 @@ llama_context::llama_context(
+@@ -583,6 +585,22 @@ llama_context::llama_context(
              moe_cache = std::make_unique<llama_moe_cache>(model, backend_ptrs, backend_buft, cparams.moe_cache_size, mc_params);
          }
  
@@ -137,7 +137,7 @@ index 041d5ec..0388a3a 100644
          sched_reserve();
  
          if (!cparams.flash_attn) {
-@@ -2726,6 +2744,7 @@ llm_graph_params llama_context::graph_params(
+@@ -2732,6 +2750,7 @@ llm_graph_params llama_context::graph_params(
          /*.mctx        =*/ mctx,
          /*.cross       =*/ &cross,
          /*.moe_cache   =*/ moe_cache.get(),
@@ -145,10 +145,10 @@ index 041d5ec..0388a3a 100644
          /*.prec_policy =*/ &model.prec_policy,
          /*.hdmd        =*/ model.hdmd.rot.empty() ? nullptr : &model.hdmd,
          /*.samplers    =*/ sampling.samplers,
-@@ -4049,6 +4068,7 @@ llama_context_params llama_context_default_params() {
-         /*.moe_cache_async_upload        =*/ false,
-         /*.moe_cache_swap_every          =*/ 0,
-         /*.moe_cache_swap_max            =*/ 0,
+@@ -4061,6 +4080,7 @@ llama_context_params llama_context_default_params() {
+         /*.moe_cache_prefill_share       =*/ 0.0f,
+         /*.moe_cache_prefill_max_tokens  =*/ 2048,
+         /*.moe_cache_staging_slots       =*/ 64,
 +        /*.head_subset                   =*/ 0,
          /*.abort_callback              =*/ nullptr,
          /*.abort_callback_data         =*/ nullptr,
@@ -174,19 +174,19 @@ index 6938fb1..d326ab0 100644
      // decode output (2-dimensional array: [n_outputs][n_vocab])
      buffer_view<float> logits = {nullptr, 0};
 diff --git a/src/llama-cparams.h b/src/llama-cparams.h
-index a209f7c..d11b863 100644
+index a2d6917..abcabf4 100644
 --- a/src/llama-cparams.h
 +++ b/src/llama-cparams.h
-@@ -78,6 +78,7 @@ struct llama_cparams {
-     bool moe_cache_async_upload;
-     int32_t moe_cache_swap_every;
-     int32_t moe_cache_swap_max;
+@@ -84,6 +84,7 @@ struct llama_cparams {
+     float moe_cache_prefill_share;
+     int32_t moe_cache_prefill_max_tokens;
+     int32_t moe_cache_staging_slots;
 +    int32_t head_subset;
  
      std::vector<bool> embeddings_layer_inp; // [n_layer()] extract input embeddings for layer
  
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 07b95bc..64c3e73 100644
+index fb52d97..620f8d7 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -2,6 +2,7 @@
@@ -197,7 +197,7 @@ index 07b95bc..64c3e73 100644
  #include "llama-moe-cache.h"
  #include "llama-batch.h"
  #include "llama-cparams.h"
-@@ -1557,6 +1558,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
+@@ -1558,6 +1559,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
      mctx             (params.mctx),
      cross            (params.cross),
      moe_cache        (params.moe_cache),
@@ -205,7 +205,7 @@ index 07b95bc..64c3e73 100644
      prec_policy      (params.prec_policy),
      hdmd             (params.hdmd),
      samplers         (params.samplers),
-@@ -1616,6 +1618,18 @@ ggml_tensor * llm_graph_context::build_lora_mm(
+@@ -1617,6 +1619,18 @@ ggml_tensor * llm_graph_context::build_lora_mm(
            ggml_tensor * w,
            ggml_tensor * cur,
            ggml_tensor * w_s) const {
@@ -225,7 +225,7 @@ index 07b95bc..64c3e73 100644
      ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
  
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index 4df5a10..01a1a7b 100644
+index f7a1dcc..05dc1da 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
 @@ -23,6 +23,7 @@ struct llama_prec_policy;
@@ -244,7 +244,7 @@ index 4df5a10..01a1a7b 100644
  
      const llama_prec_policy * prec_policy = nullptr;
  
-@@ -1057,6 +1059,7 @@ struct llm_graph_context {
+@@ -1059,6 +1061,7 @@ struct llm_graph_context {
      const llama_memory_context_i * mctx;
      const llama_cross            * cross;
      const llama_moe_cache        * moe_cache;
@@ -254,10 +254,10 @@ index 4df5a10..01a1a7b 100644
  
 diff --git a/src/llama-head-subset.cpp b/src/llama-head-subset.cpp
 new file mode 100644
-index 0000000..bdc920d
+index 0000000..a25c1e4
 --- /dev/null
 +++ b/src/llama-head-subset.cpp
-@@ -0,0 +1,103 @@
+@@ -0,0 +1,112 @@
 +#include "llama-head-subset.h"
 +
 +#include "llama-impl.h"
@@ -284,10 +284,19 @@ index 0000000..bdc920d
 +
 +    impl(const llama_model & model, ggml_backend_buffer_type_t buft, int32_t n_req) {
 +        src = model.output;
++        const ggml_tensor * src_scale = model.output_s;
++        for (const auto & layer : model.layers) {
++            // a model whose MTP layer has a head of its own drafts with that one
++            if (layer.nextn.shared_head_head != nullptr) {
++                src = layer.nextn.shared_head_head;
++                src_scale = layer.nextn.shared_head_head_s;
++                break;
++            }
++        }
 +        if (src == nullptr || src->buffer == nullptr || !ggml_backend_buffer_is_host(src->buffer)) {
 +            throw std::runtime_error("the output head is not in host memory");
 +        }
-+        if (model.output_s != nullptr || src->ne[2] != 1 || src->ne[3] != 1 || ggml_is_transposed(src)) {
++        if (src_scale != nullptr || src->ne[2] != 1 || src->ne[3] != 1 || ggml_is_transposed(src)) {
 +            throw std::runtime_error("the output head cannot be split by rows");
 +        }
 +

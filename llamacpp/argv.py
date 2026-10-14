@@ -370,6 +370,9 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("moe_cache_pcie_auto",             "--moe-cache-pcie-auto",             "flag"),
     ("moe_cache_pcie_auto_window",      "--moe-cache-pcie-auto-window",      "value_nz"),
     ("moe_cache_upload_batch",          "--moe-cache-upload-batch",          "flag"),
+    ("moe_cache_prefill_share",         "--moe-cache-prefill-share",         "value_nz"),
+    ("moe_cache_prefill_max_tokens",    "--moe-cache-prefill-max-tokens",    "value_nz"),
+    ("moe_cache_staging_slots",         "--moe-cache-staging-slots",         "value_nz"),
 
     # RoPE / YaRN (0 = model default; YaRN factors default to -1.00 = auto,
     # so emit only when explicitly set to a non-zero override).
@@ -471,6 +474,7 @@ _MOE_CACHE_TUNING = frozenset({
     "moe_cache_tail_skip_rank", "moe_cache_tail_skip_auto_off", "moe_cache_evict_window",
     "moe_cache_pcie_share", "moe_cache_pcie_max", "moe_cache_async_upload",
     "moe_cache_swap_every", "moe_cache_swap_max", "moe_cache_pcie_auto", "moe_cache_pcie_auto_window",
+    "moe_cache_prefill_share", "moe_cache_prefill_max_tokens", "moe_cache_staging_slots",
 })
 # These two only act with the router bias on
 _MOE_CACHE_ROUTE_RECIPE = frozenset({"moe_cache_route_top", "moe_cache_route_scale"})

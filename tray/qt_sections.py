@@ -5647,6 +5647,26 @@ def _models(window) -> QWidget:
                          "copies where the driver cannot batch."),
             [f"{p}.moe_cache_mib"], _mc_cache))
         _sl.addWidget(_dependent(
+            _number_row(f"{p}.moe_cache_prefill_share", "Prompt: CPU Share of Misses", 0, 1, 0.05, 2, "",
+                         "--moe-cache-prefill-share (patched build): in prompt batches (above the decode batch size) this fraction of the "
+                         "missed experts is computed on the CPU while the GPU computes the others, which are uploaded through staging slots. "
+                         "The hot-expert cache is left alone. Strata does this by default and measured 20-49% less prompt time at 512-3000 tokens. "
+                         "0 = off: experts are copied to the GPU as without the cache.", default=0),
+            [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.moe_cache_prefill_max_tokens", "Prompt: Largest Batch", 32, 16384, 32, 0, "tok",
+                         "--moe-cache-prefill-max-tokens (patched build): largest prompt batch (the ubatch size) that uses the CPU share. "
+                         "Each layer keeps host buffers of this many tokens, about 8 KiB per token and layer.", default=2048),
+            [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss", f"{p}.moe_cache_prefill_share"],
+            lambda m, c, sh: _mc_on(m, c) and float(sh or 0) > 0))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.moe_cache_staging_slots", "Prompt: Staging Slots", 0, 4096, 8, 0, "slots",
+                         "--moe-cache-staging-slots (patched build): cache slots set apart for the experts a prompt batch uploads, so it does not "
+                         "push the hot experts out. At most half of the cache; more slots = more experts computed on the GPU (the rest of the "
+                         "share goes to the CPU anyway).", default=64),
+            [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss", f"{p}.moe_cache_prefill_share"],
+            lambda m, c, sh: _mc_on(m, c) and float(sh or 0) > 0))
+        _sl.addWidget(_dependent(
             _number_row(f"{p}.moe_cache_swap_every", "Swap Rounds Every", 0, 100000, 1, 0, "tokens",
                          "--moe-cache-swap-every (patched build): promote experts in rounds, every N tokens, choosing the most missed "
                          "experts of all layers together (Strata style) instead of in every call. 0 = off.", default=0),
