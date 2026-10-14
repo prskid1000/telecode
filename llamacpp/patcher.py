@@ -328,6 +328,33 @@ def toolchain() -> dict[str, Any]:
 
 # ── Status ───────────────────────────────────────────────────────────
 
+def patch_setting_name(p: Path) -> str:
+    """Settings-safe name of a patch: `0002-foo.patch` -> `0002-foo`, `vendor/0001-x.patch` -> `vendor__0001-x`."""
+    return patch_key(p).removesuffix(".patch").replace("/", "__").replace(".", "_")
+
+
+def patch_requires(p: Path) -> list[str]:
+    """Keys of the patches this one needs, from `Requires:` lines in the text before the first diff."""
+    out: list[str] = []
+    try:
+        for line in p.read_text(encoding="utf-8", errors="replace").splitlines()[:30]:
+            if line.startswith("diff --git"):
+                break
+            if line.startswith("Requires:"):
+                out.append(line.split(":", 1)[1].strip())
+    except OSError:
+        pass
+    return out
+
+
+def patch_enabled(p: Path) -> bool:
+    """Patches are add-ons: `llamacpp.custom_build.patches.<name>: false` leaves one out of the build.
+
+    Absent means on, so a new patch dropped into the series is built until someone opts out."""
+    flags = app_config.get_nested("llamacpp.custom_build.patches", {}) or {}
+    return bool(flags.get(patch_setting_name(p), True)) if isinstance(flags, dict) else True
+
+
 def applied_patches() -> list[str]:
     """Patches whose changes are already present in the working tree.
 
@@ -364,6 +391,7 @@ def status() -> dict[str, Any]:
         "dirty": bool(_git_out(["status", "--porcelain"])),
         "patch_dir": str(patch_dir()),
         "patches": [patch_key(p) for p in patches()],
+        "patches_disabled": [patch_key(p) for p in patches() if not patch_enabled(p)],
         "patches_applied": [],
         "build_dir": str(build_dir()),
         "built_binary": str(built) if built else None,
@@ -482,6 +510,15 @@ def apply_patches(progress: Progress = _noop) -> dict[str, Any]:
 
     for p in series:
         key = patch_key(p)
+        if not patch_enabled(p):
+            progress(f"-- {key}: disabled in settings, skipping")
+            skipped.append(key)
+            continue
+        missing = [r for r in patch_requires(p) if r not in applied and r not in already]
+        if missing:
+            progress(f"!! {key} needs {', '.join(missing)}, which is not applied (disabled or failed) - skipping")
+            failed.append({"patch": key, "reason": f"requires {', '.join(missing)}"})
+            continue
         if key in already:
             progress(f"-- {key}: already applied, skipping")
             skipped.append(key)

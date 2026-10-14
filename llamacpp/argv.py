@@ -19,10 +19,17 @@ per-request knobs handled by the translator when constructing
 """
 from __future__ import annotations
 
+import json
+import logging
+import re
 from typing import Optional
+
+from pathlib import Path
 
 import config as app_config
 from llamacpp import config as cfg
+
+_LOG = logging.getLogger("telecode.llamacpp.argv")
 
 
 # Kinds:
@@ -34,6 +41,12 @@ from llamacpp import config as cfg
 #   "onoff"     → --flag on|off (tri-state; always emits if present)
 #   "bool_pair" → flag is a tuple (positive, negative); emits one of the two
 #                 based on truthiness. Used for --X / --no-X style pairs.
+#   "pathlist"  → --flag a,b,c ; every comma-separated item resolved as a path
+#   "pathscaled"→ --flag a:1.0,b:0.5 ; the path part of each item resolved, the
+#                 scale (after the LAST colon) kept
+#   "multi"     → --flag v1 --flag v2 ; one flag per comma/whitespace/newline item
+#   "json_obj"  → --flag '<compact json>' ; skipped (warning) unless a JSON object
+#   "range2"    → --flag START END ; two args from "10 20" / "10-20" / "10,20"
 
 # Server-wide flags read from top-level llamacpp.*
 _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
@@ -63,6 +76,18 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("poll",             "--poll",             "value"),
     ("poll_batch",       "--poll-batch",       "value"),
     ("threads_http",     "--threads-http",     "value_nz"),
+
+    # Draft-model scheduling (stock b10733+). Only meaningful with a draft model /
+    # MTP head, harmless otherwise. The tray greys them unless a draft spec type is on.
+    ("spec_draft_cpu_mask",         "--spec-draft-cpu-mask",         "value"),
+    ("spec_draft_cpu_range",        "--spec-draft-cpu-range",        "value"),
+    ("spec_draft_cpu_strict",       "--spec-draft-cpu-strict",       "value"),
+    ("spec_draft_prio",             "--spec-draft-prio",             "value"),
+    ("spec_draft_poll",             "--spec-draft-poll",             "value"),
+    ("spec_draft_cpu_mask_batch",   "--spec-draft-cpu-mask-batch",   "value"),
+    ("spec_draft_cpu_strict_batch", "--spec-draft-cpu-strict-batch", "value"),
+    ("spec_draft_prio_batch",       "--spec-draft-prio-batch",       "value"),
+    ("spec_draft_poll_batch",       "--spec-draft-poll-batch",       "value"),
 
     # Memory policy.
     # load_mode replaces --mlock / --no-mmap / --direct-io, all three of which
@@ -124,8 +149,21 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     #   it when spec_type is meaningfully set (the two are mutually
     #   exclusive — set one or the other, not both).
     ("spec_default",             "--spec-default",         "flag"),
+    # Adaptive draft length (patched build): the length of each draft is chosen from measured
+    # acceptance and round time. The tuning knobs only mean something with it on.
+    ("spec_draft_adaptive",           "--spec-draft-adaptive",           "flag"),
+    ("spec_draft_adaptive_min_gain",  "--spec-draft-adaptive-min-gain",  "value"),
+    ("spec_draft_adaptive_ema",       "--spec-draft-adaptive-ema",       "value"),
+    ("spec_draft_adaptive_probe",     "--spec-draft-adaptive-probe",     "value"),
+    # Draft head subset (patched build): the MTP draft steps read only these rows of the output head from device memory.
+    ("spec_draft_head_subset",        "--spec-draft-head-subset",        "value_nz"),
     ("spec_synth_len",           "--spec-synth-len",       "value_nz"),
     ("spec_synth_rates",         "--spec-synth-rates",     "value"),
+    # How the draft is sampled (greedy argmax vs probabilistic + rejection sampling) and
+    # whether that sampling runs on the backend (stock default: enabled).
+    ("spec_draft_sampling",         "--spec-draft-sampling",   "value"),
+    ("spec_draft_backend_sampling",
+     ("--spec-draft-backend-sampling", "--no-spec-draft-backend-sampling"), "bool_pair"),
     ("threads_draft",            "--threads-draft",        "value_nz"),
     ("threads_batch_draft",      "--threads-batch-draft",  "value_nz"),
 
@@ -159,6 +197,36 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
 
     # Diagnostic / debug
     ("skip_chat_parsing",        "--skip-chat-parsing",    "flag"),
+    ("perf",                     ("--perf", "--no-perf"),  "bool_pair"),
+
+    # Misc server behaviour
+    ("prefill_assistant",        ("--prefill-assistant", "--no-prefill-assistant"), "bool_pair"),
+    ("lora_init_without_apply",  "--lora-init-without-apply", "flag"),
+    ("rpc",                      "--rpc",                  "value"),
+    ("offline",                  "--offline",              "flag"),
+
+    # Sampler defaults. These are llama-server's own launch defaults: a request
+    # that carries a value wins; the proxy fills only the fields it knows
+    # (inference_defaults). Absent key = nothing emitted = the server's default.
+    ("samplers",                 "--samplers",             "value"),
+    ("sampler_seq",              "--sampler-seq",          "value"),
+    ("top_nsigma",               "--top-nsigma",           "value"),
+    ("xtc_probability",          "--xtc-probability",      "value"),
+    ("xtc_threshold",            "--xtc-threshold",        "value"),
+    ("typical",                  "--typical",              "value"),
+    ("repeat_last_n",            "--repeat-last-n",        "value"),
+    ("dry_multiplier",           "--dry-multiplier",       "value"),
+    ("dry_base",                 "--dry-base",             "value"),
+    ("dry_allowed_length",       "--dry-allowed-length",   "value"),
+    ("dry_penalty_last_n",       "--dry-penalty-last-n",   "value"),
+    ("dry_sequence_breaker",     "--dry-sequence-breaker", "value"),
+    ("dynatemp_range",           "--dynatemp-range",       "value"),
+    ("dynatemp_exp",             "--dynatemp-exp",         "value"),
+    ("mirostat",                 "--mirostat",             "value"),
+    ("mirostat_lr",              "--mirostat-lr",          "value"),
+    ("mirostat_ent",             "--mirostat-ent",         "value"),
+    ("adaptive_target",          "--adaptive-target",      "value"),
+    ("adaptive_decay",           "--adaptive-decay",       "value"),
 ]
 
 
@@ -268,13 +336,46 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
 
     # MoE
     ("n_cpu_moe",     "--n-cpu-moe",       "value"),
+    ("n_cpu_ffn",     "--n-cpu-ffn",       "value_nz"),
     ("cpu_moe",       "--cpu-moe",         "flag"),
+
+    # MoE expert cache (--moe-cache-mib is upstream; the rest is the
+    # patches/llama.cpp/0002-moe-cache-compute-misses-on-the-cpu series).
+    # The tuning knobs are only emitted with moe_cache_cpu_miss on, see
+    # _MOE_CACHE_TUNING below: a stock binary rejects them as unknown flags.
+    ("moe_cache_mib",                   "--moe-cache-mib",                   "value_nz"),
+    ("moe_cache_cpu_miss",              "--moe-cache-cpu-miss",              "flag"),
+    ("moe_cache_promote_after",         "--moe-cache-promote-after",         "value"),
+    ("moe_cache_promote_max",           "--moe-cache-promote-max",           "value"),
+    ("moe_cache_decay",                 "--moe-cache-decay",                 "value"),
+    ("moe_cache_cpu_miss_max_tokens",   "--moe-cache-cpu-miss-max-tokens",   "value"),
+    ("moe_cache_stats_file",            "--moe-cache-stats-file",            "path"),
+    ("moe_cache_prewarm",               "--moe-cache-prewarm",               "flag"),
+    # Patched build only. Need a cache (suppressed when moe_cache_mib is 0), not CPU-miss mode.
+    # 0 / absent = off, nothing emitted.
+    ("moe_cache_route_bias",            "--moe-cache-route-bias",            "value_nz"),
+    ("moe_cache_promote_gain",          "--moe-cache-promote-gain",          "value_nz"),
+    ("moe_cache_foresight",             "--moe-cache-foresight",             "value_nz"),
+    ("moe_cache_tail_skip",             "--moe-cache-tail-skip",             "value_nz"),
+    ("moe_cache_tail_skip_rank",        "--moe-cache-tail-skip-rank",        "value_nz"),
+    ("moe_cache_tail_skip_auto_off",    "--moe-cache-tail-skip-auto-off",    "value"),
+    ("moe_cache_evict_window",          "--moe-cache-evict-window",          "value_nz"),
+    ("moe_cache_pcie_share",            "--moe-cache-pcie-share",            "value_nz"),
+    ("moe_cache_pcie_max",              "--moe-cache-pcie-max",              "value"),
+    ("moe_cache_async_upload",          "--moe-cache-async-upload",          "flag"),
+    ("moe_cache_swap_every",            "--moe-cache-swap-every",            "value_nz"),
+    ("moe_cache_swap_max",              "--moe-cache-swap-max",              "value_nz"),
+    ("moe_cache_route_top",             "--moe-cache-route-top",             "value_nz"),
+    ("moe_cache_route_scale",           "--moe-cache-route-scale",           "flag"),
 
     # RoPE / YaRN (0 = model default; YaRN factors default to -1.00 = auto,
     # so emit only when explicitly set to a non-zero override).
     ("rope_scaling",     "--rope-scaling",      "value"),
     ("rope_freq_base",   "--rope-freq-base",    "value_nz"),
     ("rope_freq_scale",  "--rope-freq-scale",   "value_nz"),
+    # rope_scale is the reciprocal spelling of rope_freq_scale; build_argv drops it
+    # when rope_freq_scale is also set so the two never contradict each other.
+    ("rope_scale",       "--rope-scale",        "value_nz"),
     ("yarn_orig_ctx",    "--yarn-orig-ctx",     "value_nz"),
     ("yarn_ext_factor",  "--yarn-ext-factor",   "value_nz"),
     ("yarn_attn_factor", "--yarn-attn-factor",  "value_nz"),
@@ -288,6 +389,8 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
 
     # Vision
     ("mmproj",            "--mmproj",            "path"),
+    ("mmproj_auto",       ("--mmproj-auto", "--no-mmproj-auto"), "bool_pair"),
+    ("mtmd_batch_max_tokens", "--mtmd-batch-max-tokens", "value_nz"),
     ("mmproj_offload",    ("--mmproj-offload", "--no-mmproj-offload"), "bool_pair"),
     ("image_min_tokens",  "--image-min-tokens",  "value_nz"),
     ("image_max_tokens",  "--image-max-tokens",  "value_nz"),
@@ -319,6 +422,16 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("lora",          "--lora",            "path"),
     ("lora_scale",    "--lora-scaled",     "value"),
 
+    # Control vectors (steering). control_vector takes comma-separated paths;
+    # control_vector_scaled takes path:scale,...; the layer range is "START END".
+    ("control_vector",              "--control-vector",              "pathlist"),
+    ("control_vector_scaled",       "--control-vector-scaled",       "pathscaled"),
+    ("control_vector_layer_range",  "--control-vector-layer-range",  "range2"),
+
+    # Generation defaults of the server (a request's own value wins).
+    ("logit_bias",    "--logit-bias",      "multi"),
+    ("ignore_eos",    "--ignore-eos",      "flag"),
+
     # Grammar
     ("grammar",       "--grammar",         "value"),
     ("grammar_file",  "--grammar-file",    "path"),
@@ -328,6 +441,8 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("reasoning_budget",         "--reasoning-budget",         "value"),
     ("reasoning_budget_message", "--reasoning-budget-message", "value"),
     ("reasoning_format",         "--reasoning-format",         "value"),
+    ("reasoning_effort",         "--reasoning-effort",         "value"),
+    ("chat_template_kwargs",     "--chat-template-kwargs",     "json_obj"),
     # llama-server nags for this one at every startup when the template
     # supports it: "chat template supports preserving reasoning, consider
     # enabling it via --reasoning-preserve". Server-side twin of Qwen's
@@ -343,6 +458,19 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("fit_ctx",                  "--fit-ctx",                  "value"),
     ("fit_target",               "--fit-target",               "value"),
 ]
+
+
+# Knobs of the CPU-miss mode of the MoE cache. Meaningless (and unknown to a
+# stock llama-server) unless moe_cache_cpu_miss is on, so they are suppressed.
+_MOE_CACHE_TUNING = frozenset({
+    "moe_cache_promote_after", "moe_cache_promote_max", "moe_cache_decay",
+    "moe_cache_cpu_miss_max_tokens", "moe_cache_foresight", "moe_cache_tail_skip",
+    "moe_cache_tail_skip_rank", "moe_cache_tail_skip_auto_off", "moe_cache_evict_window",
+    "moe_cache_pcie_share", "moe_cache_pcie_max", "moe_cache_async_upload",
+    "moe_cache_swap_every", "moe_cache_swap_max",
+})
+# These two only act with the router bias on
+_MOE_CACHE_ROUTE_RECIPE = frozenset({"moe_cache_route_top", "moe_cache_route_scale"})
 
 
 def _emit_flag(argv: list[str], cfg_dict: dict, key: str, flag: object, kind: str) -> None:
@@ -367,7 +495,8 @@ def _emit_flag(argv: list[str], cfg_dict: dict, key: str, flag: object, kind: st
         argv += [str(flag), sval]
         return
 
-    if key in ("cpu_strict", "cpu_strict_batch"):
+    if key in ("cpu_strict", "cpu_strict_batch", "spec_draft_cpu_strict",
+               "spec_draft_cpu_strict_batch", "spec_draft_poll", "spec_draft_poll_batch"):
         sval = "1" if bool(val) else "0"
         argv += [str(flag), sval]
         return
@@ -391,6 +520,50 @@ def _emit_flag(argv: list[str], cfg_dict: dict, key: str, flag: object, kind: st
         return
     if kind == "path":
         argv += [str(flag), cfg.resolve_path(sval)]
+        return
+    if kind == "pathlist":
+        items = [cfg.resolve_path(x.strip()) for x in sval.split(",") if x.strip()]
+        if items:
+            argv += [str(flag), ",".join(items)]
+        return
+    if kind == "pathscaled":
+        items = []
+        for x in sval.split(","):
+            x = x.strip()
+            if not x:
+                continue
+            name, sep, scale = x.rpartition(":")
+            # "D:/v.gguf" has a colon but no scale: the tail is not a number
+            try:
+                float(scale)
+            except ValueError:
+                name, sep, scale = x, "", ""
+            items.append(cfg.resolve_path(name.strip()) + (f":{scale.strip()}" if sep else ""))
+        if items:
+            argv += [str(flag), ",".join(items)]
+        return
+    if kind == "multi":
+        for item in re.split(r"[,\s]+", sval):
+            if item:
+                argv += [str(flag), item]
+        return
+    if kind == "json_obj":
+        try:
+            obj = json.loads(sval)
+        except ValueError as exc:
+            _LOG.warning("llamacpp: %s is not valid JSON (%s); %s not emitted", key, exc, flag)
+            return
+        if not isinstance(obj, dict):
+            _LOG.warning("llamacpp: %s must be a JSON object; %s not emitted", key, flag)
+            return
+        argv += [str(flag), json.dumps(obj, separators=(",", ":"))]
+        return
+    if kind == "range2":
+        parts = [x for x in re.split(r"[\s,]+|(?<=\d)-(?=\d)", sval) if x]
+        if len(parts) != 2 or not all(x.lstrip("-").isdigit() for x in parts):
+            _LOG.warning("llamacpp: %s needs 'START END' (got %r); %s not emitted", key, sval, flag)
+            return
+        argv += [str(flag), parts[0], parts[1]]
         return
     if kind == "value_nz":
         try:
@@ -446,6 +619,11 @@ def build_argv(model_name: str) -> list[str]:
     # tray, in case settings.json was hand-edited).
     if spec_active:
         suppressed_global.add("spec_default")
+    if not (spec_active or gcfg.get("spec_default")) or not gcfg.get("spec_draft_adaptive"):
+        suppressed_global.update({"spec_draft_adaptive", "spec_draft_adaptive_min_gain",
+                                  "spec_draft_adaptive_ema", "spec_draft_adaptive_probe"})
+    if not (spec_active or gcfg.get("spec_default")):
+        suppressed_global.add("spec_draft_head_subset")
     for k, flag, kind in _GLOBAL_FLAG_SPECS:
         if k in suppressed_global:
             continue
@@ -454,6 +632,12 @@ def build_argv(model_name: str) -> list[str]:
     _emit_spec_type(argv, gcfg)
     _emit_spec_ngram(argv, gcfg)
 
+    # ctx_size_spec lowers the window while speculative decoding runs (draft context VRAM).
+    mcfg = dict(mcfg)
+    eff_ctx = cfg.effective_ctx_size(resolved)
+    if eff_ctx > 0:
+        mcfg["ctx_size"] = eff_ctx
+
     # Per-model flags. When fit is on, suppress n_gpu_layers / n_gpu_layers_draft —
     # llama-server's auto-fitter aborts the moment it sees a user-pinned ngl
     # ("n_gpu_layers already set by user to N, abort"), leaving the model
@@ -461,6 +645,25 @@ def build_argv(model_name: str) -> list[str]:
     suppressed_model: set[str] = set()
     if bool(mcfg.get("fit")):
         suppressed_model.update({"n_gpu_layers", "n_gpu_layers_draft"})
+    cache_on = int(mcfg.get("moe_cache_mib") or 0) > 0
+    if not (bool(mcfg.get("moe_cache_cpu_miss")) and cache_on):
+        suppressed_model.update(_MOE_CACHE_TUNING)
+        suppressed_model.add("moe_cache_cpu_miss")
+    if not cache_on:
+        suppressed_model.update({"moe_cache_stats_file", "moe_cache_prewarm",
+                                 "moe_cache_route_bias", "moe_cache_promote_gain"})
+        suppressed_model.update(_MOE_CACHE_ROUTE_RECIPE)
+    if cache_on and not float(mcfg.get("moe_cache_route_bias") or 0) > 0:
+        suppressed_model.update(_MOE_CACHE_ROUTE_RECIPE)
+    if cache_on and mcfg.get("moe_cache_prewarm") and not mcfg.get("moe_cache_stats_file"):
+        # prewarm needs a stats file; keep one per model next to the other runtime data
+        mcfg["moe_cache_stats_file"] = str(Path(cfg.resolve_path("data/moe-cache")) / f"{resolved}.bin")
+    # rope_scale and rope_freq_scale are the same lever; the older key wins.
+    try:
+        if float(mcfg.get("rope_freq_scale") or 0) != 0.0:
+            suppressed_model.add("rope_scale")
+    except (TypeError, ValueError):
+        pass
     for k, flag, kind in _MODEL_FLAG_SPECS:
         if k in suppressed_model:
             continue

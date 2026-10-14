@@ -1148,7 +1148,7 @@ async def _apply_context_overflow(
     if policy not in ("truncate_middle", "truncate_left", "truncate_right"):
         return internal
 
-    ctx = int((llama_cfg.model_cfg(active_model) or {}).get("ctx_size") or 0)
+    ctx = llama_cfg.effective_ctx_size(active_model)
     if ctx <= 0:
         return internal
 
@@ -2449,7 +2449,7 @@ async def handle_gemini_generate(request: web.Request) -> web.StreamResponse:
 def _gemini_models_payload() -> dict[str, Any]:
     return xlate.build_gemini_models(
         list(llama_cfg.models().keys()), proxy_config.model_mapping() or {},
-        ctx_for=lambda n: (llama_cfg.model_cfg(llama_cfg.resolve_model(n)) or {}).get("ctx_size"))
+        ctx_for=lambda n: llama_cfg.effective_ctx_size(llama_cfg.resolve_model(n)))
 
 
 async def handle_gemini_models(request: web.Request) -> web.Response:

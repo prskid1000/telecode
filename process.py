@@ -311,6 +311,97 @@ atexit.register(_atexit_kill_tracked)
 
 _LLAMA_LOG = logging.getLogger("telecode.llamacpp")
 
+# ES_CONTINUOUS | ES_SYSTEM_REQUIRED: the thread keeps the system awake until it
+# clears the state or exits. Thread-bound, so set and cleared on the event loop
+# thread, which is where every begin_request / end_request / stop runs.
+_ES_CONTINUOUS = 0x80000000
+_ES_SYSTEM_REQUIRED = 0x00000001
+_AWAKE_HELD = False
+
+
+def _keep_awake(on: bool) -> None:
+    """Hold (`on`) or release the Windows keep-awake request. No-op off Windows
+    and when the state is already as asked."""
+    global _AWAKE_HELD
+    if sys.platform != "win32" or on == _AWAKE_HELD:
+        return
+    try:
+        import ctypes
+        flags = _ES_CONTINUOUS | _ES_SYSTEM_REQUIRED if on else _ES_CONTINUOUS
+        if ctypes.windll.kernel32.SetThreadExecutionState(flags):
+            _AWAKE_HELD = on
+            _LLAMA_LOG.info("llama.cpp: %s", "keeping Windows awake while requests run"
+                            if on else "released keep-awake request")
+    except Exception as exc:
+        _LLAMA_LOG.debug("SetThreadExecutionState failed: %s", exc)
+
+
+_VRAM_CHECK_WARNED = False
+
+
+def _free_vram_short(minimum: int) -> Optional[str]:
+    """None when the first NVIDIA GPU has at least `minimum` MiB free (or cannot be
+    read — logged once, check skipped); else a message saying how short it is.
+    Blocking (runs nvidia-smi): call it off the event loop."""
+    global _VRAM_CHECK_WARNED
+    from llamacpp import vram
+    free = vram.free_vram_mib()
+    for _ in range(2):            # a model that was just stopped may still be releasing VRAM
+        if free is None or free >= minimum:
+            break
+        time.sleep(1.5)
+        free = vram.free_vram_mib()
+    if free is None:
+        if not _VRAM_CHECK_WARNED:
+            _VRAM_CHECK_WARNED = True
+            _LLAMA_LOG.warning("llama.cpp: min_free_vram_mib is set but nvidia-smi could not be read "
+                               "— skipping the free-VRAM check")
+        return None
+    if free >= minimum:
+        return None
+    return f"{free} MiB free < min_free_vram_mib {minimum} MiB"
+
+
+def _apply_win_process_tuning(pid: int) -> None:
+    """Windows only: optional EcoQoS opt-out and process priority class for a freshly spawned llama-server.
+
+    Both are off unless llamacpp.win_power_throttle_off / win_process_priority are set; failures are logged
+    and ignored, the server runs either way."""
+    if sys.platform != "win32":
+        return
+    throttle_off = cfg.win_power_throttle_off()
+    prio = cfg.win_process_priority()
+    if not throttle_off and not prio:
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = wintypes.HANDLE
+        k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        handle = k32.OpenProcess(0x0200 | 0x0400, False, pid)  # PROCESS_SET_INFORMATION | PROCESS_QUERY_INFORMATION
+        if not handle:
+            raise OSError(ctypes.get_last_error(), "OpenProcess failed")
+        try:
+            if throttle_off:
+                class _PowerThrottling(ctypes.Structure):
+                    _fields_ = [("Version", wintypes.ULONG), ("ControlMask", wintypes.ULONG),
+                                ("StateMask", wintypes.ULONG)]
+
+                st = _PowerThrottling(1, 0x1, 0)  # version 1, control EXECUTION_SPEED, state 0 = never throttle
+                k32.SetProcessInformation.argtypes = (wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD)
+                ok = k32.SetProcessInformation(handle, 4, ctypes.byref(st), ctypes.sizeof(st))  # ProcessPowerThrottling
+                _LLAMA_LOG.info("llama.cpp: power throttling off for pid %d: %s", pid, "ok" if ok else "failed")
+            if prio:
+                classes = {"idle": 0x40, "below_normal": 0x4000, "normal": 0x20, "above_normal": 0x8000, "high": 0x80}
+                ok = k32.SetPriorityClass(handle, classes[prio])
+                _LLAMA_LOG.info("llama.cpp: priority class %s for pid %d: %s", prio, pid, "ok" if ok else "failed")
+        finally:
+            k32.CloseHandle(handle)
+    except Exception as exc:
+        _LLAMA_LOG.warning("llama.cpp: process tuning skipped: %s", exc)
+
 
 class LlamaSupervisor:
     """One active llama-server process at a time.
@@ -392,11 +483,15 @@ class LlamaSupervisor:
         async with self._inflight_lock:
             self._inflight += 1
             self._last_used = time.time()
+            if cfg.prevent_sleep():
+                _keep_awake(True)
 
     async def end_request(self) -> None:
         async with self._inflight_lock:
             self._inflight = max(0, self._inflight - 1)
             self._last_used = time.time()
+            if self._inflight == 0:
+                _keep_awake(False)
 
     def inflight_count(self) -> int:
         return self._inflight
@@ -443,6 +538,19 @@ class LlamaSupervisor:
     # ── Internal spawn / readiness / stop ────────────────────────────
 
     async def _spawn_locked(self, model_name: str) -> None:
+        # Refuse to start into too little VRAM: the driver would spill the model
+        # into shared system memory and run an order of magnitude slower.
+        min_free = cfg.min_free_vram_mib()
+        if min_free > 0:
+            short = await asyncio.get_running_loop().run_in_executor(
+                None, _free_vram_short, min_free)
+            if short:
+                _LLAMA_LOG.error("llama.cpp: not spawning '%s': %s", model_name, short)
+                raise RuntimeError(
+                    f"llama-server not started for '{model_name}': {short}. Free GPU memory "
+                    f"or lower llamacpp.min_free_vram_mib."
+                )
+
         argv = build_argv(model_name)
         binary = argv[0]
         resolved_binary = shutil.which(binary) or binary
@@ -455,6 +563,12 @@ class LlamaSupervisor:
             .encode()
         )
         self._log_fp.write(f"argv: {describe(model_name)}\n".encode())
+        # Extra environment (llamacpp.env, then the model's own env on top), rebuilt
+        # for the model being started. Names only in the log; values may be paths.
+        child_env = cfg.spawn_env(model_name)
+        if child_env is not None:
+            self._log_fp.write(
+                f"env: {', '.join(sorted(cfg.extra_env(model_name)))}\n".encode())
         self._log_fp.flush()
 
         _LLAMA_LOG.info("llama.cpp: spawning '%s' on %s:%d",
@@ -480,6 +594,7 @@ class LlamaSupervisor:
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
                 creationflags=creation,
+                env=child_env,
             )
         except FileNotFoundError as exc:
             self._log_fp.close()
@@ -488,6 +603,8 @@ class LlamaSupervisor:
                 f"llama.cpp binary not found: {binary}. Set llamacpp.binary "
                 f"in settings.json to the absolute path."
             ) from exc
+
+        _apply_win_process_tuning(self._proc.pid)
 
         # Bind to the shared kill-on-close Job so the OS kills llama-server
         # if THIS Python process dies unexpectedly. No-op on non-Windows.
@@ -565,6 +682,7 @@ class LlamaSupervisor:
         proc = self._proc
         self._proc = None
         self._active_model = ""
+        _keep_awake(False)
 
         if proc is None or proc.poll() is not None:
             if self._log_fp:

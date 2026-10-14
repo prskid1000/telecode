@@ -145,6 +145,8 @@ def _toggle_row(path: str, label: str, help_text: str = "",
     def _on(_state: int) -> None:
         patch_settings(path, t.isChecked())
     t.stateChanged.connect(_on)
+    _follow_setting(path, t, lambda v: t.isChecked() != bool(v if v is not None else default)
+                    and t.setChecked(bool(v if v is not None else default)))
 
     return _row(row_label(label, help_text, path, cli),
                 _wrap_align(t, Qt.AlignmentFlag.AlignLeft))
@@ -159,13 +161,33 @@ def _wrap_align(widget: QWidget, alignment) -> QWidget:
     return w
 
 
+def _follow_setting(path: str, widget: QWidget, apply: Callable[[Any], None]) -> None:
+    """Keep `widget` showing `path` when something else writes it (a button on the
+    same page, another row of the same key). `apply(value)` only runs when the
+    widget is not being edited; a widget that was destroyed with its page drops
+    its own subscription."""
+    def _on(changed: str) -> None:
+        if changed != path:
+            return
+        try:
+            if not widget.hasFocus():
+                apply(get_path(read_settings(), path))
+        except RuntimeError:
+            try:
+                settings_bus().settingChanged.disconnect(_on)
+            except (RuntimeError, TypeError):
+                pass
+    settings_bus().settingChanged.connect(_on)
+
+
 def _number_row(path: str, label: str,
                 minimum: float, maximum: float,
                 step: float = 0.01, decimals: int = 2, unit: str = "",
-                help_text: str = "", cli: str = "") -> QWidget:
-    """Numeric row (text input + slider, linked)."""
+                help_text: str = "", cli: str = "",
+                default: float | None = None) -> QWidget:
+    """Numeric row (text input + slider, linked). `default` shows when the key is unset."""
     ne = NumberEditor(minimum, maximum, step, decimals, unit)
-    cur = get_path(read_settings(), path, minimum)
+    cur = get_path(read_settings(), path, minimum if default is None else default)
     try:
         ne.setValue(float(cur))
     except (TypeError, ValueError):
@@ -175,6 +197,13 @@ def _number_row(path: str, label: str,
     # entire window on wide displays, but don't pinch it so tight that
     # the slider has nowhere to drag.
     ne.setMaximumWidth(720)
+
+    def _shown(v: Any) -> None:
+        try:
+            ne.setValue(float(minimum if v is None and default is None else (default if v is None else v)))
+        except (TypeError, ValueError):
+            pass
+    _follow_setting(path, ne, _shown)
     return _row(row_label(label, help_text, path, cli), _wrap_align(ne, Qt.AlignmentFlag.AlignLeft))
 
 
@@ -232,6 +261,178 @@ def _dependent(row: QWidget, parent_paths: list[str], predicate) -> QWidget:
     # Qt's garbage collector when the row is reparented away.
     row._dep_disconnect = lambda: bus.settingChanged.disconnect(_on_change)  # type: ignore[attr-defined]
     return row
+
+
+def _cpu_detect_row() -> QWidget:
+    """'Detect CPU cores' — reads which logical CPUs are performance cores and
+    offers masks for them. Nothing is written until one of the two buttons is
+    clicked; the current values are shown next to the result."""
+    from llamacpp import cpu_topology
+    mono = "font-family: 'JetBrains Mono', Consolas, monospace;"
+
+    detect_btn = QPushButton("Detect CPU cores")
+    p_btn = QPushButton("Use P-cores for decode")
+    all_btn = QPushButton("Use all cores for batch")
+    p_btn.setEnabled(False)
+    all_btn.setEnabled(False)
+
+    result = QLabel("Not detected yet.")
+    result.setWordWrap(True)
+    result.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+    result.setStyleSheet(f"color: {FG}; {mono} font-size: 11px;")
+    current = QLabel()
+    current.setWordWrap(True)
+    current.setStyleSheet(f"color: {FG_MUTE}; {mono} font-size: 11px;")
+
+    info: dict[str, Any] = {}
+
+    def _show_current(changed: str = "llamacpp.cpu_") -> None:
+        if not changed.startswith("llamacpp.cpu_"):
+            return
+        try:
+            snap = read_settings()
+            current.setText(
+                f"current: CPU Mask {get_path(snap, 'llamacpp.cpu_mask', '') or '(empty)'}   "
+                f"Strict {'on' if get_path(snap, 'llamacpp.cpu_strict', False) else 'off'}   "
+                f"CPU Mask (batch) {get_path(snap, 'llamacpp.cpu_mask_batch', '') or '(empty)'}")
+        except RuntimeError:             # label destroyed with its page
+            try:
+                settings_bus().settingChanged.disconnect(_show_current)
+            except (RuntimeError, TypeError):
+                pass
+    _show_current()
+    settings_bus().settingChanged.connect(_show_current)
+
+    def _detect() -> None:
+        info.clear()
+        info.update(cpu_topology.detect())
+        text = cpu_topology.describe(info)
+        if not info["hybrid"]:
+            text += "\nNot a hybrid CPU: nothing to pin."
+        result.setText(text)
+        p_btn.setEnabled(bool(info["hybrid"]))
+        all_btn.setEnabled(True)
+
+    def _use_p() -> None:
+        if info.get("hybrid"):
+            patch_settings("llamacpp.cpu_mask", info["performance_mask_hex"])
+            patch_settings("llamacpp.cpu_strict", True)
+
+    def _use_all() -> None:
+        if info:
+            patch_settings("llamacpp.cpu_mask_batch", cpu_topology.all_cpus_mask())
+
+    detect_btn.clicked.connect(_detect)
+    p_btn.clicked.connect(_use_p)
+    all_btn.clicked.connect(_use_all)
+
+    box = QWidget()
+    bl = QVBoxLayout(box)
+    bl.setContentsMargins(0, 0, 0, 0)
+    bl.setSpacing(8)
+    btns = QWidget()
+    btl = QHBoxLayout(btns)
+    btl.setContentsMargins(0, 0, 0, 0)
+    btl.setSpacing(8)
+    for b in (detect_btn, p_btn, all_btn):
+        btl.addWidget(b)
+    btl.addStretch(1)
+    bl.addWidget(btns)
+    bl.addWidget(result)
+    bl.addWidget(current)
+    return _row(row_label("Detect CPU cores",
+                          "Reads which logical CPUs are performance (P) and efficiency (E) cores. "
+                          "'Use P-cores for decode' writes CPU Mask = the P-core mask and turns CPU Strict on; "
+                          "'Use all cores for batch' writes CPU Mask (batch) = every core, so prompt "
+                          "processing is not limited to the P-cores. Nothing is changed until you click one. "
+                          "Restart the model to apply."),
+                box)
+
+
+def _gguf_inspector_card(p: str) -> QWidget:
+    """'Inspect GGUF' for the model whose settings live under `p` — a read-only
+    summary of the file's header (architecture, layers, experts, quant sizes) and,
+    for MoE models, a suggested starting cache size. The suggestion is written
+    only when 'Apply suggested cache size' is clicked."""
+    import threading
+    from PySide6.QtCore import QObject, Signal as _Signal
+    from PySide6.QtWidgets import QPlainTextEdit
+
+    class _Bridge(QObject):
+        done = _Signal(object)           # summary dict, or an error string
+
+    bridge = _Bridge()
+    card, body = _card("GGUF Inspector",
+                       "Reads the header of this model's GGUF (not the weights) and sizes its parts. "
+                       "For MoE models it suggests a starting expert-cache size from the VRAM free right now.")
+    inspect_btn = QPushButton("Inspect GGUF")
+    apply_btn = QPushButton("Apply suggested cache size")
+    apply_btn.setEnabled(False)
+    out = QPlainTextEdit()
+    out.setReadOnly(True)
+    out.setMinimumHeight(170)
+    out.setStyleSheet(
+        f"background: {BG_ELEV}; color: {FG}; border: 1px solid {BORDER}; "
+        f"border-radius: 6px; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 11px;")
+    out.setPlaceholderText("Click Inspect GGUF.")
+    suggestion: dict[str, Any] = {}
+
+    def _run(path: str, ctx: int) -> None:
+        try:
+            from llamacpp import gguf_info
+            bridge.done.emit(gguf_info.summarize(path, ctx_size=ctx or None))
+        except Exception as exc:
+            bridge.done.emit(f"Could not read the GGUF: {exc}")
+
+    def _finish(res: Any) -> None:
+        inspect_btn.setEnabled(True)
+        suggestion.clear()
+        if isinstance(res, str):
+            out.setPlainText(res)
+            apply_btn.setEnabled(False)
+            return
+        from llamacpp import gguf_info
+        out.setPlainText(gguf_info.format_summary(res))
+        sg = res.get("suggested")
+        if sg:
+            suggestion.update(sg)
+        apply_btn.setEnabled(bool(sg))
+
+    bridge.done.connect(_finish)
+
+    def _inspect() -> None:
+        from llamacpp import config as _lcfg
+        snap = read_settings()
+        raw = str(get_path(snap, f"{p}.path", "") or "").strip()
+        if not raw:
+            out.setPlainText("This model has no GGUF Path set.")
+            return
+        try:
+            ctx = int(float(get_path(snap, f"{p}.ctx_size", 0) or 0))
+        except (TypeError, ValueError):
+            ctx = 0
+        inspect_btn.setEnabled(False)
+        apply_btn.setEnabled(False)
+        out.setPlainText("Reading…")
+        threading.Thread(target=_run, args=(_lcfg.resolve_path(raw), ctx), daemon=True).start()
+
+    def _apply() -> None:
+        if suggestion:
+            patch_settings(f"{p}.moe_cache_mib", int(suggestion["moe_cache_mib"]))
+
+    inspect_btn.clicked.connect(_inspect)
+    apply_btn.clicked.connect(_apply)
+    btns = QWidget()
+    bl = QHBoxLayout(btns)
+    bl.setContentsMargins(0, 0, 0, 0)
+    bl.setSpacing(8)
+    bl.addWidget(inspect_btn)
+    bl.addWidget(apply_btn)
+    bl.addStretch(1)
+    body.addWidget(btns)
+    body.addWidget(out)
+    card._bridge = bridge                # keep the signal object alive with the card
+    return card
 
 
 def _has_spec(spec_value, *names: str) -> bool:
@@ -1524,6 +1725,14 @@ def _llama_patch_build_card(window) -> QWidget:
         "install is a silent, large performance regression. Turn off only for "
         "a deliberately CPU-only build.",
         default=True))
+    # Each patch is an add-on: off leaves it out of the next build.
+    for _p in patcher.patches():
+        body.addWidget(_toggle_row(
+            f"llamacpp.custom_build.patches.{patcher.patch_setting_name(_p)}",
+            f"Patch: {_p.stem}",
+            f"{patcher.patch_key(_p)} — applied by Build Patched when on. "
+            "Takes effect on the next build; the installed binary is unchanged until then.",
+            default=True))
 
     status = QLabel("…")
     status.setWordWrap(True)
@@ -1797,14 +2006,10 @@ def _llama(window) -> QWidget:
         m = model_box.currentData()
         if not m:
             return
+        # Selection only — nothing loads until "Load Now".
         _user_selected_model[0] = m
-        async def _do():
-            from process import get_supervisor
-            sup = await get_supervisor()
-            await sup.ensure_model(m)
-        schedule(window.bot_loop, _do())
     model_box.currentIndexChanged.connect(_on_model_chosen)
-    body.addWidget(_row(row_label("Model", "Swap to a different registered model."), model_box))
+    body.addWidget(_row(row_label("Model", "Pick a registered model, then press Load Now to swap to it."), model_box))
 
     # Actions row
     action_row = QWidget()
@@ -1956,6 +2161,27 @@ def _llama(window) -> QWidget:
     spawn_body.addWidget(_number_row("llamacpp.keep",           "Keep Tokens",       0, 8192, 32, 0, "tok",
                                       "--keep: tokens from prompt always kept when truncating."))
 
+    spawn_body.addWidget(_section_header("Power / Safety"))
+    spawn_body.addWidget(_toggle_row("llamacpp.prevent_sleep", "Prevent Sleep While Running",
+                                      "Keeps Windows awake (no sleep or idle suspend) while llama-server is working "
+                                      "on at least one request, and lets it sleep again as soon as it is idle or the "
+                                      "model unloads. Off by default; no effect on other systems."))
+    spawn_body.addWidget(_toggle_row("llamacpp.win_power_throttle_off", "Windows: No Power Throttling",
+                                      "Opts llama-server out of Windows power throttling (EcoQoS) after it starts. On hybrid "
+                                      "Intel CPUs Windows can park a background-looking process on the E-cores; Strata measured "
+                                      "+18% decode with it off. Off by default; Windows only."))
+    spawn_body.addWidget(_enum_row_strs("llamacpp.win_process_priority", "Windows: Process Priority",
+                                         [("Leave as is (default)", ""), ("Normal", "normal"), ("Above normal", "above_normal"),
+                                          ("High", "high"), ("Below normal", "below_normal"), ("Idle", "idle")],
+                                         "Priority class set on llama-server after it starts (not the --prio thread priority). "
+                                         "Normal is what Strata uses; a process started from Task Scheduler can inherit a low class "
+                                         "and load models far slower."))
+    spawn_body.addWidget(_number_row("llamacpp.min_free_vram_mib", "Min Free VRAM Before Load", 0, 262144, 256, 0, "MiB",
+                                      "Do not start llama-server unless the first NVIDIA GPU has at least this much free "
+                                      "memory; the request fails with a clear error instead of the driver spilling the model "
+                                      "into shared system memory (much slower). 0 = no check. Skipped (logged once) when "
+                                      "nvidia-smi is not available."))
+
     spawn_body.addWidget(_section_header("Scheduling"))
     spawn_body.addWidget(_line_row("llamacpp.cpu_mask", "CPU Mask",
                                     "hex, e.g. c03c03 — empty = all cores",
@@ -1978,6 +2204,7 @@ def _llama(window) -> QWidget:
                                       "--cpu-strict <0|1>: pin threads strictly to selected cores (default 0)."))
     spawn_body.addWidget(_toggle_row("llamacpp.cpu_strict_batch", "CPU Strict (batch)",
                                       "--cpu-strict-batch: same as --cpu-strict but for prompt-processing threads."))
+    spawn_body.addWidget(_cpu_detect_row())
     spawn_body.addWidget(_number_row("llamacpp.prio",             "Priority",         -1, 3, 1, 0, "",
                                       "--prio: process/thread priority. -1=low, 0=normal, 1=medium, 2=high, 3=realtime."))
     spawn_body.addWidget(_number_row("llamacpp.prio_batch",       "Priority (batch)", -1, 3, 1, 0, "",
@@ -2006,7 +2233,109 @@ def _llama(window) -> QWidget:
                                       "--skip-chat-parsing: force the server to skip Jinja chat-template parsing. Useful for debugging template bugs."))
     spawn_body.addWidget(_number_row("llamacpp.n_predict",         "N-Predict (default)", -1, 1048576, 64, 0, "tok",
                                       "--n-predict: server-wide default cap on tokens generated. -1 = unlimited."))
+    spawn_body.addWidget(_section_header("Server Behaviour"))
+    spawn_body.addWidget(_toggle_row("llamacpp.prefill_assistant", "Prefill Assistant",
+                                      "--prefill-assistant / --no-prefill-assistant: when the last message of a request is "
+                                      "an assistant message, continue it (Claude-style prefill) instead of starting a new "
+                                      "turn. Server default: enabled.", default=True))
+    spawn_body.addWidget(_toggle_row("llamacpp.perf", "Performance Timings",
+                                      "--perf / --no-perf: print libllama's internal timing breakdown to the llama log "
+                                      "(server default: off). Cheap, handy when tuning."))
+    spawn_body.addWidget(_toggle_row("llamacpp.lora_init_without_apply", "Load LoRA Unapplied",
+                                      "--lora-init-without-apply: load LoRA adapters but do not apply them; scale them later "
+                                      "through POST /lora-adapters."))
+    spawn_body.addWidget(_line_row("llamacpp.rpc", "RPC Servers", "host:port,host:port",
+                                    "--rpc: comma-separated llama.cpp RPC servers whose GPUs this server may use. "
+                                    "Needs a build with the RPC backend. Empty = none."))
+    spawn_body.addWidget(_toggle_row("llamacpp.offline", "Offline Mode",
+                                      "--offline: use cached files only and never touch the network at startup."))
     layout.addWidget(spawn_card)
+
+    # ── Environment card — variables for the spawned llama-server ────
+    env_card, env_body = _card("Environment",
+                                "llamacpp.env - variables set on the llama-server process (a model's own "
+                                "Environment overrides these)")
+    env_body.addWidget(_code_row("llamacpp.env", "Environment Variables",
+                                  "GGML_CUDA_REGISTER_HOST=1\n# GGML_OP_OFFLOAD_MIN_BATCH=32",
+                                  _ENV_HELP, height=130))
+    layout.addWidget(env_card)
+
+    # ── Sampler defaults — llama-server launch flags ─────────────────
+    smp_card, smp_body = _card("Sampler Defaults (server)",
+                                "llamacpp.* - llama-server's own sampler defaults; a request that sets a value "
+                                "wins. Untouched rows emit nothing (restart required)")
+    smp_body.addWidget(_line_row("llamacpp.samplers", "Sampler Order",
+                                  "penalties;dry;top_n_sigma;top_k;typ_p;top_p;min_p;xtc;temperature",
+                                  "--samplers: samplers in the order they run, separated by ';'. Empty = server default."))
+    smp_body.addWidget(_line_row("llamacpp.sampler_seq", "Sampler Sequence", "edskypmxt",
+                                  "--sampler-seq: the same thing as one letter per sampler "
+                                  "(server default edskypmxt). Ignored by the server if Sampler Order is set."))
+    smp_body.addWidget(_number_row("llamacpp.top_nsigma", "Top-n-sigma", -1, 10, 0.1, 2, "",
+                                    "--top-nsigma: keep tokens within n standard deviations of the top logit. "
+                                    "-1 = disabled (default).", default=-1))
+    smp_body.addWidget(_number_row("llamacpp.xtc_probability", "XTC Probability", 0, 1, 0.05, 2, "",
+                                    "--xtc-probability: chance per token that XTC removes the top choices (creativity "
+                                    "sampler). 0 = disabled (default).", default=0))
+    smp_body.addWidget(_dependent(
+        _number_row("llamacpp.xtc_threshold", "XTC Threshold", 0, 1, 0.05, 2, "",
+                     "--xtc-threshold: tokens above this probability are candidates for removal. 1.0 = disabled; "
+                     "default 0.10.", default=0.1),
+        ["llamacpp.xtc_probability"], lambda v: _num_gt0(v)))
+    smp_body.addWidget(_number_row("llamacpp.typical", "Typical-p", 0, 1, 0.05, 2, "",
+                                    "--typical: locally typical sampling, parameter p. 1.0 = disabled (default).", default=1))
+    smp_body.addWidget(_number_row("llamacpp.repeat_last_n", "Repeat Penalty Window", -1, 65536, 16, 0, "tok",
+                                    "--repeat-last-n: how many recent tokens the repeat / presence / frequency penalties "
+                                    "look at. 0 = disabled, -1 = whole context. Default 64.", default=64))
+    smp_body.addWidget(_number_row("llamacpp.dry_multiplier", "DRY Multiplier", 0, 10, 0.1, 2, "",
+                                    "--dry-multiplier: strength of DRY (penalises repeating a sequence the context already "
+                                    "contains). 0 = disabled (default); 0.8 is a common start.", default=0))
+    _dry_on = lambda m: _num_gt0(m)
+    smp_body.addWidget(_dependent(
+        _number_row("llamacpp.dry_base", "DRY Base", 1, 10, 0.05, 2, "",
+                     "--dry-base: how fast the DRY penalty grows with the repeated length. Default 1.75.", default=1.75),
+        ["llamacpp.dry_multiplier"], _dry_on))
+    smp_body.addWidget(_dependent(
+        _number_row("llamacpp.dry_allowed_length", "DRY Allowed Length", 0, 256, 1, 0, "tok",
+                     "--dry-allowed-length: repeats up to this long are not penalised. Default 2.", default=2),
+        ["llamacpp.dry_multiplier"], _dry_on))
+    smp_body.addWidget(_dependent(
+        _number_row("llamacpp.dry_penalty_last_n", "DRY Window", -1, 65536, 16, 0, "tok",
+                     "--dry-penalty-last-n: how far back DRY looks. 0 = disabled, -1 = whole context. Default 64.",
+                     default=64),
+        ["llamacpp.dry_multiplier"], _dry_on))
+    smp_body.addWidget(_dependent(
+        _line_row("llamacpp.dry_sequence_breaker", "DRY Sequence Breaker", "none",
+                   "--dry-sequence-breaker: a string that resets DRY matching. Giving one REPLACES the defaults "
+                   "(newline, ':', '\"', '*'); 'none' uses no breakers. Empty = defaults."),
+        ["llamacpp.dry_multiplier"], _dry_on))
+    smp_body.addWidget(_number_row("llamacpp.dynatemp_range", "Dynamic Temperature Range", 0, 5, 0.05, 2, "",
+                                    "--dynatemp-range: the temperature moves within +-range around the request temperature, by the entropy of the "
+                                    "distribution. 0 = disabled (default).", default=0))
+    smp_body.addWidget(_dependent(
+        _number_row("llamacpp.dynatemp_exp", "Dynamic Temperature Exponent", 0.1, 10, 0.1, 2, "",
+                     "--dynatemp-exp: how fast the temperature follows the entropy (default 1.0).", default=1),
+        ["llamacpp.dynatemp_range"], lambda v: _num_gt0(v)))
+    smp_body.addWidget(_enum_row("llamacpp.mirostat", "Mirostat",
+                                  [("Off (default)", 0), ("Mirostat 1", 1), ("Mirostat 2", 2)],
+                                  "--mirostat: Mirostat sampling keeps the surprise of the text near a target instead of a fixed truncation; "
+                                  "it replaces top-k / top-p / typical / min-p while on."))
+    _miro_on = lambda v: int(v or 0) > 0
+    smp_body.addWidget(_dependent(
+        _number_row("llamacpp.mirostat_lr", "Mirostat Learning Rate (eta)", 0.0, 1.0, 0.01, 2, "",
+                     "--mirostat-lr: how fast Mirostat corrects toward its target entropy (default 0.10).", default=0.1),
+        ["llamacpp.mirostat"], _miro_on))
+    smp_body.addWidget(_dependent(
+        _number_row("llamacpp.mirostat_ent", "Mirostat Target Entropy (tau)", 0.0, 20.0, 0.1, 2, "",
+                     "--mirostat-ent: the surprise Mirostat aims for (default 5.0).", default=5),
+        ["llamacpp.mirostat"], _miro_on))
+    smp_body.addWidget(_number_row("llamacpp.adaptive_target", "Adaptive-P Target", -1, 1, 0.01, 2, "",
+                                    "--adaptive-target: adaptive-p sampling selects tokens near this probability (0 to 1). Negative = disabled (default).",
+                                    default=-1))
+    smp_body.addWidget(_dependent(
+        _number_row("llamacpp.adaptive_decay", "Adaptive-P Decay", 0.0, 0.99, 0.01, 2, "",
+                     "--adaptive-decay: decay rate of the target adaptation over time; lower follows the recent text more (default 0.90).", default=0.9),
+        ["llamacpp.adaptive_target"], lambda v: float(v if v is not None else -1) >= 0))
+    layout.addWidget(smp_card)
 
     # ── Endpoints card — diagnostic / monitoring endpoints ───────────
     ep_card, ep_body = _card("Endpoints",
@@ -2132,6 +2461,37 @@ def _llama(window) -> QWidget:
         ["llamacpp.spec_type"],
         lambda st: not _spec_value_is_active(st),
     ))
+    _spec_on = lambda st, sd: _spec_value_is_active(st) or bool(sd)
+    spec_body.addWidget(_dependent(
+        _toggle_row("llamacpp.spec_draft_adaptive", "Adaptive Draft Length",
+                     "--spec-draft-adaptive (patched build): pick the length of every draft from the measured acceptance of each "
+                     "draft position and the measured time of rounds of each size, up to the draft Max Tokens. Drafts nothing when "
+                     "that is faster. Needs a draft model or MTP head."),
+        ["llamacpp.spec_type", "llamacpp.spec_default"], _spec_on))
+    spec_body.addWidget(_dependent(
+        _number_row("llamacpp.spec_draft_head_subset", "Draft Head Subset (GPU rows)", 0, 1000000, 1024, 0, "rows",
+                     "--spec-draft-head-subset (patched build): keep this many rows of the output head (the first tokens of the vocabulary "
+                     "and the last 1024 special ones) in GPU memory and let the MTP draft steps choose among them. When the output head sits "
+                     "in host memory (an output.weight=CPU override) every drafted token otherwise reads the whole head from RAM. The target model "
+                     "still verifies with the full head, so the output is exact. 32768 is a good start. 0 = off.", default=0),
+        ["llamacpp.spec_type", "llamacpp.spec_default"], _spec_on))
+    _adaptive_on = lambda st, sd, ad: (_spec_value_is_active(st) or bool(sd)) and bool(ad)
+    _adaptive_deps = ["llamacpp.spec_type", "llamacpp.spec_default", "llamacpp.spec_draft_adaptive"]
+    spec_body.addWidget(_dependent(
+        _number_row("llamacpp.spec_draft_adaptive_min_gain", "Adaptive Min Gain", 0, 1, 0.01, 2, "",
+                     "--spec-draft-adaptive-min-gain: a draft must beat not drafting by this fraction of tokens per ms. "
+                     "Higher = drafts only when clearly worth it.", default=0.03),
+        _adaptive_deps, _adaptive_on))
+    spec_body.addWidget(_dependent(
+        _number_row("llamacpp.spec_draft_adaptive_ema", "Adaptive Learning Rate", 0.01, 1, 0.01, 2, "",
+                     "--spec-draft-adaptive-ema: weight of a new round in the acceptance and round-time estimates. "
+                     "Low = steady, high = follows the current text quickly.", default=0.1),
+        _adaptive_deps, _adaptive_on))
+    spec_body.addWidget(_dependent(
+        _number_row("llamacpp.spec_draft_adaptive_probe", "Adaptive Probe Interval", 0, 1000, 1, 0, "rounds",
+                     "--spec-draft-adaptive-probe: every N rounds try a draft length next to the best one, so sizes that were "
+                     "never measured get real timings. 0 = never.", default=16),
+        _adaptive_deps, _adaptive_on))
     # Synthetic acceptance: a benchmarking aid, not a speed knob. It fakes the
     # accept/reject pattern of a draft model so spec-decode overhead can be
     # measured without one. Leave at 0 / empty for normal use.
@@ -2186,6 +2546,60 @@ def _llama(window) -> QWidget:
     spec_body.addWidget(_dependent(
         _number_row("llamacpp.threads_batch_draft", "Threads (draft batch)", 0, 128, 1, 0, "",
                      "--threads-batch-draft: CPU threads for draft-model prompt processing."),
+        ["llamacpp.spec_type"], _draft_active))
+    spec_body.addWidget(_dependent(
+        _enum_row_strs("llamacpp.spec_draft_sampling", "Draft Sampling",
+                       [("Greedy (default)", ""), ("greedy", "greedy"), ("probabilistic", "probabilistic")],
+                       "--spec-draft-sampling: how the draft is sampled. greedy takes the draft's argmax; probabilistic "
+                       "samples it and the target verifies by rejection sampling, which keeps acceptance up at "
+                       "temperature > 0. Empty = server default (greedy)."),
+        ["llamacpp.spec_type"], _draft_active))
+    spec_body.addWidget(_dependent(
+        _toggle_row("llamacpp.spec_draft_backend_sampling", "Draft Backend Sampling",
+                     "--spec-draft-backend-sampling / --no-...: run the draft's sampling on the backend (GPU) instead of "
+                     "the CPU (server default: enabled). Turn off only to rule it out when drafts misbehave.",
+                     default=True),
+        ["llamacpp.spec_type"], _draft_active))
+    spec_body.addWidget(_section_header("Draft Thread Scheduling"))
+    spec_body.addWidget(_dependent(
+        _line_row("llamacpp.spec_draft_cpu_mask", "Draft CPU Mask", "hex - empty = same as CPU Mask",
+                   "--spec-draft-cpu-mask: affinity mask for the draft model's threads, so they do not fight the main "
+                   "generation threads for cores. Empty = the main CPU Mask."),
+        ["llamacpp.spec_type"], _draft_active))
+    spec_body.addWidget(_dependent(
+        _line_row("llamacpp.spec_draft_cpu_range", "Draft CPU Range", "lo-hi, e.g. 8-11",
+                   "--spec-draft-cpu-range: contiguous CPU range for the draft threads. Complements Draft CPU Mask."),
+        ["llamacpp.spec_type"], _draft_active))
+    spec_body.addWidget(_dependent(
+        _toggle_row("llamacpp.spec_draft_cpu_strict", "Draft CPU Strict",
+                     "--spec-draft-cpu-strict <0|1>: pin the draft threads strictly to their cores "
+                     "(default: same as CPU Strict)."),
+        ["llamacpp.spec_type"], _draft_active))
+    spec_body.addWidget(_dependent(
+        _number_row("llamacpp.spec_draft_prio", "Draft Priority", 0, 3, 1, 0, "",
+                     "--spec-draft-prio: draft thread priority. 0=normal, 1=medium, 2=high, 3=realtime (default 0)."),
+        ["llamacpp.spec_type"], _draft_active))
+    spec_body.addWidget(_dependent(
+        _toggle_row("llamacpp.spec_draft_poll", "Draft Polling",
+                     "--spec-draft-poll <0|1>: busy-poll while waiting for draft work (default: same as Polling)."),
+        ["llamacpp.spec_type"], _draft_active))
+    spec_body.addWidget(_dependent(
+        _line_row("llamacpp.spec_draft_cpu_mask_batch", "Draft CPU Mask (batch)", "hex - empty = same as Draft CPU Mask",
+                   "--spec-draft-cpu-mask-batch: affinity mask for the draft model's prompt-processing threads."),
+        ["llamacpp.spec_type"], _draft_active))
+    spec_body.addWidget(_dependent(
+        _toggle_row("llamacpp.spec_draft_cpu_strict_batch", "Draft CPU Strict (batch)",
+                     "--spec-draft-cpu-strict-batch <0|1>: strict placement for the draft's prompt-processing threads "
+                     "(default: Draft CPU Strict)."),
+        ["llamacpp.spec_type"], _draft_active))
+    spec_body.addWidget(_dependent(
+        _number_row("llamacpp.spec_draft_prio_batch", "Draft Priority (batch)", 0, 3, 1, 0, "",
+                     "--spec-draft-prio-batch: priority of the draft's prompt-processing threads (0-3, default 0)."),
+        ["llamacpp.spec_type"], _draft_active))
+    spec_body.addWidget(_dependent(
+        _toggle_row("llamacpp.spec_draft_poll_batch", "Draft Polling (batch)",
+                     "--spec-draft-poll-batch <0|1>: busy-poll for the draft's prompt-processing pool "
+                     "(default: Draft Polling)."),
         ["llamacpp.spec_type"], _draft_active))
     layout.addWidget(spec_card)
 
@@ -2540,7 +2954,7 @@ def _llama(window) -> QWidget:
             # Same resolution as the benchmark itself: the model actually
             # loaded, else the default.
             m = (_sup.active_model() if (_sup and _sup.alive()) else "") or _lc.default_model()
-            ctx = int((_lc.model_cfg(m) or {}).get("ctx_size", 0) or 0)
+            ctx = _lc.effective_ctx_size(m)
             return m, ctx
         except Exception:
             return "", 0
@@ -4847,6 +5261,7 @@ def _line_row(path: str, label: str, placeholder: str = "",
     # width of a wide value (model paths, full URLs) without making
     # short values like "127.0.0.1" sit in a sparse row.
     le.setMaximumWidth(720)
+    _follow_setting(path, le, lambda v: le.setText(str(v or "")) if le.text() != str(v or "") else None)
     return _row(row_label(label, help_text, path, cli), _wrap_align(le, Qt.AlignmentFlag.AlignLeft))
 
 
@@ -4945,6 +5360,26 @@ _JinjaHighlighter = _make_rule_highlighter([
 ])
 
 
+_ENV_HELP = (
+    "Environment variables for the llama-server process, one NAME=VALUE per line. Blank lines and lines "
+    "starting with # are ignored; a line with an invalid name is skipped (see telecode.log). Read when the "
+    "server starts, so a change applies on the next (re)spawn. Useful ones:\n"
+    "GGML_CUDA_REGISTER_HOST=1 - pin (page-lock) the memory-mapped weights; may speed expert uploads to the GPU.\n"
+    "GGML_OP_OFFLOAD_MIN_BATCH=32 - smallest batch whose host-resident weights are streamed to the GPU "
+    "instead of computed on the CPU (default 32).\n"
+    "LLAMA_ATTN_ROT_DISABLE=1 - turn off the automatic rotation of quantized KV.\n"
+    "GGML_CUDA_DISABLE_GRAPHS=1 - do not use CUDA graphs (debugging, or if graphs misbehave)."
+)
+
+
+def _num_gt0(v) -> bool:
+    """True when a settings value is a number above zero (False for unset / junk)."""
+    try:
+        return float(v or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _enum_row_strs(path: str, label: str, options: list[tuple[str, str]],
                    help_text: str = "") -> QWidget:
     return _enum_row(path, label, [(d, v) for d, v in options], help_text)
@@ -5014,6 +5449,7 @@ def _models(window) -> QWidget:
         _sl.addWidget(_line_row(f"{p}.path",   "GGUF Path",
                                          "D:/models/foo.gguf",
                                          "Absolute path to the model .gguf file."))
+        form_layout.addWidget(_gguf_inspector_card(p))
         _sl = _sec("Vision",
                     "llamacpp.models.<m>.mmproj — multimodal projector; leave empty for text-only models")
         _sl.addWidget(_line_row(f"{p}.mmproj", "mmproj Path",
@@ -5033,10 +5469,23 @@ def _models(window) -> QWidget:
             _number_row(f"{p}.image_max_tokens", "Image Max Tokens",  0, 16384, 64, 0, "tok",
                          "--image-max-tokens: maximum tokens per image. 0 = read from model. Lower = less prefill compute."),
             [f"{p}.mmproj"], _has_mmproj))
+        _sl.addWidget(_toggle_row(f"{p}.mmproj_auto", "Auto-detect mmproj",
+                                           "--mmproj-auto / --no-mmproj-auto: use a projector file found next to the model "
+                                           "(mostly for -hf downloads). Turn off to run a vision GGUF as text-only. "
+                                           "Server default: enabled.", default=True))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.mtmd_batch_max_tokens", "Image Batch Max Tokens", 0, 65536, 128, 0, "tok",
+                         "--mtmd-batch-max-tokens: most image tokens encoded in one batch. Raise for fewer, larger "
+                         "encode passes (more VRAM); 0 = server default (1024).", default=0),
+            [f"{p}.mmproj"], _has_mmproj))
 
         _sl = _sec("Capacity",
                     "llamacpp.models.<m>.* — context window and layer placement")
         _sl.addWidget(_number_row(f"{p}.ctx_size",     "Context Size",       512, 1048576, 256, 0, "tok"))
+        _sl.addWidget(_number_row(f"{p}.ctx_size_spec", "Context With Speculative Decoding", 0, 1048576, 256, 0, "tok",
+                                           "Context size used instead while speculative decoding is on (MTP / draft model / ngram). "
+                                           "The draft context needs extra VRAM, so a model that just fits without it needs a smaller window. "
+                                           "0 = same as Context Size."))
         # n_gpu_layers is greyed when fit is on — the auto-fitter aborts if it
         # sees a user-pinned ngl, so argv.build_argv() suppresses --n-gpu-layers
         # in that case. This dependency mirrors that suppression in the UI.
@@ -5047,6 +5496,9 @@ def _models(window) -> QWidget:
             [f"{p}.fit"], _fit_off))
         _sl.addWidget(_number_row(f"{p}.n_cpu_moe",    "CPU MoE Layers",     0,   200,     1,   0, "",
                                            "MoE experts kept on CPU. 0 = all on GPU."))
+        _sl.addWidget(_number_row(f"{p}.n_cpu_ffn",    "CPU Dense FFN Layers", 0,   200,     1,   0, "",
+                                           "--n-cpu-ffn: keep the dense FFN weights of the first N layers on the CPU "
+                                           "(dense models; for MoE expert weights use CPU MoE Layers). 0 = off."))
         _sl.addWidget(_line_row(f"{p}.device",         "Devices",
                                          "e.g. CUDA0,CUDA1 / Vulkan0 / none",
                                          "--device: explicit comma-separated device list. Empty = let llama-server pick (split-mode applies)."))
@@ -5083,6 +5535,125 @@ def _models(window) -> QWidget:
                                               "--flash-attn: set Flash Attention use ('on', 'off', or 'auto')."))
         _sl.addWidget(_toggle_row(f"{p}.cpu_moe",       "CPU MoE (all experts)",
                                            "--cpu-moe: keep ALL MoE expert layers on CPU (overrides n_cpu_moe)."))
+        _sl = _sec("MoE Expert Cache",
+                    "--moe-cache-* — keep the hottest experts of CPU-resident layers in VRAM")
+        _sl.addWidget(_number_row(f"{p}.moe_cache_mib", "Cache Size", 0, 262144, 256, 0, "MiB",
+                                           "--moe-cache-mib: VRAM for the experts of layers kept on the CPU (--n-cpu-moe / --cpu-moe), "
+                                           "split among GPUs like the layers. 0 = off. Without CPU-miss mode a missing expert is uploaded "
+                                           "before the layer runs (upstream behaviour)."))
+        _sl.addWidget(_toggle_row(f"{p}.moe_cache_cpu_miss", "Compute Misses on CPU",
+                                           "--moe-cache-cpu-miss (patched build): experts not in the cache are computed on the CPU "
+                                           "instead of uploaded, and only experts missed often enough are promoted into VRAM. "
+                                           "Applies to small batches (decode, speculative verify); larger batches behave as usual."))
+        _mc_on = lambda m, c: bool(c) and float(m or 0) > 0
+        _mc_cache = lambda m: float(m or 0) > 0
+        _sl.addWidget(_dependent(
+            _toggle_row(f"{p}.moe_cache_prewarm", "Prewarm From Stats",
+                         "--moe-cache-prewarm (patched build): fill the cache with the experts used most in earlier runs before the "
+                         "first token, instead of starting empty. Needs the stats file below (a default one per model is used if empty)."),
+            [f"{p}.moe_cache_mib"], _mc_cache))
+        _sl.addWidget(_dependent(
+            _line_row(f"{p}.moe_cache_stats_file", "Expert Stats File", "(empty = data/moe-cache/<model>.bin when prewarm is on)",
+                       "--moe-cache-stats-file (patched build): where how often each expert is selected is kept between runs. "
+                       "It is tied to the model's layer and expert counts; a file from another model is ignored."),
+            [f"{p}.moe_cache_mib"], _mc_cache))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.moe_cache_promote_after", "Promote After Misses", 0, 1000, 1, 0, "",
+                         "--moe-cache-promote-after: misses of an expert before it is uploaded into the cache. "
+                         "0/1 = on the first miss (upstream-like). Higher = only hot experts earn VRAM.",
+                         default=2),
+            [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.moe_cache_promote_max", "Max Uploads / Layer / Token", 0, 64, 1, 0, "",
+                         "--moe-cache-promote-max: cap on experts uploaded per layer and token, bounds the PCIe traffic "
+                         "a token can cause. 0 = no limit.", default=2),
+            [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.moe_cache_decay", "Miss Count Decay", 0, 1000000, 16, 0, "tok",
+                         "--moe-cache-decay: halve all miss counts every N tokens so promotion follows the current topic, "
+                         "not the whole history. 0 = never.", default=256),
+            [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.moe_cache_cpu_miss_max_tokens", "CPU-Miss Max Batch", 1, 31, 1, 0, "tok",
+                         "--moe-cache-cpu-miss-max-tokens: largest batch (decode, speculative verify, short prompt) that uses "
+                         "CPU-miss mode. Larger batches use the normal path; keep it below 32, where the scheduler "
+                         "moves host experts to the GPU on its own.", default=16),
+            [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.moe_cache_route_bias", "Route Bias", 0, 100, 0.05, 2, "",
+                         "--moe-cache-route-bias (patched build): bias the router toward experts already in the GPU cache "
+                         "(lossy: it changes which experts a token uses; 0 = off).", default=0),
+            [f"{p}.moe_cache_mib"], _mc_cache))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.moe_cache_promote_gain", "Promote Gain", 0, 100, 0.05, 2, "",
+                         "--moe-cache-promote-gain (patched build): promote an expert only when its recent use beats the "
+                         "expert it evicts by this fraction (0 = always promote).", default=0),
+            [f"{p}.moe_cache_mib"], _mc_cache))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.moe_cache_foresight", "Foresight Prefetch", 0, 64, 1, 0, "experts",
+                         "--moe-cache-foresight (patched build): run the next layer's router on this layer's input and upload up to N "
+                         "of the experts it predicts, while this layer computes, so they are in the cache when the next layer needs them. "
+                         "0 = off. Costs PCIe traffic; works best with pinned host memory (GGML_CUDA_REGISTER_HOST=1 under Environment).",
+                         default=0),
+            [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.moe_cache_evict_window", "Eviction Window", 0, 64, 1, 0, "slots",
+                         "--moe-cache-evict-window (patched build): when a slot is needed, give up the least used of the N least recently "
+                         "used slots instead of the least recently used one. 0 = plain LRU.", default=0),
+            [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.moe_cache_pcie_share", "PCIe Share of Misses", 0, 1, 0.05, 2, "",
+                         "--moe-cache-pcie-share (patched build): this fraction of the missed experts of a call is uploaded and computed "
+                         "on the GPU in that same call, most used first; the rest stays on the CPU. 0 = all on the CPU.", default=0),
+            [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.moe_cache_pcie_max", "PCIe Share Max / Layer", 0, 256, 1, 0, "experts",
+                         "--moe-cache-pcie-max (patched build): most experts per layer and call uploaded for the GPU at once.", default=2),
+            [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss", f"{p}.moe_cache_pcie_share"],
+            lambda m, c, sh: _mc_on(m, c) and float(sh or 0) > 0))
+        _sl.addWidget(_dependent(
+            _toggle_row(f"{p}.moe_cache_async_upload", "Async Uploads (second stream)",
+                         "--moe-cache-async-upload (patched build): upload promoted and predicted experts on a second CUDA stream so "
+                         "they overlap with compute. Best with pinned host memory: GGML_CUDA_REGISTER_HOST=1 under Environment."),
+            [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.moe_cache_swap_every", "Swap Rounds Every", 0, 100000, 1, 0, "tokens",
+                         "--moe-cache-swap-every (patched build): promote experts in rounds, every N tokens, choosing the most missed "
+                         "experts of all layers together (Strata style) instead of in every call. 0 = off.", default=0),
+            [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.moe_cache_swap_max", "Swap Round Max", 0, 100000, 1, 0, "experts",
+                         "--moe-cache-swap-max (patched build): most experts promoted per round. 0 = no limit.", default=0),
+            [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss", f"{p}.moe_cache_swap_every"],
+            lambda m, c, ev: _mc_on(m, c) and float(ev or 0) > 0))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.moe_cache_tail_skip_rank", "Tail Skip Rank (Strata rule)", 0, 256, 1, 0, "rank",
+                         "--moe-cache-tail-skip-rank (patched build): in a batch of several tokens (speculative verification) skip a "
+                         "missed expert when every token ranks it N-th or lower by weight (Strata uses 7). Lossy. 0 = off.", default=0),
+            [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.moe_cache_tail_skip_auto_off", "Tail Skip Auto-Off", 0, 100, 1, 0, "%",
+                         "--moe-cache-tail-skip-auto-off (patched build): do not skip experts when this percent or more of the experts "
+                         "of the batch are already in the cache.", default=90),
+            [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss", f"{p}.moe_cache_tail_skip_rank"],
+            lambda m, c, r: _mc_on(m, c) and float(r or 0) > 0))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.moe_cache_route_top", "Route: Always Keep Top", 0, 256, 1, 0, "experts",
+                         "--moe-cache-route-top (patched build): with Route Bias on, the N best-scored experts of a token are always "
+                         "selected whatever the bias. Cuts the quality cost of the bias. 0 = none.", default=0),
+            [f"{p}.moe_cache_mib", f"{p}.moe_cache_route_bias"], lambda m, b: _mc_cache(m) and float(b or 0) > 0))
+        _sl.addWidget(_dependent(
+            _toggle_row(f"{p}.moe_cache_route_scale", "Route: Scale Bias By Score Gap",
+                         "--moe-cache-route-scale (patched build): with Route Bias on, scale each token's bias by the gap between its best "
+                         "and last selected score, so the bias follows the router's own confidence."),
+            [f"{p}.moe_cache_mib", f"{p}.moe_cache_route_bias"], lambda m, b: _mc_cache(m) and float(b or 0) > 0))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.moe_cache_tail_skip", "Tail Skip (verify windows)", 0, 32, 1, 0, "experts",
+                         "--moe-cache-tail-skip (patched build): when a batch has several tokens (speculative verification) compute only "
+                         "the N cache misses with the highest routing weight per token and drop the rest. Lossy. 0 = compute all.",
+                         default=0),
+            [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
+
         _sl.addWidget(_toggle_row(f"{p}.jinja",         "Jinja Chat Template",
                                            "Use the built-in tokenizer chat template (required for tools)."))
         _sl.addWidget(_code_row(f"{p}.chat_template",   "Chat Template Override",
@@ -5093,6 +5664,13 @@ def _models(window) -> QWidget:
         _sl.addWidget(_line_row(f"{p}.chat_template_file", "Chat Template File",
                                          "/path/to/template.jinja",
                                          "--chat-template-file: load the jinja template from a file (alternative to the inline override above)."))
+        _sl.addWidget(_code_row(f"{p}.chat_template_kwargs", "Chat Template Kwargs (server)",
+                                         '{"enable_thinking": false}',
+                                         "--chat-template-kwargs: a JSON object of extra variables for the chat template, as the "
+                                         "server default. Clients that talk to llama-server directly get it; requests through the "
+                                         "proxy are covered by the per-request Kwargs below (Chat Template Kwargs card). "
+                                         "Invalid JSON is skipped with a log warning.",
+                                         height=80))
 
         _sl = _sec("RoPE",
                     "--rope-* — position-embedding scaling to stretch context past training length")
@@ -5111,6 +5689,12 @@ def _models(window) -> QWidget:
             _number_row(f"{p}.rope_freq_scale","RoPE Freq Scale",      0, 4.0, 0.05, 2, "",
                          "--rope-freq-scale. 0 = model default."),
             [f"{p}.rope_scaling"], _has_rope_scaling))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.rope_scale",     "RoPE Scale",           0, 64, 0.25, 2, "",
+                         "--rope-scale: context expansion factor N (the reciprocal of Freq Scale). 0 = model default. "
+                         "Not emitted while RoPE Freq Scale is set - that one wins."),
+            [f"{p}.rope_scaling", f"{p}.rope_freq_scale"],
+            lambda rs, fs: _has_rope_scaling(rs) and not _num_gt0(fs)))
 
         _sl = _sec("YaRN",
                     "--yarn-* — only applied when RoPE Scaling is set to yarn")
@@ -5449,6 +6033,22 @@ def _models(window) -> QWidget:
                          "--lora-scaled: blend strength (1.0 = full)."),
             [f"{p}.lora"], lambda l: bool(str(l or "").strip())))
 
+        _sl = _sec("Control Vectors",
+                    "--control-vector* - steer the model's activations with trained vectors")
+        _sl.addWidget(_line_row(f"{p}.control_vector", "Control Vector (path)",
+                                         "/path/a.gguf,/path/b.gguf",
+                                         "--control-vector: control vector GGUF file; comma-separate several to add them together."))
+        _sl.addWidget(_line_row(f"{p}.control_vector_scaled", "Control Vector (scaled)",
+                                         "/path/a.gguf:0.8,/path/b.gguf:-0.5",
+                                         "--control-vector-scaled: path:scale pairs, comma-separated. Scale 1.0 = full strength; "
+                                         "negative flips the direction."))
+        _cv_set = lambda a, b: bool(str(a or "").strip()) or bool(str(b or "").strip())
+        _sl.addWidget(_dependent(
+            _line_row(f"{p}.control_vector_layer_range", "Control Vector Layers", "START END, e.g. 10 20",
+                       "--control-vector-layer-range: first and last layer (inclusive) the vectors apply to. "
+                       "Empty = all layers."),
+            [f"{p}.control_vector", f"{p}.control_vector_scaled"], _cv_set))
+
         _sl = _sec("Grammar",
                     "--grammar / --grammar-file — this model's default GBNF (server flag). A grammar "
                     "or schema sent with a request overrides it — including the global "
@@ -5470,6 +6070,22 @@ def _models(window) -> QWidget:
         _sl.addWidget(_line_row(f"{p}.override_kv", "Override KV",
                                          "tokenizer.ggml.add_bos_token=bool:false",
                                          "--override-kv: override GGUF metadata at load. Format KEY=TYPE:VALUE, comma-separated."))
+
+        _sl = _sec("Generation Defaults",
+                    "--logit-bias / --ignore-eos - server defaults; a request's own value wins")
+        _sl.addWidget(_line_row(f"{p}.logit_bias", "Logit Bias", "15043+1, 2-5",
+                                         "--logit-bias: TOKEN_ID(+/-)BIAS - raise (+) or lower (-) the likelihood of a token, "
+                                         "e.g. 15043+1 or 15043-1. Several entries separated by commas or spaces become one "
+                                         "flag each. Empty = none."))
+        _sl.addWidget(_toggle_row(f"{p}.ignore_eos", "Ignore End-of-Stream",
+                                           "--ignore-eos: keep generating past the end-of-stream token (implies "
+                                           "--logit-bias EOS-inf). Output only stops at the token limit - for benchmarking."))
+
+        _sl = _sec("Environment",
+                    "llamacpp.models.<m>.env - variables for this model's llama-server; overrides the global Environment")
+        _sl.addWidget(_code_row(f"{p}.env", "Environment Variables",
+                                         "GGML_OP_OFFLOAD_MIN_BATCH=64",
+                                         _ENV_HELP, height=110))
 
         _sl = _sec("Extra CLI Args",
                     "llamacpp.models.<m>.extra_args — raw flags appended to the spawn argv")
@@ -5509,6 +6125,15 @@ def _models(window) -> QWidget:
                                               "--reasoning-format: how the server tags think blocks. "
                                               "The proxy reads both shapes — inline <think> and a separate "
                                               "reasoning_content field — so this is free to set."),
+            [f"{p}.reasoning"], _reason_not_off))
+        _sl.addWidget(_dependent(
+            _enum_row_strs(f"{p}.reasoning_effort", "Reasoning Effort (server)",
+                                              [("(server default)", ""), ("default", "default"),
+                                               ("minimal", "minimal"), ("low", "low"), ("medium", "medium"),
+                                               ("high", "high"), ("xhigh", "xhigh"), ("max", "max")],
+                                              "--reasoning-effort: effort level given to the chat template when a request "
+                                              "carries none; 'default' keeps the template's own. Requests through the proxy get "
+                                              "their level from the Reasoning Effort Map / per-model Reasoning Effort instead."),
             [f"{p}.reasoning"], _reason_not_off))
         # Layer 3 of the prior-reasoning chain. Layer 1 (the proxy's
         # drop_prior_thinking) strips the content before llama.cpp ever sees it,
