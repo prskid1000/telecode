@@ -2536,7 +2536,10 @@ def _llama(window) -> QWidget:
     def _active_ctx_size() -> tuple[str, int]:
         try:
             from llamacpp import config as _lc
-            m = _lc.default_model()
+            from process import _SUPERVISOR as _sup
+            # Same resolution as the benchmark itself: the model actually
+            # loaded, else the default.
+            m = (_sup.active_model() if (_sup and _sup.alive()) else "") or _lc.default_model()
             ctx = int((_lc.model_cfg(m) or {}).get("ctx_size", 0) or 0)
             return m, ctx
         except Exception:
@@ -2559,6 +2562,13 @@ def _llama(window) -> QWidget:
 
     gen_editor.valueChanged.connect(lambda *_: _update_prompt_cap())
     _update_prompt_cap()
+
+    # Follow model swaps: re-evaluate the cap while the card is on screen.
+    _cap_timer = QTimer(sp_card)
+    _cap_timer.setInterval(2000)
+    _cap_timer.timeout.connect(
+        lambda: _update_prompt_cap() if sp_card.isVisible() else None)
+    _cap_timer.start()
 
     ctrl_w = QWidget()
     ctrl_layout = QHBoxLayout(ctrl_w)
