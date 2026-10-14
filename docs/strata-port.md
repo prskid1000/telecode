@@ -3,12 +3,30 @@
 Source: [Niko1221/Strata](https://github.com/Niko1221/Strata) (MIT, main as of 2026-10-14, ~110k lines C++/CUDA under
 `src/`, own runtime: `core/` 24k, `kernels/` 53k, `prefill/` 13k, `program/` 15k, `qwen35/` 3k, `spec/` 0.7k).
 Strata is **not** a llama.cpp fork (`third_party/ggml` holds only `ggml-common.h`), so there is nothing to rebase:
-this series is **our own re-implementation of its ideas** against upstream llama.cpp, one feature per patch, under
-`patches/llama.cpp/strata/`. Credit + MIT notice go in `patches/llama.cpp/strata/NOTICE`. Where we copy a kernel
-verbatim the patch header says which Strata file and commit.
+this series is **our own re-implementation of its ideas** against upstream llama.cpp, as add-on patches under
+`patches/llama.cpp/` (each toggleable in the tray's Patched Build card; `Requires:` lines in a patch header are honoured).
 
-Status: **plan only — nothing is written yet.** The mapping below is from Strata's docs and file sizes, not from a
-line-by-line read; each phase starts with that read.
+## Current state (2026-10-15)
+
+Written and compiling: patches **0002** (ggml: `mul_mat_id` skips ids < 0 on CPU and CUDA, scheduler CPU overlap with an
+event query, batched host-to-device copies), **0003** (the MoE cache modes and the adaptive draft length) and **0004** (GPU
+subset of the output head for MTP draft steps). Flags, all off by default: `--moe-cache-cpu-miss` with `-promote-after/-max/-gain`,
+`-decay`, `-cpu-miss-max-tokens`, `-evict-window`, `-pcie-share/-pcie-max/-pcie-auto(-window)`, `-async-upload`,
+`-upload-batch`, `-swap-every/-swap-max`, `-foresight`, `-tail-skip`, `-tail-skip-rank/-auto-off`, `-route-bias/-top/-scale`,
+`-stats-file`, `-prewarm`; `--spec-draft-adaptive` (+ `-min-gain/-ema/-probe`); `--spec-draft-head-subset`. Every flag has a
+tray knob and an argv row. Two independent code reviews found 10 problems in the first version; all were fixed (a second
+review of the fixes and the later additions is in progress). Measured so far (35B MoE, 12 GB laptop): hybrid ~40-47 tok/s
+against 44-55 for a static layer split; the 125B model, where this should win, is not downloaded. **Not yet measured:**
+everything added after the first benchmark, because the laptop crashed twice under load and tests are on hold until it is
+on a proper charger.
+
+Not built, and why: KV streaming, VRAM-elastic cache, custom prefill/small-batch kernels, replicas (each a week or more,
+gain unmeasured here); CPU share of prefill batches above 31 tokens (design known, see `strata-parity.md`); the ~450
+Strata switches that tune its own engine, hardware ports, installer or diagnostics (`strata-parity.md`, N/A rows).
+Documents: `strata-params.md` (738 parameters), `strata-parity.md` (status of each), `strata-default-behaviours.md`
+(always-on techniques), `research-*.md` (alternatives and papers), `strata-test-plan.md` (what to run when testing resumes).
+
+The phase table below is the original plan, kept for reference; the revision section after it records what changed.
 
 ## Ground rules
 

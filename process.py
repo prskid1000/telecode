@@ -425,6 +425,7 @@ class LlamaSupervisor:
         self._inflight: int = 0
         self._inflight_lock = asyncio.Lock()
         self._idle_task: Optional[asyncio.Task] = None
+        self._watchdog_task: Optional[asyncio.Task] = None
         self._loaded_at: float = 0.0
 
     # ── Lifecycle ────────────────────────────────────────────────────
@@ -447,11 +448,13 @@ class LlamaSupervisor:
         async with self._lock:
             if self._proc and self._proc.poll() is None and self._active_model == resolved:
                 self._ensure_idle_watcher()
+                self._ensure_watchdog()
                 return resolved
             await self._stop_locked()
-            await self._spawn_locked(resolved)
+            await self._spawn_with_retry(resolved)
             self._loaded_at = time.time()
             self._ensure_idle_watcher()
+            self._ensure_watchdog()
             try:
                 llama_state.save(resolved)
             except Exception:
@@ -504,6 +507,48 @@ class LlamaSupervisor:
 
     # ── Idle unload watcher ──────────────────────────────────────────
 
+    def _ensure_watchdog(self) -> None:
+        if self._watchdog_task is not None and not self._watchdog_task.done():
+            return
+        if cfg.watchdog_sec() <= 0:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._watchdog_task = loop.create_task(self._watchdog_loop())
+
+    async def _watchdog_loop(self) -> None:
+        """Stop a llama-server whose /health stops answering; the next request starts a fresh one."""
+        url = f"{cfg.upstream_url()}/health"
+        failing_since: Optional[float] = None
+        async with aiohttp.ClientSession() as session:
+            while True:
+                await asyncio.sleep(5.0)
+                if not self.alive():
+                    return
+                limit = cfg.watchdog_sec()
+                if limit <= 0:
+                    return
+                ok = False
+                try:
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                        ok = resp.status in (200, 503)  # 503 = still loading a model
+                except (aiohttp.ClientError, asyncio.TimeoutError):
+                    ok = False
+                now = time.time()
+                if ok:
+                    failing_since = None
+                    continue
+                failing_since = failing_since or now
+                if now - failing_since >= limit:
+                    _LLAMA_LOG.error("llama.cpp: /health has not answered for %.0fs, restarting llama-server", now - failing_since)
+                    try:
+                        await self.stop()
+                    except Exception as exc:
+                        _LLAMA_LOG.warning("watchdog stop failed: %s", exc)
+                    return
+
     def _ensure_idle_watcher(self) -> None:
         if self._idle_task is not None and not self._idle_task.done():
             return
@@ -537,7 +582,23 @@ class LlamaSupervisor:
 
     # ── Internal spawn / readiness / stop ────────────────────────────
 
-    async def _spawn_locked(self, model_name: str) -> None:
+    async def _spawn_with_retry(self, model_name: str) -> None:
+        """Spawn; with an automatic MoE cache size, start again with a smaller cache when the server ran out of GPU memory."""
+        from llamacpp import auto_cache
+        scale = 1.0
+        for attempt in range(4):
+            try:
+                await self._spawn_locked(model_name, scale)
+                return
+            except RuntimeError as exc:
+                if attempt >= 3 or not auto_cache.enabled(model_name) or not auto_cache.log_says_oom(cfg.log_file()):
+                    raise
+                scale *= 0.8
+                _LLAMA_LOG.warning("llama.cpp: '%s' ran out of GPU memory (%s), trying again with a cache %d%% of the planned size",
+                                   model_name, exc, int(scale*100))
+                await self._stop_locked()
+
+    async def _spawn_locked(self, model_name: str, cache_scale: float = 1.0) -> None:
         # Refuse to start into too little VRAM: the driver would spill the model
         # into shared system memory and run an order of magnitude slower.
         min_free = cfg.min_free_vram_mib()
@@ -551,7 +612,11 @@ class LlamaSupervisor:
                     f"or lower llamacpp.min_free_vram_mib."
                 )
 
-        argv = build_argv(model_name)
+        overrides = None
+        from llamacpp import auto_cache
+        if auto_cache.enabled(model_name):
+            overrides = await asyncio.get_running_loop().run_in_executor(None, auto_cache.plan, model_name, cache_scale)
+        argv = build_argv(model_name, overrides)
         binary = argv[0]
         resolved_binary = shutil.which(binary) or binary
         argv[0] = resolved_binary
@@ -562,7 +627,7 @@ class LlamaSupervisor:
             f"\n\n===== telecode: spawning llama-server for '{model_name}' =====\n"
             .encode()
         )
-        self._log_fp.write(f"argv: {describe(model_name)}\n".encode())
+        self._log_fp.write(f"argv: {describe(model_name, overrides)}\n".encode())
         # Extra environment (llamacpp.env, then the model's own env on top), rebuilt
         # for the model being started. Names only in the log; values may be paths.
         child_env = cfg.spawn_env(model_name)
@@ -573,7 +638,7 @@ class LlamaSupervisor:
 
         _LLAMA_LOG.info("llama.cpp: spawning '%s' on %s:%d",
                         model_name, cfg.host(), cfg.port())
-        _LLAMA_LOG.info("llama.cpp: argv: %s", describe(model_name))
+        _LLAMA_LOG.info("llama.cpp: argv: %s", describe(model_name, overrides))
 
         # If a previous telecode crashed before its Job Object could tear
         # down llama-server (or the Job binding failed), an orphan may still

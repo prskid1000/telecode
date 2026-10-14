@@ -367,6 +367,9 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("moe_cache_swap_max",              "--moe-cache-swap-max",              "value_nz"),
     ("moe_cache_route_top",             "--moe-cache-route-top",             "value_nz"),
     ("moe_cache_route_scale",           "--moe-cache-route-scale",           "flag"),
+    ("moe_cache_pcie_auto",             "--moe-cache-pcie-auto",             "flag"),
+    ("moe_cache_pcie_auto_window",      "--moe-cache-pcie-auto-window",      "value_nz"),
+    ("moe_cache_upload_batch",          "--moe-cache-upload-batch",          "flag"),
 
     # RoPE / YaRN (0 = model default; YaRN factors default to -1.00 = auto,
     # so emit only when explicitly set to a non-zero override).
@@ -467,7 +470,7 @@ _MOE_CACHE_TUNING = frozenset({
     "moe_cache_cpu_miss_max_tokens", "moe_cache_foresight", "moe_cache_tail_skip",
     "moe_cache_tail_skip_rank", "moe_cache_tail_skip_auto_off", "moe_cache_evict_window",
     "moe_cache_pcie_share", "moe_cache_pcie_max", "moe_cache_async_upload",
-    "moe_cache_swap_every", "moe_cache_swap_max",
+    "moe_cache_swap_every", "moe_cache_swap_max", "moe_cache_pcie_auto", "moe_cache_pcie_auto_window",
 })
 # These two only act with the router bias on
 _MOE_CACHE_ROUTE_RECIPE = frozenset({"moe_cache_route_top", "moe_cache_route_scale"})
@@ -574,9 +577,10 @@ def _emit_flag(argv: list[str], cfg_dict: dict, key: str, flag: object, kind: st
     argv += [str(flag), sval]
 
 
-def build_argv(model_name: str) -> list[str]:
+def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
     """Produce the full llama-server argv for a given registered model.
 
+    `overrides` replaces model keys for this call only (the supervisor uses it for the automatic cache size).
     Raises KeyError if the model isn't registered and doesn't resolve to one.
     """
     resolved = cfg.resolve_model(model_name)
@@ -584,6 +588,8 @@ def build_argv(model_name: str) -> list[str]:
         raise KeyError(f"No model registered that matches '{model_name}'")
 
     mcfg = cfg.model_cfg(resolved)
+    if overrides:
+        mcfg = {**mcfg, **overrides}
     model_path = mcfg.get("path")
     if not model_path:
         raise KeyError(f"llamacpp.models.{resolved}.path is required")
@@ -653,6 +659,7 @@ def build_argv(model_name: str) -> list[str]:
         suppressed_model.update({"moe_cache_stats_file", "moe_cache_prewarm",
                                  "moe_cache_route_bias", "moe_cache_promote_gain"})
         suppressed_model.update(_MOE_CACHE_ROUTE_RECIPE)
+        suppressed_model.add("moe_cache_upload_batch")
     if cache_on and not float(mcfg.get("moe_cache_route_bias") or 0) > 0:
         suppressed_model.update(_MOE_CACHE_ROUTE_RECIPE)
     if cache_on and mcfg.get("moe_cache_prewarm") and not mcfg.get("moe_cache_stats_file"):
@@ -686,10 +693,10 @@ def build_argv(model_name: str) -> list[str]:
     return argv
 
 
-def describe(model_name: str) -> str:
+def describe(model_name: str, overrides: Optional[dict] = None) -> str:
     """Human-readable argv preview for logs."""
     try:
-        argv = build_argv(model_name)
+        argv = build_argv(model_name, overrides)
     except KeyError as exc:
         return f"<{exc}>"
     # Quote args containing spaces for copy-paste

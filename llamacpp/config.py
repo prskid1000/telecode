@@ -70,6 +70,16 @@ def idle_unload_sec() -> float:
     return float(app_config.get_nested("llamacpp.idle_unload_sec", 300))
 
 
+def watchdog_sec() -> float:
+    """Restart llama-server when its /health has not answered for this many seconds (0 = off).
+
+    A server that is busy loading or generating still answers /health; one that hangs in the driver or a deadlock does not."""
+    try:
+        return max(0.0, float(app_config.get_nested("llamacpp.watchdog_sec", 0) or 0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def win_power_throttle_off() -> bool:
     """Opt out of Windows power throttling (EcoQoS) for llama-server.
 

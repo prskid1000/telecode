@@ -1,0 +1,121 @@
+"""Automatic size of the MoE expert cache (`llamacpp.models.<m>.moe_cache_auto`).
+
+The cache is VRAM that must fit next to the dense weights, the KV cache and the compute buffers; guessing it wrong costs
+a failed start (out of memory) or, on Windows, a model that spills into shared memory and runs several times slower.
+So the size is worked out at every spawn from what is free right now, and the supervisor retries smaller when the
+server runs out of memory anyway.
+"""
+from __future__ import annotations
+
+import logging
+import re
+import time
+from pathlib import Path
+from typing import Optional
+
+from llamacpp import config as cfg
+from llamacpp import gguf_info, vram
+
+_LOG = logging.getLogger("telecode.llamacpp.auto_cache")
+
+# what llama-server / ggml print when an allocation on the GPU fails
+_OOM = re.compile(r"out of memory|failed to allocate|cudamalloc failed|unable to allocate|cuda error: .*memory|"
+                  r"alloc_tensor_range|failed to (create|load) (the )?model", re.I)
+
+
+def enabled(model_name: str) -> bool:
+    return bool(cfg.model_cfg(model_name).get("moe_cache_auto"))
+
+
+def headroom_mib(model_name: str) -> int:
+    try:
+        return max(0, int(cfg.model_cfg(model_name).get("moe_cache_auto_headroom_mib", 1500) or 0))
+    except (TypeError, ValueError):
+        return 1500
+
+
+# bytes per element of the KV cache types relative to f16
+_KV_TYPE = {"f32": 2.0, "f16": 1.0, "bf16": 1.0, "q8_0": 0.53, "q5_1": 0.38, "q5_0": 0.34, "q4_1": 0.31, "q4_0": 0.28, "iq4_nl": 0.28}
+
+
+def kv_factor(model_name: str) -> float:
+    m = cfg.model_cfg(model_name)
+    k = _KV_TYPE.get(str(m.get("cache_type_k") or "f16").lower(), 1.0)
+    v = _KV_TYPE.get(str(m.get("cache_type_v") or "f16").lower(), 1.0)
+    return (k + v)/2
+
+
+def _free_mib() -> Optional[int]:
+    """Free VRAM now; the previous model may still be releasing it, so take the best of a few readings."""
+    best: Optional[int] = None
+    for i in range(3):
+        v = vram.free_vram_mib()
+        if v is None:
+            return best
+        best = v if best is None else max(best, v)
+        if i < 2:
+            time.sleep(1.0)
+    return best
+
+
+def plan(model_name: str, scale: float = 1.0) -> Optional[dict]:
+    """The settings to override for this spawn, e.g. {"moe_cache_mib": 4200}, or None to leave the config alone.
+
+    scale < 1 is applied after an out-of-memory start. A configured moe_cache_mib above 0 is a ceiling."""
+    mcfg = cfg.model_cfg(model_name)
+    if not mcfg.get("moe_cache_auto"):
+        return None
+    free = _free_mib()
+    if free is None:
+        _LOG.info("auto cache: free VRAM unknown (no nvidia-smi), using moe_cache_mib as configured")
+        return None
+    path = mcfg.get("path")
+    if not path:
+        return None
+    headroom = headroom_mib(model_name)
+    try:
+        # the suggestion plans with 1500 MiB of headroom: shift the free memory so that it means the configured headroom
+        s = gguf_info.summarize(str(cfg.resolve_path(path)), ctx_size=cfg.effective_ctx_size(model_name),
+                                free_vram_mib=free + 1500 - headroom, kv_factor=kv_factor(model_name))
+    except Exception as exc:
+        _LOG.warning("auto cache: cannot read %s: %s", path, exc)
+        return None
+    sg = s.get("suggested")
+    if not sg:
+        return None  # not a MoE model
+
+    # memory left after the dense weights, the KV cache and the headroom (the suggestion keeps 70% of it for the cache)
+    avail = float(sg["moe_cache_mib"]) / 0.7
+    layers = s.get("expert_bytes_per_layer") or {}
+    n_moe = len(layers) or int(s.get("n_layers") or 0)
+    if n_moe:
+        # experts of layers that are not offloaded sit on the GPU too
+        n_cpu = n_moe if mcfg.get("cpu_moe") else (int(mcfg.get("n_cpu_moe") or 0) or n_moe)
+        avail -= max(0, n_moe - n_cpu) * float(s["expert_bytes_total"]) / n_moe / (1 << 20)
+    mib = int(max(0.0, avail) * 0.7 * max(0.05, min(1.0, scale)))
+    mib = (mib // 64) * 64
+    cap = int(mcfg.get("moe_cache_mib") or 0)
+    if cap > 0:
+        mib = min(mib, cap)
+    if mib < 256:
+        mib = 0
+    _LOG.info("auto cache: %d MiB free, ctx %d, headroom %d, scale %.2f -> moe_cache_mib %d%s",
+              free, sg["ctx_size"], headroom, scale, mib, f" (ceiling {cap})" if cap > 0 else "")
+    return {"moe_cache_mib": mib}
+
+
+def log_says_oom(log_path: str, tail_bytes: int = 96 * 1024) -> bool:
+    """Whether the end of llama.log looks like a failed GPU allocation."""
+    try:
+        p = Path(log_path)
+        with p.open("rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - tail_bytes))
+            text = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return False
+    # only the last spawn: the log is appended to across spawns
+    marker = text.rfind("===== telecode: spawning llama-server")
+    if marker >= 0:
+        text = text[marker:]
+    return bool(_OOM.search(text))

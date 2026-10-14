@@ -2176,6 +2176,10 @@ def _llama(window) -> QWidget:
                                          "Priority class set on llama-server after it starts (not the --prio thread priority). "
                                          "Normal is what Strata uses; a process started from Task Scheduler can inherit a low class "
                                          "and load models far slower."))
+    spawn_body.addWidget(_number_row("llamacpp.watchdog_sec", "Watchdog: Restart After", 0, 3600, 10, 0, "s",
+                                      "Restart llama-server when its /health has not answered for this many seconds (checked every 5 s). A server that is busy "
+                                      "loading or generating still answers; one hung in the driver does not, and without this every request would wait on it. "
+                                      "0 = off."))
     spawn_body.addWidget(_number_row("llamacpp.min_free_vram_mib", "Min Free VRAM Before Load", 0, 262144, 256, 0, "MiB",
                                       "Do not start llama-server unless the first NVIDIA GPU has at least this much free "
                                       "memory; the request fails with a clear error instead of the driver spilling the model "
@@ -5541,6 +5545,14 @@ def _models(window) -> QWidget:
                                            "--moe-cache-mib: VRAM for the experts of layers kept on the CPU (--n-cpu-moe / --cpu-moe), "
                                            "split among GPUs like the layers. 0 = off. Without CPU-miss mode a missing expert is uploaded "
                                            "before the layer runs (upstream behaviour)."))
+        _sl.addWidget(_toggle_row(f"{p}.moe_cache_auto", "Auto Cache Size",
+                                           "Size the cache at every start from the VRAM that is free then, minus the dense weights, the KV cache for the "
+                                           "context in use and the headroom below, and start again with a smaller cache if the server still runs out of GPU "
+                                           "memory (up to 3 times, 20% smaller each). Cache Size above, when set, becomes a ceiling. Needs nvidia-smi."))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.moe_cache_auto_headroom_mib", "Auto Cache Headroom", 0, 16384, 128, 0, "MiB",
+                         "VRAM kept free for compute buffers, the CUDA context and other programs when the cache size is chosen automatically.", default=1500),
+            [f"{p}.moe_cache_auto"], lambda a: bool(a)))
         _sl.addWidget(_toggle_row(f"{p}.moe_cache_cpu_miss", "Compute Misses on CPU",
                                            "--moe-cache-cpu-miss (patched build): experts not in the cache are computed on the CPU "
                                            "instead of uploaded, and only experts missed often enough are promoted into VRAM. "
@@ -5616,6 +5628,24 @@ def _models(window) -> QWidget:
                          "--moe-cache-async-upload (patched build): upload promoted and predicted experts on a second CUDA stream so "
                          "they overlap with compute. Best with pinned host memory: GGML_CUDA_REGISTER_HOST=1 under Environment."),
             [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
+        _sl.addWidget(_dependent(
+            _toggle_row(f"{p}.moe_cache_pcie_auto", "Auto-Tune PCIe Share",
+                         "--moe-cache-pcie-auto (patched build): while running, move the PCIe share of misses up and down every window of "
+                         "tokens, keep the value that makes decode tokens faster, settle, and look again now and then. The PCIe Share above "
+                         "is the starting value; the cap per layer (PCIe Share Max) still applies, raise it for a wider search."),
+            [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.moe_cache_pcie_auto_window", "Auto-Tune Window", 4, 4096, 4, 0, "tokens",
+                         "--moe-cache-pcie-auto-window (patched build): decode tokens measured before the share is changed. Longer = steadier "
+                         "but slower to adapt.", default=32),
+            [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss", f"{p}.moe_cache_pcie_auto"],
+            lambda m, c, a: _mc_on(m, c) and bool(a)))
+        _sl.addWidget(_dependent(
+            _toggle_row(f"{p}.moe_cache_upload_batch", "Batch Expert Uploads",
+                         "--moe-cache-upload-batch (patched build): submit the expert copies of a call (all tensors, and the layers the call "
+                         "prefetches or promotes for) as one batch, a single CUDA driver call, instead of one copy each. Falls back to plain "
+                         "copies where the driver cannot batch."),
+            [f"{p}.moe_cache_mib"], _mc_cache))
         _sl.addWidget(_dependent(
             _number_row(f"{p}.moe_cache_swap_every", "Swap Rounds Every", 0, 100000, 1, 0, "tokens",
                          "--moe-cache-swap-every (patched build): promote experts in rounds, every N tokens, choosing the most missed "

@@ -213,11 +213,13 @@ def _kv_bytes_per_token(kv: dict[str, Any], arch: str, n_layers: int) -> tuple[i
         f"{layers} attention layers x {int(kv_heads)} KV heads x dim {head_dim_k}, f16"
 
 
-def summarize(path: str, ctx_size: Optional[int] = None, free_vram_mib: Optional[int] = None) -> dict[str, Any]:
+def summarize(path: str, ctx_size: Optional[int] = None, free_vram_mib: Optional[int] = None,
+              kv_factor: float = 1.0) -> dict[str, Any]:
     """Facts and a starting config for a GGUF; header only.
 
     ctx_size    context the KV estimate is for (default min(model context, 8192)).
-    free_vram_mib  VRAM to plan against (default: nvidia-smi now, else 12000)."""
+    free_vram_mib  VRAM to plan against (default: nvidia-smi now, else 12000).
+    kv_factor   size of the KV cache relative to f16 (q8_0 is about 0.53, q4_0 about 0.28)."""
     h = read_header(path)
     kv, tensors = h["kv"], h["tensors"]
     arch = str(kv.get("general.architecture") or "")
@@ -271,7 +273,7 @@ def summarize(path: str, ctx_size: Optional[int] = None, free_vram_mib: Optional
             free_src = "given"
         per_tok, kv_how = _kv_bytes_per_token(kv, arch, n_layers or len(experts_per_layer))
         dense_mib = dense_total / _MIB
-        kv_mib = ctx * per_tok / _MIB
+        kv_mib = ctx * per_tok * max(0.05, kv_factor) / _MIB
         headroom = 1500
         budget = free_vram_mib - dense_mib - kv_mib - headroom
         n_moe_layers = len(experts_per_layer) or (n_layers or 0)
