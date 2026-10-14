@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Prithwiraj Samanta <prskid1000@gmail.com>
-Date: Thu, 3 Sep 2026 10:11:05 +0530
+Date: Wed, 14 Oct 2026 09:45:08 +0530
 Subject: [PATCH] common : add defer_loading to tool definitions
 
 Declares a tool to the sampling grammar while leaving its schema out of the
@@ -26,11 +26,12 @@ prompt that never mentions tools while the grammar still expects calls.
 
 Ref: #28179
 
-Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
-Rebased onto upstream b11065: the original diff no longer applied at
-common/chat.h:358 after upstream's churn there. Re-expressed by 3-way
-apply, so the change is the same one, not a re-implementation.
+Rebased onto upstream b11609: after the chat API refactor (#30210) the
+test hunk's context had moved and common_chat_params::prompt became a
+common_chat_prompt (read via .str()); the README anchor line was removed
+upstream. The common/ hunks applied unchanged.
 
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 ---
  common/chat-auto-parser.h |  4 ++
  common/chat.cpp           | 42 +++++++++++++++---
@@ -55,10 +56,10 @@ index 8ae15c91e..e4dee1f0c 100644
      json                                  json_schema;
      bool                                  parallel_tool_calls = true;
 diff --git a/common/chat.cpp b/common/chat.cpp
-index 6c8099cf2..822dfbdc2 100644
+index 485671308..ba31f7096 100644
 --- a/common/chat.cpp
 +++ b/common/chat.cpp
-@@ -555,21 +555,29 @@ json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msg
+@@ -524,21 +524,29 @@ json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msg
      return render_message_to_json(msgs, c);
  }
  
@@ -91,7 +92,7 @@ index 6c8099cf2..822dfbdc2 100644
      }
      return result;
  }
-@@ -605,13 +613,31 @@ std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & too
+@@ -574,13 +582,31 @@ std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & too
                  }
  
                  const auto & function = tool.at("function");
@@ -123,7 +124,7 @@ index 6c8099cf2..822dfbdc2 100644
      } catch (const std::exception & e) {
          throw std::runtime_error("Failed to parse tools: " + std::string(e.what()) + "; tools = " + tools.dump(2));
      }
-@@ -919,8 +945,11 @@ std::string common_chat_template_direct_apply_impl(
+@@ -891,8 +917,11 @@ common_chat_prompt common_chat_template_direct_apply_impl(
          {"eos_token", tmpl.eos_token()},
          {"enable_thinking", inputs.enable_thinking},
      };
@@ -137,7 +138,7 @@ index 6c8099cf2..822dfbdc2 100644
      }
      if (inputs.extra_context.is_object()) {
          // TODO: do we need to merge, or replacing is fine?
-@@ -1223,7 +1252,8 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
+@@ -1286,7 +1315,8 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
  static common_chat_params common_chat_templates_apply_jinja(const struct common_chat_templates *        tmpls,
                                                              const struct common_chat_templates_inputs & inputs) {
      autoparser::generation_params params;
@@ -148,10 +149,10 @@ index 6c8099cf2..822dfbdc2 100644
          params.tools.is_array() && tmpls->template_tool_use ? *tmpls->template_tool_use : *tmpls->template_default;
      const auto & src             = tmpl.source();
 diff --git a/common/chat.h b/common/chat.h
-index 0e1423a5a..79f4dcda2 100644
+index dcff94919..fcf4d0d37 100644
 --- a/common/chat.h
 +++ b/common/chat.h
-@@ -217,6 +217,12 @@ struct common_chat_tool {
+@@ -224,6 +224,12 @@ struct common_chat_tool {
      std::string name;
      std::string description;
      std::string parameters;
@@ -164,7 +165,7 @@ index 0e1423a5a..79f4dcda2 100644
  };
  
  enum common_chat_tool_choice {
-@@ -358,7 +364,10 @@ common_chat_continuation common_chat_continuation_parse(const common_json & valu
+@@ -460,7 +466,10 @@ common_chat_continuation common_chat_continuation_parse(const common_json & valu
  // DEPRECATED: only used in tests
  common_json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msgs, bool concat_typed_text = false);
  
@@ -177,10 +178,10 @@ index 0e1423a5a..79f4dcda2 100644
  // The parameters schema of a function tool. A tool without parameters, or with an empty {}, takes zero arguments.
  common_json common_chat_tool_parameters(const common_json & function);
 diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
-index 13733c1d9..954d08618 100644
+index 01b2220da..65396441b 100644
 --- a/tests/test-chat.cpp
 +++ b/tests/test-chat.cpp
-@@ -1813,6 +1813,97 @@ static void test_tools_oaicompat_json_conversion() {
+@@ -1833,6 +1833,97 @@ static void test_tools_oaicompat_json_conversion() {
                    common_chat_tools_to_json_oaicompat({ special_function_tool }).dump(2));
  }
  
@@ -246,10 +247,10 @@ index 13733c1d9..954d08618 100644
 +
 +        auto params = common_chat_templates_apply(tmpls.get(), inputs);
 +
-+        if (params.prompt.find("special_function") == std::string::npos) {
++        if (params.prompt.str().find("special_function") == std::string::npos) {
 +            throw std::runtime_error("visible tool missing from the prompt");
 +        }
-+        if (params.prompt.find(python_tool.name) != std::string::npos) {
++        if (params.prompt.str().find(python_tool.name) != std::string::npos) {
 +            throw std::runtime_error("deferred tool leaked into the prompt");
 +        }
 +        if (params.grammar.find(python_tool.name) == std::string::npos) {
@@ -278,21 +279,21 @@ index 13733c1d9..954d08618 100644
  static void test_convert_responses_to_chatcmpl() {
      LOG_DBG("%s\n", __func__);
  
-@@ -7624,6 +7715,7 @@ int main(int argc, char ** argv) {
+@@ -8126,6 +8217,7 @@ int main(int argc, char ** argv) {
          test_msgs_oaicompat_json_conversion();
          test_msg_token_delimiters_split();
          test_tools_oaicompat_json_conversion();
 +        test_tool_defer_loading();
          test_convert_responses_to_chatcmpl();
          test_developer_role_to_system_workaround();
-         test_deepseek_v4_thinking_retention();
+         test_translate_gemma();
 diff --git a/tools/server/README.md b/tools/server/README.md
-index ef9033404..d79efd885 100644
+index 48c40eda7..10f061411 100644
 --- a/tools/server/README.md
 +++ b/tools/server/README.md
-@@ -1327,6 +1327,17 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type":
+@@ -1353,6 +1353,17 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type":
  
- `parse_tool_calls`: Whether to parse the generated tool call.
+ `reasoning_control`: Arms realtime reasoning control for this completion so it can be ended early via `/v1/chat/completions/control`. Defaults to `false`.
  
 +`tools[].function.defer_loading`: When `true`, the tool is still declared to the sampling grammar - so the model can call it - but its schema is left out of the rendered prompt. This lets a client keep a large tool set available without paying for every schema in context, and reveal a schema to the model on demand (via a tool result, a system message, or its own search tool) without changing the declared tool set. Because the declared set is what the prompt is built from, keeping it constant is also what preserves the prompt cache: tools render at the very start of the prompt, so adding one mid-conversation invalidates the whole cached prefix. At least one tool must be left un-deferred, otherwise the request is rejected - templates render their tool section conditionally on a non-empty tool list, and deferring everything would produce a prompt that never mentions tools while the grammar still expects calls.
 +
@@ -308,3 +309,6 @@ index ef9033404..d79efd885 100644
  `parallel_tool_calls` : Whether to enable parallel/multiple tool calls (only supported on some models, verification is based on jinja template).
  
  For multimodal input (typed content, `messages[i].content[j]`):
+-- 
+2.55.0.windows.2
+
