@@ -1,0 +1,348 @@
+Add-on: generic ggml pieces for the MoE cache CPU-miss mode.
+mul_mat_id skips expert ids < 0 (CPU, CUDA) and leaves zero rows; the scheduler can start a CPU split while the GPU still computes.
+Both are off unless a graph asks for them (ggml_mul_mat_id_set_skip_neg, ggml_backend_sched_set_cpu_overlap).
+
+diff --git a/ggml/include/ggml-backend.h b/ggml/include/ggml-backend.h
+index 7a65d8121..0409daf3a 100644
+--- a/ggml/include/ggml-backend.h
++++ b/ggml/include/ggml-backend.h
+@@ -127,6 +127,8 @@ extern "C" {
+     GGML_API void                 ggml_backend_event_free(ggml_backend_event_t event);
+     GGML_API void                 ggml_backend_event_record(ggml_backend_event_t event, ggml_backend_t backend);
+     GGML_API void                 ggml_backend_event_synchronize(ggml_backend_event_t event);
++    // true if the work before the event is done (also when the backend cannot tell); does not block
++    GGML_API bool                 ggml_backend_event_query(ggml_backend_event_t event);
+     GGML_API void                 ggml_backend_event_wait(ggml_backend_t backend, ggml_backend_event_t event);
+ 
+     //
+@@ -375,6 +377,10 @@ extern "C" {
+     // Set a callback to be called when the inputs weights of a split are being copied
+     GGML_API void                 ggml_backend_sched_set_copy_callback(ggml_backend_sched_t sched, ggml_backend_sched_copy_callback callback, void * user_data);
+ 
++    // Do not wait for the previous split before a CPU split that has no inputs, so it runs while the GPU computes
++    // Only for graphs whose CPU splits read nothing the GPU writes and write no memory the GPU still reads
++    GGML_API void                 ggml_backend_sched_set_cpu_overlap(ggml_backend_sched_t sched, bool enable);
++
+     // Set a callback to be called when the compute buffers of a graph are being reallocated
+     GGML_API void                 ggml_backend_sched_set_realloc_callback(ggml_backend_sched_t sched, ggml_backend_sched_realloc_callback callback, void * user_data);
+ 
+diff --git a/ggml/include/ggml.h b/ggml/include/ggml.h
+index 224bdef92..c7967888a 100644
+--- a/ggml/include/ggml.h
++++ b/ggml/include/ggml.h
+@@ -1496,6 +1496,10 @@ extern "C" {
+             struct ggml_tensor * a,
+             enum ggml_op_hint    hint);
+ 
++    // ids < 0 of a mul_mat_id are skipped, their rows of the result are zero
++    GGML_API void ggml_mul_mat_id_set_skip_neg(struct ggml_tensor * a);
++    GGML_API bool ggml_mul_mat_id_skip_neg(const struct ggml_tensor * a);
++
+     // indirect matrix multiplication
+     GGML_API struct ggml_tensor * ggml_mul_mat_id(
+             struct ggml_context * ctx,
+diff --git a/ggml/src/ggml-backend-impl.h b/ggml/src/ggml-backend-impl.h
+index dc7367dec..4227a946e 100644
+--- a/ggml/src/ggml-backend-impl.h
++++ b/ggml/src/ggml-backend-impl.h
+@@ -216,6 +216,8 @@ extern "C" {
+         ggml_backend_event_t (*event_new)         (ggml_backend_dev_t dev);
+         void                 (*event_free)        (ggml_backend_dev_t dev, ggml_backend_event_t event);
+         void                 (*event_synchronize) (ggml_backend_dev_t dev, ggml_backend_event_t event);
++        // (optional) true if the work before the event is done; querying also makes the driver submit the queued work
++        bool                 (*event_query)       (ggml_backend_dev_t dev, ggml_backend_event_t event);
+     };
+ 
+     struct ggml_backend_device {
+diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
+index ffbcba366..ce205d27a 100644
+--- a/ggml/src/ggml-backend.cpp
++++ b/ggml/src/ggml-backend.cpp
+@@ -693,6 +693,14 @@ void ggml_backend_event_record(ggml_backend_event_t event, ggml_backend_t backen
+     backend->iface.event_record(backend, event);
+ }
+ 
++bool ggml_backend_event_query(ggml_backend_event_t event) {
++    GGML_ASSERT(event);
++    if (event->device->iface.event_query == NULL) {
++        return true;
++    }
++    return event->device->iface.event_query(event->device, event);
++}
++
+ void ggml_backend_event_synchronize(ggml_backend_event_t event) {
+     GGML_ASSERT(event);
+     GGML_ASSERT(event->device->iface.event_synchronize);
+@@ -976,6 +984,7 @@ struct ggml_backend_sched {
+     size_t context_buffer_size;
+ 
+     bool op_offload;
++    bool cpu_overlap;
+ 
+     int debug;
+ 
+@@ -1875,7 +1884,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
+ 
+         // ensure the previous split's async work has completed before we start
+         // this split, the allocator may have reused buffer regions across splits
+-        if (split->n_inputs == 0 && prev_backend_id >= 0 && prev_backend_id != split_backend_id) {
++        const bool cpu_overlap = sched->cpu_overlap && ggml_backend_dev_type(ggml_backend_get_device(split_backend)) == GGML_BACKEND_DEVICE_TYPE_CPU;
++        if (split->n_inputs == 0 && prev_backend_id >= 0 && prev_backend_id != split_backend_id && !cpu_overlap) {
+             if (sched->events[prev_backend_id][sched->cur_copy] != NULL) {
+                 ggml_backend_event_synchronize(sched->events[prev_backend_id][sched->cur_copy]);
+             } else {
+@@ -1938,6 +1948,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
+         // record the event of this split
+         if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+             ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy], split_backend);
++            // on Windows the driver batches the launches: query the event so this split is submitted before a CPU split overlaps it
++            if (sched->cpu_overlap && !cpu_overlap) {
++                ggml_backend_event_query(sched->events[split_backend_id][sched->cur_copy]);
++            }
+         }
+ 
+         prev_backend_id = split_backend_id;
+@@ -2155,6 +2169,11 @@ void ggml_backend_sched_set_copy_callback(ggml_backend_sched_t sched, ggml_backe
+     sched->callback_copy_user_data = user_data;
+ }
+ 
++void ggml_backend_sched_set_cpu_overlap(ggml_backend_sched_t sched, bool enable) {
++    GGML_ASSERT(sched);
++    sched->cpu_overlap = enable;
++}
++
+ void ggml_backend_sched_set_realloc_callback(ggml_backend_sched_t sched, ggml_backend_sched_realloc_callback callback, void * user_data) {
+     GGML_ASSERT(sched);
+     sched->callback_realloc = callback;
+diff --git a/ggml/src/ggml-cpu/ggml-cpu.c b/ggml/src/ggml-cpu/ggml-cpu.c
+index 5428d5164..1420be50c 100644
+--- a/ggml/src/ggml-cpu/ggml-cpu.c
++++ b/ggml/src/ggml-cpu/ggml-cpu.c
+@@ -1652,7 +1652,13 @@ static void ggml_compute_forward_mul_mat_id(
+             for (int id = 0; id < n_ids; ++id) {
+                 const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
+ 
+-                assert(i02 >= 0 && i02 < n_as);
++                if (i02 < 0) {
++                    // skipped entry: dst row is zero
++                    memset((char *) dst->data + id*nb1 + iid1*nb2, 0, ne0*sizeof(float));
++                    continue;
++                }
++
++                assert(i02 < n_as);
+ 
+                 MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = (struct mmid_row_mapping) {id, iid1};
+                 matrix_row_counts[i02] += 1;
+diff --git a/ggml/src/ggml-cpu/repack.cpp b/ggml/src/ggml-cpu/repack.cpp
+index 2632ae3a0..a09504231 100644
+--- a/ggml/src/ggml-cpu/repack.cpp
++++ b/ggml/src/ggml-cpu/repack.cpp
+@@ -4855,7 +4855,13 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
+                     const int32_t i02 =
+                         *(const int32_t *) ((const char *) ids->data + iid1 * ids->nb[1] + id * ids->nb[0]);
+ 
+-                    GGML_ASSERT(i02 >= 0 && i02 < n_as);
++                    if (i02 < 0) {
++                        // skipped entry: dst row is zero
++                        memset((char *) op->data + id * op->nb[1] + iid1 * op->nb[2], 0, op->ne[0] * sizeof(float));
++                        continue;
++                    }
++
++                    GGML_ASSERT(i02 < n_as);
+ 
+                     MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = { id, iid1 };
+                     matrix_row_counts[i02] += 1;
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index 9fe618f85..3b31a6b93 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -30,6 +30,7 @@
+ #include "ggml-cuda/getrows.cuh"
+ #include "ggml-cuda/im2col.cuh"
+ #include "ggml-cuda/mmf.cuh"
++#include "ggml-cuda/mmid.cuh"
+ #include "ggml-cuda/mmq.cuh"
+ #include "ggml-cuda/mmvf.cuh"
+ #include "ggml-cuda/mmvq.cuh"
+@@ -1770,6 +1771,11 @@ static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up,
+         return false;
+     }
+ 
++    // the fused kernels read the ids of the node, which may be < 0
++    if (is_mul_mat_id && (ggml_mul_mat_id_skip_neg(ffn_up) || ggml_mul_mat_id_skip_neg(ffn_gate))) {
++        return false;
++    }
++
+     const ggml_op expected_bias_op = is_mul_mat ? GGML_OP_ADD : GGML_OP_ADD_ID;
+     const ggml_tensor * ffn_up_bias_src   = has_scale ? ffn_up_scale   : ffn_up;
+     const ggml_tensor * ffn_gate_bias_src = has_scale ? ffn_gate_scale : ffn_gate;
+@@ -2033,10 +2039,9 @@ static bool ggml_cuda_mul_mat_id_needs_sync(const ggml_tensor * dst, const int c
+     return true;
+ }
+ 
+-static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
++static void ggml_cuda_mul_mat_id_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst, const ggml_tensor * ids) {
+     const ggml_tensor * src0 = dst->src[0];
+     const ggml_tensor * src1 = dst->src[1];
+-    const ggml_tensor * ids  = dst->src[2];
+ 
+     GGML_ASSERT(src1->type == GGML_TYPE_F32);
+     GGML_ASSERT(dst->type  == GGML_TYPE_F32);
+@@ -2191,6 +2196,31 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor *
+         nb1, nb2, nb3, stream);
+ }
+ 
++static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
++    const ggml_tensor * ids = dst->src[2];
++    if (!ggml_mul_mat_id_skip_neg(dst)) {
++        ggml_cuda_mul_mat_id_impl(ctx, dst, ids);
++        return;
++    }
++
++    // the kernels read every id, so the skipped ones point to experts the token does not use, and their rows are zeroed after
++    ggml_cuda_pool_alloc<int32_t> ids_fix(ctx.pool(), ggml_nelements(ids));
++    ggml_cuda_fix_neg_ids(ids, ids_fix.get(), (int) dst->src[0]->ne[2], ctx.stream());
++    CUDA_CHECK(cudaGetLastError());
++
++    ggml_tensor ids_fixed = *ids;
++    ids_fixed.data  = ids_fix.get();
++    ids_fixed.nb[0] = sizeof(int32_t);
++    ids_fixed.nb[1] = ids->ne[0]*ids_fixed.nb[0];
++    ids_fixed.nb[2] = ids->ne[1]*ids_fixed.nb[1];
++    ids_fixed.nb[3] = ids_fixed.nb[2];
++
++    ggml_cuda_mul_mat_id_impl(ctx, dst, &ids_fixed);
++
++    ggml_cuda_zero_neg_rows(ids, dst, ctx.stream());
++    CUDA_CHECK(cudaGetLastError());
++}
++
+ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct ggml_tensor * dst) {
+     switch (dst->op) {
+         case GGML_OP_ARGMAX:
+@@ -5942,6 +5972,11 @@ static void ggml_backend_cuda_device_event_synchronize(ggml_backend_dev_t dev, g
+     CUDA_CHECK(cudaEventSynchronize((cudaEvent_t)event->context));
+ }
+ 
++static bool ggml_backend_cuda_device_event_query(ggml_backend_dev_t dev, ggml_backend_event_t event) {
++    GGML_UNUSED(dev);
++    return cudaEventQuery((cudaEvent_t)event->context) == cudaSuccess;
++}
++
+ static const ggml_backend_device_i ggml_backend_cuda_device_interface = {
+     /* .get_name                = */ ggml_backend_cuda_device_get_name,
+     /* .get_description         = */ ggml_backend_cuda_device_get_description,
+@@ -5958,6 +5993,7 @@ static const ggml_backend_device_i ggml_backend_cuda_device_interface = {
+     /* .event_new               = */ ggml_backend_cuda_device_event_new,
+     /* .event_free              = */ ggml_backend_cuda_device_event_free,
+     /* .event_synchronize       = */ ggml_backend_cuda_device_event_synchronize,
++    /* .event_query             = */ ggml_backend_cuda_device_event_query,
+ };
+ 
+ // backend reg
+diff --git a/ggml/src/ggml-cuda/mmid.cu b/ggml/src/ggml-cuda/mmid.cu
+index 12ae14ce9..a14dd71a9 100644
+--- a/ggml/src/ggml-cuda/mmid.cu
++++ b/ggml/src/ggml-cuda/mmid.cu
+@@ -177,3 +177,62 @@ void ggml_cuda_launch_mm_ids_helper(
+             break;
+     }
+ }
++
++static __global__ void mm_ids_fix_neg(
++        const int32_t * __restrict__ ids, int32_t * __restrict__ out, const int n_expert_used, const int n_tokens, const int n_experts,
++        const int64_t si0, const int64_t si1) {
++    const int it = blockIdx.x*blockDim.x + threadIdx.x;
++    if (it >= n_tokens) {
++        return;
++    }
++    int32_t * row = out + (int64_t) it*n_expert_used;
++    for (int k = 0; k < n_expert_used; ++k) {
++        row[k] = ids[it*si1 + k*si0];
++    }
++    int next = 0;
++    for (int k = 0; k < n_expert_used; ++k) {
++        if (row[k] >= 0) {
++            continue;
++        }
++        bool used = true;
++        while (used && next < n_experts) {
++            used = false;
++            for (int j = 0; j < n_expert_used; ++j) {
++                used |= row[j] == next;
++            }
++            next += used;
++        }
++        row[k] = next < n_experts ? next : 0;
++    }
++}
++
++static __global__ void mm_ids_zero_neg(
++        const int32_t * __restrict__ ids, float * __restrict__ dst, const int n_expert_used, const int64_t ne0,
++        const int64_t si0, const int64_t si1, const int64_t nb1, const int64_t nb2) {
++    const int it = blockIdx.x / n_expert_used;
++    const int k  = blockIdx.x % n_expert_used;
++    if (ids[it*si1 + k*si0] >= 0) {
++        return;
++    }
++    float * row = (float *) ((char *) dst + k*nb1 + it*nb2);
++    for (int64_t i = threadIdx.x; i < ne0; i += blockDim.x) {
++        row[i] = 0.0f;
++    }
++}
++
++void ggml_cuda_fix_neg_ids(const ggml_tensor * ids, int32_t * out, int n_experts, cudaStream_t stream) {
++    GGML_ASSERT(ids->type == GGML_TYPE_I32);
++    const int n_expert_used = ids->ne[0];
++    const int n_tokens      = ids->ne[1];
++    const int block = 128;
++    mm_ids_fix_neg<<<(n_tokens + block - 1)/block, block, 0, stream>>>(
++        (const int32_t *) ids->data, out, n_expert_used, n_tokens, n_experts, ids->nb[0]/sizeof(int32_t), ids->nb[1]/sizeof(int32_t));
++}
++
++void ggml_cuda_zero_neg_rows(const ggml_tensor * ids, ggml_tensor * dst, cudaStream_t stream) {
++    const int n_expert_used = ids->ne[0];
++    const int n_tokens      = ids->ne[1];
++    mm_ids_zero_neg<<<n_expert_used*n_tokens, 128, 0, stream>>>(
++        (const int32_t *) ids->data, (float *) dst->data, n_expert_used, dst->ne[0],
++        ids->nb[0]/sizeof(int32_t), ids->nb[1]/sizeof(int32_t), dst->nb[1], dst->nb[2]);
++}
+diff --git a/ggml/src/ggml-cuda/mmid.cuh b/ggml/src/ggml-cuda/mmid.cuh
+index 74c2db433..cad378bf6 100644
+--- a/ggml/src/ggml-cuda/mmid.cuh
++++ b/ggml/src/ggml-cuda/mmid.cuh
+@@ -1,5 +1,11 @@
+ #pragma once
+ 
++// copies ids to out, [n_expert_used, n_tokens] contiguous, giving each id < 0 an expert that its token does not use
++void ggml_cuda_fix_neg_ids(const ggml_tensor * ids, int32_t * out, int n_experts, cudaStream_t stream);
++
++// zeroes the rows of dst that belong to ids < 0
++void ggml_cuda_zero_neg_rows(const ggml_tensor * ids, ggml_tensor * dst, cudaStream_t stream);
++
+ void ggml_cuda_launch_mm_ids_helper(
+         const int32_t * ids, int32_t * ids_src1, int32_t * ids_dst, int32_t * expert_bounds,
+         int n_experts, int n_tokens, int n_expert_used, int nchannels_y, int si1, int sis1, bool write_inverse, cudaStream_t stream);
+diff --git a/ggml/src/ggml.c b/ggml/src/ggml.c
+index ef0134ba0..8057de4df 100644
+--- a/ggml/src/ggml.c
++++ b/ggml/src/ggml.c
+@@ -3376,6 +3376,18 @@ struct ggml_tensor * ggml_mul_mat(
+     return result;
+ }
+ 
++// the last op param, the others are used for the precision of the sources
++#define GGML_MUL_MAT_ID_SKIP_NEG_PARAM (GGML_MAX_OP_PARAMS/sizeof(int32_t) - 1)
++
++void ggml_mul_mat_id_set_skip_neg(struct ggml_tensor * a) {
++    GGML_ASSERT(a->op == GGML_OP_MUL_MAT_ID);
++    ggml_set_op_params_i32(a, GGML_MUL_MAT_ID_SKIP_NEG_PARAM, 1);
++}
++
++bool ggml_mul_mat_id_skip_neg(const struct ggml_tensor * a) {
++    return a->op == GGML_OP_MUL_MAT_ID && ggml_get_op_params_i32(a, GGML_MUL_MAT_ID_SKIP_NEG_PARAM) != 0;
++}
++
+ void ggml_mul_mat_set_prec(
+         struct ggml_tensor * a,
+         enum ggml_prec       prec) {
