@@ -50,7 +50,7 @@ VARIANTS: dict[str, list[tuple[str, list[str], str]]] = {
         ("sycl",     ["win-sycl"],       "Intel SYCL"),
         ("cpu",      ["win-cpu-x64"],    "CPU only (x64)"),
         ("cpu-arm",  ["win-cpu-arm64"],  "CPU only (ARM64)"),
-        ("opencl",   ["win-opencl"],     "OpenCL (Adreno ARM64)"),
+        ("opencl",   ["win-opencl", "arm64"], "OpenCL (Adreno ARM64)"),
     ],
     "linux": [
         ("vulkan",   ["ubuntu-vulkan-x64"],   "Vulkan (Linux x64)"),
@@ -76,6 +76,21 @@ def platform_key() -> str:
     if sys.platform == "darwin":
         return "mac"
     return "linux"
+
+
+def host_is_arm64() -> bool:
+    import platform as _pl
+    return _pl.machine().lower() in ("arm64", "aarch64")
+
+
+def _arch_matches(name: str, patterns: list[str]) -> bool:
+    """A variant that names its arch (`win-cpu-arm64`) already decides by substring.
+    Otherwise the archive must be built for this machine: since b11609 upstream
+    ships `win-cuda-13.4-arm64` next to the x64 zip under the same prefix, and
+    first-match picked whichever the release listed first."""
+    if any("arm64" in p or "x64" in p for p in patterns):
+        return True
+    return ("arm64" in name) == host_is_arm64()
 
 
 def variants_for_platform() -> list[tuple[str, str]]:
@@ -206,7 +221,7 @@ def pick_cudart_asset(release: dict[str, Any], variant_key: str) -> Optional[dic
     needle = f"cudart-llama-bin-win-cuda-{major}"
     for asset in release.get("assets") or []:
         name = str(asset.get("name") or "").lower()
-        if name.endswith(".zip") and name.startswith(needle):
+        if name.endswith(".zip") and name.startswith(needle) and _arch_matches(name, []):
             return asset
     return None
 
@@ -380,7 +395,7 @@ def pick_asset(release: dict[str, Any], variant_key: str) -> Optional[dict[str, 
             continue
         if "-bin-" not in name:
             continue
-        if all(p in name for p in patterns):
+        if all(p in name for p in patterns) and _arch_matches(name, patterns):
             return asset
     return None
 
@@ -397,8 +412,7 @@ def detect_variant() -> str:
             return "hip"
         return "vulkan"
     if pkey == "mac":
-        import platform as _pl
-        return "arm64" if _pl.machine().lower() in ("arm64", "aarch64") else "x64"
+        return "arm64" if host_is_arm64() else "x64"
     # linux: no cuda zip published; vulkan covers most accelerators
     return "vulkan"
 

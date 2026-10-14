@@ -1060,7 +1060,9 @@ def _llama_updater_card(window) -> QWidget:
                 display += "\n  + " + "\n  + ".join(companions)
             asset_label.setText(display)
             cur = upd.installed_version()
-            already_latest = bool(cur and build and cur == build and not companions)
+            # Companions don't count: a CUDA build always lists its cudart zip,
+            # which kept the button live on the build already installed.
+            already_latest = bool(cur and build and cur == build)
             # Don't offer a re-install of the build that's already installed —
             # there's nothing to update to.
             update_btn.setEnabled(not already_latest)
