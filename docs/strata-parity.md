@@ -8,6 +8,8 @@ Notes on the mapping: upstream ships the GPU expert cache itself (`--moe-cache-m
 
 **Update 2 (same day, later).** Re-checked against `common/arg.cpp` in the source tree, `llamacpp/argv.py`, `tray/qt_sections.py`, `process.py`, `llamacpp/config.py`, `llamacpp/gguf_info.py`, `llamacpp/cpu_topology.py`, `tools/moe_cache_bench.py`, and corrected with `docs/strata-default-behaviours.md`. Strata's **tail skip is on by default** with a window-wide rank rule (rank 7, auto-off at 90 % cached); its **swap margin is additive** (cand >= victim + 1.5, ours `--moe-cache-promote-gain` is a ratio); its **CPU share of prefill (chunks under 1024 tokens) and its PCIe share (auto-refined at run time) are on by default**. Ours are all off by default, and our CPU path is capped at 31 tokens (`--moe-cache-cpu-miss-max-tokens` is 1..31), so the prefill share is not built. Caveats: patch file `0003` lists only the flags up to `--moe-cache-tail-skip`; `-tail-skip-rank`, `-tail-skip-auto-off`, `-evict-window`, `-pcie-share`, `-pcie-max`, `-async-upload`, `-swap-every`, `-swap-max`, `-route-top`, `-route-scale` exist in `common/arg.cpp` of the source tree but not in the patch files (grep), and not in the `--help` of the current `build-telecode` binary. So the patch files need regenerating and the build repeating (whether a newer build exists is unverified). The scheduler "hit poke" is `ggml_backend_event_query` after the GPU split in `ggml-backend.cpp` (grep); `cpu_overlap` is in patch 0002.
 
+**Update 3 (2026-10-15).** Built since: auto PCIe share (`--moe-cache-pcie-auto`), batched uploads (`--moe-cache-upload-batch`, CUDA batch copy), and the prompt-batch CPU share (`--moe-cache-prefill-share`, `-prefill-max-tokens`, `-staging-slots`). Patches 0002-0004 now contain every flag of the source tree. The totals below are from update 2 and not recounted (STRATA_PREFILL_CPU_SHARE moved from FEASIBLE to IMPLEMENTED).
+
 
 ## Summary
 
@@ -141,10 +143,10 @@ Notes on the mapping: upstream ships the GPU expert cache itself (`--moe-cache-m
 
 | Name | Status | Our knob / how | Notes |
 |---|---|---|---|
-| `--pcie-frac` | IMPLEMENTED | `--moe-cache-pcie-share` + `--moe-cache-pcie-max` / model `moe_cache_pcie_share`, `moe_cache_pcie_max` | a fraction of the misses (most used first) is uploaded and computed on the GPU in that call; ours is off by default (Strata: on) and Strata refines it at run time (`PcieAuto`), ours is fixed |
+| `--pcie-frac` | IMPLEMENTED | `--moe-cache-pcie-share` + `--moe-cache-pcie-max` / model `moe_cache_pcie_share`, `moe_cache_pcie_max` | a fraction of the misses (most used first) is uploaded and computed on the GPU in that call; off by default (Strata: on); `--moe-cache-pcie-auto` (+ `-pcie-auto-window`) refines the share at run time from measured times, `--moe-cache-upload-batch` batches the copies |
 | `--pcie-mode` | N/A | Strata copy path; ggml uses cudaMemcpyAsync |  |
 | `--spec-min-p` | COVERED | `--spec-draft-p-min` / model `draft_p_min` |  |
-| `pcie_frac` | IMPLEMENTED | `--moe-cache-pcie-share` + `--moe-cache-pcie-max` / model `moe_cache_pcie_share`, `moe_cache_pcie_max` | a fraction of the misses (most used first) is uploaded and computed on the GPU in that call; ours is off by default (Strata: on) and Strata refines it at run time (`PcieAuto`), ours is fixed |
+| `pcie_frac` | IMPLEMENTED | `--moe-cache-pcie-share` + `--moe-cache-pcie-max` / model `moe_cache_pcie_share`, `moe_cache_pcie_max` | a fraction of the misses (most used first) is uploaded and computed on the GPU in that call; off by default (Strata: on); `--moe-cache-pcie-auto` (+ `-pcie-auto-window`) refines the share at run time from measured times, `--moe-cache-upload-batch` batches the copies |
 | `STRATA_DMA_BATCH` | FEASIBLE | M: batch promotion copies of one layer into one H2D transfer | plan patch 3; today copies per expert (unverified) |
 | `STRATA_IO_THREADS` | N/A | Strata PLE row reader |  |
 | `STRATA_PCIE_AUTO_CANON` | N/A | Strata auto-PCIe / stage-buffer tuning |  |
@@ -169,8 +171,8 @@ Notes on the mapping: upstream ships the GPU expert cache itself (`--moe-cache-m
 | `STRATA_METAL_PROMPT_CHUNK` | N/A | Apple Metal engine |  |
 | `STRATA_PF_SWITCH_MIN_T` | N/A | Strata prompt-path tuning / AMD / Intel |  |
 | `STRATA_PREFILL_AUTO_MAX` | COVERED | `--batch-size` / `--ubatch-size` / global `batch_size`, `ubatch_size` | set by hand, no auto chunk sizing |
-| `STRATA_PREFILL_CPU_SHARE` | FEASIBLE | M: raise `moe_cache_cpu_miss_max_tokens` (hard limit 31) to chunks under 1024 tokens with a balanced CPU/GPU share and the A/B gate | skipping ids < 0 now works in CPU and CUDA `mul_mat_id` (patch 0002) but the flag stays 1..31; Strata has the prefill share ON by default |
-| `STRATA_PREFILL_CPU_SHARE_MAX` | IMPLEMENTED | `--moe-cache-cpu-miss-max-tokens` (1..31) / model `moe_cache_cpu_miss_max_tokens` | decode / verify windows only; prompt chunks up to 1024 tokens are not covered (see STRATA_PREFILL_CPU_SHARE) |
+| `STRATA_PREFILL_CPU_SHARE` | IMPLEMENTED | `--moe-cache-prefill-share` + `-prefill-max-tokens` + `-staging-slots` / model `moe_cache_prefill_share`, `moe_cache_prefill_max_tokens`, `moe_cache_staging_slots` | prompt batches above the decode CPU-miss cap: missed experts split between CPU and GPU (staging slots), cache untouched; off by default (Strata: on); no A/B gate; built, not yet measured |
+| `STRATA_PREFILL_CPU_SHARE_MAX` | IMPLEMENTED | `--moe-cache-prefill-max-tokens` (32..16384) / model `moe_cache_prefill_max_tokens` | the decode window stays `--moe-cache-cpu-miss-max-tokens` (1..31) |
 | `STRATA_PREFILL_EQUAL` | N/A | Strata prompt-path tuning / AMD / Intel |  |
 | `STRATA_PREFILL_FIRST` | N/A | Strata prompt-path tuning / AMD / Intel |  |
 | `STRATA_PREFILL_MMQ` | N/A | Strata prompt-path tuning / AMD / Intel |  |
