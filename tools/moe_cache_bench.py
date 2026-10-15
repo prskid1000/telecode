@@ -116,11 +116,13 @@ def _post(port: int, path: str, body: dict, timeout: int = 900) -> dict:
 
 
 class _VramPeak(threading.Thread):
-    """Polls GPU memory in use once a second and keeps the maximum."""
+    """Polls GPU memory in use four times a second, keeps the maximum, and kills the server above the limit."""
 
-    def __init__(self) -> None:
+    def __init__(self, limit_mib: int = 0) -> None:
         super().__init__(daemon=True)
         self.peak: int | None = None
+        self.limit_mib = limit_mib
+        self.exceeded = False
         self._stop_evt = threading.Event()
 
     def run(self) -> None:
@@ -129,7 +131,11 @@ class _VramPeak(threading.Thread):
             used = vram.used_vram_mib()
             if used is not None and (self.peak is None or used > self.peak):
                 self.peak = used
-            self._stop_evt.wait(1.0)
+            if used is not None and self.limit_mib > 0 and used > self.limit_mib and not self.exceeded:
+                # this laptop hard-crashes when the GPU memory runs full: stop the server before that
+                self.exceeded = True
+                subprocess.run(["taskkill", "/F", "/IM", "llama-server.exe"], capture_output=True)
+            self._stop_evt.wait(0.25)
 
     def stop(self) -> None:
         self._stop_evt.set()
@@ -142,6 +148,7 @@ def main() -> int:
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                     help="model key edit before argv is built (repeatable), e.g. n_cpu_moe=99")
     ap.add_argument("--extra", default="", help="extra llama-server args, one quoted string")
+    ap.add_argument("--vram-limit", type=int, default=11600, help="kill the server when the GPU memory in use passes this many MiB (0 = off)")
     ap.add_argument("--probs", type=int, default=0, help="also record the top-N token probabilities of every generated token (tc_<label>_probs.json)")
     ap.add_argument("--pad", type=int, default=0, help="prepend this many filler sentences (about 12 tokens each) so prompts reach the prompt-batch paths")
     ap.add_argument("--prompts", type=int, default=len(PROMPTS), help="how many prompts to run (cycles the 4 built-in)")
@@ -178,7 +185,7 @@ def main() -> int:
         return 0
     os.makedirs(args.out, exist_ok=True)
     log = open(os.path.join(args.out, f"tc_{args.label}.log"), "w")
-    peak = _VramPeak()
+    peak = _VramPeak(args.vram_limit)
     proc = None
     try:
         proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,

@@ -10,7 +10,8 @@ Patches under test: `patches/llama.cpp/0002-ggml-skip-negative-expert-ids-and-cp
 - One `llama-server` at a time, never two. Kill it (`taskkill /F /IM llama-server.exe`) before the next.
 - Test runs use **normal priority, no mlock, <= 8 threads, ctx <= 8192** unless the test is about the real config
   (`tools/moe_cache_bench.py` does this by default; `--no-safe` is for the few real-config runs).
-- Watch VRAM: abort a run above 11 GB used. The 27B + MTP real config needs ctx_size_spec (60000) to leave room for the draft context.
+- **Hard VRAM ceiling 11.6 GB (11600 MiB, set by the user):** `tools/moe_cache_bench.py --vram-limit` (default 11600) kills the server above it. Third crash, 2026-10-15 07:29, was the 27B with `--spec-type draft-mtp` at ~11.9 GB: **do not run the 27B with MTP in tests** (see memory note 27b-mtp-crashes-laptop); use the 35B and the 27B without spec.
+- (old rule) Watch VRAM: abort a run above 11 GB used. The 27B + MTP real config needs ctx_size_spec (60000) to leave room for the draft context.
 - No benchmark while compiling. Timing runs: close other GPU apps, 3 repeats, report mean and spread, note GPU temperature.
 - Stop and report on the first crash, hang over 3 minutes, `CUDA error`, `GGML_ASSERT`, or a sluggish system. No retry loops.
 - Test runs use a frozen copy of the binaries (`build/test-bin-*`), not the build directory that is being compiled.
