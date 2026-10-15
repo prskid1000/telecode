@@ -490,7 +490,7 @@ index 97250c2e8..c68d64e77 100644
      llama-memory-hybrid-iswa.cpp
      llama-memory-hybrid-idx.cpp
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 9ee64b566..03aa17d60 100644
+index 9ee64b566..d64676cb2 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -9,6 +9,7 @@
@@ -555,7 +555,19 @@ index 9ee64b566..03aa17d60 100644
          /*.prec_policy =*/ &model.prec_policy,
          /*.hdmd        =*/ model.hdmd.rot.empty() ? nullptr : &model.hdmd,
          /*.samplers    =*/ sampling.samplers,
-@@ -3712,6 +3737,9 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
+@@ -2795,7 +2820,10 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+         for (int64_t i1 = 0; i1 < ids->ne[1]; i1++) {
+             for (int64_t i0 = 0; i0 < ids->ne[0]; i0++) {
+                 const int32_t id = st.ids_data[i1*ids->nb[1]/sizeof(int32_t) + i0*ids->nb[0]/sizeof(int32_t)];
+-                GGML_ASSERT(id >= 0 && id < n_expert);
++                if (id < 0) {
++                    continue; // an expert that was left out of this token (--moe-expert-reduce-min): nothing to copy
++                }
++                GGML_ASSERT(id < n_expert);
+                 st.used[id] = true;
+             }
+         }
+@@ -3712,6 +3740,9 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
              ret[buft].context += size;
          }
      }
@@ -565,7 +577,7 @@ index 9ee64b566..03aa17d60 100644
      if (model.hparams.no_alloc) {
          for (size_t i = 0; i < backends.size(); ++i) {
              ggml_backend_t             backend = backends[i].get();
-@@ -4002,6 +4030,8 @@ llama_context_params llama_context_default_params() {
+@@ -4002,6 +4033,8 @@ llama_context_params llama_context_default_params() {
          /*.type_k                      =*/ GGML_TYPE_F16,
          /*.type_v                      =*/ GGML_TYPE_F16,
          /*.moe_cache_size              =*/ 0,

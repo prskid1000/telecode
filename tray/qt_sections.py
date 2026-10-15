@@ -5619,7 +5619,9 @@ def _models(window) -> QWidget:
         _sl.addWidget(_number_row(f"{p}.moe_reduce_min", "Always Use the Best", 0, 64, 1, 0, "experts",
                                   "--moe-expert-reduce-min (patched build): the N best experts of a token are always computed, of the others only those whose weight "
                                   "is at least the threshold below times the weight of the best one. The skipped experts are not computed on the CPU layers. "
-                                  "Changes the output (check it on your prompts). Not used together with the MoE cache, expert biases or LoRA. 0 = off.", default=0))
+                                  "Changes the output. Measured on the Qwen3.6-35B-A3B (8 experts per token) against the full model: 6 with threshold 0.4 stayed close (differences only at near-tied "
+                                  "tokens), 4 with 0.5 changed some answers, 2 with 0.7 broke it. Check it on your own prompts. Not used together with the MoE cache, "
+                                  "expert biases or LoRA. 0 = off.", default=0))
         _sl.addWidget(_dependent(
             _number_row(f"{p}.moe_reduce_thresh", "Weight Threshold", 0, 1, 0.05, 2, "",
                          "--moe-expert-reduce-thresh (patched build): the weight an expert beyond the first N needs, as a fraction of the weight of the best one. "
