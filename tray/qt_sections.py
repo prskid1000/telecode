@@ -111,6 +111,67 @@ def _card(title: str, sub: str = "", patched: bool = False) -> tuple[QFrame, QVB
     return card, body_l
 
 
+def _patch_list() -> QWidget:
+    """The patches as one compact scrolling list: a switch, number + title on one line, the description folded
+    away behind a "Details" button. Stays a fixed height however many patches there are."""
+    from llamacpp import patcher
+
+    box = QFrame()
+    box.setStyleSheet(f"QFrame#patchbox {{ border: 1px solid {BORDER}; border-radius: 6px; }}")
+    box.setObjectName("patchbox")
+    outer = QVBoxLayout(box)
+    outer.setContentsMargins(0, 0, 0, 0)
+    head = QLabel("Patches (off = left out of the next build)")
+    head.setStyleSheet(f"color: {FG}; font-weight: 600; padding: 8px 12px 4px 12px; border: none;")
+    outer.addWidget(head)
+
+    inner = QWidget()
+    il = QVBoxLayout(inner)
+    il.setContentsMargins(12, 2, 12, 8)
+    il.setSpacing(2)
+    for pf in patcher.patches():
+        key = f"llamacpp.custom_build.patches.{patcher.patch_setting_name(pf)}"
+        req = patcher.patch_requires(pf)
+        desc = patcher.patch_description(pf) + (f" Needs {', '.join(r[:4] for r in req)}." if req else "")
+        desc += f"  Takes effect on the next build.  ({key})"
+
+        t = Toggle()
+        t.setChecked(bool(get_path(read_settings(), key, True)))
+        t.stateChanged.connect(lambda _s, k=key, w=t: patch_settings(k, w.isChecked()))
+        _follow_setting(key, t, lambda v, w=t: w.isChecked() != bool(v if v is not None else True)
+                        and w.setChecked(bool(v if v is not None else True)))
+
+        title = QLabel(f"<b>{pf.name[:4]}</b>  {patcher.patch_title(pf)}")
+        title.setTextFormat(Qt.TextFormat.RichText)
+        title.setStyleSheet(f"color: {FG}; border: none;")
+        title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)  # long titles clip, never widen the page
+        more = QPushButton("Details")
+        more.setCheckable(True)
+        more.setFlat(True)
+        text = WrapLabel(desc)
+        text.setVisible(False)
+        more.toggled.connect(lambda on, w=text, b=more: (w.setVisible(on), b.setText("Hide" if on else "Details")))
+
+        line = QWidget()
+        ll = QHBoxLayout(line)
+        ll.setContentsMargins(0, 2, 0, 2)
+        ll.setSpacing(10)
+        ll.addWidget(t, 0)
+        ll.addWidget(title, 1)
+        ll.addWidget(more, 0)
+        il.addWidget(line)
+        il.addWidget(text)
+
+    sa = QScrollArea()
+    sa.setWidgetResizable(True)
+    sa.setFrameShape(QFrame.Shape.NoFrame)
+    sa.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    sa.setMaximumHeight(240)
+    sa.setWidget(inner)
+    outer.addWidget(sa)
+    return box
+
+
 def _section_header(text: str) -> QLabel:
     lbl = QLabel(text)
     lbl.setProperty("class", "section_header")
@@ -1763,14 +1824,7 @@ def _llama_patch_build_card(window) -> QWidget:
         "a deliberately CPU-only build.",
         default=True))
     # Each patch is an add-on: off leaves it out of the next build.
-    for _p in patcher.patches():
-        body.addWidget(_toggle_row(
-            f"llamacpp.custom_build.patches.{patcher.patch_setting_name(_p)}",
-            f"{_p.name[:4]}  {patcher.patch_title(_p)}",
-            f"{patcher.patch_description(_p)} "
-            + (f"Needs {', '.join(r[:4] for r in patcher.patch_requires(_p))}. " if patcher.patch_requires(_p) else "")
-            + "Applied by Build Patched when on; takes effect on the next build, the installed binary is unchanged until then.",
-            default=True))
+    body.addWidget(_patch_list())
 
     status = QLabel("…")
     status.setWordWrap(True)
