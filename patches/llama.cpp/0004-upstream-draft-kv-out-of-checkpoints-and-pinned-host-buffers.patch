@@ -1,4 +1,4 @@
-Title: Upstream PRs 29509, 30449
+Title: Upstream fixes: draft KV out of checkpoints, pinned host buffers
 Add-on: cherry-picks of two open upstream pull requests, exactly as proposed there; drop this patch when they are merged.
   ggml-org/llama.cpp#29509: the draft (MTP) KV is not stored in the context checkpoints (it is a prefix-addressed cache that stays resident, and it made every checkpoint grow with the context).
   ggml-org/llama.cpp#30449: the pinned host buffer type of CUDA has a 4 GiB maximum size, so a large set of CPU-resident expert weights (--load-mode none) is split into several

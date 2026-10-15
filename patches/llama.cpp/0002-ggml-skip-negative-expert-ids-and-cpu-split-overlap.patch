@@ -37,7 +37,7 @@ index 7a65d8121..08b81808b 100644
      GGML_API void                 ggml_backend_sched_set_realloc_callback(ggml_backend_sched_t sched, ggml_backend_sched_realloc_callback callback, void * user_data);
  
 diff --git a/ggml/include/ggml.h b/ggml/include/ggml.h
-index 224bdef92..c7967888a 100644
+index c37ba9471..31ea56475 100644
 --- a/ggml/include/ggml.h
 +++ b/ggml/include/ggml.h
 @@ -1496,6 +1496,10 @@ extern "C" {
@@ -49,8 +49,8 @@ index 224bdef92..c7967888a 100644
 +    GGML_API bool ggml_mul_mat_id_skip_neg(const struct ggml_tensor * a);
 +
      // indirect matrix multiplication
-     GGML_API struct ggml_tensor * ggml_mul_mat_id(
-             struct ggml_context * ctx,
+     //
+     // [TAG_MUL_MAT_ID_DUPLICATE_ID]
 diff --git a/ggml/src/ggml-backend-impl.h b/ggml/src/ggml-backend-impl.h
 index dc7367dec..cbd13bb17 100644
 --- a/ggml/src/ggml-backend-impl.h
@@ -178,7 +178,7 @@ index ffbcba366..63b2f9df3 100644
      GGML_ASSERT(sched);
      sched->callback_realloc = callback;
 diff --git a/ggml/src/ggml-cpu/ggml-cpu.c b/ggml/src/ggml-cpu/ggml-cpu.c
-index 5428d5164..1420be50c 100644
+index ab82e3d6c..062215c1c 100644
 --- a/ggml/src/ggml-cpu/ggml-cpu.c
 +++ b/ggml/src/ggml-cpu/ggml-cpu.c
 @@ -1652,7 +1652,13 @@ static void ggml_compute_forward_mul_mat_id(
@@ -432,7 +432,7 @@ index 74c2db433..cad378bf6 100644
          const int32_t * ids, int32_t * ids_src1, int32_t * ids_dst, int32_t * expert_bounds,
          int n_experts, int n_tokens, int n_expert_used, int nchannels_y, int si1, int sis1, bool write_inverse, cudaStream_t stream);
 diff --git a/ggml/src/ggml.c b/ggml/src/ggml.c
-index ef0134ba0..8057de4df 100644
+index 01dc8d05c..e53f95c20 100644
 --- a/ggml/src/ggml.c
 +++ b/ggml/src/ggml.c
 @@ -3376,6 +3376,18 @@ struct ggml_tensor * ggml_mul_mat(

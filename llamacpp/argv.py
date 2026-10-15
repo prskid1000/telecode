@@ -156,6 +156,7 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("spec_draft_adaptive_ema",       "--spec-draft-adaptive-ema",       "value"),
     ("spec_draft_adaptive_probe",     "--spec-draft-adaptive-probe",     "value"),
     # Draft head subset (patched build): the MTP draft steps read only these rows of the output head from device memory.
+    ("spec_draft_n_ubatch",           "--spec-draft-n-ubatch",           "value_nz"),  # newer upstream builds only
     ("spec_draft_head_subset",        "--spec-draft-head-subset",        "value_nz"),
     ("spec_draft_head_subset_ids",    "--spec-draft-head-subset-ids",    "path"),
     ("spec_synth_len",           "--spec-synth-len",       "value_nz"),
@@ -637,7 +638,7 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
         suppressed_global.update({"spec_draft_adaptive", "spec_draft_adaptive_min_gain",
                                   "spec_draft_adaptive_ema", "spec_draft_adaptive_probe"})
     if not (spec_active or gcfg.get("spec_default")):
-        suppressed_global.update({"spec_draft_head_subset", "spec_draft_head_subset_ids"})
+        suppressed_global.update({"spec_draft_head_subset", "spec_draft_head_subset_ids", "spec_draft_n_ubatch"})
     if cfg.as_int(gcfg.get("spec_draft_head_subset")) <= 0:
         suppressed_global.add("spec_draft_head_subset_ids")
     for k, flag, kind in _GLOBAL_FLAG_SPECS:
@@ -711,7 +712,7 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
 
 
 # flags that only a patched llama.cpp (llamacpp/patcher.py) or a recent build has: a binary that does not list them in --help refuses to start
-_PATCHED_PREFIXES = ("--moe-cache-", "--moe-expert-reduce", "--spec-draft-adaptive", "--spec-draft-head-subset")
+_PATCHED_PREFIXES = ("--moe-cache-", "--moe-expert-reduce", "--spec-draft-n-ubatch", "--spec-draft-adaptive", "--spec-draft-head-subset")
 _HELP_FLAGS: dict[tuple, Optional[set]] = {}
 
 

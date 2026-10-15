@@ -325,9 +325,13 @@ combinations (`mlock+dio`, `mmap+mlock+dio`) are rejected by the parser, so it i
    `--moe-cache-*` modes (CPU compute on a cache miss, promotion, prewarm, foresight, tail skip, PCIe share, rounds, prompt-batch CPU share),
    `--moe-expert-reduce-*` (fewer experts per token, lossy), the adaptive speculative draft length and `--spec-draft-head-subset[-ids]`,
    `0004` two open upstream PRs (#29509 draft KV out of checkpoints, #30449 4 GiB pinned host buffers) taken as they are proposed there.
-   `tools/` has the checks that need no GPU: `moe_cache_lru_fuzz` (planner invariants + a state trace to compare two versions),
-   `spec_policy_sim`, `settings_audit_{static,combo,coverage}.py` (every patched-only flag has a setting and a tray row), and
-   `moe_cache_bench.py` (one configuration, greedy outputs hash, `--vram-limit` kills the server above the ceiling).
+   **Tools: see `tools/README.md` before writing a script, these exist:** `vram_plan.py` (llama-server's own memory plan, no weights loaded: use it before
+   ANY test that loads a model), `vram_guard.py`, `moe_cache_bench.py` (one configuration, greedy output hash, peak VRAM, kill above `--vram-limit`),
+   `bench_matrix.py` (a JSON list of configurations, hashes compared with an earlier run = regression check), `compare_runs.py` (texts / token probabilities
+   against a reference), `patch_series.py regen|verify|upgrade-check TAG` (maintain `patches/llama.cpp`, config in `patches/llama.cpp/series.json`),
+   `build_llama.ps1`, `sanitize_server.py`, `parallel_download.py`, the settings audits and the planner fuzzer.
+   **GPU safety on this 12 GB laptop:** dedicated GPU memory of about 11.7 GB (Task Manager GiB) hard-crashes the machine; stay at or below 11.5 GiB
+   (11776 MiB) including the desktop and the Android emulator (~3.4 GB), one server at a time, plan first, speeds only compare inside one session.
    Rules for this series: the options travel as ONE `llama_moe_cache_params` pointer (`llama_context_params::moe_cache_params`); upstream's
    `build_moe_ffn` expert block stays byte for byte (the CPU miss form runs it twice in a loop); regenerate the patches from the working
    tree with the 0004 picks taken out, and prove the series applies in order to a clean `git archive HEAD`.

@@ -23,7 +23,7 @@ Strata clone: engine ~0.1.44. Nothing was run. Line numbers are approximate. Num
 its hardware, not ours.
 
 **Our side** = patches `0002-ggml-skip-negative-expert-ids-and-cpu-split-overlap` and
-`0003-moe-cache-cpu-miss-prewarm-and-adaptive-draft`, telecode (proxy, `LlamaSupervisor`, `llamacpp/{argv,gguf_info,
+`0003-moe-cache-modes-expert-reduction-adaptive-draft-head-subset`, telecode (proxy, `LlamaSupervisor`, `llamacpp/{argv,gguf_info,
 vram,cpu_topology}.py`) and stock llama.cpp b11609.
 
 The 0003 flags are:

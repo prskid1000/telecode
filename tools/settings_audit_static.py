@@ -9,7 +9,7 @@ ROOT = r"D:\Projects\Telecode"
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 STOCK = r"D:\Projects\Telecode\llama\llama-server.exe"
-PATCHED = r"D:\Projects\Telecode\build\test-bin-0008\llama-server.exe"
+PATCHED = r"D:\Projects\Telecode\build\test-bin-0016\llama-server.exe"
 
 tmp = tempfile.mkdtemp(prefix="audit_")
 SETTINGS = os.path.join(tmp, "settings.json")
@@ -88,8 +88,14 @@ for scope, table in (("global", A._GLOBAL_FLAG_SPECS), ("model", A._MODEL_FLAG_S
         # a few keys are only emitted together with their parent
         if key.startswith("moe_cache_") and key not in ("moe_cache_mib", "moe_cache_cpu_miss"):
             m.update({"moe_cache_mib": 1000, "moe_cache_cpu_miss": True, "moe_cache_route_bias": 0.05, "moe_cache_prewarm": True} if key in ("moe_cache_route_top", "moe_cache_route_scale") else {"moe_cache_mib": 1000, "moe_cache_cpu_miss": True})
-        if key.startswith("spec_draft_adaptive") or key == "spec_draft_head_subset":
+        if key.startswith("spec_draft_adaptive") or key in ("spec_draft_head_subset", "spec_draft_head_subset_ids", "spec_draft_n_ubatch"):
             g.update({"spec_type": "draft-mtp", "spec_draft_adaptive": True})
+        if key == "spec_draft_head_subset_ids":
+            g["spec_draft_head_subset"] = 1024  # the token list needs the subset
+        if key == "moe_reduce_thresh":
+            m["moe_reduce_min"] = 3  # the threshold needs the reduction
+        if key == "moe_cache_cpu_miss":
+            m["moe_cache_mib"] = 1000  # CPU miss mode needs the cache
         if key.startswith("moe_cache_prefill") or key == "moe_cache_staging_slots":
             m["moe_cache_prefill_share"] = 0.5
         write_settings(g, m)

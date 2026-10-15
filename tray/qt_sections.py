@@ -2566,6 +2566,12 @@ def _llama(window) -> QWidget:
     # Synthetic acceptance: a benchmarking aid, not a speed knob. It fakes the
     # accept/reject pattern of a draft model so spec-decode overhead can be
     # measured without one. Leave at 0 / empty for normal use.
+    spec_body.addWidget(_dependent(
+        _number_row("llamacpp.spec_draft_n_ubatch", "Draft Micro-Batch", 0, 8192, 64, 0, "tok",
+                     "--spec-draft-n-ubatch (llama.cpp b11641 or newer; a build without it is skipped automatically): the largest batch of the draft / MTP "
+                     "context. A smaller value spares VRAM: the draft's compute buffer (about 0.4-0.5 GB at 2048 on a 27B) follows it, and a draft step only "
+                     "ever decodes a few tokens. 0 = same as the main micro-batch."),
+        ["llamacpp.spec_type", "llamacpp.spec_default"], _spec_on))
     spec_body.addWidget(_number_row("llamacpp.spec_synth_len", "Synthetic Accept Length", 0, 64, 1, 0, "tok",
                                      "--spec-synth-len: target mean synthetic acceptance length, including "
                                      "the target token. 0 = off."))

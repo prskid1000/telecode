@@ -9,7 +9,7 @@ ROOT = r"D:\Projects\Telecode"
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 STOCK = r"D:\Projects\Telecode\llama\llama-server.exe"
-PATCHED = r"D:\Projects\Telecode\build\test-bin-0008\llama-server.exe"
+PATCHED = r"D:\Projects\Telecode\build\test-bin-0016\llama-server.exe"
 
 tmp = tempfile.mkdtemp(prefix="audit_")
 SETTINGS = os.path.join(tmp, "settings.json")

@@ -1,7 +1,7 @@
 # Test plan for the Strata port (run after all features are written)
 
 Patches under test: `patches/llama.cpp/0002-ggml-skip-negative-expert-ids-and-cpu-split-overlap.patch` and
-`0003-moe-cache-cpu-miss-prewarm-and-adaptive-draft.patch` (0003 needs 0002), plus the telecode side (`llamacpp/argv.py`,
+`0003-moe-cache-modes-expert-reduction-adaptive-draft-head-subset.patch` (0003 needs 0002), plus the telecode side (`llamacpp/argv.py`,
 `config.py`, `patcher.py`, `process.py`, `tray/qt_sections.py`, `llamacpp/gguf_info.py`, `llamacpp/cpu_topology.py`,
 `tools/moe_cache_bench.py`). Parameter coverage: `docs/strata-parity.md`.
 

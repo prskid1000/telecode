@@ -94,7 +94,7 @@ def _make_settings(args: argparse.Namespace) -> str:
     if m.get("path"):
         m["path"] = _abs(m["path"])
     if args.exe:
-        g["binary"] = args.exe
+        g["binary"] = os.path.abspath(args.exe)
 
     if not args.no_safe:
         for key in ("prio", "prio_batch"):
