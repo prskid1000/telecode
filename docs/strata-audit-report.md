@@ -107,6 +107,45 @@ Result of round one: patch 0003 +2140/-175 -> +1747/-39 (3112 -> 2449 lines); wh
 
 Checked without a GPU: `llama-server --help` of the new build is byte-identical to the old (865 lines, defaults and env names included); LRU fuzzer 160000 steps OK; the patch series applies in order to `git archive HEAD` and equals the working tree on all 34 files. **Not yet checked on the GPU (waiting for the emulator to be closed):** the graph change must give the same outputs as before (A1/A3/B hashes and the `compute-sanitizer` run).
 
+## 5d. Measured on the GPU after the simplifications and the new features (2026-10-15, low-power charger: speeds are indicative only)
+
+**Regression of the simplified build (35B, 21 configurations: stock-equal runs A1, A3 and 19 flag sets):** every output hash is identical to the build before the simplifications.
+
+**Fewer experts per token** (`--moe-expert-reduce-min/-thresh`, 35B, `n_cpu_moe` 26, against the full model by token probabilities):
+
+| min / threshold | result |
+|---|---|
+| off | identical to the full model (same hash) |
+| 6 / 0.4 | close: first differences at near-tied tokens (gap 0.03, 0.15), one prompt identical for 48 tokens |
+| 4 / 0.5 | some answers change (one token 0.877 -> 0.867 against the other choice, gap 0.75) |
+| 2 / 0.7 | broken (the first token's probability for `<think>` 0.96 -> 0.30) |
+
+Found by this test and fixed: the host-side expert copy for large batches (`llama_context::sched_copy_experts`) asserted on the -1 ids.
+
+**Memory plan of the 27B (llama.cpp's own dry run, no weights loaded; q4_0 KV, embedding and output on the CPU, `--parallel 2`):**
+
+| context | no MTP | with MTP (target + draft context) |
+|---|---|---|
+| 8192, micro-batch 2048 | 9667 MiB | 11449 MiB |
+| 8192, micro-batch 512 | 9177 MiB | 10569 MiB |
+| 32768, micro-batch 512 | 9719 MiB | 11207 MiB |
+| 60000, micro-batch 512 | 10334 MiB | **11925 MiB** (the real configuration: this is the level of the three crashes) |
+
+The CUDA runtime adds about 450 MiB that the plan does not count (measured: plan 10569 + ~450 = 11.0 GB, observed peak 11024 MiB). **The MTP layer of this GGUF is only 41 MiB** (earlier estimates of "a few hundred MB" were wrong); what MTP costs in VRAM is the draft context, the recurrent state copies and the compute buffers.
+
+**27B with MTP at ctx 8192, micro-batch 512 (hard kill at 11.3 GB), greedy, 2 prompts x 64 tokens:**
+
+| configuration | tok/s | peak VRAM | output |
+|---|---|---|---|
+| no MTP | 17.1 | 9622 MiB | reference |
+| MTP depth 3 | 23.2 | 11024 MiB | |
+| MTP depth 3 + `--spec-draft-head-subset 32768` | **34.3** | 11112 MiB | **identical to MTP without the subset** (same hash) |
+| MTP depth 4 + adaptive + head subset | 26.1 | 11412 MiB | near-tie differences only |
+
+The head subset is lossless (verification still uses the full head) and about +48% over plain MTP in this run.
+
+**Safety features built because of the crashes:** `llamacpp.vram_ceiling_mib` (kill above a level, from the spawn on), `llamacpp.preflight_vram` (refuse a start whose own plan + CUDA runtime + other programs passes the ceiling; tested: the real 27B + MTP at 60000 context is refused in under 3 seconds with the numbers), `vram_budget_mib` (budget for the stock fitter).
+
 ## 6. Not done yet (and why)
 
 - Hard crash #3 (bugcheck 0x20001 HYPERVISOR_ERROR, 2026-10-15 07:29) happened while the 27B ran with MTP + adaptive + head subset at ~11.9 GB VRAM. **No more 27B + MTP runs** (memory note `27b-mtp-crashes-laptop`). MTP is therefore covered by the CPU-only policy simulation (`tools/spec_policy_sim.cpp`) and by the lossless-output checks above, not by further GPU runs.
