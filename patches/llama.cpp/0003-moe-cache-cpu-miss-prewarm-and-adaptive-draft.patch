@@ -11,10 +11,10 @@ All off by default; stock behaviour is unchanged without the flags.
 Requires: 0002-ggml-skip-negative-expert-ids-and-cpu-split-overlap.patch
 
 diff --git a/common/arg.cpp b/common/arg.cpp
-index 6bc4a84e2..f21da51ad 100644
+index 6bc4a84e2..c357a3885 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
-@@ -2786,6 +2786,94 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -2786,6 +2786,101 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.moe_cache_size = (size_t) value*1024*1024;
          }
      ).set_env("LLAMA_ARG_MOE_CACHE_MIB"));
@@ -103,6 +103,13 @@ index 6bc4a84e2..f21da51ad 100644
 +        "use fewer experts per token: always the N best, of the others only those whose weight is at least --moe-expert-reduce-thresh times that of the best one. The skipped experts are not computed (on the CPU layers). Not used with the MoE cache, with expert biases or with LoRA. This changes the output. 0 = off (default: 0)");
 +    MC_FLOAT("--moe-expert-reduce-thresh", "F", moe_cache.reduce_thresh, v >= 0.0f && v <= 1.0f, "LLAMA_ARG_MOE_EXPERT_REDUCE_THRESH",
 +        "with --moe-expert-reduce-min, the weight an expert beyond the first N needs, as a fraction of the weight of the best one (default: 0.40)");
++    add_opt(common_arg(
++        {"--spec-draft-head-subset-ids"}, "FNAME",
++        "with --spec-draft-head-subset, keep the rows of the token ids in this text file (one per line, the most useful first) instead of the first tokens of the vocabulary (default: none)",
++        [](common_params & params, const std::string & value) {
++            params.moe_cache.head_subset_ids = value;
++        }
++    ).set_env("LLAMA_ARG_SPEC_DRAFT_HEAD_SUBSET_IDS"));
 +#undef MC_BOOL
 +#undef MC_INT
 +#undef MC_FLOAT
@@ -483,7 +490,7 @@ index 97250c2e8..c68d64e77 100644
      llama-memory-hybrid-iswa.cpp
      llama-memory-hybrid-idx.cpp
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 9ee64b566..d2cf9c259 100644
+index 9ee64b566..03aa17d60 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -9,6 +9,7 @@
@@ -504,7 +511,7 @@ index 9ee64b566..d2cf9c259 100644
  
      // initialized later
      cparams.pipeline_parallel = false;
-@@ -549,7 +553,25 @@ llama_context::llama_context(
+@@ -549,7 +553,26 @@ llama_context::llama_context(
          }
  
          if (cparams.moe_cache_size > 0) {
@@ -522,7 +529,8 @@ index 9ee64b566..d2cf9c259 100644
 +                    continue;
 +                }
 +                try {
-+                    head_subset = std::make_unique<llama_head_subset>(model, backend_buft[i], cparams.head_subset);
++                    head_subset = std::make_unique<llama_head_subset>(model, backend_buft[i], cparams.head_subset,
++                            params.moe_cache_params ? params.moe_cache_params->head_subset_ids : std::string());
 +                } catch (const std::exception & e) {
 +                    LLAMA_LOG_WARN("%s: no head subset: %s\n", __func__, e.what());
 +                }
@@ -531,7 +539,7 @@ index 9ee64b566..d2cf9c259 100644
          }
  
          sched_reserve();
-@@ -709,6 +731,7 @@ void llama_context::sched_new(size_t max_nodes, bool parallel) {
+@@ -709,6 +732,7 @@ void llama_context::sched_new(size_t max_nodes, bool parallel) {
              backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, parallel, cparams.op_offload));
  
      ggml_backend_sched_set_copy_callback(sched.get(), sched_copy_experts, this);
@@ -539,7 +547,7 @@ index 9ee64b566..d2cf9c259 100644
      ggml_backend_sched_set_realloc_callback(sched.get(), sched_graph_realloc, this);
  }
  
-@@ -2700,6 +2723,7 @@ llm_graph_params llama_context::graph_params(
+@@ -2700,6 +2724,7 @@ llm_graph_params llama_context::graph_params(
          /*.mctx        =*/ mctx,
          /*.cross       =*/ &cross,
          /*.moe_cache   =*/ moe_cache.get(),
@@ -547,7 +555,7 @@ index 9ee64b566..d2cf9c259 100644
          /*.prec_policy =*/ &model.prec_policy,
          /*.hdmd        =*/ model.hdmd.rot.empty() ? nullptr : &model.hdmd,
          /*.samplers    =*/ sampling.samplers,
-@@ -3712,6 +3736,9 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
+@@ -3712,6 +3737,9 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
              ret[buft].context += size;
          }
      }
@@ -557,7 +565,7 @@ index 9ee64b566..d2cf9c259 100644
      if (model.hparams.no_alloc) {
          for (size_t i = 0; i < backends.size(); ++i) {
              ggml_backend_t             backend = backends[i].get();
-@@ -4002,6 +4029,8 @@ llama_context_params llama_context_default_params() {
+@@ -4002,6 +4030,8 @@ llama_context_params llama_context_default_params() {
          /*.type_k                      =*/ GGML_TYPE_F16,
          /*.type_v                      =*/ GGML_TYPE_F16,
          /*.moe_cache_size              =*/ 0,
@@ -885,10 +893,10 @@ index e853a0269..05dc1da22 100644
      // inputs
 diff --git a/src/llama-head-subset.cpp b/src/llama-head-subset.cpp
 new file mode 100644
-index 000000000..e23d146a1
+index 000000000..d65d00924
 --- /dev/null
 +++ b/src/llama-head-subset.cpp
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,109 @@
 +#include "llama-head-subset.h"
 +
 +#include "llama-impl.h"
@@ -897,10 +905,12 @@ index 000000000..e23d146a1
 +#include <algorithm>
 +#include <cinttypes>
 +#include <cstdint>
++#include <fstream>
++#include <numeric>
 +#include <stdexcept>
 +#include <vector>
 +
-+llama_head_subset::llama_head_subset(const llama_model & model, ggml_backend_buffer_type_t dev_buft, int32_t n_req) {
++llama_head_subset::llama_head_subset(const llama_model & model, ggml_backend_buffer_type_t dev_buft, int32_t n_req, const std::string & ids_file) {
 +    src = model.output;
 +    const ggml_tensor * src_scale = model.output_s;
 +    for (const auto & layer : model.layers) {
@@ -922,7 +932,27 @@ index 000000000..e23d146a1
 +    const int64_t n_vocab = src->ne[1];
 +    // the special tokens of the common vocabularies are the last ones
 +    const int64_t n_last  = std::min<int64_t>(1024, n_vocab/4);
-+    const int64_t n_first = std::min<int64_t>(std::max<int64_t>(n_req, 1), n_vocab - n_last);
++    // the first rows: the ranked tokens of ids_file, else the first tokens of the vocabulary (the most frequent ones of a BPE vocabulary)
++    std::vector<int32_t> first;
++    if (!ids_file.empty()) {
++        std::ifstream in(ids_file);
++        std::vector<char> taken(n_vocab, 0);
++        int64_t id;
++        while ((int64_t) first.size() < std::max<int64_t>(n_req, 1) && in >> id) {
++            if (id >= 0 && id < n_vocab - n_last && !taken[id]) {
++                taken[id] = 1;
++                first.push_back((int32_t) id);
++            }
++        }
++        if (first.empty()) {
++            LLAMA_LOG_WARN("%s: no usable token ids in '%s', using the first tokens of the vocabulary\n", __func__, ids_file.c_str());
++        }
++    }
++    if (first.empty()) {
++        first.resize(std::min<int64_t>(std::max<int64_t>(n_req, 1), n_vocab - n_last));
++        std::iota(first.begin(), first.end(), 0);
++    }
++    const int64_t n_first = first.size();
 +    n_rows = n_first + n_last;
 +    if (n_rows >= n_vocab) {
 +        throw std::runtime_error("the subset would be the whole head");
@@ -955,13 +985,18 @@ index 000000000..e23d146a1
 +    // the memory fit of the server loads the model without weights: the buffer is counted, nothing is copied
 +    if (!model.hparams.no_alloc) {
 +        const size_t row = src->nb[1];
-+        ggml_backend_tensor_set(w, src->data, 0, n_first*row);
++        for (int64_t i = 0; i < n_first; ) {
++            int64_t run = 1; // consecutive token ids are one copy
++            while (i + run < n_first && first[i + run] == first[i] + run) {
++                run++;
++            }
++            ggml_backend_tensor_set(w, (const uint8_t *) src->data + (size_t) first[i]*row, i*row, run*row);
++            i += run;
++        }
 +        ggml_backend_tensor_set(w, (const uint8_t *) src->data + (n_vocab - n_last)*row, n_first*row, n_last*row);
 +
 +        std::vector<int32_t> tokens(n_rows);
-+        for (int64_t i = 0; i < n_first; ++i) {
-+            tokens[i] = (int32_t) i;
-+        }
++        std::copy(first.begin(), first.end(), tokens.begin());
 +        for (int64_t i = 0; i < n_last; ++i) {
 +            tokens[n_first + i] = (int32_t) (n_vocab - n_last + i);
 +        }
@@ -973,16 +1008,17 @@ index 000000000..e23d146a1
 +}
 diff --git a/src/llama-head-subset.h b/src/llama-head-subset.h
 new file mode 100644
-index 000000000..ae31b67e8
+index 000000000..d6aa0cc65
 --- /dev/null
 +++ b/src/llama-head-subset.h
-@@ -0,0 +1,28 @@
+@@ -0,0 +1,30 @@
 +#pragma once
 +
 +#include "ggml-backend.h"
 +#include "ggml-cpp.h"
 +
 +#include <memory>
++#include <string>
 +
 +struct llama_model;
 +
@@ -990,7 +1026,8 @@ index 000000000..ae31b67e8
 +// a draft head step that only needs likely tokens then does not read the whole output matrix from host memory
 +struct llama_head_subset {
 +    // throws if the model has no output head in host memory that can be split by rows
-+    llama_head_subset(const llama_model & model, ggml_backend_buffer_type_t dev_buft, int32_t n_req);
++    // ids_file: token ids (one per line, the most useful first) to keep instead of the first n_req tokens of the vocabulary, empty = the first tokens
++    llama_head_subset(const llama_model & model, ggml_backend_buffer_type_t dev_buft, int32_t n_req, const std::string & ids_file = {});
 +
 +    const ggml_tensor * src = nullptr; // the full output head the subset was taken from
 +    ggml_tensor * w   = nullptr;       // [n_embd, n_rows] same type as the full head
@@ -2341,10 +2378,10 @@ index f22d986dc..71b9106f2 100644
  
  ggml_tensor * llama_moe_cache::get_experts(const ggml_tensor * w) const {
 diff --git a/src/llama-moe-cache.h b/src/llama-moe-cache.h
-index 3b6726b86..85d5c287b 100644
+index 3b6726b86..bc9c73c15 100644
 --- a/src/llama-moe-cache.h
 +++ b/src/llama-moe-cache.h
-@@ -4,23 +4,83 @@
+@@ -4,23 +4,84 @@
  
  #include <map>
  #include <memory>
@@ -2382,6 +2419,7 @@ index 3b6726b86..85d5c287b 100644
 +    float prefill_share = 0.0f;
 +    int32_t prefill_max_tokens = 2048;
 +    int32_t staging_slots = 64;
++    std::string head_subset_ids;   // file with token ids (one per line, the most useful first) for the rows of the draft head subset, empty = the first tokens
 +    int32_t reduce_min = 0;        // fewer experts per token: always the best reduce_min, 0 = off (not a cache option: it also works without a cache)
 +    float   reduce_thresh = 0.4f;  // of the others only those with at least this fraction of the weight of the best one
 +    int32_t n_ubatch = 0; // rows of a micro batch (0 = unknown), bounds the host inputs of the prompt batches
