@@ -216,7 +216,7 @@ index 2632ae3a0..a09504231 100644
                      MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = { id, iid1 };
                      matrix_row_counts[i02] += 1;
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 9fe618f85..4a6903951 100644
+index 9fe618f85..71f70328f 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -30,6 +30,7 @@
@@ -251,7 +251,7 @@ index 9fe618f85..4a6903951 100644
  
      GGML_ASSERT(src1->type == GGML_TYPE_F32);
      GGML_ASSERT(dst->type  == GGML_TYPE_F32);
-@@ -2191,6 +2196,31 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor *
+@@ -2191,6 +2196,38 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor *
          nb1, nb2, nb3, stream);
  }
  
@@ -259,6 +259,13 @@ index 9fe618f85..4a6903951 100644
 +    const ggml_tensor * ids = dst->src[2];
 +    if (!ggml_mul_mat_id_skip_neg(dst)) {
 +        ggml_cuda_mul_mat_id_impl(ctx, dst, ids);
++        return;
++    }
++
++    // one token on a quantized matrix: the vector kernel reads the ids itself and leaves a skipped expert (id < 0) out
++    if (dst->src[1]->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 && dst->ne[2] == 1 && ggml_is_quantized(dst->src[0]->type) &&
++            get_mmvq_mmid_max_batch(dst->src[0]->type, ggml_cuda_info().devices[ggml_cuda_get_device()].cc) >= 1) {
++        ggml_cuda_mul_mat_vec_q(ctx, dst->src[0], dst->src[1], ids, dst);
 +        return;
 +    }
 +
@@ -283,7 +290,7 @@ index 9fe618f85..4a6903951 100644
  static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct ggml_tensor * dst) {
      switch (dst->op) {
          case GGML_OP_ARGMAX:
-@@ -5125,6 +5155,32 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
+@@ -5125,6 +5162,32 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
      }
  }
  
@@ -316,7 +323,7 @@ index 9fe618f85..4a6903951 100644
  static const ggml_backend_i ggml_backend_cuda_interface = {
      /* .get_name                = */ ggml_backend_cuda_get_name,
      /* .free                    = */ ggml_backend_cuda_free,
-@@ -5142,6 +5198,7 @@ static const ggml_backend_i ggml_backend_cuda_interface = {
+@@ -5142,6 +5205,7 @@ static const ggml_backend_i ggml_backend_cuda_interface = {
      /* .event_record            = */ ggml_backend_cuda_event_record,
      /* .event_wait              = */ ggml_backend_cuda_event_wait,
      /* .graph_optimize          = */ ggml_backend_cuda_graph_optimize,
@@ -324,7 +331,7 @@ index 9fe618f85..4a6903951 100644
  };
  
  static ggml_guid_t ggml_backend_cuda_guid() {
-@@ -5942,6 +5999,15 @@ static void ggml_backend_cuda_device_event_synchronize(ggml_backend_dev_t dev, g
+@@ -5942,6 +6006,15 @@ static void ggml_backend_cuda_device_event_synchronize(ggml_backend_dev_t dev, g
      CUDA_CHECK(cudaEventSynchronize((cudaEvent_t)event->context));
  }
  
@@ -340,7 +347,7 @@ index 9fe618f85..4a6903951 100644
  static const ggml_backend_device_i ggml_backend_cuda_device_interface = {
      /* .get_name                = */ ggml_backend_cuda_device_get_name,
      /* .get_description         = */ ggml_backend_cuda_device_get_description,
-@@ -5958,6 +6024,7 @@ static const ggml_backend_device_i ggml_backend_cuda_device_interface = {
+@@ -5958,6 +6031,7 @@ static const ggml_backend_device_i ggml_backend_cuda_device_interface = {
      /* .event_new               = */ ggml_backend_cuda_device_event_new,
      /* .event_free              = */ ggml_backend_cuda_device_event_free,
      /* .event_synchronize       = */ ggml_backend_cuda_device_event_synchronize,
@@ -431,6 +438,27 @@ index 74c2db433..cad378bf6 100644
  void ggml_cuda_launch_mm_ids_helper(
          const int32_t * ids, int32_t * ids_src1, int32_t * ids_dst, int32_t * expert_bounds,
          int n_experts, int n_tokens, int n_expert_used, int nchannels_y, int si1, int sis1, bool write_inverse, cudaStream_t stream);
+diff --git a/ggml/src/ggml-cuda/mmvq.cu b/ggml/src/ggml-cuda/mmvq.cu
+index 8068ba364..f48ae46c3 100644
+--- a/ggml/src/ggml-cuda/mmvq.cu
++++ b/ggml/src/ggml-cuda/mmvq.cu
+@@ -642,6 +642,16 @@ static __global__ void mul_mat_vec_q(
+     channel_y  = ncols_dst == 1 && ids ? fastmodulo(channel_dst, nchannels_y) : channel_dst;
+     sample_dst = blockIdx.z;
+ 
++    if constexpr (ncols_dst == 1 && !has_fusion) {
++        // a skipped expert (id < 0, ggml_mul_mat_id_set_skip_neg): write zeros and leave before reading any weights
++        if (ids && int32_t(channel_x) < 0) {
++            if (threadIdx.y == 0 && threadIdx.x < rows_per_cuda_block && (rows_per_cuda_block == 1 || uint32_t(row0 + threadIdx.x) < stride_col_dst)) {
++                dst[sample_dst*stride_sample_dst + channel_dst*stride_channel_dst + row0 + threadIdx.x] = 0.0f;
++            }
++            return;
++        }
++    }
++
+     const uint32_t sample_x    = fastdiv(sample_dst, sample_ratio);
+     const uint32_t sample_y    = sample_dst;
+ 
 diff --git a/ggml/src/ggml.c b/ggml/src/ggml.c
 index 01dc8d05c..e53f95c20 100644
 --- a/ggml/src/ggml.c
