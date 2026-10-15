@@ -372,7 +372,7 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("moe_cache_upload_batch",          "--moe-cache-upload-batch",          "flag"),
     ("moe_cache_prefill_share",         "--moe-cache-prefill-share",         "value_nz"),
     ("moe_cache_prefill_max_tokens",    "--moe-cache-prefill-max-tokens",    "value_nz"),
-    ("moe_cache_staging_slots",         "--moe-cache-staging-slots",         "value_nz"),
+    ("moe_cache_staging_slots",         "--moe-cache-staging-slots",         "value"),
 
     # RoPE / YaRN (0 = model default; YaRN factors default to -1.00 = auto,
     # so emit only when explicitly set to a non-zero override).

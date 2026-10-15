@@ -134,9 +134,20 @@ struct fuzz {
             if (lru.round_due(p)) {
                 lru.plan_round(p, round_fills);
                 check("plan_round", il);
+                // a slot filled twice in a round is uploaded in an order the planner does not know
+                for (size_t a = 0; a < round_fills.size(); ++a) {
+                    for (size_t b = a + 1; b < round_fills.size(); ++b) {
+                        CHECK(round_fills[a].second.slot != round_fills[b].second.slot, "round fills slot %d twice", round_fills[a].second.slot);
+                    }
+                }
             }
         } else if (op == 6 && il + 1 < n_layer) {
             const auto ids = random_ids(1, n_used);
+            if (n_stage > 0) {
+                size_t nh = 0;
+                const auto pre = random_ids(40, n_used);
+                lru.plan_prefill(il + 1, pre.data(), pre.size(), 0.5f, n_stage, lru.n_slots, fills, nh);
+            }
             // plan_ahead must not take a slot of the current call: simulate the current call first
             const auto cur = random_ids(2, n_used);
             size_t n_hit = 0;
@@ -149,6 +160,14 @@ struct fuzz {
             }
             lru.plan_ahead(il + 1, ids.data(), ids.size(), 2, p.evict_window, fills);
             check("plan_ahead", il + 1);
+            for (int e = 0; e < n_expert; ++e) {
+                CHECK(maps[il + 1][e] < lru.n_slots, "plan_ahead left a staging slot mapped in layer %d", il + 1);
+            }
+            for (size_t a = 0; a < fills.size(); ++a) {
+                for (size_t b = a + 1; b < fills.size(); ++b) {
+                    CHECK(fills[a].slot != fills[b].slot, "plan_ahead fills slot %d twice", fills[a].slot);
+                }
+            }
             for (auto & b : before) {
                 CHECK(maps[il][b.first] == b.second, "plan_ahead evicted a slot the running layer uses: layer %d expert %d", il, b.first);
             }
