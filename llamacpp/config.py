@@ -134,6 +134,12 @@ def vram_ceiling_mib() -> int:
     return as_int(app_config.get_nested("llamacpp.vram_ceiling_mib", 0))
 
 
+def preflight_vram() -> bool:
+    """Before every start, ask llama-server for its own memory plan (no weights loaded) and refuse to start when the plan plus what other programs
+    already use passes `vram_ceiling_mib`. Needs a ceiling > 0 and nvidia-smi. Not a llama-server flag, never reaches argv."""
+    return bool(app_config.get_nested("llamacpp.preflight_vram", False))
+
+
 def min_free_vram_mib() -> int:
     """Refuse to spawn llama-server when the first NVIDIA GPU has less free VRAM (MiB).
 

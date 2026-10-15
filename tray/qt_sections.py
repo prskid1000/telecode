@@ -2230,6 +2230,14 @@ def _llama(window) -> QWidget:
                                       "server only costs a reload (the request that was waiting fails, the next one starts it again). Counts the whole "
                                       "GPU, other programs included. 11878 = 11.6 GB. 0 = off. Needs nvidia-smi."))
 
+    spawn_body.addWidget(_dependent(
+        _toggle_row("llamacpp.preflight_vram", "Check the Memory Plan Before Start",
+                    "Before every start, run llama-server for a few seconds without loading the weights and read the memory it plans to use (the model, the "
+                    "KV cache, the compute buffers, the draft / MTP context and the head subset, all counted by llama.cpp itself). When that plus what other "
+                    "programs already use passes the VRAM Ceiling, the start is refused with the numbers instead of loading until the GPU is full. "
+                    "Costs a few seconds per start. Needs the VRAM Ceiling above and nvidia-smi."),
+        ["llamacpp.vram_ceiling_mib"], lambda c: float(c or 0) > 0))
+
     spawn_body.addWidget(_section_header("Scheduling"))
     spawn_body.addWidget(_line_row("llamacpp.cpu_mask", "CPU Mask",
                                     "hex, e.g. c03c03 — empty = all cores",
