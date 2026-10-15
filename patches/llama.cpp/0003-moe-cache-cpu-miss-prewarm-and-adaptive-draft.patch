@@ -1,3 +1,4 @@
+Title: MoE cache modes, adaptive draft, head subset
 Add-on: MoE expert cache modes for models whose experts live in host memory, an adaptive speculative draft length, and a GPU subset of the output head for draft steps.
   --moe-cache-cpu-miss (+ --moe-cache-promote-after/-max/-gain, --moe-cache-decay, --moe-cache-cpu-miss-max-tokens)
   --moe-cache-stats-file, --moe-cache-prewarm, --moe-cache-route-bias/-route-top/-route-scale, --moe-cache-foresight, --moe-cache-tail-skip(-rank, -auto-off)
@@ -10,369 +11,126 @@ All off by default; stock behaviour is unchanged without the flags.
 Requires: 0002-ggml-skip-negative-expert-ids-and-cpu-split-overlap.patch
 
 diff --git a/common/arg.cpp b/common/arg.cpp
-index 6bc4a84e2..a2c149e82 100644
+index 6bc4a84e2..c7b979f4b 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
-@@ -2786,6 +2786,315 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -2786,6 +2786,90 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.moe_cache_size = (size_t) value*1024*1024;
          }
      ).set_env("LLAMA_ARG_MOE_CACHE_MIB"));
-+    add_opt(common_arg(
-+        {"--moe-cache-cpu-miss"},
-+        {"--no-moe-cache-cpu-miss"},
-+        "compute the experts that are not in the MoE cache on the CPU, in parallel with the GPU, instead of uploading them (default: disabled)",
-+        [](common_params & params, bool value) {
-+            params.moe_cache_cpu_miss = value;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_CPU_MISS"));
-+    add_opt(common_arg(
-+        {"--moe-cache-promote-after"}, "N",
-+        string_format("misses of an expert before it is uploaded to the MoE cache, with --moe-cache-cpu-miss (default: %d)", params.moe_cache_promote_after),
-+        [](common_params & params, int value) {
-+            if (value < 0) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.moe_cache_promote_after = value;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_PROMOTE_AFTER"));
-+    add_opt(common_arg(
-+        {"--moe-cache-promote-max"}, "N",
-+        string_format("max experts uploaded to the MoE cache per layer and token, 0 = no limit (default: %d)", params.moe_cache_promote_max),
-+        [](common_params & params, int value) {
-+            if (value < 0) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.moe_cache_promote_max = value;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_PROMOTE_MAX"));
-+    add_opt(common_arg(
-+        {"--moe-cache-decay"}, "N",
-+        string_format("halve the MoE cache miss counts every N tokens, 0 = never (default: %d)", params.moe_cache_decay),
-+        [](common_params & params, int value) {
-+            if (value < 0) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.moe_cache_decay = value;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_DECAY"));
-+    add_opt(common_arg(
-+        {"--moe-cache-cpu-miss-max-tokens"}, "N",
-+        string_format("largest batch that computes the MoE cache misses on the CPU, larger batches use the experts as without --moe-cache-cpu-miss (default: %d)", params.moe_cache_cpu_miss_max_tokens),
-+        [](common_params & params, int value) {
-+            if (value < 1 || value > 31) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.moe_cache_cpu_miss_max_tokens = value;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_CPU_MISS_MAX_TOKENS"));
++    // the add-on options below differ only in flag, field and range: one macro call each (a handler cannot capture, so the lambda lives in the macro)
++#define MC_BOOL(flag, neg, field, env, help) \
++    add_opt(common_arg({flag}, {neg}, help, [](common_params & params, bool value) { params.field = value; }).set_env(env))
++#define MC_INT(flag, hint, field, bad, env, help) \
++    add_opt(common_arg({flag}, hint, help, [](common_params & params, int value) { \
++        if (bad) { throw std::invalid_argument("invalid value"); } \
++        params.field = value; }).set_env(env))
++#define MC_FLOAT(flag, hint, field, ok, env, help) \
++    add_opt(common_arg({flag}, hint, help, [](common_params & params, const std::string & value) { \
++        const float v = std::stof(value); \
++        if (!(ok)) { throw std::invalid_argument("invalid value"); } \
++        params.field = v; }).set_env(env))
++    MC_BOOL("--moe-cache-cpu-miss", "--no-moe-cache-cpu-miss", moe_cache.cpu_miss, "LLAMA_ARG_MOE_CACHE_CPU_MISS",
++        "compute the experts that are not in the MoE cache on the CPU, in parallel with the GPU, instead of uploading them (default: disabled)");
++    MC_INT("--moe-cache-promote-after", "N", moe_cache.promote_after, value < 0, "LLAMA_ARG_MOE_CACHE_PROMOTE_AFTER",
++        string_format("misses of an expert before it is uploaded to the MoE cache, with --moe-cache-cpu-miss (default: %d)", params.moe_cache.promote_after));
++    MC_INT("--moe-cache-promote-max", "N", moe_cache.promote_max, value < 0, "LLAMA_ARG_MOE_CACHE_PROMOTE_MAX",
++        string_format("max experts uploaded to the MoE cache per layer and token, 0 = no limit (default: %d)", params.moe_cache.promote_max));
++    MC_INT("--moe-cache-decay", "N", moe_cache.decay, value < 0, "LLAMA_ARG_MOE_CACHE_DECAY",
++        string_format("halve the MoE cache miss counts every N tokens, 0 = never (default: %d)", params.moe_cache.decay));
++    MC_INT("--moe-cache-cpu-miss-max-tokens", "N", moe_cache.max_tokens, value < 1 || value > 31, "LLAMA_ARG_MOE_CACHE_CPU_MISS_MAX_TOKENS",
++        string_format("largest batch that computes the MoE cache misses on the CPU, larger batches use the experts as without --moe-cache-cpu-miss (default: %d)", params.moe_cache.max_tokens));
 +    add_opt(common_arg(
 +        {"--moe-cache-stats-file"}, "FNAME",
 +        "file that keeps how often each expert is used, updated while running and read at start (default: none)",
 +        [](common_params & params, const std::string & value) {
-+            params.moe_cache_stats_file = value;
++            params.moe_cache.stats_file = value;
 +        }
 +    ).set_env("LLAMA_ARG_MOE_CACHE_STATS_FILE"));
-+    add_opt(common_arg(
-+        {"--moe-cache-prewarm"},
-+        {"--no-moe-cache-prewarm"},
-+        "fill the MoE cache with the most used experts of --moe-cache-stats-file at the first token instead of starting empty (default: disabled)",
-+        [](common_params & params, bool value) {
-+            params.moe_cache_prewarm = value;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_PREWARM"));
-+    add_opt(common_arg(
-+        {"--moe-cache-route-bias"}, "F",
-+        "add F to the router score of the experts that are in the MoE cache when a token picks its experts, so it prefers them. This changes the output. 0 = off (default: 0)",
-+        [](common_params & params, const std::string & value) {
-+            const float v = std::stof(value);
-+            if (!(v >= 0.0f)) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.moe_cache_route_bias = v;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_ROUTE_BIAS"));
-+    add_opt(common_arg(
-+        {"--moe-cache-promote-gain"}, "F",
-+        "with --moe-cache-cpu-miss, an expert enters the cache only if it was used F times more than the expert it evicts, 0 = always (default: 0)",
-+        [](common_params & params, const std::string & value) {
-+            const float v = std::stof(value);
-+            if (!(v >= 0.0f)) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.moe_cache_promote_gain = v;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_PROMOTE_GAIN"));
-+    add_opt(common_arg(
-+        {"--moe-cache-foresight"}, "N",
-+        "with --moe-cache-cpu-miss, predict the experts of the next layer from the current one and upload up to N missing ones during this layer, 0 = off (default: 0)",
-+        [](common_params & params, int value) {
-+            if (value < 0) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.moe_cache_foresight = value;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_FORESIGHT"));
-+    add_opt(common_arg(
-+        {"--moe-cache-tail-skip"}, "N",
-+        "with --moe-cache-cpu-miss and several tokens in a batch (speculative verification), compute only the N cache misses with the highest weight per token and skip the rest. This changes the output. 0 = compute all (default: 0)",
-+        [](common_params & params, int value) {
-+            if (value < 0) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.moe_cache_tail_skip = value;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_TAIL_SKIP"));
-+    add_opt(common_arg(
-+        {"--moe-cache-evict-window"}, "N",
-+        "when a cache slot is needed, give up the least used of the N least recently used slots instead of the least recently used one, 0 = plain LRU (default: 0)",
-+        [](common_params & params, int value) {
-+            if (value < 0 || value > 64) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.moe_cache_evict_window = value;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_EVICT_WINDOW"));
-+    add_opt(common_arg(
-+        {"--moe-cache-pcie-share"}, "F",
-+        "with --moe-cache-cpu-miss, this fraction (0-1) of the missed experts of a call is uploaded and computed on the GPU in that call instead of on the CPU, most used first, 0 = all on the CPU (default: 0.0)",
-+        [](common_params & params, const std::string & value) {
-+            const float v = std::stof(value);
-+            if (!(v >= 0.0f && v <= 1.0f)) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.moe_cache_pcie_share = v;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_PCIE_SHARE"));
-+    add_opt(common_arg(
-+        {"--moe-cache-pcie-max"}, "N",
-+        "most experts per layer and call uploaded and computed on the GPU at once, with --moe-cache-pcie-share (default: 2)",
-+        [](common_params & params, int value) {
-+            if (value < 0 || value > 256) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.moe_cache_pcie_max = value;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_PCIE_MAX"));
-+    add_opt(common_arg(
-+        {"--moe-cache-tail-skip-rank"}, "N",
-+        "with --moe-cache-cpu-miss and several tokens in a batch, skip a missed expert when every token ranks it N-th or lower by weight. This changes the output. 0 = off (default: 0)",
-+        [](common_params & params, int value) {
-+            if (value < 0 || value > 256) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.moe_cache_tail_rank = value;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_TAIL_SKIP_RANK"));
-+    add_opt(common_arg(
-+        {"--moe-cache-tail-skip-auto-off"}, "PCT",
-+        "do not skip experts (--moe-cache-tail-skip-rank) when this percent or more of the experts of the batch are in the cache (default: 90)",
-+        [](common_params & params, int value) {
-+            if (value < 0 || value > 100) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.moe_cache_tail_auto_off = value;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_TAIL_SKIP_AUTO_OFF"));
-+    add_opt(common_arg(
-+        {"--moe-cache-route-top"}, "N",
-+        "with --moe-cache-route-bias, the N highest scored experts of a token are always selected, whatever the bias, 0 = none (default: 0)",
-+        [](common_params & params, int value) {
-+            if (value < 0 || value > 256) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.moe_cache_route_top = value;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_ROUTE_TOP"));
-+    add_opt(common_arg(
-+        {"--moe-cache-route-scale"},
-+        {"--no-moe-cache-route-scale"},
-+        "with --moe-cache-route-bias, scale the bias of a token by the gap between its best and its last selected score (default: disabled)",
-+        [](common_params & params, bool value) {
-+            params.moe_cache_route_scale = value;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_ROUTE_SCALE"));
-+    add_opt(common_arg(
-+        {"--moe-cache-async-upload"},
-+        {"--no-moe-cache-async-upload"},
-+        "with --moe-cache-cpu-miss, upload promoted and predicted experts on a second stream so they overlap with compute (best with pinned host memory, GGML_CUDA_REGISTER_HOST=1) (default: disabled)",
-+        [](common_params & params, bool value) {
-+            params.moe_cache_async_upload = value;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_ASYNC_UPLOAD"));
-+    add_opt(common_arg(
-+        {"--moe-cache-swap-every"}, "N",
-+        "with --moe-cache-cpu-miss, promote experts in rounds, every N tokens, choosing the most missed experts of all layers together, 0 = promote in every call (default: 0)",
-+        [](common_params & params, int value) {
-+            if (value < 0 || value > 100000) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.moe_cache_swap_every = value;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_SWAP_EVERY"));
-+    add_opt(common_arg(
-+        {"--moe-cache-swap-max"}, "N",
-+        "most experts promoted per round (--moe-cache-swap-every), 0 = no limit (default: 0)",
-+        [](common_params & params, int value) {
-+            if (value < 0 || value > 100000) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.moe_cache_swap_max = value;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_SWAP_MAX"));
-+    add_opt(common_arg(
-+        {"--moe-cache-pcie-auto"},
-+        {"--no-moe-cache-pcie-auto"},
-+        "with --moe-cache-cpu-miss, tune the PCIe share of misses while running: every window of tokens it moves the share up or down, keeps what makes the tokens faster, and settles (--moe-cache-pcie-share is the starting value) (default: disabled)",
-+        [](common_params & params, bool value) {
-+            params.moe_cache_pcie_auto = value;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_PCIE_AUTO"));
-+    add_opt(common_arg(
-+        {"--moe-cache-pcie-auto-window"}, "N",
-+        "tokens per measurement of the automatic PCIe share (--moe-cache-pcie-auto) (default: 32)",
-+        [](common_params & params, int value) {
-+            if (value < 4 || value > 4096) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.moe_cache_pcie_auto_window = value;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_PCIE_AUTO_WINDOW"));
-+    add_opt(common_arg(
-+        {"--moe-cache-upload-batch"},
-+        {"--no-moe-cache-upload-batch"},
-+        "submit the expert uploads of a call as one batch of copies (one driver call) instead of one copy each, and send the uploads for several layers together (default: disabled)",
-+        [](common_params & params, bool value) {
-+            params.moe_cache_upload_batch = value;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_UPLOAD_BATCH"));
-+    add_opt(common_arg(
-+        {"--moe-cache-prefill-share"}, "F",
-+        "with --moe-cache-cpu-miss, in prompt batches above --moe-cache-cpu-miss-max-tokens this fraction (0-1) of the missed experts is computed on the CPU while the GPU computes the others, uploaded through staging slots, and the cache is left alone. 0 = off (the experts are copied to the GPU as without the cache) (default: 0.0)",
-+        [](common_params & params, const std::string & value) {
-+            const float v = std::stof(value);
-+            if (!(v >= 0.0f && v <= 1.0f)) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.moe_cache_prefill_share = v;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_PREFILL_SHARE"));
-+    add_opt(common_arg(
-+        {"--moe-cache-prefill-max-tokens"}, "N",
-+        "largest prompt batch that uses --moe-cache-prefill-share, bigger batches are copied to the GPU as without the cache (default: 2048)",
-+        [](common_params & params, int value) {
-+            if (value < 32 || value > 16384) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.moe_cache_prefill_max_tokens = value;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_PREFILL_MAX_TOKENS"));
-+    add_opt(common_arg(
-+        {"--moe-cache-staging-slots"}, "N",
-+        "cache slots kept apart for the experts a prompt batch uploads (--moe-cache-prefill-share), per group of layers, half of the cache at most (default: 64)",
-+        [](common_params & params, int value) {
-+            if (value < 0 || value > 4096) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.moe_cache_staging_slots = value;
-+        }
-+    ).set_env("LLAMA_ARG_MOE_CACHE_STAGING_SLOTS"));
-+    add_opt(common_arg(
-+        {"--spec-draft-adaptive"},
-+        {"--no-spec-draft-adaptive"},
-+        "choose the length of each speculative draft from the measured acceptance and round time, up to --spec-draft-n-max (default: disabled)",
-+        [](common_params & params, bool value) {
-+            params.speculative.adaptive = value;
-+        }
-+    ).set_env("LLAMA_ARG_SPEC_DRAFT_ADAPTIVE"));
-+    add_opt(common_arg(
-+        {"--spec-draft-adaptive-min-gain"}, "F",
-+        string_format("a draft must beat not drafting by this fraction of tokens per ms, with --spec-draft-adaptive (default: %.2f)", (double) params.speculative.adaptive_min_gain),
-+        [](common_params & params, const std::string & value) {
-+            const float v = std::stof(value);
-+            if (!(v >= 0.0f && v <= 1.0f)) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.speculative.adaptive_min_gain = v;
-+        }
-+    ).set_env("LLAMA_ARG_SPEC_DRAFT_ADAPTIVE_MIN_GAIN"));
-+    add_opt(common_arg(
-+        {"--spec-draft-adaptive-ema"}, "F",
-+        string_format("weight of a new round in the acceptance and time estimates, with --spec-draft-adaptive (default: %.2f)", (double) params.speculative.adaptive_ema),
-+        [](common_params & params, const std::string & value) {
-+            const float v = std::stof(value);
-+            if (!(v > 0.0f && v <= 1.0f)) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.speculative.adaptive_ema = v;
-+        }
-+    ).set_env("LLAMA_ARG_SPEC_DRAFT_ADAPTIVE_EMA"));
-+    add_opt(common_arg(
-+        {"--spec-draft-adaptive-probe"}, "N",
-+        string_format("rounds between tries of a draft length next to the best one, 0 = never, with --spec-draft-adaptive (default: %d)", params.speculative.adaptive_probe),
-+        [](common_params & params, int value) {
-+            if (value < 0) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.speculative.adaptive_probe = value;
-+        }
-+    ).set_env("LLAMA_ARG_SPEC_DRAFT_ADAPTIVE_PROBE"));
-+    add_opt(common_arg(
-+        {"--spec-draft-head-subset"}, "N",
-+        "keep N rows of the output head in device memory (the first N tokens of the vocabulary and the last 1024, the special ones) and let the MTP draft steps choose among them, instead of reading the whole head from host memory, 0 = off (default: 0)",
-+        [](common_params & params, int value) {
-+            if (value < 0 || value > 10000000) {
-+                throw std::invalid_argument("invalid value");
-+            }
-+            params.speculative.draft.head_subset = value;
-+        }
-+    ).set_env("LLAMA_ARG_SPEC_DRAFT_HEAD_SUBSET"));
++    MC_BOOL("--moe-cache-prewarm", "--no-moe-cache-prewarm", moe_cache.prewarm, "LLAMA_ARG_MOE_CACHE_PREWARM",
++        "fill the MoE cache with the most used experts of --moe-cache-stats-file at the first token instead of starting empty (default: disabled)");
++    MC_FLOAT("--moe-cache-route-bias", "F", moe_cache.route_bias, v >= 0.0f, "LLAMA_ARG_MOE_CACHE_ROUTE_BIAS",
++        "add F to the router score of the experts that are in the MoE cache when a token picks its experts, so it prefers them. This changes the output. 0 = off (default: 0)");
++    MC_FLOAT("--moe-cache-promote-gain", "F", moe_cache.promote_gain, v >= 0.0f, "LLAMA_ARG_MOE_CACHE_PROMOTE_GAIN",
++        "with --moe-cache-cpu-miss, an expert enters the cache only if it was used F times more than the expert it evicts, 0 = always (default: 0)");
++    MC_INT("--moe-cache-foresight", "N", moe_cache.foresight, value < 0, "LLAMA_ARG_MOE_CACHE_FORESIGHT",
++        "with --moe-cache-cpu-miss, predict the experts of the next layer from the current one and upload up to N missing ones during this layer, 0 = off (default: 0)");
++    MC_INT("--moe-cache-tail-skip", "N", moe_cache.tail_skip, value < 0, "LLAMA_ARG_MOE_CACHE_TAIL_SKIP",
++        "with --moe-cache-cpu-miss and several tokens in a batch (speculative verification), compute only the N cache misses with the highest weight per token and skip the rest. This changes the output. 0 = compute all (default: 0)");
++    MC_INT("--moe-cache-evict-window", "N", moe_cache.evict_window, value < 0 || value > 64, "LLAMA_ARG_MOE_CACHE_EVICT_WINDOW",
++        "when a cache slot is needed, give up the least used of the N least recently used slots instead of the least recently used one, 0 = plain LRU (default: 0)");
++    MC_FLOAT("--moe-cache-pcie-share", "F", moe_cache.pcie_share, v >= 0.0f && v <= 1.0f, "LLAMA_ARG_MOE_CACHE_PCIE_SHARE",
++        "with --moe-cache-cpu-miss, this fraction (0-1) of the missed experts of a call is uploaded and computed on the GPU in that call instead of on the CPU, most used first, 0 = all on the CPU (default: 0.0)");
++    MC_INT("--moe-cache-pcie-max", "N", moe_cache.pcie_max, value < 0 || value > 256, "LLAMA_ARG_MOE_CACHE_PCIE_MAX",
++        "most experts per layer and call uploaded and computed on the GPU at once, with --moe-cache-pcie-share (default: 2)");
++    MC_INT("--moe-cache-tail-skip-rank", "N", moe_cache.tail_rank, value < 0 || value > 256, "LLAMA_ARG_MOE_CACHE_TAIL_SKIP_RANK",
++        "with --moe-cache-cpu-miss and several tokens in a batch, skip a missed expert when every token ranks it N-th or lower by weight. This changes the output. 0 = off (default: 0)");
++    MC_INT("--moe-cache-tail-skip-auto-off", "PCT", moe_cache.tail_auto_off, value < 0 || value > 100, "LLAMA_ARG_MOE_CACHE_TAIL_SKIP_AUTO_OFF",
++        "do not skip experts (--moe-cache-tail-skip-rank) when this percent or more of the experts of the batch are in the cache (default: 90)");
++    MC_INT("--moe-cache-route-top", "N", moe_cache.route_top, value < 0 || value > 256, "LLAMA_ARG_MOE_CACHE_ROUTE_TOP",
++        "with --moe-cache-route-bias, the N highest scored experts of a token are always selected, whatever the bias, 0 = none (default: 0)");
++    MC_BOOL("--moe-cache-route-scale", "--no-moe-cache-route-scale", moe_cache.route_scale, "LLAMA_ARG_MOE_CACHE_ROUTE_SCALE",
++        "with --moe-cache-route-bias, scale the bias of a token by the gap between its best and its last selected score (default: disabled)");
++    MC_BOOL("--moe-cache-async-upload", "--no-moe-cache-async-upload", moe_cache.async_upload, "LLAMA_ARG_MOE_CACHE_ASYNC_UPLOAD",
++        "with --moe-cache-cpu-miss, upload promoted and predicted experts on a second stream so they overlap with compute (best with pinned host memory, GGML_CUDA_REGISTER_HOST=1) (default: disabled)");
++    MC_INT("--moe-cache-swap-every", "N", moe_cache.swap_every, value < 0 || value > 100000, "LLAMA_ARG_MOE_CACHE_SWAP_EVERY",
++        "with --moe-cache-cpu-miss, promote experts in rounds, every N tokens, choosing the most missed experts of all layers together, 0 = promote in every call (default: 0)");
++    MC_INT("--moe-cache-swap-max", "N", moe_cache.swap_max, value < 0 || value > 100000, "LLAMA_ARG_MOE_CACHE_SWAP_MAX",
++        "most experts promoted per round (--moe-cache-swap-every), 0 = no limit (default: 0)");
++    MC_BOOL("--moe-cache-pcie-auto", "--no-moe-cache-pcie-auto", moe_cache.pcie_auto, "LLAMA_ARG_MOE_CACHE_PCIE_AUTO",
++        "with --moe-cache-cpu-miss, tune the PCIe share of misses while running: every window of tokens it moves the share up or down, keeps what makes the tokens faster, and settles (--moe-cache-pcie-share is the starting value) (default: disabled)");
++    MC_INT("--moe-cache-pcie-auto-window", "N", moe_cache.pcie_auto_window, value < 4 || value > 4096, "LLAMA_ARG_MOE_CACHE_PCIE_AUTO_WINDOW",
++        "tokens per measurement of the automatic PCIe share (--moe-cache-pcie-auto) (default: 32)");
++    MC_BOOL("--moe-cache-upload-batch", "--no-moe-cache-upload-batch", moe_cache.upload_batch, "LLAMA_ARG_MOE_CACHE_UPLOAD_BATCH",
++        "submit the expert uploads of a call as one batch of copies (one driver call) instead of one copy each, and send the uploads for several layers together (default: disabled)");
++    MC_FLOAT("--moe-cache-prefill-share", "F", moe_cache.prefill_share, v >= 0.0f && v <= 1.0f, "LLAMA_ARG_MOE_CACHE_PREFILL_SHARE",
++        "with --moe-cache-cpu-miss, in prompt batches above --moe-cache-cpu-miss-max-tokens this fraction (0-1) of the missed experts is computed on the CPU while the GPU computes the others, uploaded through staging slots, and the cache is left alone. 0 = off (the experts are copied to the GPU as without the cache) (default: 0.0)");
++    MC_INT("--moe-cache-prefill-max-tokens", "N", moe_cache.prefill_max_tokens, value < 32 || value > 16384, "LLAMA_ARG_MOE_CACHE_PREFILL_MAX_TOKENS",
++        "largest prompt batch that uses --moe-cache-prefill-share, bigger batches are copied to the GPU as without the cache (default: 2048)");
++    MC_INT("--moe-cache-staging-slots", "N", moe_cache.staging_slots, value < 0 || value > 4096, "LLAMA_ARG_MOE_CACHE_STAGING_SLOTS",
++        "cache slots kept apart for the experts a prompt batch uploads (--moe-cache-prefill-share), per group of layers, half of the cache at most (default: 64)");
++    MC_BOOL("--spec-draft-adaptive", "--no-spec-draft-adaptive", speculative.adaptive, "LLAMA_ARG_SPEC_DRAFT_ADAPTIVE",
++        "choose the length of each speculative draft from the measured acceptance and round time, up to --spec-draft-n-max (default: disabled)");
++    MC_FLOAT("--spec-draft-adaptive-min-gain", "F", speculative.adaptive_min_gain, v >= 0.0f && v <= 1.0f, "LLAMA_ARG_SPEC_DRAFT_ADAPTIVE_MIN_GAIN",
++        string_format("a draft must beat not drafting by this fraction of tokens per ms, with --spec-draft-adaptive (default: %.2f)", (double) params.speculative.adaptive_min_gain));
++    MC_FLOAT("--spec-draft-adaptive-ema", "F", speculative.adaptive_ema, v > 0.0f && v <= 1.0f, "LLAMA_ARG_SPEC_DRAFT_ADAPTIVE_EMA",
++        string_format("weight of a new round in the acceptance and time estimates, with --spec-draft-adaptive (default: %.2f)", (double) params.speculative.adaptive_ema));
++    MC_INT("--spec-draft-adaptive-probe", "N", speculative.adaptive_probe, value < 0, "LLAMA_ARG_SPEC_DRAFT_ADAPTIVE_PROBE",
++        string_format("rounds between tries of a draft length next to the best one, 0 = never, with --spec-draft-adaptive (default: %d)", params.speculative.adaptive_probe));
++    MC_INT("--spec-draft-head-subset", "N", speculative.draft.head_subset, value < 0 || value > 10000000, "LLAMA_ARG_SPEC_DRAFT_HEAD_SUBSET",
++        "keep N rows of the output head in device memory (the first N tokens of the vocabulary and the last 1024, the special ones) and let the MTP draft steps choose among them, instead of reading the whole head from host memory, 0 = off (default: 0)");
++#undef MC_BOOL
++#undef MC_INT
++#undef MC_FLOAT
      add_opt(common_arg(
          {"-ncffn", "--n-cpu-ffn"}, "N",
          "keep the dense FFN weights of the first N layers in the CPU\n"
 diff --git a/common/common.cpp b/common/common.cpp
-index c5db22832..64eff2026 100644
+index c5db22832..8179586de 100644
 --- a/common/common.cpp
 +++ b/common/common.cpp
-@@ -1744,6 +1744,34 @@ struct llama_context_params common_context_params_to_llama(const common_params &
+@@ -1744,6 +1744,8 @@ struct llama_context_params common_context_params_to_llama(const common_params &
      cparams.type_v = params.cache_type_v;
  
      cparams.moe_cache_size = params.moe_cache_size;
-+    cparams.moe_cache_cpu_miss      = params.moe_cache_cpu_miss;
-+    cparams.moe_cache_promote_after = params.moe_cache_promote_after;
-+    cparams.moe_cache_promote_max   = params.moe_cache_promote_max;
-+    cparams.moe_cache_decay         = params.moe_cache_decay;
-+    cparams.moe_cache_cpu_miss_max_tokens = params.moe_cache_cpu_miss_max_tokens;
-+    cparams.moe_cache_stats_file = params.moe_cache_stats_file.empty() ? nullptr : params.moe_cache_stats_file.c_str();
-+    cparams.moe_cache_prewarm    = params.moe_cache_prewarm;
-+    cparams.moe_cache_route_bias   = params.moe_cache_route_bias;
-+    cparams.moe_cache_promote_gain = params.moe_cache_promote_gain;
-+    cparams.moe_cache_foresight    = params.moe_cache_foresight;
-+    cparams.moe_cache_tail_skip    = params.moe_cache_tail_skip;
-+    cparams.moe_cache_evict_window = params.moe_cache_evict_window;
-+    cparams.moe_cache_pcie_share = params.moe_cache_pcie_share;
-+    cparams.moe_cache_pcie_max = params.moe_cache_pcie_max;
-+    cparams.moe_cache_tail_rank = params.moe_cache_tail_rank;
-+    cparams.moe_cache_tail_auto_off = params.moe_cache_tail_auto_off;
-+    cparams.moe_cache_route_top = params.moe_cache_route_top;
-+    cparams.moe_cache_route_scale = params.moe_cache_route_scale;
-+    cparams.moe_cache_async_upload = params.moe_cache_async_upload;
-+    cparams.moe_cache_swap_every = params.moe_cache_swap_every;
-+    cparams.moe_cache_swap_max = params.moe_cache_swap_max;
-+    cparams.moe_cache_pcie_auto = params.moe_cache_pcie_auto;
-+    cparams.moe_cache_pcie_auto_window = params.moe_cache_pcie_auto_window;
-+    cparams.moe_cache_upload_batch = params.moe_cache_upload_batch;
-+    cparams.moe_cache_prefill_share = params.moe_cache_prefill_share;
-+    cparams.moe_cache_prefill_max_tokens = params.moe_cache_prefill_max_tokens;
-+    cparams.moe_cache_staging_slots = params.moe_cache_staging_slots;
++    cparams.moe_cache_params = &params.moe_cache;
 +    cparams.head_subset = params.head_subset;
  
      return cparams;
  }
 diff --git a/common/common.h b/common/common.h
-index b6683fe67..ba1bd25e9 100644
+index b6683fe67..f2c15ce1a 100644
 --- a/common/common.h
 +++ b/common/common.h
-@@ -336,6 +336,8 @@ struct common_params_speculative_draft {
+@@ -7,6 +7,7 @@
+ #include "ggml-opt.h"
+ #include "ggml.h"
+ #include "llama.h"
++#include "../src/llama-moe-cache.h"
+ 
+ #include <array>
+ #include <list>
+@@ -336,6 +337,8 @@ struct common_params_speculative_draft {
  
      bool probabilistic = false; // sample the draft and verify by rejection, instead of argmax and match
  
@@ -381,7 +139,7 @@ index b6683fe67..ba1bd25e9 100644
      common_params_model mparams;
  
      llama_context * ctx_tgt = nullptr;
-@@ -378,6 +380,13 @@ struct common_params_speculative {
+@@ -378,6 +381,13 @@ struct common_params_speculative {
      double synth_len = -1.0;
      std::vector<double> synth_rates;
  
@@ -395,43 +153,17 @@ index b6683fe67..ba1bd25e9 100644
      // used by Simple, MTP, Eagle3, etc. - all methods that require some kind of draft model
      common_params_speculative_draft draft;
  
-@@ -594,6 +603,34 @@ struct common_params {
+@@ -594,6 +604,8 @@ struct common_params {
      ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
  
      size_t moe_cache_size = 0; // GPU cache size in bytes for the MoE experts kept in the CPU, split among the GPUs like the layers
-+    bool    moe_cache_cpu_miss      = false; // compute the experts that are not in the cache on the CPU
-+    int32_t moe_cache_promote_after = 2;     // misses before an expert is uploaded to the cache
-+    int32_t moe_cache_promote_max   = 2;     // max experts uploaded per layer and token, 0 = no limit
-+    int32_t moe_cache_decay         = 256;   // halve the miss counts every N tokens, 0 = never
-+    int32_t moe_cache_cpu_miss_max_tokens = 16; // largest batch that computes cache misses on the CPU
-+    std::string moe_cache_stats_file;          // keeps the expert use counts between runs
-+    bool        moe_cache_prewarm = false;     // fill the cache with the most used experts of the stats file
-+    float       moe_cache_route_bias   = 0.0f; // added to the router score of the cached experts, 0 = off
-+    float       moe_cache_promote_gain = 0.0f; // an expert enters the cache only if used this fraction more than the one it evicts
-+    int32_t     moe_cache_foresight    = 0;    // experts of the next layer uploaded ahead per layer and token, 0 = off
-+    int32_t     moe_cache_tail_skip    = 0;    // cache misses computed per token when a batch has several tokens, 0 = all
-+    int32_t moe_cache_evict_window = 0;
-+    float moe_cache_pcie_share = 0.0f;
-+    int32_t moe_cache_pcie_max = 2;
-+    int32_t moe_cache_tail_rank = 0;
-+    int32_t moe_cache_tail_auto_off = 90;
-+    int32_t moe_cache_route_top = 0;
-+    bool moe_cache_route_scale = false;
-+    bool moe_cache_async_upload = false;
-+    int32_t moe_cache_swap_every = 0;
-+    int32_t moe_cache_swap_max = 0;
-+    bool moe_cache_pcie_auto = false;
-+    int32_t moe_cache_pcie_auto_window = 32;
-+    bool moe_cache_upload_batch = false;
-+    float moe_cache_prefill_share = 0.0f;
-+    int32_t moe_cache_prefill_max_tokens = 2048;
-+    int32_t moe_cache_staging_slots = 64;
++    llama_moe_cache_params moe_cache; // options of the add-on MoE cache modes, see src/llama-moe-cache.h
 +    int32_t head_subset = 0; // rows of the output head kept in device memory, set for the draft context
  
      common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
  
 diff --git a/common/speculative.cpp b/common/speculative.cpp
-index c5043a4a8..2f4ecf6f2 100644
+index c5043a4a8..05e166318 100644
 --- a/common/speculative.cpp
 +++ b/common/speculative.cpp
 @@ -882,7 +882,8 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
@@ -610,7 +342,7 @@ index c5043a4a8..2f4ecf6f2 100644
  
      // the MoE cache is only used by the target context
      result.moe_cache_size = 0;
-+    result.moe_cache_cpu_miss = false;
++    result.moe_cache.cpu_miss = false;
  
      // dflash/dspark decode the whole noise block in a single pass and sample every block position on the backend
      // TODO: refactor such properties to be announced by the speculative types
@@ -712,40 +444,23 @@ index c5043a4a8..2f4ecf6f2 100644
          std::string str_perf;
          if (impl->gen_perf) {
 diff --git a/include/llama.h b/include/llama.h
-index f15ca9f75..a4a17df9a 100644
+index f15ca9f75..4d6fa1d9a 100644
 --- a/include/llama.h
 +++ b/include/llama.h
-@@ -397,6 +397,34 @@ extern "C" {
+@@ -363,6 +363,8 @@ extern "C" {
+ 
+     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
+     //       https://github.com/ggml-org/llama.cpp/pull/7544
++    struct llama_moe_cache_params; // the add-on MoE cache options, see src/llama-moe-cache.h
++
+     struct llama_context_params {
+         uint32_t n_ctx;                 // text context, 0 = from model
+         uint32_t n_batch;               // logical maximum batch size that can be submitted to llama_decode
+@@ -397,6 +399,8 @@ extern "C" {
          enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
  
          size_t moe_cache_size; // device cache in bytes for the experts kept in host memory, split among the devices like the layers, 0 = disabled [EXPERIMENTAL]
-+        bool    moe_cache_cpu_miss;      // compute the experts that are not in the cache on the CPU instead of uploading them [EXPERIMENTAL]
-+        int32_t moe_cache_promote_after; // misses of an expert before it is uploaded to the cache, 0 = upload on the first miss
-+        int32_t moe_cache_promote_max;   // max experts uploaded per layer and token, 0 = no limit
-+        int32_t moe_cache_decay;         // halve the miss counts every N tokens, 0 = never
-+        int32_t moe_cache_cpu_miss_max_tokens; // largest batch that computes cache misses on the CPU
-+        const char * moe_cache_stats_file; // file that keeps the expert use counts between runs, NULL = off
-+        bool         moe_cache_prewarm;    // fill the cache with the most used experts of the stats file before the first token
-+        float        moe_cache_route_bias;   // added to the router score of the experts in the cache when a token picks its experts, 0 = off (changes the output)
-+        float        moe_cache_promote_gain; // an expert enters the cache only if it was used this fraction more than the one it evicts, 0 = always
-+        int32_t      moe_cache_foresight;    // experts of the next layer predicted from the current one that are uploaded ahead, per layer and token, 0 = off
-+        int32_t      moe_cache_tail_skip;    // with several tokens in a batch, compute only this many cache misses per token on the CPU, the ones with the highest weight, 0 = all (changes the output)
-+        int32_t  moe_cache_evict_window;
-+        float    moe_cache_pcie_share;
-+        int32_t  moe_cache_pcie_max;
-+        int32_t  moe_cache_tail_rank;
-+        int32_t  moe_cache_tail_auto_off;
-+        int32_t  moe_cache_route_top;
-+        bool     moe_cache_route_scale;
-+        bool     moe_cache_async_upload;
-+        int32_t  moe_cache_swap_every;
-+        int32_t  moe_cache_swap_max;
-+        bool     moe_cache_pcie_auto;
-+        int32_t  moe_cache_pcie_auto_window;
-+        bool     moe_cache_upload_batch;
-+        float    moe_cache_prefill_share;
-+        int32_t  moe_cache_prefill_max_tokens;
-+        int32_t  moe_cache_staging_slots;
++        const struct llama_moe_cache_params * moe_cache_params; // options of the add-on MoE cache modes (src/llama-moe-cache.h), NULL = defaults [EXPERIMENTAL]
 +        int32_t  head_subset;  // rows of the output head kept in device memory for the steps of a draft head, 0 = off [EXPERIMENTAL]
  
          // Abort callback
@@ -763,7 +478,7 @@ index 97250c2e8..c68d64e77 100644
      llama-memory-hybrid-iswa.cpp
      llama-memory-hybrid-idx.cpp
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 9ee64b566..34f20a62b 100644
+index 9ee64b566..d8a1df757 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -9,6 +9,7 @@
@@ -774,50 +489,21 @@ index 9ee64b566..34f20a62b 100644
  #include "llama-moe-cache.h"
  #include "llama-ext.h"
  #include "llama-sampler.h"
-@@ -359,6 +360,34 @@ llama_context::llama_context(
+@@ -359,6 +360,7 @@ llama_context::llama_context(
      cparams.op_offload     = params.op_offload;
      cparams.kv_unified     = params.kv_unified;
      cparams.moe_cache_size = params.moe_cache_size;
-+    cparams.moe_cache_cpu_miss      = params.moe_cache_cpu_miss;
-+    cparams.moe_cache_promote_after = params.moe_cache_promote_after;
-+    cparams.moe_cache_promote_max   = params.moe_cache_promote_max;
-+    cparams.moe_cache_decay         = params.moe_cache_decay;
-+    cparams.moe_cache_cpu_miss_max_tokens = params.moe_cache_cpu_miss_max_tokens;
-+    cparams.moe_cache_stats_file = params.moe_cache_stats_file ? params.moe_cache_stats_file : "";
-+    cparams.moe_cache_prewarm    = params.moe_cache_prewarm;
-+    cparams.moe_cache_route_bias   = params.moe_cache_route_bias;
-+    cparams.moe_cache_promote_gain = params.moe_cache_promote_gain;
-+    cparams.moe_cache_foresight    = params.moe_cache_foresight;
-+    cparams.moe_cache_tail_skip    = params.moe_cache_tail_skip;
-+    cparams.moe_cache_evict_window = params.moe_cache_evict_window;
-+    cparams.moe_cache_pcie_share = params.moe_cache_pcie_share;
-+    cparams.moe_cache_pcie_max = params.moe_cache_pcie_max;
-+    cparams.moe_cache_tail_rank = params.moe_cache_tail_rank;
-+    cparams.moe_cache_tail_auto_off = params.moe_cache_tail_auto_off;
-+    cparams.moe_cache_route_top = params.moe_cache_route_top;
-+    cparams.moe_cache_route_scale = params.moe_cache_route_scale;
-+    cparams.moe_cache_async_upload = params.moe_cache_async_upload;
-+    cparams.moe_cache_swap_every = params.moe_cache_swap_every;
-+    cparams.moe_cache_swap_max = params.moe_cache_swap_max;
-+    cparams.moe_cache_pcie_auto = params.moe_cache_pcie_auto;
-+    cparams.moe_cache_pcie_auto_window = params.moe_cache_pcie_auto_window;
-+    cparams.moe_cache_upload_batch = params.moe_cache_upload_batch;
-+    cparams.moe_cache_prefill_share = params.moe_cache_prefill_share;
-+    cparams.moe_cache_prefill_max_tokens = params.moe_cache_prefill_max_tokens;
-+    cparams.moe_cache_staging_slots = params.moe_cache_staging_slots;
 +    cparams.head_subset = params.head_subset;
  
      // initialized later
      cparams.pipeline_parallel = false;
-@@ -549,7 +578,27 @@ llama_context::llama_context(
+@@ -549,7 +551,25 @@ llama_context::llama_context(
          }
  
          if (cparams.moe_cache_size > 0) {
 -            moe_cache = std::make_unique<llama_moe_cache>(model, backend_ptrs, backend_buft, cparams.moe_cache_size);
-+            const llama_moe_cache_params mc_params = {
-+                cparams.moe_cache_cpu_miss, cparams.moe_cache_promote_after, cparams.moe_cache_promote_max, cparams.moe_cache_decay, cparams.moe_cache_cpu_miss_max_tokens,
-+                cparams.moe_cache_stats_file, cparams.moe_cache_prewarm, cparams.moe_cache_route_bias, cparams.moe_cache_promote_gain, cparams.moe_cache_foresight, cparams.moe_cache_tail_skip, cparams.moe_cache_evict_window, cparams.moe_cache_pcie_share, cparams.moe_cache_pcie_max, cparams.moe_cache_tail_rank, cparams.moe_cache_tail_auto_off, cparams.moe_cache_route_top, cparams.moe_cache_route_scale, cparams.moe_cache_async_upload, cparams.moe_cache_swap_every, cparams.moe_cache_swap_max, cparams.moe_cache_pcie_auto, cparams.moe_cache_pcie_auto_window, cparams.moe_cache_upload_batch, cparams.moe_cache_prefill_share, cparams.moe_cache_prefill_max_tokens, cparams.moe_cache_staging_slots, (int32_t) cparams.n_ubatch,
-+            };
++            llama_moe_cache_params mc_params = params.moe_cache_params ? *params.moe_cache_params : llama_moe_cache_params{};
++            mc_params.n_ubatch = (int32_t) cparams.n_ubatch;
 +            moe_cache = std::make_unique<llama_moe_cache>(model, backend_ptrs, backend_buft, cparams.moe_cache_size, mc_params);
 +        }
 +
@@ -838,7 +524,7 @@ index 9ee64b566..34f20a62b 100644
          }
  
          sched_reserve();
-@@ -709,6 +758,7 @@ void llama_context::sched_new(size_t max_nodes, bool parallel) {
+@@ -709,6 +729,7 @@ void llama_context::sched_new(size_t max_nodes, bool parallel) {
              backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, parallel, cparams.op_offload));
  
      ggml_backend_sched_set_copy_callback(sched.get(), sched_copy_experts, this);
@@ -846,7 +532,7 @@ index 9ee64b566..34f20a62b 100644
      ggml_backend_sched_set_realloc_callback(sched.get(), sched_graph_realloc, this);
  }
  
-@@ -2700,6 +2750,7 @@ llm_graph_params llama_context::graph_params(
+@@ -2700,6 +2721,7 @@ llm_graph_params llama_context::graph_params(
          /*.mctx        =*/ mctx,
          /*.cross       =*/ &cross,
          /*.moe_cache   =*/ moe_cache.get(),
@@ -854,7 +540,7 @@ index 9ee64b566..34f20a62b 100644
          /*.prec_policy =*/ &model.prec_policy,
          /*.hdmd        =*/ model.hdmd.rot.empty() ? nullptr : &model.hdmd,
          /*.samplers    =*/ sampling.samplers,
-@@ -3712,6 +3763,9 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
+@@ -3712,6 +3734,9 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
              ret[buft].context += size;
          }
      }
@@ -864,37 +550,11 @@ index 9ee64b566..34f20a62b 100644
      if (model.hparams.no_alloc) {
          for (size_t i = 0; i < backends.size(); ++i) {
              ggml_backend_t             backend = backends[i].get();
-@@ -4002,6 +4056,34 @@ llama_context_params llama_context_default_params() {
+@@ -4002,6 +4027,8 @@ llama_context_params llama_context_default_params() {
          /*.type_k                      =*/ GGML_TYPE_F16,
          /*.type_v                      =*/ GGML_TYPE_F16,
          /*.moe_cache_size              =*/ 0,
-+        /*.moe_cache_cpu_miss          =*/ false,
-+        /*.moe_cache_promote_after     =*/ 2,
-+        /*.moe_cache_promote_max       =*/ 2,
-+        /*.moe_cache_decay             =*/ 256,
-+        /*.moe_cache_cpu_miss_max_tokens =*/ 16,
-+        /*.moe_cache_stats_file        =*/ nullptr,
-+        /*.moe_cache_prewarm           =*/ false,
-+        /*.moe_cache_route_bias        =*/ 0.0f,
-+        /*.moe_cache_promote_gain      =*/ 0.0f,
-+        /*.moe_cache_foresight         =*/ 0,
-+        /*.moe_cache_tail_skip         =*/ 0,
-+        /*.moe_cache_evict_window        =*/ 0,
-+        /*.moe_cache_pcie_share          =*/ 0.0f,
-+        /*.moe_cache_pcie_max            =*/ 2,
-+        /*.moe_cache_tail_rank           =*/ 0,
-+        /*.moe_cache_tail_auto_off       =*/ 90,
-+        /*.moe_cache_route_top           =*/ 0,
-+        /*.moe_cache_route_scale         =*/ false,
-+        /*.moe_cache_async_upload        =*/ false,
-+        /*.moe_cache_swap_every          =*/ 0,
-+        /*.moe_cache_swap_max            =*/ 0,
-+        /*.moe_cache_pcie_auto           =*/ false,
-+        /*.moe_cache_pcie_auto_window    =*/ 32,
-+        /*.moe_cache_upload_batch        =*/ false,
-+        /*.moe_cache_prefill_share       =*/ 0.0f,
-+        /*.moe_cache_prefill_max_tokens  =*/ 2048,
-+        /*.moe_cache_staging_slots       =*/ 64,
++        /*.moe_cache_params            =*/ nullptr,
 +        /*.head_subset                   =*/ 0,
          /*.abort_callback              =*/ nullptr,
          /*.abort_callback_data         =*/ nullptr,
@@ -920,54 +580,19 @@ index 6938fb103..d326ab029 100644
      // decode output (2-dimensional array: [n_outputs][n_vocab])
      buffer_view<float> logits = {nullptr, 0};
 diff --git a/src/llama-cparams.h b/src/llama-cparams.h
-index f4eb181a7..abcabf437 100644
+index f4eb181a7..8b516d563 100644
 --- a/src/llama-cparams.h
 +++ b/src/llama-cparams.h
-@@ -3,6 +3,7 @@
- #include "llama.h"
- 
- #include <cstdint>
-+#include <string>
- #include <vector>
- 
- #define LLAMA_MAX_SEQ 256
-@@ -56,6 +57,34 @@ struct llama_cparams {
+@@ -56,6 +56,7 @@ struct llama_cparams {
      bool training;           // set by llama_opt_init()
  
      size_t moe_cache_size;
-+    bool    moe_cache_cpu_miss;
-+    int32_t moe_cache_promote_after;
-+    int32_t moe_cache_promote_max;
-+    int32_t moe_cache_decay;
-+    int32_t moe_cache_cpu_miss_max_tokens;
-+    std::string moe_cache_stats_file;
-+    bool    moe_cache_prewarm;
-+    float   moe_cache_route_bias;
-+    float   moe_cache_promote_gain;
-+    int32_t moe_cache_foresight;
-+    int32_t moe_cache_tail_skip;
-+    int32_t moe_cache_evict_window;
-+    float moe_cache_pcie_share;
-+    int32_t moe_cache_pcie_max;
-+    int32_t moe_cache_tail_rank;
-+    int32_t moe_cache_tail_auto_off;
-+    int32_t moe_cache_route_top;
-+    bool moe_cache_route_scale;
-+    bool moe_cache_async_upload;
-+    int32_t moe_cache_swap_every;
-+    int32_t moe_cache_swap_max;
-+    bool moe_cache_pcie_auto;
-+    int32_t moe_cache_pcie_auto_window;
-+    bool moe_cache_upload_batch;
-+    float moe_cache_prefill_share;
-+    int32_t moe_cache_prefill_max_tokens;
-+    int32_t moe_cache_staging_slots;
 +    int32_t head_subset;
  
      std::vector<bool> embeddings_layer_inp; // [n_layer()] extract input embeddings for layer
  
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index f69fe63f8..620f8d73e 100644
+index f69fe63f8..a7a7c73c1 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -2,6 +2,7 @@
@@ -1112,335 +737,47 @@ index f69fe63f8..620f8d73e 100644
  
      cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
  
-@@ -2294,163 +2377,190 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
-         cb(cur, "ffn_moe_weighted", il);
-     }
+@@ -2296,6 +2379,24 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
  
--    ggml_tensor * up = nullptr;
--    ggml_tensor * experts = nullptr;
-+    // the experts of one set of ids, weighted
-+    ggml_tensor * cur_in = cur;
-+    auto build_experts = [&](ggml_tensor * selected_experts, ggml_tensor * slots, ggml_tensor * weights, ggml_tensor * cur_arg) -> ggml_tensor * {
-+        ggml_tensor * cur = cur_arg;
-+        ggml_tensor * up = nullptr;
-+        ggml_tensor * experts = nullptr;
- 
--    if (gate_up_exps) {
--        // merged gate_up path: one mul_mat_id, then split into gate and up views
--        ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, selected_experts, up_exps_s, slots); // [n_ff*2, n_expert_used, n_tokens]
--        cb(gate_up, "ffn_moe_gate_up", il);
-+        if (gate_up_exps) {
-+            // merged gate_up path: one mul_mat_id, then split into gate and up views
-+            ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, selected_experts, up_exps_s, slots); // [n_ff*2, n_expert_used, n_tokens]
-+            cb(gate_up, "ffn_moe_gate_up", il);
- 
--        if (up_exps_s) {
--            cb(gate_up, "ffn_moe_gate_up_scaled", il);
--        }
-+            if (up_exps_s) {
-+                cb(gate_up, "ffn_moe_gate_up_scaled", il);
-+            }
- 
--        if (gate_up_exps_b) {
--            gate_up = ggml_add_id(ctx0, gate_up, gate_up_exps_b, selected_experts);
--            cb(gate_up, "ffn_moe_gate_up_biased", il);
--        }
-+            if (gate_up_exps_b) {
-+                gate_up = ggml_add_id(ctx0, gate_up, gate_up_exps_b, selected_experts);
-+                cb(gate_up, "ffn_moe_gate_up_biased", il);
-+            }
- 
--        const int64_t n_ff = gate_up->ne[0] / 2;
--        cur = ggml_view_3d(ctx0, gate_up, n_ff, gate_up->ne[1], gate_up->ne[2], gate_up->nb[1], gate_up->nb[2], 0);
--        cb(cur, "ffn_moe_gate", il);
--        up  = ggml_view_3d(ctx0, gate_up, n_ff, gate_up->ne[1], gate_up->ne[2], gate_up->nb[1], gate_up->nb[2], n_ff * gate_up->nb[0]);
--        cb(up, "ffn_moe_up", il);
--    } else {
--        // separate gate and up path
--        up = build_lora_mm_id(up_exps, cur, selected_experts, up_exps_s, slots); // [n_ff, n_expert_used, n_tokens]
--        cb(up, "ffn_moe_up", il);
-+            const int64_t n_ff = gate_up->ne[0] / 2;
-+            cur = ggml_view_3d(ctx0, gate_up, n_ff, gate_up->ne[1], gate_up->ne[2], gate_up->nb[1], gate_up->nb[2], 0);
-+            cb(cur, "ffn_moe_gate", il);
-+            up  = ggml_view_3d(ctx0, gate_up, n_ff, gate_up->ne[1], gate_up->ne[2], gate_up->nb[1], gate_up->nb[2], n_ff * gate_up->nb[0]);
-+            cb(up, "ffn_moe_up", il);
-+        } else {
-+            // separate gate and up path
-+            up = build_lora_mm_id(up_exps, cur, selected_experts, up_exps_s, slots); // [n_ff, n_expert_used, n_tokens]
-+            cb(up, "ffn_moe_up", il);
- 
--        if (up_exps_s) {
--            cb(up, "ffn_moe_up_scaled", il);
--        }
-+            if (up_exps_s) {
-+                cb(up, "ffn_moe_up_scaled", il);
-+            }
- 
--        if (up_exps_b) {
--            up = ggml_add_id(ctx0, up, up_exps_b, selected_experts);
--            cb(up, "ffn_moe_up_biased", il);
--        }
-+            if (up_exps_b) {
-+                up = ggml_add_id(ctx0, up, up_exps_b, selected_experts);
-+                cb(up, "ffn_moe_up_biased", il);
-+            }
- 
--        if (gate_exps) {
--            cur = build_lora_mm_id(gate_exps, cur, selected_experts, gate_exps_s, slots); // [n_ff, n_expert_used, n_tokens]
--            cb(cur, "ffn_moe_gate", il);
--        } else {
--            cur = up;
--        }
-+            if (gate_exps) {
-+                cur = build_lora_mm_id(gate_exps, cur, selected_experts, gate_exps_s, slots); // [n_ff, n_expert_used, n_tokens]
-+                cb(cur, "ffn_moe_gate", il);
-+            } else {
-+                cur = up;
-+            }
- 
--        if (gate_exps_s) {
--            cb(cur, "ffn_moe_gate_scaled", il);
--        }
-+            if (gate_exps_s) {
-+                cb(cur, "ffn_moe_gate_scaled", il);
-+            }
- 
--        if (gate_exps_b) {
--            cur = ggml_add_id(ctx0, cur, gate_exps_b, selected_experts);
--            cb(cur, "ffn_moe_gate_biased", il);
-+            if (gate_exps_b) {
-+                cur = ggml_add_id(ctx0, cur, gate_exps_b, selected_experts);
-+                cb(cur, "ffn_moe_gate_biased", il);
-+            }
-         }
--    }
- 
--    const bool has_gate = gate_exps || gate_up_exps;
--
--    switch (type_op) {
--        case LLM_FFN_SILU:
--            if (gate_exps) {
--                if (il >= 0) {
--                    const float limit = hparams.swiglu_clamp_exp[il];
--                    constexpr float eps = 1e-6f;
--                    if (limit > eps) {
--                        if (arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_GLM5_NEXT || (arch == LLM_ARCH_DFLASH && hparams.dsv4_hc_mult > 0) || arch == LLM_ARCH_HY_V4) {
--                            cur = ggml_swiglu_clamp(ctx0, cur, up, limit);
--                        } else {
--                            up = ggml_clamp(ctx0, up, -limit, limit);
--                            cb(up, "ffn_moe_up_clamped", il);
--                            ggml_tensor * gate_act = ggml_silu(ctx0, cur);
--                            cb(gate_act, "ffn_moe_silu", il);
--                            gate_act = ggml_clamp(ctx0, gate_act, -INFINITY, limit);
--                            cb(gate_act, "ffn_moe_silu_clamped", il);
--                            cur = ggml_mul(ctx0, gate_act, up);
-+        const bool has_gate = gate_exps || gate_up_exps;
-+
-+        switch (type_op) {
-+            case LLM_FFN_SILU:
-+                if (gate_exps) {
-+                    if (il >= 0) {
-+                        const float limit = hparams.swiglu_clamp_exp[il];
-+                        constexpr float eps = 1e-6f;
-+                        if (limit > eps) {
-+                            if (arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_GLM5_NEXT || (arch == LLM_ARCH_DFLASH && hparams.dsv4_hc_mult > 0) || arch == LLM_ARCH_HY_V4) {
-+                                cur = ggml_swiglu_clamp(ctx0, cur, up, limit);
-+                            } else {
-+                                up = ggml_clamp(ctx0, up, -limit, limit);
-+                                cb(up, "ffn_moe_up_clamped", il);
-+                                ggml_tensor * gate_act = ggml_silu(ctx0, cur);
-+                                cb(gate_act, "ffn_moe_silu", il);
-+                                gate_act = ggml_clamp(ctx0, gate_act, -INFINITY, limit);
-+                                cb(gate_act, "ffn_moe_silu_clamped", il);
-+                                cur = ggml_mul(ctx0, gate_act, up);
-+                            }
-+                            cb(cur, "ffn_moe_swiglu_limited", il);
-+                            break;
-                         }
--                        cb(cur, "ffn_moe_swiglu_limited", il);
--                        break;
-                     }
-                 }
--            }
- 
--            if (has_gate) {
--                cur = ggml_swiglu_split(ctx0, cur, up);
--                cb(cur, "ffn_moe_swiglu", il);
--            } else {
--                cur = ggml_silu(ctx0, cur);
--                cb(cur, "ffn_moe_silu", il);
--            } break;
--        case LLM_FFN_SITU:
--            {
--                // situ(gate, up) = beta*tanh(gate/beta)*sigmoid(gate) * lb*tanh(up/lb)
--                GGML_ASSERT(has_gate);
--                const float beta = hparams.situ_beta;
--                const float lb   = hparams.situ_linear_beta;
--
--                ggml_tensor * act = ggml_scale(ctx0, ggml_tanh(ctx0, ggml_scale(ctx0, cur, 1.0f/beta)), beta);
--                act = ggml_mul(ctx0, act, ggml_sigmoid(ctx0, cur));
--                if (lb > 0.0f) {
--                    up = ggml_scale(ctx0, ggml_tanh(ctx0, ggml_scale(ctx0, up, 1.0f/lb)), lb);
--                }
--                cur = ggml_mul(ctx0, act, up);
--                cb(cur, "ffn_moe_situ", il);
--            } break;
--        case LLM_FFN_GELU:
--            if (has_gate) {
--                cur = ggml_geglu_split(ctx0, cur, up);
--                cb(cur, "ffn_moe_geglu", il);
--            } else {
--                cur = ggml_gelu(ctx0, cur);
--                cb(cur, "ffn_moe_gelu", il);
--            } break;
--        case LLM_FFN_SWIGLU_OAI_MOE:
--            {
--                // TODO: move to hparams?
--                constexpr float alpha = 1.702f;
--                constexpr float limit = 7.0f;
--                cur = ggml_swiglu_oai(ctx0, cur, up, alpha, limit);
--                cb(cur, "ffn_moe_swiglu_oai", il);
--            } break;
--        case LLM_FFN_RELU:
--            if (has_gate) {
--                cur = ggml_reglu_split(ctx0, cur, up);
--                cb(cur, "ffn_moe_reglu", il);
--            } else {
--                cur = ggml_relu(ctx0, cur);
--                cb(cur, "ffn_moe_relu", il);
--            } break;
--        case LLM_FFN_RELU_SQR:
--            if (has_gate) {
--                // TODO: add support for gated squared relu
--                GGML_ABORT("fatal error: gated squared relu not implemented");
--            } else {
--                cur = ggml_relu(ctx0, cur);
--                cur = ggml_sqr(ctx0, cur);
--                cb(cur, "ffn_moe_relu_sqr", il);
--            } break;
--        default:
--            GGML_ABORT("fatal error");
--    }
-+                if (has_gate) {
-+                    cur = ggml_swiglu_split(ctx0, cur, up);
-+                    cb(cur, "ffn_moe_swiglu", il);
-+                } else {
-+                    cur = ggml_silu(ctx0, cur);
-+                    cb(cur, "ffn_moe_silu", il);
-+                } break;
-+            case LLM_FFN_SITU:
-+                {
-+                    // situ(gate, up) = beta*tanh(gate/beta)*sigmoid(gate) * lb*tanh(up/lb)
-+                    GGML_ASSERT(has_gate);
-+                    const float beta = hparams.situ_beta;
-+                    const float lb   = hparams.situ_linear_beta;
-+
-+                    ggml_tensor * act = ggml_scale(ctx0, ggml_tanh(ctx0, ggml_scale(ctx0, cur, 1.0f/beta)), beta);
-+                    act = ggml_mul(ctx0, act, ggml_sigmoid(ctx0, cur));
-+                    if (lb > 0.0f) {
-+                        up = ggml_scale(ctx0, ggml_tanh(ctx0, ggml_scale(ctx0, up, 1.0f/lb)), lb);
-+                    }
-+                    cur = ggml_mul(ctx0, act, up);
-+                    cb(cur, "ffn_moe_situ", il);
-+                } break;
-+            case LLM_FFN_GELU:
-+                if (has_gate) {
-+                    cur = ggml_geglu_split(ctx0, cur, up);
-+                    cb(cur, "ffn_moe_geglu", il);
-+                } else {
-+                    cur = ggml_gelu(ctx0, cur);
-+                    cb(cur, "ffn_moe_gelu", il);
-+                } break;
-+            case LLM_FFN_SWIGLU_OAI_MOE:
-+                {
-+                    // TODO: move to hparams?
-+                    constexpr float alpha = 1.702f;
-+                    constexpr float limit = 7.0f;
-+                    cur = ggml_swiglu_oai(ctx0, cur, up, alpha, limit);
-+                    cb(cur, "ffn_moe_swiglu_oai", il);
-+                } break;
-+            case LLM_FFN_RELU:
-+                if (has_gate) {
-+                    cur = ggml_reglu_split(ctx0, cur, up);
-+                    cb(cur, "ffn_moe_reglu", il);
-+                } else {
-+                    cur = ggml_relu(ctx0, cur);
-+                    cb(cur, "ffn_moe_relu", il);
-+                } break;
-+            case LLM_FFN_RELU_SQR:
-+                if (has_gate) {
-+                    // TODO: add support for gated squared relu
-+                    GGML_ABORT("fatal error: gated squared relu not implemented");
-+                } else {
-+                    cur = ggml_relu(ctx0, cur);
-+                    cur = ggml_sqr(ctx0, cur);
-+                    cb(cur, "ffn_moe_relu_sqr", il);
-+                } break;
-+            default:
-+                GGML_ABORT("fatal error");
-+        }
- 
--    experts = build_lora_mm_id(down_exps, cur, selected_experts, down_exps_s, slots); // [n_embd, n_expert_used, n_tokens]
--    if (arch == LLM_ARCH_MISTRAL4) {
--        // src1 can exceed F16 range
--        ggml_prec_set_src(experts, GGML_PREC_F32, 1);
--    }
--    cb(experts, "ffn_moe_down", il);
-+        experts = build_lora_mm_id(down_exps, cur, selected_experts, down_exps_s, slots); // [n_embd, n_expert_used, n_tokens]
-+        if (arch == LLM_ARCH_MISTRAL4) {
-+            // src1 can exceed F16 range
-+            ggml_prec_set_src(experts, GGML_PREC_F32, 1);
-+        }
-+        cb(experts, "ffn_moe_down", il);
- 
--    if (down_exps_s) {
--        cb(experts, "ffn_moe_down_scaled", il);
--    }
-+        if (down_exps_s) {
-+            cb(experts, "ffn_moe_down_scaled", il);
-+        }
- 
--    if (down_exps_b) {
--        experts = ggml_add_id(ctx0, experts, down_exps_b, selected_experts);
--        cb(experts, "ffn_moe_down_biased", il);
--    }
-+        if (down_exps_b) {
-+            experts = ggml_add_id(ctx0, experts, down_exps_b, selected_experts);
-+            cb(experts, "ffn_moe_down_biased", il);
-+        }
-+
-+        if (!weight_before_ffn && weights != nullptr) {
-+            experts = ggml_mul(ctx0, experts, weights);
-+            cb(experts, "ffn_moe_weighted", il);
-+        }
-+        return experts;
-+    };
- 
--    if (!weight_before_ffn) {
--        experts = ggml_mul(ctx0, experts, weights);
--        cb(experts, "ffn_moe_weighted", il);
-+    ggml_tensor * experts = nullptr;
-+    if (slots != nullptr && cpu_form) {
-+        // slots is -1 for the experts that are not in the cache: the GPU computes the others, the CPU computes these
-+        // mul_mat_id skips the ids < 0 and leaves zero rows, so the two results add up
+     ggml_tensor * up = nullptr;
+     ggml_tensor * experts = nullptr;
++    // the CPU miss form runs the experts twice, the block below is upstream's: pass 0 = the cached experts on the GPU, pass 1 = the missed ones on the CPU
++    // (slots is -1 for the experts that are not in the cache, mul_mat_id skips those ids and leaves zero rows, so the two results add up)
++    ggml_tensor * experts_gpu = nullptr;
++    const int n_pass = slots != nullptr && cpu_form ? 2 : 1;
++    if (n_pass == 2) {
 +        // the CPU branch reads host inputs filled by the cache, so it runs while the GPU computes the cached experts
 +        moe_cache->set_weights(il, weights);
 +        moe_cache->set_hybrid(il, true);
 +        moe_skip_neg = true;
-+        ggml_tensor * experts_gpu = build_experts(selected_experts, slots, weights, cur_in);
-+        moe_pin_cpu = true;
-+        ggml_tensor * experts_cpu = build_experts(ids_cpu, nullptr, nullptr, cur_cpu);
-+        moe_pin_cpu = false;
-+        moe_skip_neg = false;
-+        experts_cpu = ggml_mul(ctx0, experts_cpu, weights);
-+        ggml_backend_sched_set_tensor_backend(sched, experts_cpu, moe_cache->backend(il));
-+        experts = ggml_add(ctx0, experts_gpu, experts_cpu);
-+        cb(experts, "ffn_moe_hybrid", il);
-+    } else {
-+        experts = build_experts(selected_experts, slots, weights, cur_in);
++    }
++    for (int pass = 0; pass < n_pass; ++pass) {
++    if (pass == 1) {
++        experts_gpu      = experts;
++        selected_experts = ids_cpu;
++        slots            = nullptr;
++        cur              = cur_cpu;
++        moe_pin_cpu      = true;
++    }
+ 
+     if (gate_up_exps) {
+         // merged gate_up path: one mul_mat_id, then split into gate and up views
+@@ -2452,6 +2553,15 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+         experts = ggml_mul(ctx0, experts, weights);
+         cb(experts, "ffn_moe_weighted", il);
      }
++    } // passes (the block above is not indented on purpose: it is upstream's)
++    if (n_pass == 2) {
++        moe_pin_cpu  = false;
++        moe_skip_neg = false;
++        // the weighted CPU branch is summed on the GPU, next to the cached experts
++        ggml_backend_sched_set_tensor_backend(sched, experts, moe_cache->backend(il));
++        experts = ggml_add(ctx0, experts_gpu, experts);
++        cb(experts, "ffn_moe_hybrid", il);
++    }
  
      ggml_build_forward_expand(gf, experts);
+ 
 @@ -2495,12 +2605,13 @@ ggml_tensor * llm_graph_context::build_moe_cache_slots(
           ggml_tensor * gate_exps,
           ggml_tensor * down_exps,

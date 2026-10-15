@@ -90,6 +90,21 @@ Known and left (documented, not fixed):
 - Async uploads from pageable (mmapped) weights block the host thread; the gain of `--moe-cache-async-upload` needs pinned host weights and a measurement.
 - Stats file shared by two contexts is overwritten by the last writer.
 
+## 5c. Patch simplification (2026-10-15)
+
+Goal: smaller patch, same features. Done (plan from a read-only review):
+
+| Change | Effect |
+|---|---|
+| `build_moe_ffn`: upstream's expert block is back byte for byte (not re-indented, not in a lambda); the CPU miss form runs it twice in a loop | `llama-graph.cpp` +245/-139 -> +114/-3 |
+| the 27 cache options travel as ONE `llama_moe_cache_params` pointer in `llama_context_params` / `common_params` instead of 27 copied fields in 5 files | `llama-cparams.h` untouched, `llama.h` +28 -> +4, `common.h` +35 -> +12, `common.cpp` +28 -> +2; a new option touches 2 places instead of 7 |
+| `arg.cpp`: the 31 add-on options as one macro call each | +309 -> +84 |
+| head subset reports its memory (see 5b) | -- |
+
+Result: patch 0003 +2140/-175 -> +1747/-39 (3112 -> 2449 lines); whole series 4289 -> 3627 lines; 15 files in 0003 and 10 in 0002 (unchanged; merging head-subset files and de-duplicating `llama-moe-cache.cpp` need a differential fuzz first and were not done).
+
+Checked without a GPU: `llama-server --help` of the new build is byte-identical to the old (865 lines, defaults and env names included); LRU fuzzer 160000 steps OK; the patch series applies in order to `git archive HEAD` and equals the working tree on all 34 files. **Not yet checked on the GPU (waiting for the emulator to be closed):** the graph change must give the same outputs as before (A1/A3/B hashes and the `compute-sanitizer` run).
+
 ## 6. Not done yet (and why)
 
 - Hard crash #3 (bugcheck 0x20001 HYPERVISOR_ERROR, 2026-10-15 07:29) happened while the 27B ran with MTP + adaptive + head subset at ~11.9 GB VRAM. **No more 27B + MTP runs** (memory note `27b-mtp-crashes-laptop`). MTP is therefore covered by the CPU-only policy simulation (`tools/spec_policy_sim.cpp`) and by the lossless-output checks above, not by further GPU runs.

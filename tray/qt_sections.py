@@ -1741,9 +1741,10 @@ def _llama_patch_build_card(window) -> QWidget:
     for _p in patcher.patches():
         body.addWidget(_toggle_row(
             f"llamacpp.custom_build.patches.{patcher.patch_setting_name(_p)}",
-            f"Patch: {_p.stem}",
-            f"{patcher.patch_key(_p)} — applied by Build Patched when on. "
-            "Takes effect on the next build; the installed binary is unchanged until then.",
+            f"{_p.name[:4]}  {patcher.patch_title(_p)}",
+            f"{patcher.patch_description(_p)} "
+            + (f"Needs {', '.join(r[:4] for r in patcher.patch_requires(_p))}. " if patcher.patch_requires(_p) else "")
+            + "Applied by Build Patched when on; takes effect on the next build, the installed binary is unchanged until then.",
             default=True))
 
     status = QLabel("…")

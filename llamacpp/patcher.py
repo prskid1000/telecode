@@ -347,6 +347,51 @@ def patch_requires(p: Path) -> list[str]:
     return out
 
 
+def _patch_header(p: Path) -> list[str]:
+    """The lines before the first diff of a patch file."""
+    out: list[str] = []
+    try:
+        for line in p.read_text(encoding="utf-8", errors="replace").splitlines()[:60]:
+            if line.startswith("diff --git") or line.startswith("---"):
+                break
+            out.append(line)
+    except OSError:
+        pass
+    return out
+
+
+def patch_title(p: Path) -> str:
+    """A short name for the tray: the `Title:` line of our patch headers, else the subject of a git mail patch
+    without its area prefix, else the file name."""
+    head = _patch_header(p)
+    for line in head:
+        if line.startswith("Title:"):
+            return line.split(":", 1)[1].strip()
+    for i, line in enumerate(head):
+        if line.startswith("Subject:"):
+            subj = line.split("]", 1)[-1].strip()
+            if i + 1 < len(head) and head[i + 1].startswith(" "):
+                subj += " " + head[i + 1].strip()
+            subj = subj.split(" : ", 1)[-1]
+            return subj if len(subj) <= 46 else subj[:45].rstrip() + "…"
+    return p.stem
+
+
+def patch_description(p: Path) -> str:
+    """What the patch does, in a few sentences, from its header."""
+    head = _patch_header(p)
+    for i, line in enumerate(head):
+        if line.startswith("Subject:"):
+            subj = line.split("]", 1)[-1].strip()
+            if i + 1 < len(head) and head[i + 1].startswith(" "):
+                subj += " " + head[i + 1].strip()
+            return subj
+    text = " ".join(l.strip() for l in head if l.strip() and not l.startswith(("Title:", "Requires:")))
+    if text.startswith("Add-on:"):
+        text = text[len("Add-on:"):].strip()
+    return text if len(text) <= 420 else text[:419].rstrip() + "…"
+
+
 def patch_enabled(p: Path) -> bool:
     """Patches are add-ons: `llamacpp.custom_build.patches.<name>: false` leaves one out of the build.
 

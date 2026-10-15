@@ -1,3 +1,4 @@
+Title: ggml: skip expert ids below 0, CPU overlap
 Add-on: generic ggml pieces for the MoE cache CPU-miss mode.
 mul_mat_id skips expert ids < 0 (CPU, CUDA) and leaves zero rows; the scheduler can start a CPU split while the GPU still computes.
 Both are off unless a graph asks for them (ggml_mul_mat_id_set_skip_neg, ggml_backend_sched_set_cpu_overlap).
