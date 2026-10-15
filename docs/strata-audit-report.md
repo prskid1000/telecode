@@ -101,7 +101,9 @@ Goal: smaller patch, same features. Done (plan from a read-only review):
 | `arg.cpp`: the 31 add-on options as one macro call each | +309 -> +84 |
 | head subset reports its memory (see 5b) | -- |
 
-Result: patch 0003 +2140/-175 -> +1747/-39 (3112 -> 2449 lines); whole series 4289 -> 3627 lines; 15 files in 0003 and 10 in 0002 (unchanged; merging head-subset files and de-duplicating `llama-moe-cache.cpp` need a differential fuzz first and were not done).
+Round two: the planner's repeated blocks (distinct-expert collection, slot claim, heat sort, hysteresis test, pending test) are helpers, the unreachable branch in `pick_victim` is gone, and `llama_head_subset` is a plain struct (no pimpl, no getters). **Proven equivalent without a GPU:** the fuzzer's new trace mode fingerprints the planner's whole state after every step; old and new planner give the same fingerprint for all 400 seeds (160000 steps). `--help` is byte-identical again.
+
+Result of round one: patch 0003 +2140/-175 -> +1747/-39 (3112 -> 2449 lines); whole series 4289 -> 3583 lines after round two (0003: 3112 -> 2405); 15 files in 0003 and 10 in 0002 (unchanged; merging head-subset files and de-duplicating `llama-moe-cache.cpp` need a differential fuzz first and were not done).
 
 Checked without a GPU: `llama-server --help` of the new build is byte-identical to the old (865 lines, defaults and env names included); LRU fuzzer 160000 steps OK; the patch series applies in order to `git archive HEAD` and equals the working tree on all 34 files. **Not yet checked on the GPU (waiting for the emulator to be closed):** the graph change must give the same outputs as before (A1/A3/B hashes and the `compute-sanitizer` run).
 

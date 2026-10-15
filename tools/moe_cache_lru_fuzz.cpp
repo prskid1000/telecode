@@ -20,6 +20,28 @@ struct fuzz {
     std::vector<moe_cache_lru::fill> fills;
     std::vector<std::pair<int32_t, moe_cache_lru::fill>> round_fills;
     std::mt19937 rng;
+    uint64_t trace = 14695981039346656037ULL; // FNV-1a over the whole state after every step: two planners that behave the same give the same number
+
+    void mix(uint64_t v) {
+        trace = (trace ^ v) * 1099511628211ULL;
+    }
+
+    void fingerprint() {
+        mix((uint64_t) lru.head); mix((uint64_t) lru.tail); mix(lru.epoch); mix(lru.n_calls); mix(lru.round_calls);
+        for (int s = 0; s < lru.n_slots; ++s) {
+            mix((uint64_t) lru.prev[s]); mix((uint64_t) lru.next[s]); mix((uint64_t) lru.key_of[s]); mix(lru.slot_epoch[s]);
+        }
+        for (uint32_t v : lru.heat) { mix(v); }
+        for (uint32_t v : lru.miss_count) { mix(v); }
+        for (int il = 0; il < n_layer; ++il) {
+            for (int e = 0; e < n_expert; ++e) { mix((uint64_t) (int64_t) maps[il][e]); }
+            mix(lru.dirty[il]);
+            for (const auto & f : lru.pending[il]) { mix((uint64_t) f.expert); mix((uint64_t) f.slot); }
+            for (int32_t e : lru.staged[il]) { mix((uint64_t) e); }
+        }
+        for (const auto & f : fills) { mix((uint64_t) f.expert); mix((uint64_t) f.slot); mix(f.now); }
+        for (const auto & f : round_fills) { mix((uint64_t) f.first); mix((uint64_t) f.second.expert); mix((uint64_t) f.second.slot); }
+    }
 
     explicit fuzz(uint32_t seed, int slots, int stage) : n_slots(slots), n_stage(stage), rng(seed) {
         lru.init(n_layer, n_expert, n_slots - n_stage);
@@ -202,7 +224,11 @@ int main() {
         fuzz f(seed, slots + stage, stage);
         for (int i = 0; i < 400 && g_fail == 0; ++i) {
             f.step();
+            f.fingerprint();
             total++;
+        }
+        if (getenv("FUZZ_TRACE")) {
+            printf("seed %u trace %016llx\n", seed, (unsigned long long) f.trace);
         }
         if (g_fail) {
             printf("seed %u (slots %d stage %d) failed after %d steps\n", seed, slots, stage, total);
