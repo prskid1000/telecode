@@ -117,7 +117,7 @@ def _patch_list() -> QWidget:
     from llamacpp import patcher
 
     box = QFrame()
-    box.setStyleSheet(f"QFrame#patchbox {{ border: 1px solid {BORDER}; border-radius: 6px; }}")
+    box.setStyleSheet(f"QFrame#patchbox {{ border: 1px solid {BORDER}; border-radius: 6px; background: transparent; }}")
     box.setObjectName("patchbox")
     outer = QVBoxLayout(box)
     outer.setContentsMargins(0, 0, 0, 0)
@@ -167,6 +167,9 @@ def _patch_list() -> QWidget:
     sa.setFrameShape(QFrame.Shape.NoFrame)
     sa.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     sa.setMaximumHeight(240)
+    inner.setObjectName("patchinner")
+    sa.viewport().setAutoFillBackground(False)
+    sa.setStyleSheet("QScrollArea { background: transparent; border: none; } QWidget#patchinner { background: transparent; }")
     sa.setWidget(inner)
     outer.addWidget(sa)
     return box
