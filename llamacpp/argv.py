@@ -655,7 +655,7 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
     suppressed_model: set[str] = set()
     if bool(mcfg.get("fit")):
         suppressed_model.update({"n_gpu_layers", "n_gpu_layers_draft"})
-    cache_on = int(mcfg.get("moe_cache_mib") or 0) > 0
+    cache_on = cfg.as_int(mcfg.get("moe_cache_mib")) > 0
     if not (bool(mcfg.get("moe_cache_cpu_miss")) and cache_on):
         suppressed_model.update(_MOE_CACHE_TUNING)
         suppressed_model.add("moe_cache_cpu_miss")
@@ -664,17 +664,14 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
                                  "moe_cache_route_bias", "moe_cache_promote_gain"})
         suppressed_model.update(_MOE_CACHE_ROUTE_RECIPE)
         suppressed_model.add("moe_cache_upload_batch")
-    if cache_on and not float(mcfg.get("moe_cache_route_bias") or 0) > 0:
+    if cache_on and not cfg.as_float(mcfg.get("moe_cache_route_bias")) > 0:
         suppressed_model.update(_MOE_CACHE_ROUTE_RECIPE)
     if cache_on and mcfg.get("moe_cache_prewarm") and not mcfg.get("moe_cache_stats_file"):
         # prewarm needs a stats file; keep one per model next to the other runtime data
         mcfg["moe_cache_stats_file"] = str(Path(cfg.resolve_path("data/moe-cache")) / f"{resolved}.bin")
     # rope_scale and rope_freq_scale are the same lever; the older key wins.
-    try:
-        if float(mcfg.get("rope_freq_scale") or 0) != 0.0:
-            suppressed_model.add("rope_scale")
-    except (TypeError, ValueError):
-        pass
+    if cfg.as_float(mcfg.get("rope_freq_scale")) != 0.0:
+        suppressed_model.add("rope_scale")
     for k, flag, kind in _MODEL_FLAG_SPECS:
         if k in suppressed_model:
             continue
@@ -694,7 +691,58 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
         elif isinstance(entry, str):
             argv.append(entry)
 
-    return argv
+    return _drop_unsupported(argv)
+
+
+# flags that only a patched llama.cpp (llamacpp/patcher.py) or a recent build has: a binary that does not list them in --help refuses to start
+_PATCHED_PREFIXES = ("--moe-cache-", "--spec-draft-adaptive", "--spec-draft-head-subset")
+_HELP_FLAGS: dict[tuple, Optional[set]] = {}
+
+
+def _binary_flags(binary: str) -> Optional[set]:
+    """The long flags `binary --help` lists, cached per file (path, size, mtime); None when it cannot be asked."""
+    import os
+    import shutil
+    import subprocess
+    exe = shutil.which(binary) or binary
+    try:
+        st = os.stat(exe)
+    except OSError:
+        return None
+    key = (exe, st.st_size, int(st.st_mtime))
+    if key not in _HELP_FLAGS:
+        flags = None
+        try:
+            out = subprocess.run([exe, "--help"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+            found = set(re.findall(r"(?<![\w-])(--[a-z0-9][a-z0-9-]*)", out))
+            flags = found if len(found) > 50 else None  # a real help text lists hundreds
+        except Exception as exc:  # no binary yet, timeout: do not filter
+            _LOG.debug("cannot read --help of %s: %s", exe, exc)
+        _HELP_FLAGS[key] = flags
+    return _HELP_FLAGS[key]
+
+
+def _drop_unsupported(argv: list[str]) -> list[str]:
+    """Remove the add-on flags (and their values) that the binary does not know, so a stock binary still starts."""
+    if not any(a.startswith(_PATCHED_PREFIXES) for a in argv[1:]):
+        return argv
+    have = _binary_flags(argv[0])
+    if not have:
+        return argv
+    out = [argv[0]]
+    i = 1
+    while i < len(argv):
+        a = argv[i]
+        if a.startswith(_PATCHED_PREFIXES) and a not in have:
+            _LOG.warning("llamacpp: %s is not known to %s (stock build?), leaving it out", a, argv[0])
+            i += 1
+            if i < len(argv) and not argv[i].startswith("-"):
+                i += 1
+            continue
+        out.append(a)
+        i += 1
+    return out
 
 
 def describe(model_name: str, overrides: Optional[dict] = None) -> str:

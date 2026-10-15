@@ -20,7 +20,7 @@ _LOG = logging.getLogger("telecode.llamacpp.auto_cache")
 
 # what llama-server / ggml print when an allocation on the GPU fails
 _OOM = re.compile(r"out of memory|failed to allocate|cudamalloc failed|unable to allocate|cuda error: .*memory|"
-                  r"alloc_tensor_range|failed to (create|load) (the )?model", re.I)
+                  r"alloc_tensor_range", re.I)
 
 
 def enabled(model_name: str) -> bool:
@@ -75,8 +75,9 @@ def plan(model_name: str, scale: float = 1.0) -> Optional[dict]:
     headroom = headroom_mib(model_name)
     try:
         # the suggestion plans with 1500 MiB of headroom: shift the free memory so that it means the configured headroom
+        # ctx_size 0 means the trained context for llama-server: plan the KV cache for that, not for 8192
         s = gguf_info.summarize(str(cfg.resolve_path(path)), ctx_size=cfg.effective_ctx_size(model_name),
-                                free_vram_mib=free + 1500 - headroom, kv_factor=kv_factor(model_name))
+                                free_vram_mib=free + 1500 - headroom, kv_factor=kv_factor(model_name), unset_ctx_is_trained=True)
     except Exception as exc:
         _LOG.warning("auto cache: cannot read %s: %s", path, exc)
         return None
@@ -90,11 +91,15 @@ def plan(model_name: str, scale: float = 1.0) -> Optional[dict]:
     n_moe = len(layers) or int(s.get("n_layers") or 0)
     if n_moe:
         # experts of layers that are not offloaded sit on the GPU too
-        n_cpu = n_moe if mcfg.get("cpu_moe") else (int(mcfg.get("n_cpu_moe") or 0) or n_moe)
+        # n_cpu_moe 0 or absent = no expert layer on the CPU (llama.cpp's meaning), so every layer's experts sit on the GPU
+        try:
+            n_cpu = n_moe if mcfg.get("cpu_moe") else max(0, min(n_moe, cfg.as_int(mcfg.get("n_cpu_moe"))))
+        except (TypeError, ValueError):
+            n_cpu = 0
         avail -= max(0, n_moe - n_cpu) * float(s["expert_bytes_total"]) / n_moe / (1 << 20)
     mib = int(max(0.0, avail) * 0.7 * max(0.05, min(1.0, scale)))
     mib = (mib // 64) * 64
-    cap = int(mcfg.get("moe_cache_mib") or 0)
+    cap = cfg.as_int(mcfg.get("moe_cache_mib"))
     if cap > 0:
         mib = min(mib, cap)
     if mib < 256:

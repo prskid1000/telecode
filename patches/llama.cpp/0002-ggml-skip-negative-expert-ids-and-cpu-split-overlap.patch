@@ -215,7 +215,7 @@ index 2632ae3a0..a09504231 100644
                      MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = { id, iid1 };
                      matrix_row_counts[i02] += 1;
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 9fe618f85..bdfd0689a 100644
+index 9fe618f85..4a6903951 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -30,6 +30,7 @@
@@ -323,19 +323,23 @@ index 9fe618f85..bdfd0689a 100644
  };
  
  static ggml_guid_t ggml_backend_cuda_guid() {
-@@ -5942,6 +5999,11 @@ static void ggml_backend_cuda_device_event_synchronize(ggml_backend_dev_t dev, g
+@@ -5942,6 +5999,15 @@ static void ggml_backend_cuda_device_event_synchronize(ggml_backend_dev_t dev, g
      CUDA_CHECK(cudaEventSynchronize((cudaEvent_t)event->context));
  }
  
 +static bool ggml_backend_cuda_device_event_query(ggml_backend_dev_t dev, ggml_backend_event_t event) {
 +    GGML_UNUSED(dev);
-+    return cudaEventQuery((cudaEvent_t)event->context) == cudaSuccess;
++    if (cudaEventQuery((cudaEvent_t)event->context) == cudaSuccess) {
++        return true;
++    }
++    (void) cudaGetLastError(); // cudaErrorNotReady is an answer, not a failure of the next kernel launch
++    return false;
 +}
 +
  static const ggml_backend_device_i ggml_backend_cuda_device_interface = {
      /* .get_name                = */ ggml_backend_cuda_device_get_name,
      /* .get_description         = */ ggml_backend_cuda_device_get_description,
-@@ -5958,6 +6020,7 @@ static const ggml_backend_device_i ggml_backend_cuda_device_interface = {
+@@ -5958,6 +6024,7 @@ static const ggml_backend_device_i ggml_backend_cuda_device_interface = {
      /* .event_new               = */ ggml_backend_cuda_device_event_new,
      /* .event_free              = */ ggml_backend_cuda_device_event_free,
      /* .event_synchronize       = */ ggml_backend_cuda_device_event_synchronize,

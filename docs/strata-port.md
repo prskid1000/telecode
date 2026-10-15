@@ -1,5 +1,7 @@
 # Porting Strata's MoE features to llama.cpp as a patch series
 
+> **2026-10-15:** patch 0004 (draft head subset) was folded into `0003-moe-cache-cpu-miss-prewarm-and-adaptive-draft.patch`. The series is now 0001 (defer_loading), 0002 (ggml), 0003 (cache, adaptive draft, head subset). Earlier mentions of 0004 below mean the head-subset part of 0003.
+
 Source: [Niko1221/Strata](https://github.com/Niko1221/Strata) (MIT, main as of 2026-10-14, ~110k lines C++/CUDA under
 `src/`, own runtime: `core/` 24k, `kernels/` 53k, `prefill/` 13k, `program/` 15k, `qwen35/` 3k, `spec/` 0.7k).
 Strata is **not** a llama.cpp fork (`third_party/ggml` holds only `ggml-common.h`), so there is nothing to rebase:

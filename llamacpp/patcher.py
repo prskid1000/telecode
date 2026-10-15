@@ -507,14 +507,22 @@ def apply_patches(progress: Progress = _noop) -> dict[str, Any]:
     skipped: list[str] = []
     failed: list[dict[str, str]] = []
     already = set(applied_patches())
+    left_out: set[str] = set()  # switched off in the settings, or depending on one that is
 
     for p in series:
         key = patch_key(p)
         if not patch_enabled(p):
             progress(f"-- {key}: disabled in settings, skipping")
             skipped.append(key)
+            left_out.add(key)
             continue
         missing = [r for r in patch_requires(p) if r not in applied and r not in already]
+        if missing and all(r in left_out for r in missing):
+            # the user turned the required patch off: this one cannot go in either, which is not a failure
+            progress(f"-- {key}: needs {', '.join(missing)}, which is disabled in settings, skipping")
+            skipped.append(key)
+            left_out.add(key)
+            continue
         if missing:
             progress(f"!! {key} needs {', '.join(missing)}, which is not applied (disabled or failed) - skipping")
             failed.append({"patch": key, "reason": f"requires {', '.join(missing)}"})

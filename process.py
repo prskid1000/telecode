@@ -427,6 +427,8 @@ class LlamaSupervisor:
         self._idle_task: Optional[asyncio.Task] = None
         self._watchdog_task: Optional[asyncio.Task] = None
         self._loaded_at: float = 0.0
+        self._spawn_logged = False  # the current spawn attempt wrote its marker to llama.log
+        self._planned_mib: Optional[int] = None  # the automatic cache size of the current spawn attempt
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
@@ -522,11 +524,17 @@ class LlamaSupervisor:
         """Stop a llama-server whose /health stops answering; the next request starts a fresh one."""
         url = f"{cfg.upstream_url()}/health"
         failing_since: Optional[float] = None
+        watched_pid = 0
         async with aiohttp.ClientSession() as session:
             while True:
                 await asyncio.sleep(5.0)
                 if not self.alive():
                     return
+                pid = self._proc.pid if self._proc else 0
+                if pid != watched_pid:
+                    # a new server (swap, restart): its start-up is not a failure of the old one
+                    watched_pid = pid
+                    failing_since = None
                 limit = cfg.watchdog_sec()
                 if limit <= 0:
                     return
@@ -544,7 +552,10 @@ class LlamaSupervisor:
                 if now - failing_since >= limit:
                     _LLAMA_LOG.error("llama.cpp: /health has not answered for %.0fs, restarting llama-server", now - failing_since)
                     try:
-                        await self.stop()
+                        async with self._lock:
+                            # a swap or spawn may have held the lock meanwhile: only stop the very server that stopped answering
+                            if self._proc is not None and self._proc.pid == watched_pid and self._proc.poll() is None:
+                                await self._stop_locked()
                     except Exception as exc:
                         _LLAMA_LOG.warning("watchdog stop failed: %s", exc)
                     return
@@ -587,11 +598,19 @@ class LlamaSupervisor:
         from llamacpp import auto_cache
         scale = 1.0
         for attempt in range(4):
+            self._spawn_logged = False
+            self._planned_mib = None
             try:
                 await self._spawn_locked(model_name, scale)
                 return
             except RuntimeError as exc:
-                if attempt >= 3 or not auto_cache.enabled(model_name) or not auto_cache.log_says_oom(cfg.log_file()):
+                # a retry only helps when this attempt really started a server with a planned cache that a smaller one would change;
+                # every extra near-OOM load is a risk on a machine that crashes when the GPU memory runs full
+                if (attempt >= 3 or not auto_cache.enabled(model_name) or not self._spawn_logged
+                        or not self._planned_mib or not auto_cache.log_says_oom(cfg.log_file())):
+                    raise
+                nxt = await asyncio.get_running_loop().run_in_executor(None, auto_cache.plan, model_name, scale*0.8)
+                if nxt is None or int(nxt.get("moe_cache_mib") or 0) >= self._planned_mib:
                     raise
                 scale *= 0.8
                 _LLAMA_LOG.warning("llama.cpp: '%s' ran out of GPU memory (%s), trying again with a cache %d%% of the planned size",
@@ -616,6 +635,7 @@ class LlamaSupervisor:
         from llamacpp import auto_cache
         if auto_cache.enabled(model_name):
             overrides = await asyncio.get_running_loop().run_in_executor(None, auto_cache.plan, model_name, cache_scale)
+        self._planned_mib = int(overrides["moe_cache_mib"]) if overrides and overrides.get("moe_cache_mib") else None
         argv = build_argv(model_name, overrides)
         binary = argv[0]
         resolved_binary = shutil.which(binary) or binary
@@ -635,6 +655,7 @@ class LlamaSupervisor:
             self._log_fp.write(
                 f"env: {', '.join(sorted(cfg.extra_env(model_name)))}\n".encode())
         self._log_fp.flush()
+        self._spawn_logged = True
 
         _LLAMA_LOG.info("llama.cpp: spawning '%s' on %s:%d",
                         model_name, cfg.host(), cfg.port())

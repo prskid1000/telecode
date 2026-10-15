@@ -214,7 +214,7 @@ def _kv_bytes_per_token(kv: dict[str, Any], arch: str, n_layers: int) -> tuple[i
 
 
 def summarize(path: str, ctx_size: Optional[int] = None, free_vram_mib: Optional[int] = None,
-              kv_factor: float = 1.0) -> dict[str, Any]:
+              kv_factor: float = 1.0, unset_ctx_is_trained: bool = False) -> dict[str, Any]:
     """Facts and a starting config for a GGUF; header only.
 
     ctx_size    context the KV estimate is for (default min(model context, 8192)).
@@ -263,7 +263,8 @@ def summarize(path: str, ctx_size: Optional[int] = None, free_vram_mib: Optional
     }
 
     if expert_total and (n_exp or 0) > 1:
-        ctx = ctx_size or min(ctx_len or 8192, 8192)
+        # llama-server loads the trained context for ctx_size 0; the tray estimate keeps the small default
+        ctx = ctx_size or ((ctx_len or 8192) if unset_ctx_is_trained else min(ctx_len or 8192, 8192))
         if free_vram_mib is None:
             from llamacpp import vram
             free_vram_mib = vram.free_vram_mib()
@@ -282,6 +283,7 @@ def summarize(path: str, ctx_size: Optional[int] = None, free_vram_mib: Optional
         cache = max(0, int(budget * 0.7))
         out["suggested"] = {
             "n_cpu_moe": n_moe_layers - fit,
+            "n_moe_layers": n_moe_layers,
             "moe_cache_mib": cache,
             "ctx_size": ctx,
             "free_vram_mib": int(free_vram_mib),

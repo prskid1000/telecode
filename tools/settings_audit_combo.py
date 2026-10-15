@@ -9,7 +9,7 @@ ROOT = r"D:\Projects\Telecode"
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 STOCK = r"D:\Projects\Telecode\llama\llama-server.exe"
-PATCHED = r"D:\Projects\Telecode\build\test-bin-0007\llama-server.exe"
+PATCHED = r"D:\Projects\Telecode\build\test-bin-0008\llama-server.exe"
 
 tmp = tempfile.mkdtemp(prefix="audit_")
 SETTINGS = os.path.join(tmp, "settings.json")
@@ -19,7 +19,7 @@ os.environ["TELECODE_SETTINGS"] = SETTINGS
 def write_settings(g=None, m=None):
     model = {"path": "D:/x/model.gguf"}
     model.update(m or {})
-    glob = {"binary": "llama-server", "models": {"m": model}, "default_model": "m"}
+    glob = {"binary": PATCHED, "models": {"m": model}, "default_model": "m"}
     glob.update(g or {})
     json.dump({"llamacpp": glob}, open(SETTINGS, "w"))
 

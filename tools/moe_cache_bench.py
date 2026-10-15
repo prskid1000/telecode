@@ -85,6 +85,14 @@ def _make_settings(args: argparse.Namespace) -> str:
         m[k] = _parse_value(v)
 
     g["host"], g["port"], g["api_key"] = BENCH_HOST, args.port, ""
+    # the copy lives in a temp folder: paths relative to the settings folder must be made absolute first
+    base = Path(src).resolve().parent
+    def _abs(p: object) -> object:
+        raw = str(p or "").strip()
+        return str((base / raw).resolve()) if raw and ("/" in raw or "\\" in raw) and not Path(raw).is_absolute() else p
+    g["binary"] = _abs(g.get("binary"))
+    if m.get("path"):
+        m["path"] = _abs(m["path"])
     if args.exe:
         g["binary"] = args.exe
 
@@ -123,6 +131,7 @@ class _VramPeak(threading.Thread):
         self.peak: int | None = None
         self.limit_mib = limit_mib
         self.exceeded = False
+        self.kill = None  # called to stop the server being measured (set once it runs)
         self._stop_evt = threading.Event()
 
     def run(self) -> None:
@@ -134,7 +143,8 @@ class _VramPeak(threading.Thread):
             if used is not None and self.limit_mib > 0 and used > self.limit_mib and not self.exceeded:
                 # this laptop hard-crashes when the GPU memory runs full: stop the server before that
                 self.exceeded = True
-                subprocess.run(["taskkill", "/F", "/IM", "llama-server.exe"], capture_output=True)
+                if self.kill is not None:
+                    self.kill()
             self._stop_evt.wait(0.25)
 
     def stop(self) -> None:
@@ -191,6 +201,7 @@ def main() -> int:
         proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                 env=lcfg.spawn_env(args.model),
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        peak.kill = lambda: kill_process_tree(proc.pid)
         peak.start()
         t0 = time.time()
         while True:

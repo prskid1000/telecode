@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,26 @@ _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 def enabled() -> bool:
     return bool(app_config.get_nested("llamacpp.enabled", False))
+
+
+# where the llama.cpp install lives when llamacpp.binary is empty (relative to the settings.json directory)
+DEFAULT_BINARY = "./llama/llama-server.exe" if sys.platform == "win32" else "llama-server"
+
+
+def as_int(value: Any, default: int = 0) -> int:
+    """int() that survives a hand-edited settings value ("abc", "32768.0", None)."""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+    return v if v == v else default  # NaN
 
 
 def binary() -> str:
@@ -110,7 +131,7 @@ def min_free_vram_mib() -> int:
     0 (default) = no check. Guards against the driver spilling a model into shared
     system memory, which runs an order of magnitude slower than failing early.
     Not a llama-server flag, so it never reaches argv."""
-    return int(app_config.get_nested("llamacpp.min_free_vram_mib", 0) or 0)
+    return as_int(app_config.get_nested("llamacpp.min_free_vram_mib", 0))
 
 
 # Note: telecode always remembers the last-active model (no toggle).
@@ -172,7 +193,7 @@ def model_cfg(name: str) -> dict[str, Any]:
 def spec_active() -> bool:
     """True when speculative decoding is on: a real --spec-type strategy or --spec-default."""
     g = app_config.get_nested("llamacpp", {}) or {}
-    types = [t.strip() for t in str(g.get("spec_type", "") or "").split(",")]
+    types = [t.strip().lower() for t in str(g.get("spec_type", "") or "").split(",")]
     return any(t and t != "none" for t in types) or bool(g.get("spec_default"))
 
 
@@ -183,8 +204,8 @@ def effective_ctx_size(name: str) -> int:
     context and its KV take VRAM, so a model that just fits without them needs a smaller window.
     """
     m = model_cfg(name)
-    ctx = int(m.get("ctx_size") or 0)
-    cap = int(m.get("ctx_size_spec") or 0)
+    ctx = as_int(m.get("ctx_size"))
+    cap = as_int(m.get("ctx_size_spec"))
     if cap > 0 and ctx > 0 and spec_active():
         return min(ctx, cap)
     return ctx

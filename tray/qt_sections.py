@@ -177,7 +177,16 @@ def _follow_setting(path: str, widget: QWidget, apply: Callable[[Any], None]) ->
                 settings_bus().settingChanged.disconnect(_on)
             except (RuntimeError, TypeError):
                 pass
-    settings_bus().settingChanged.connect(_on)
+    bus = settings_bus()
+    bus.settingChanged.connect(_on)
+
+    def _gone(*_args: Any) -> None:
+        # the widget went away with its page: drop the subscription now instead of at the next write of this key
+        try:
+            bus.settingChanged.disconnect(_on)
+        except (RuntimeError, TypeError):
+            pass
+    widget.destroyed.connect(_gone)
 
 
 def _number_row(path: str, label: str,
@@ -418,6 +427,9 @@ def _gguf_inspector_card(p: str) -> QWidget:
 
     def _apply() -> None:
         if suggestion:
+            # the suggested size was computed with every expert layer on the CPU: set that, or the cache and the GPU experts overcommit the VRAM
+            if suggestion.get("n_moe_layers"):
+                patch_settings(f"{p}.n_cpu_moe", int(suggestion["n_moe_layers"]))
             patch_settings(f"{p}.moe_cache_mib", int(suggestion["moe_cache_mib"]))
 
     inspect_btn.clicked.connect(_inspect)

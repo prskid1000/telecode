@@ -1,12 +1,16 @@
-Add-on: MoE expert cache modes for models whose experts live in host memory, and an adaptive speculative draft length.
+Add-on: MoE expert cache modes for models whose experts live in host memory, an adaptive speculative draft length, and a GPU subset of the output head for draft steps.
   --moe-cache-cpu-miss (+ --moe-cache-promote-after/-max/-gain, --moe-cache-decay, --moe-cache-cpu-miss-max-tokens)
-  --moe-cache-stats-file, --moe-cache-prewarm, --moe-cache-route-bias, --moe-cache-foresight, --moe-cache-tail-skip
+  --moe-cache-stats-file, --moe-cache-prewarm, --moe-cache-route-bias/-route-top/-route-scale, --moe-cache-foresight, --moe-cache-tail-skip(-rank, -auto-off)
+  --moe-cache-evict-window, --moe-cache-pcie-share/-pcie-max/-pcie-auto(-window), --moe-cache-async-upload, --moe-cache-upload-batch, --moe-cache-swap-every/-swap-max
+  --moe-cache-prefill-share, --moe-cache-prefill-max-tokens, --moe-cache-staging-slots (CPU share of prompt batches)
   --spec-draft-adaptive (+ -min-gain, -ema, -probe)
+  --spec-draft-head-subset N: the MTP draft steps read the output head once per drafted token; with the head in host memory that is the biggest cost of a
+  draft step. This keeps the first N rows and the last 1024 rows of the head in device memory for the draft. The target still verifies with the full head.
 All off by default; stock behaviour is unchanged without the flags.
 Requires: 0002-ggml-skip-negative-expert-ids-and-cpu-split-overlap.patch
 
 diff --git a/common/arg.cpp b/common/arg.cpp
-index 6bc4a84e2..08b1f6c8f 100644
+index 6bc4a84e2..a2c149e82 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
 @@ -2786,6 +2786,315 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
@@ -81,7 +85,7 @@ index 6bc4a84e2..08b1f6c8f 100644
 +        "add F to the router score of the experts that are in the MoE cache when a token picks its experts, so it prefers them. This changes the output. 0 = off (default: 0)",
 +        [](common_params & params, const std::string & value) {
 +            const float v = std::stof(value);
-+            if (v < 0.0f) {
++            if (!(v >= 0.0f)) {
 +                throw std::invalid_argument("invalid value");
 +            }
 +            params.moe_cache_route_bias = v;
@@ -92,7 +96,7 @@ index 6bc4a84e2..08b1f6c8f 100644
 +        "with --moe-cache-cpu-miss, an expert enters the cache only if it was used F times more than the expert it evicts, 0 = always (default: 0)",
 +        [](common_params & params, const std::string & value) {
 +            const float v = std::stof(value);
-+            if (v < 0.0f) {
++            if (!(v >= 0.0f)) {
 +                throw std::invalid_argument("invalid value");
 +            }
 +            params.moe_cache_promote_gain = v;
@@ -133,7 +137,7 @@ index 6bc4a84e2..08b1f6c8f 100644
 +        "with --moe-cache-cpu-miss, this fraction (0-1) of the missed experts of a call is uploaded and computed on the GPU in that call instead of on the CPU, most used first, 0 = all on the CPU (default: 0.0)",
 +        [](common_params & params, const std::string & value) {
 +            const float v = std::stof(value);
-+            if (v < 0.0f || v > 1.0f) {
++            if (!(v >= 0.0f && v <= 1.0f)) {
 +                throw std::invalid_argument("invalid value");
 +            }
 +            params.moe_cache_pcie_share = v;
@@ -246,7 +250,7 @@ index 6bc4a84e2..08b1f6c8f 100644
 +        "with --moe-cache-cpu-miss, in prompt batches above --moe-cache-cpu-miss-max-tokens this fraction (0-1) of the missed experts is computed on the CPU while the GPU computes the others, uploaded through staging slots, and the cache is left alone. 0 = off (the experts are copied to the GPU as without the cache) (default: 0.0)",
 +        [](common_params & params, const std::string & value) {
 +            const float v = std::stof(value);
-+            if (v < 0.0f || v > 1.0f) {
++            if (!(v >= 0.0f && v <= 1.0f)) {
 +                throw std::invalid_argument("invalid value");
 +            }
 +            params.moe_cache_prefill_share = v;
@@ -285,7 +289,7 @@ index 6bc4a84e2..08b1f6c8f 100644
 +        string_format("a draft must beat not drafting by this fraction of tokens per ms, with --spec-draft-adaptive (default: %.2f)", (double) params.speculative.adaptive_min_gain),
 +        [](common_params & params, const std::string & value) {
 +            const float v = std::stof(value);
-+            if (v < 0.0f || v > 1.0f) {
++            if (!(v >= 0.0f && v <= 1.0f)) {
 +                throw std::invalid_argument("invalid value");
 +            }
 +            params.speculative.adaptive_min_gain = v;
@@ -427,10 +431,30 @@ index b6683fe67..ba1bd25e9 100644
      common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
  
 diff --git a/common/speculative.cpp b/common/speculative.cpp
-index c5043a4a8..2b0d5d1cd 100644
+index c5043a4a8..2f4ecf6f2 100644
 --- a/common/speculative.cpp
 +++ b/common/speculative.cpp
-@@ -2245,6 +2245,131 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
+@@ -882,7 +882,8 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
+ 
+                 result.push_back(id);
+ 
+-                if (params.n_max <= (int) result.size()) {
++                if (params.n_max <= (int) result.size() ||
++                    (dp.n_max > 0 && dp.n_max <= (int) result.size())) {
+                     drafting[seq_id] = false;
+                     n_drafting--;
+                     continue;
+@@ -1762,7 +1763,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+                     dp.result_q->emplace_back(cur_p->data, cur_p->data + cur_p->size);
+                 }
+ 
+-                if (params.n_max <= (int) result.size()) {
++                if (params.n_max <= (int) result.size() ||
++                    (dp.n_max > 0 && dp.n_max <= (int) result.size())) {
+                     drafting[seq_id] = false;
+                     n_drafting--;
+                     continue;
+@@ -2245,6 +2247,131 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
      }
  };
  
@@ -562,7 +586,7 @@ index c5043a4a8..2b0d5d1cd 100644
  struct common_speculative {
      common_speculative_draft_params_vec dparams;
  
-@@ -2255,6 +2380,11 @@ struct common_speculative {
+@@ -2255,6 +2382,11 @@ struct common_speculative {
      std::vector<common_speculative_impl *> impl_last;
  
      std::vector<double> synth_probs;
@@ -574,7 +598,7 @@ index c5043a4a8..2b0d5d1cd 100644
  };
  
  static common_ngram_map get_common_ngram_map(
-@@ -2536,6 +2666,7 @@ common_params common_base_params_to_speculative(const common_params & params) {
+@@ -2536,6 +2668,7 @@ common_params common_base_params_to_speculative(const common_params & params) {
  
      result.embedding    = false;
      result.pooling_type = LLAMA_POOLING_TYPE_UNSPECIFIED;
@@ -582,7 +606,7 @@ index c5043a4a8..2b0d5d1cd 100644
  
      if (has_draft) {
          // default to global devices value
-@@ -2567,6 +2698,7 @@ common_params common_base_params_to_speculative(const common_params & params) {
+@@ -2567,6 +2700,7 @@ common_params common_base_params_to_speculative(const common_params & params) {
  
      // the MoE cache is only used by the target context
      result.moe_cache_size = 0;
@@ -590,7 +614,7 @@ index c5043a4a8..2b0d5d1cd 100644
  
      // dflash/dspark decode the whole noise block in a single pass and sample every block position on the backend
      // TODO: refactor such properties to be announced by the speculative types
-@@ -2801,6 +2933,24 @@ common_speculative * common_speculative_init(common_params_speculative & params,
+@@ -2801,6 +2935,24 @@ common_speculative * common_speculative_init(common_params_speculative & params,
          /* .synth_probs = */ {},
      });
  
@@ -615,7 +639,7 @@ index c5043a4a8..2b0d5d1cd 100644
      const int32_t n_max_configured = common_speculative_n_max(&params);
      const int32_t n_max_effective  = common_speculative_n_max(result.get());
      const auto rates = common_speculative_synth_rates_resolve(&params, n_max_effective);
-@@ -2895,6 +3045,32 @@ void common_speculative_draft(common_speculative * spec) {
+@@ -2895,6 +3047,32 @@ void common_speculative_draft(common_speculative * spec) {
          }
      }
  
@@ -648,7 +672,7 @@ index c5043a4a8..2b0d5d1cd 100644
      for (auto & impl : spec->impls) {
          {
              common_time_meas tm(impl->t_draft_us, !impl->gen_perf);
-@@ -2936,6 +3112,9 @@ void common_speculative_draft(common_speculative * spec) {
+@@ -2936,6 +3114,9 @@ void common_speculative_draft(common_speculative * spec) {
  
                      // remember which implementation was used
                      spec->impl_last[seq_id] = impl.get();
@@ -658,7 +682,7 @@ index c5043a4a8..2b0d5d1cd 100644
  
                      impl->n_gen_drafts++;
                      impl->n_gen_tokens += result.size();
-@@ -2963,6 +3142,11 @@ void common_speculative_draft(common_speculative * spec) {
+@@ -2963,6 +3144,11 @@ void common_speculative_draft(common_speculative * spec) {
  }
  
  void common_speculative_accept(common_speculative * spec, llama_seq_id seq_id, uint16_t n_accepted) {
@@ -670,7 +694,7 @@ index c5043a4a8..2b0d5d1cd 100644
      common_speculative_impl * impl = spec->impl_last[seq_id];
  
      if (impl == nullptr) {
-@@ -3028,6 +3212,16 @@ void common_speculative_print_stats(const common_speculative * spec) {
+@@ -3028,6 +3214,16 @@ void common_speculative_print_stats(const common_speculative * spec) {
          return;
      }
  
@@ -726,8 +750,20 @@ index f15ca9f75..a4a17df9a 100644
  
          // Abort callback
          // if it returns true, execution of llama_decode() will be aborted
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 97250c2e8..c68d64e77 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -29,6 +29,7 @@ set(LLAMA_CORE_SOURCES
+     llama-kv-cache-dsv4.cpp
+     llama-memory.cpp
+     llama-moe-cache.cpp
++    llama-head-subset.cpp
+     llama-memory-hybrid.cpp
+     llama-memory-hybrid-iswa.cpp
+     llama-memory-hybrid-idx.cpp
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 9ee64b566..7a81044b4 100644
+index 9ee64b566..34f20a62b 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -9,6 +9,7 @@
@@ -780,7 +816,7 @@ index 9ee64b566..7a81044b4 100644
 -            moe_cache = std::make_unique<llama_moe_cache>(model, backend_ptrs, backend_buft, cparams.moe_cache_size);
 +            const llama_moe_cache_params mc_params = {
 +                cparams.moe_cache_cpu_miss, cparams.moe_cache_promote_after, cparams.moe_cache_promote_max, cparams.moe_cache_decay, cparams.moe_cache_cpu_miss_max_tokens,
-+                cparams.moe_cache_stats_file, cparams.moe_cache_prewarm, cparams.moe_cache_route_bias, cparams.moe_cache_promote_gain, cparams.moe_cache_foresight, cparams.moe_cache_tail_skip, cparams.moe_cache_evict_window, cparams.moe_cache_pcie_share, cparams.moe_cache_pcie_max, cparams.moe_cache_tail_rank, cparams.moe_cache_tail_auto_off, cparams.moe_cache_route_top, cparams.moe_cache_route_scale, cparams.moe_cache_async_upload, cparams.moe_cache_swap_every, cparams.moe_cache_swap_max, cparams.moe_cache_pcie_auto, cparams.moe_cache_pcie_auto_window, cparams.moe_cache_upload_batch, cparams.moe_cache_prefill_share, cparams.moe_cache_prefill_max_tokens, cparams.moe_cache_staging_slots,
++                cparams.moe_cache_stats_file, cparams.moe_cache_prewarm, cparams.moe_cache_route_bias, cparams.moe_cache_promote_gain, cparams.moe_cache_foresight, cparams.moe_cache_tail_skip, cparams.moe_cache_evict_window, cparams.moe_cache_pcie_share, cparams.moe_cache_pcie_max, cparams.moe_cache_tail_rank, cparams.moe_cache_tail_auto_off, cparams.moe_cache_route_top, cparams.moe_cache_route_scale, cparams.moe_cache_async_upload, cparams.moe_cache_swap_every, cparams.moe_cache_swap_max, cparams.moe_cache_pcie_auto, cparams.moe_cache_pcie_auto_window, cparams.moe_cache_upload_batch, cparams.moe_cache_prefill_share, cparams.moe_cache_prefill_max_tokens, cparams.moe_cache_staging_slots, (int32_t) cparams.n_ubatch,
 +            };
 +            moe_cache = std::make_unique<llama_moe_cache>(model, backend_ptrs, backend_buft, cparams.moe_cache_size, mc_params);
 +        }
@@ -818,7 +854,17 @@ index 9ee64b566..7a81044b4 100644
          /*.prec_policy =*/ &model.prec_policy,
          /*.hdmd        =*/ model.hdmd.rot.empty() ? nullptr : &model.hdmd,
          /*.samplers    =*/ sampling.samplers,
-@@ -4002,6 +4053,34 @@ llama_context_params llama_context_default_params() {
+@@ -3712,6 +3763,9 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
+             ret[buft].context += size;
+         }
+     }
++    if (head_subset) {
++        ret[head_subset->buft()].context += head_subset->size_bytes();
++    }
+     if (model.hparams.no_alloc) {
+         for (size_t i = 0; i < backends.size(); ++i) {
+             ggml_backend_t             backend = backends[i].get();
+@@ -4002,6 +4056,34 @@ llama_context_params llama_context_default_params() {
          /*.type_k                      =*/ GGML_TYPE_F16,
          /*.type_v                      =*/ GGML_TYPE_F16,
          /*.moe_cache_size              =*/ 0,
@@ -853,6 +899,26 @@ index 9ee64b566..7a81044b4 100644
          /*.abort_callback              =*/ nullptr,
          /*.abort_callback_data         =*/ nullptr,
          /*.embeddings                  =*/ false,
+diff --git a/src/llama-context.h b/src/llama-context.h
+index 6938fb103..d326ab029 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -7,6 +7,7 @@
+ #include "llama-adapter.h"
+ #include "llama-impl.h"
+ #include "llama-memory.h"
++#include "llama-head-subset.h"
+ #include "llama-moe-cache.h"
+ 
+ #include "ggml-cpp.h"
+@@ -308,6 +309,7 @@ private:
+ 
+     llama_memory_ptr memory;
+     llama_moe_cache_ptr moe_cache;
++    llama_head_subset_ptr head_subset;
+ 
+     // decode output (2-dimensional array: [n_outputs][n_vocab])
+     buffer_view<float> logits = {nullptr, 0};
 diff --git a/src/llama-cparams.h b/src/llama-cparams.h
 index f4eb181a7..abcabf437 100644
 --- a/src/llama-cparams.h
@@ -1441,8 +1507,186 @@ index e853a0269..05dc1da22 100644
  
      //
      // inputs
+diff --git a/src/llama-head-subset.cpp b/src/llama-head-subset.cpp
+new file mode 100644
+index 000000000..0482f6176
+--- /dev/null
++++ b/src/llama-head-subset.cpp
+@@ -0,0 +1,129 @@
++#include "llama-head-subset.h"
++
++#include "llama-impl.h"
++#include "llama-model.h"
++
++#include "ggml-cpp.h"
++
++#include <algorithm>
++#include <cinttypes>
++#include <cstdint>
++#include <stdexcept>
++#include <vector>
++
++struct llama_head_subset::impl {
++    const ggml_tensor * src = nullptr;
++
++    ggml_context_ptr ctx;
++    ggml_backend_buffer_ptr buf;
++
++    ggml_tensor * w   = nullptr;
++    ggml_tensor * ids = nullptr;
++
++    int64_t n_rows = 0;
++
++    ggml_backend_buffer_type_t buft = nullptr;
++    size_t size = 0;
++
++    impl(const llama_model & model, ggml_backend_buffer_type_t buft_req, int32_t n_req) {
++        src = model.output;
++        const ggml_tensor * src_scale = model.output_s;
++        for (const auto & layer : model.layers) {
++            // a model whose MTP layer has a head of its own drafts with that one
++            if (layer.nextn.shared_head_head != nullptr) {
++                src = layer.nextn.shared_head_head;
++                src_scale = layer.nextn.shared_head_head_s;
++                break;
++            }
++        }
++        // the memory fit loads the model without weights and may place the head on the GPU: it only needs the size, so no host check there
++        if (src == nullptr || (!model.hparams.no_alloc && (src->buffer == nullptr || !ggml_backend_buffer_is_host(src->buffer)))) {
++            throw std::runtime_error("the output head is not in host memory");
++        }
++        if (src_scale != nullptr || src->ne[2] != 1 || src->ne[3] != 1 || ggml_is_transposed(src)) {
++            throw std::runtime_error("the output head cannot be split by rows");
++        }
++
++        const int64_t n_vocab = src->ne[1];
++        // the special tokens of the common vocabularies are the last ones
++        const int64_t n_last  = std::min<int64_t>(1024, n_vocab/4);
++        const int64_t n_first = std::min<int64_t>(std::max<int64_t>(n_req, 1), n_vocab - n_last);
++        n_rows = n_first + n_last;
++        if (n_rows >= n_vocab) {
++            throw std::runtime_error("the subset would be the whole head");
++        }
++
++        ggml_init_params params = {
++            /*.mem_size   =*/ 2*ggml_tensor_overhead(),
++            /*.mem_buffer =*/ nullptr,
++            /*.no_alloc   =*/ true,
++        };
++        ctx.reset(ggml_init(params));
++        if (!ctx) {
++            throw std::runtime_error("failed to create the head subset context");
++        }
++        w   = ggml_new_tensor_2d(ctx.get(), src->type, src->ne[0], n_rows);
++        ids = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, n_rows);
++        ggml_set_name(w,   "head_subset.weight");
++        ggml_set_name(ids, "head_subset.ids");
++        GGML_ASSERT(w->nb[1] == src->nb[1]);
++
++        buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft_req));
++        if (!buf) {
++            throw std::runtime_error("failed to allocate the head subset");
++        }
++        buft = buft_req;
++        size = ggml_backend_buffer_get_size(buf.get());
++        // as weights, the ops that read it run on the device that holds it
++        ggml_backend_buffer_set_usage(buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
++
++        // the memory fit of the server loads the model without weights: the buffer is counted, nothing is copied
++        if (!model.hparams.no_alloc) {
++            const size_t row = src->nb[1];
++            ggml_backend_tensor_set(w, src->data, 0, n_first*row);
++            ggml_backend_tensor_set(w, (const uint8_t *) src->data + (n_vocab - n_last)*row, n_first*row, n_last*row);
++
++            std::vector<int32_t> tokens(n_rows);
++            for (int64_t i = 0; i < n_first; ++i) {
++                tokens[i] = (int32_t) i;
++            }
++            for (int64_t i = 0; i < n_last; ++i) {
++                tokens[n_first + i] = (int32_t) (n_vocab - n_last + i);
++            }
++            ggml_backend_tensor_set(ids, tokens.data(), 0, ggml_nbytes(ids));
++        }
++
++        LLAMA_LOG_INFO("%s: %" PRId64 " of %" PRId64 " rows of the output head on the device, %.2f MiB\n", __func__,
++                n_rows, n_vocab, ggml_backend_buffer_get_size(buf.get())/1024.0/1024.0);
++    }
++};
++
++llama_head_subset::llama_head_subset(const llama_model & model, ggml_backend_buffer_type_t buft, int32_t n_rows) :
++    pimpl(new impl(model, buft, n_rows)) {
++}
++
++llama_head_subset::~llama_head_subset() = default;
++
++const ggml_tensor * llama_head_subset::source() const {
++    return pimpl->src;
++}
++
++ggml_tensor * llama_head_subset::weights() const {
++    return pimpl->w;
++}
++
++ggml_tensor * llama_head_subset::ids() const {
++    return pimpl->ids;
++}
++
++int64_t llama_head_subset::n_rows() const {
++    return pimpl->n_rows;
++}
++
++ggml_backend_buffer_type_t llama_head_subset::buft() const {
++    return pimpl->buft;
++}
++
++size_t llama_head_subset::size_bytes() const {
++    return pimpl->size;
++}
+diff --git a/src/llama-head-subset.h b/src/llama-head-subset.h
+new file mode 100644
+index 000000000..9042acc21
+--- /dev/null
++++ b/src/llama-head-subset.h
+@@ -0,0 +1,37 @@
++#pragma once
++
++#include "ggml-backend.h"
++
++#include <memory>
++
++struct llama_model;
++
++// the first rows of the output head (the most frequent tokens of a BPE vocabulary) and the last ones (the special tokens) in device memory
++// a draft head step that only needs likely tokens then does not read the whole output matrix from host memory
++class llama_head_subset {
++public:
++    // throws if the model has no output head in host memory that can be split by rows
++    llama_head_subset(const llama_model & model, ggml_backend_buffer_type_t buft, int32_t n_rows);
++    ~llama_head_subset();
++
++    // the full output head the subset was taken from
++    const ggml_tensor * source() const;
++
++    // [n_embd, n_rows] same type as the full head
++    ggml_tensor * weights() const;
++
++    // I32 [n_rows], the token of each row
++    ggml_tensor * ids() const;
++
++    int64_t n_rows() const;
++
++    // where the subset lives and how many bytes it takes
++    ggml_backend_buffer_type_t buft() const;
++    size_t size_bytes() const;
++
++private:
++    struct impl;
++    std::unique_ptr<impl> pimpl;
++};
++
++using llama_head_subset_ptr = std::unique_ptr<llama_head_subset>;
 diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
-index f22d986dc..eb3940be3 100644
+index f22d986dc..105c20deb 100644
 --- a/src/llama-moe-cache.cpp
 +++ b/src/llama-moe-cache.cpp
 @@ -6,6 +6,11 @@
@@ -1953,13 +2197,14 @@ index f22d986dc..eb3940be3 100644
          for (size_t i = 0; i < backends.size(); ++i) {
              const auto dev_type = ggml_backend_dev_type(ggml_backend_get_device(backends[i]));
              if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU || dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
-@@ -231,6 +632,29 @@ struct llama_moe_cache::impl {
+@@ -231,6 +632,30 @@ struct llama_moe_cache::impl {
          if (devices.empty()) {
              throw std::runtime_error("MoE cache requires a GPU backend");
          }
 +        this->params.max_tokens = std::clamp(params.max_tokens, 1, 31);
 +        this->params.prefill_max_tokens = std::clamp(params.prefill_max_tokens, 32, 16384);
 +        this->params.staging_slots = std::clamp(params.staging_slots, 0, 4096);
++        this->params.pcie_auto_window = std::max(params.pcie_auto_window, 1);
 +        if (const char * env = getenv("GGML_OP_OFFLOAD_MIN_BATCH")) {
 +            // from this batch size on the scheduler moves the host experts to the GPU on its own
 +            const int v = atoi(env);
@@ -1979,11 +2224,11 @@ index f22d986dc..eb3940be3 100644
 +            }
 +        }
 +        // the batches that use the CPU miss form, and so the rows of the host inputs of its CPU branch
-+        hybrid_cap = this->params.cpu_miss && this->params.prefill_share > 0.0f && this->params.staging_slots > 0 ? std::max(this->params.max_tokens, this->params.prefill_max_tokens) : this->params.max_tokens;
++        hybrid_cap = this->params.cpu_miss && this->params.prefill_share > 0.0f && this->params.staging_slots > 0 ? std::max(this->params.max_tokens, this->params.n_ubatch > 0 ? std::min(this->params.prefill_max_tokens, this->params.n_ubatch) : this->params.prefill_max_tokens) : this->params.max_tokens;
          if (model.split_mode() == LLAMA_SPLIT_MODE_TENSOR) {
              throw std::runtime_error("MoE cache does not support tensor parallelism");
          }
-@@ -323,7 +747,9 @@ struct llama_moe_cache::impl {
+@@ -323,7 +748,9 @@ struct llama_moe_cache::impl {
                  g.n_slots = 0;
                  continue;
              }
@@ -1994,7 +2239,7 @@ index f22d986dc..eb3940be3 100644
              n_tensors[g.id] += g.ref.size()*(1 + g.layers.size());
              n_tensors_host  += g.layers.size();
          }
-@@ -348,7 +774,7 @@ struct llama_moe_cache::impl {
+@@ -348,7 +775,7 @@ struct llama_moe_cache::impl {
                  devices[id].ctx = init_ctx(n_tensors[id]);
              }
          }
@@ -2003,7 +2248,7 @@ index f22d986dc..eb3940be3 100644
          ctx_views = init_ctx(2);
  
          ggml_backend_buffer_type_t buft_host = ggml_backend_cpu_buffer_type();
-@@ -370,16 +796,32 @@ struct llama_moe_cache::impl {
+@@ -370,16 +797,32 @@ struct llama_moe_cache::impl {
                  layer & l = layers[il];
                  l.ig      = (int32_t) ig;
                  l.experts = llama_moe_cache_layer_experts(model.layers[il]);
@@ -2036,7 +2281,7 @@ index f22d986dc..eb3940be3 100644
              }
              devices[g.id].buf_size += alloc_size(g, g.n_slots);
          }
-@@ -416,6 +858,15 @@ struct llama_moe_cache::impl {
+@@ -416,6 +859,15 @@ struct llama_moe_cache::impl {
                  throw std::runtime_error("failed to allocate the MoE cache buffers");
              }
              ggml_backend_buffer_clear(buf_host.get(), 0xff); // all slots are -1
@@ -2052,7 +2297,7 @@ index f22d986dc..eb3940be3 100644
              buf_host_size = ggml_backend_buffer_get_size(buf_host.get());
  
              for (group & g : groups) {
-@@ -427,6 +878,8 @@ struct llama_moe_cache::impl {
+@@ -427,6 +879,8 @@ struct llama_moe_cache::impl {
              }
          }
  
@@ -2061,7 +2306,7 @@ index f22d986dc..eb3940be3 100644
          // as weights, the ops that read the banks run on the device and the slot maps are copied with the copy callback
          for (device & d : devices) {
              if (d.buf) {
-@@ -455,23 +908,188 @@ struct llama_moe_cache::impl {
+@@ -455,23 +909,188 @@ struct llama_moe_cache::impl {
          return devices[groups[layers[il].ig].id].backend;
      }
  
@@ -2252,7 +2497,7 @@ index f22d986dc..eb3940be3 100644
      ggml_tensor * get_experts(const ggml_tensor * w) const {
          const auto it = bindings.find(w);
          return it != bindings.end() ? it->second.cached : nullptr;
-@@ -490,7 +1108,8 @@ struct llama_moe_cache::impl {
+@@ -490,11 +1109,12 @@ struct llama_moe_cache::impl {
  
          // large batches only read the cache, so the experts used in generation stay in it
          const int32_t * slots = g.lru.slot_map[b.il];
@@ -2262,7 +2507,12 @@ index f22d986dc..eb3940be3 100644
              return 0;
          }
          int64_t n = 1;
-@@ -512,6 +1131,206 @@ struct llama_moe_cache::impl {
+-        while (e + n <= last && slots[e + n] == slots[e] + n) {
++        while (e + n <= last && slots[e + n] == slots[e] + n && slots[e + n] < g.lru.n_slots) {
+             n++;
+         }
+ 
+@@ -512,6 +1132,206 @@ struct llama_moe_cache::impl {
          return n;
      }
  
@@ -2469,7 +2719,7 @@ index f22d986dc..eb3940be3 100644
      bool copy(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph) {
          const auto it = layer_of.find(src);
          if (it == layer_of.end()) {
-@@ -523,6 +1342,11 @@ struct llama_moe_cache::impl {
+@@ -523,6 +1343,11 @@ struct llama_moe_cache::impl {
  
          GGML_ASSERT(backend == devices[g.id].backend);
  
@@ -2481,7 +2731,7 @@ index f22d986dc..eb3940be3 100644
          // the get_rows that looks up the slots of the selected experts
          const int n_nodes = ggml_graph_n_nodes(graph);
          const ggml_tensor * lookup = nullptr;
-@@ -547,35 +1371,198 @@ struct llama_moe_cache::impl {
+@@ -547,35 +1372,198 @@ struct llama_moe_cache::impl {
  
          ids.resize(ggml_nelements(sel));
          ggml_backend_tensor_get_async(backend, sel, ids.data(), 0, ggml_nbytes(sel));
@@ -2695,7 +2945,7 @@ index f22d986dc..eb3940be3 100644
          // the next copy synchronizes the backend before it changes the slot map again
          ggml_backend_tensor_set_async(backend, dst, src->data, 0, ggml_nbytes(src));
  
-@@ -591,6 +1578,15 @@ struct llama_moe_cache::impl {
+@@ -591,6 +1579,15 @@ struct llama_moe_cache::impl {
              LLAMA_LOG_INFO("llama_moe_cache: %s: hits = %zu, misses = %zu, hit rate = %.2f%%, uploaded = %.2f MiB\n",
                  name, st.hits, st.misses, 100.0*st.hits/n, st.bytes/1024.0/1024.0);
          };
@@ -2711,7 +2961,7 @@ index f22d986dc..eb3940be3 100644
          log("ubatch <= 8", stats_small);
          log("ubatch  > 8", stats_large);
          if (stats_copy.hits > 0) {
-@@ -599,18 +1595,54 @@ struct llama_moe_cache::impl {
+@@ -599,18 +1596,54 @@ struct llama_moe_cache::impl {
      }
  };
  
@@ -2724,7 +2974,7 @@ index f22d986dc..eb3940be3 100644
  llama_moe_cache::~llama_moe_cache() = default;
  
 +bool llama_moe_cache::cpu_miss() const {
-+    return pimpl->params.cpu_miss;
++    return pimpl->params.cpu_miss && !pimpl->groups.empty();
 +}
 +
  ggml_backend_t llama_moe_cache::backend(int32_t il) const {
@@ -2771,10 +3021,10 @@ index f22d986dc..eb3940be3 100644
  
  ggml_tensor * llama_moe_cache::get_experts(const ggml_tensor * w) const {
 diff --git a/src/llama-moe-cache.h b/src/llama-moe-cache.h
-index 3b6726b86..94b4781bd 100644
+index 3b6726b86..c96bf9422 100644
 --- a/src/llama-moe-cache.h
 +++ b/src/llama-moe-cache.h
-@@ -4,23 +4,82 @@
+@@ -4,23 +4,83 @@
  
  #include <map>
  #include <memory>
@@ -2812,6 +3062,7 @@ index 3b6726b86..94b4781bd 100644
 +    float prefill_share = 0.0f;
 +    int32_t prefill_max_tokens = 2048;
 +    int32_t staging_slots = 64;
++    int32_t n_ubatch = 0; // rows of a micro batch (0 = unknown), bounds the host inputs of the prompt batches
 +};
  
  // keeps the most recently used experts of host-resident MoE layers in a device buffer

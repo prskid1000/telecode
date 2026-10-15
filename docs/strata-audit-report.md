@@ -52,6 +52,44 @@ Lossy modes (route bias, tail skip) change the text by design and were only run 
 | 2 | testing the draft head subset: server aborts at start with `CUDA error: invalid argument` because the memory-fit pass loads the model without weights and the subset copied into a placeholder buffer | commit eb310b7 |
 | 3 | argv: `moe_cache_staging_slots` 0 could not be passed (`value_nz`) | commit fd2542c |
 
+## 5b. Deep review (four independent read-only reviewers, 2026-10-15)
+
+Areas: cache core, ggml/CUDA patch 0002, graph + speculative + head subset + plumbing, telecode Python side. Every finding was checked against the code before a change.
+
+Fixed:
+
+| Finding | Fix |
+|---|---|
+| `copy_experts` could extend a run of experts into a staging slot (wrong weights after a prompt batch larger than the staging window) | bound by `lru.n_slots` |
+| head subset VRAM was invisible to `--fit` and the memory breakdown, and the fit dry run never created it | counted in `memory_breakdown()`, dry run no longer needs a host head |
+| patch series did not apply to a clean checkout (0003 already held half of 0004) | 0004 folded into 0003; the series is now checked in order against `git archive HEAD` and equals the working tree on all 34 files (`regen_all.py` logic) |
+| adaptive draft length never saved MTP / Eagle3 draft steps (only truncated the result) | those drafters stop at the length the policy chose |
+| NaN passed the float range checks of the new flags | NaN-safe checks |
+| `pcie_auto_window` 0 gave 0/0 | clamped to >= 1 |
+| `cpu_miss()` true without any cached layer (turned scheduler overlap on for nothing) | false when no group is cached |
+| host inputs of prompt batches sized by `prefill_max_tokens` instead of `n_ubatch` (GBs of host RAM on large models) | bounded by `n_ubatch` |
+| CUDA event query could leave `cudaErrorNotReady` in the last-error slot | cleared |
+| "Apply suggested cache size" wrote only the cache size (computed for all experts on the CPU) | also sets `n_cpu_moe` to all MoE layers |
+| `auto_cache.plan`: `n_cpu_moe` 0 treated as "all on CPU"; unset context planned for 8192 instead of the trained one | llama.cpp semantics, trained context |
+| OOM retry repeated spawns that could not help (no cache planned, same size, failure before the spawn marker, non-memory failure) | retry only when a strictly smaller cache is planned; generic "failed to load model" no longer counts as OOM |
+| watchdog could kill a freshly started server after a swap | re-checks pid and state under the lock |
+| patched-only flags emitted for a stock binary (server refuses to start) | flags the binary does not list in `--help` are left out (cached per binary) |
+| `DEFAULT_BINARY` NameError when `llamacpp.binary` is empty | constant defined |
+| non-numeric settings values raised ValueError at spawn | tolerant `as_int` / `as_float` |
+| turning a required patch off failed the whole patched build | dependents are skipped, not failed |
+| `spec_type: "None"` handled differently in config and argv | case-insensitive |
+| bench: relative paths broke in the temp settings copy; the VRAM ceiling killed every llama-server | absolute paths; only the bench's own server is killed |
+| tray subscriptions piled up | dropped when the widget is destroyed |
+
+Known and left (documented, not fixed):
+
+- Skipped (negative id) experts still cost a full GPU matmul and are zeroed afterwards; an early exit inside the MMVQ kernel and dropping those pairs in the MMQ id helper would shorten the GPU branch of CPU-miss layers. Needs a full CUDA rebuild and measurement: speed phase.
+- Other backends (Vulkan, Metal, SYCL...) do not refuse nodes flagged skip-negative; unreachable today because CPU-miss mode only starts on CUDA.
+- `GGML_BACKEND_API_VERSION` is not bumped although the interface structs grew; `llamacpp/patcher.py` moves stale backend DLLs out of the install dir instead.
+- Adaptive draft acceptance accounting after a checkpoint restore (recurrent / hybrid targets) counts the target's correction token; with several slots another slot's round can reset a slot's `round_k`; round time includes other slots' prompt chunks; the policy also caps n-gram drafters when both are on. These make the adaptive policy's estimates noisy, not wrong output: verification is exact. Measure before trusting adaptive length on the 27B.
+- Async uploads from pageable (mmapped) weights block the host thread; the gain of `--moe-cache-async-upload` needs pinned host weights and a measurement.
+- Stats file shared by two contexts is overwritten by the last writer.
+
 ## 6. Not done yet (and why)
 
 - Hard crash #3 (bugcheck 0x20001 HYPERVISOR_ERROR, 2026-10-15 07:29) happened while the 27B ran with MTP + adaptive + head subset at ~11.9 GB VRAM. **No more 27B + MTP runs** (memory note `27b-mtp-crashes-laptop`). MTP is therefore covered by the CPU-only policy simulation (`tools/spec_policy_sim.cpp`) and by the lossless-output checks above, not by further GPU runs.
