@@ -283,7 +283,7 @@ def find_ninja() -> Optional[str]:
 def cuda_toolkit() -> dict[str, Any]:
     """The local CUDA toolkit, and whether it matches the installed runtime.
 
-    This matters because install() copies executables only — not the CUDA
+    install() also copies the toolkit's CUDA runtime DLLs of the build's major; a different major still matters, because the CUDA
     runtime DLLs. The release zips ship a cudart matched to their own variant,
     so a locally built binary linked against a DIFFERENT CUDA major lands next
     to a cudart it cannot use and fails to start. Detect the mismatch before
@@ -791,6 +791,26 @@ def _probe_commit(binary: Path) -> str:
         return ""
 
 
+def _cuda_runtime_dlls() -> list[Path]:
+    """The toolkit's cudart / cublas DLLs of the CUDA major the build links against.
+
+    The built kernels need a runtime at least as new as the toolkit that compiled them; a folder that still holds the
+    runtime of an older release of the same major fails at the first kernel launch ("shared object initialization failed").
+    """
+    if sys.platform != "win32":
+        return []
+    tk = cuda_toolkit()
+    if not tk.get("nvcc") or not tk.get("major"):
+        return []
+    bin_dir = Path(tk["nvcc"]).resolve().parent
+    for d in (bin_dir / "x64", bin_dir):
+        found = [f for pat in ("cudart64_*.dll", "cublas64_*.dll", "cublasLt64_*.dll") for f in d.glob(pat)
+                 if f.stem.split("_")[-1] == str(tk["major"])]
+        if found:
+            return found
+    return []
+
+
 def install(progress: Progress = _noop) -> dict[str, Any]:
     """Overlay the built binaries onto the install dir, snapshotting what they
     replace into `.bak-<ts>/` — the same mechanism release installs use, so the
@@ -816,6 +836,7 @@ def install(progress: Progress = _noop) -> dict[str, Any]:
     if not artifacts:
         shutil.rmtree(backup, ignore_errors=True)
         return {"ok": False, "error": "no artifacts found next to the built binary"}
+    artifacts = artifacts + [f for f in _cuda_runtime_dlls() if f.name.lower() not in {a.name.lower() for a in artifacts}]
 
     # Everything llama.cpp-owned that our build does not produce is stale the
     # moment our DLLs land: a b10775 ggml-base.dll enumerates the backend DLLs
