@@ -320,6 +320,23 @@ combinations (`mlock+dio`, `mmap+mlock+dio`) are rejected by the parser, so it i
    reveal it. Templates that handle either themselves (GLM-5.x) are detected by caps probes; others get the
    server-side fallback (filter / expand to JSON text). All-deferred is allowed only on templates that handle the flag.
 
+   **Add-on series 0002-0004** (the Strata port, docs/strata-port.md; every flag is off by default and a stock build behaves as before):
+   `0002` ggml (mul_mat_id skips expert ids < 0 on CPU and CUDA, scheduler CPU overlap, `event_query`, batched copies), `0003` the
+   `--moe-cache-*` modes (CPU compute on a cache miss, promotion, prewarm, foresight, tail skip, PCIe share, rounds, prompt-batch CPU share),
+   `--moe-expert-reduce-*` (fewer experts per token, lossy), the adaptive speculative draft length and `--spec-draft-head-subset[-ids]`,
+   `0004` two open upstream PRs (#29509 draft KV out of checkpoints, #30449 4 GiB pinned host buffers) taken as they are proposed there.
+   `tools/` has the checks that need no GPU: `moe_cache_lru_fuzz` (planner invariants + a state trace to compare two versions),
+   `spec_policy_sim`, `settings_audit_{static,combo,coverage}.py` (every patched-only flag has a setting and a tray row), and
+   `moe_cache_bench.py` (one configuration, greedy outputs hash, `--vram-limit` kills the server above the ceiling).
+   Rules for this series: the options travel as ONE `llama_moe_cache_params` pointer (`llama_context_params::moe_cache_params`); upstream's
+   `build_moe_ffn` expert block stays byte for byte (the CPU miss form runs it twice in a loop); regenerate the patches from the working
+   tree with the 0004 picks taken out, and prove the series applies in order to a clean `git archive HEAD`.
+   In the tray the settings that exist only in the patched build live in cards with a **PATCHED BUILD** badge (`_card(..., patched=True)`);
+   argv leaves a patched-only flag out when the binary's `--help` does not list it (`argv._drop_unsupported`). Safety on a 12 GB GPU:
+   `llamacpp.vram_ceiling_mib` kills llama-server above a memory level (checked every 0.5 s from the spawn on), `vram_budget_mib` (with `fit`) sets
+   `--fit-target` from the card's total memory. The 27B with MTP hard-crashed the machine 3 times near 11.9 GB: do not run it as a test
+   without a ceiling below 10.8 GB.
+
 - **A subdirectory of `patches/llama.cpp/` is a whole third-party fork, vendored.** Different kind of
   thing from a top-level patch: not awaiting upstream, and thousands of lines or nothing — some GGUFs
   simply cannot be read by stock llama.cpp. `patches()` returns top-level (ours) first, then each vendor

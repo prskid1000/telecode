@@ -39,6 +39,11 @@ def free_vram_mib() -> Optional[int]:
     return _query("memory.free")
 
 
+def total_vram_mib() -> Optional[int]:
+    """Total memory (MiB) of the first NVIDIA GPU, or None when it cannot be read."""
+    return _query("memory.total")
+
+
 def used_vram_mib() -> Optional[int]:
     """Used memory (MiB) of the first NVIDIA GPU, or None when it cannot be read."""
     return _query("memory.used", timeout=3.0)

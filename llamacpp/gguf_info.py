@@ -231,9 +231,14 @@ def summarize(path: str, ctx_size: Optional[int] = None, free_vram_mib: Optional
     experts_per_layer: dict[int, int] = {}
     expert_total = dense_total = 0
     quants: dict[str, int] = {}
+    mtp_bytes: dict[int, int] = {}  # block index -> bytes of its MTP (nextn) tensors
     for t, b in zip(tensors, sizes):
         qname = GGML_TYPES.get(t["type"], (f"type{t['type']}",))[0]
         quants[qname] = quants.get(qname, 0) + b
+        if "nextn" in t["name"]:
+            mb = _BLK_RE.match(t["name"])
+            if mb:
+                mtp_bytes[int(mb.group(1))] = mtp_bytes.get(int(mb.group(1)), 0) + b
         if _EXPERT_RE.search(t["name"]):
             expert_total += b
             m = _BLK_RE.match(t["name"])
@@ -255,6 +260,7 @@ def summarize(path: str, ctx_size: Optional[int] = None, free_vram_mib: Optional
         "expert_shared_count": _num(kv.get(f"{arch}.expert_shared_count")),
         "has_mtp": any("nextn" in t["name"] or "mtp" in t["name"] for t in tensors),
         "tensor_count": len(tensors),
+        "mtp_blocks": {str(k): v for k, v in sorted(mtp_bytes.items())},
         "file_size_bytes": h["file_size"],
         "expert_bytes_total": expert_total,
         "expert_bytes_per_layer": {str(k): v for k, v in sorted(experts_per_layer.items())},
@@ -305,6 +311,9 @@ def format_summary(s: dict[str, Any]) -> str:
         f"tensors {s['tensor_count']}   MTP/nextn: {'yes' if s['has_mtp'] else 'no'}",
         f"file {g(s['file_size_bytes'])}   dense {g(s['dense_bytes'])}   routed experts {g(s['expert_bytes_total'])}",
     ]
+    if s.get("mtp_blocks"):
+        lines.append("MTP layer: block " + ", ".join(f"{k} ({v / (1 << 20):.0f} MiB)" for k, v in s["mtp_blocks"].items()) +
+                     " - 'MTP layer to CPU' keeps it in RAM (saves that much VRAM, each drafted token is then computed on the CPU)")
     if s.get("expert_count"):
         lines.append(f"experts {s['expert_count']}  used/token {s['expert_used_count']}  shared {s['expert_shared_count'] or 0}")
     lines.append("quant (by bytes): " + ", ".join(f"{k} {g(v)}" for k, v in s["quant_bytes"].items()))

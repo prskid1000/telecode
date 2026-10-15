@@ -157,6 +157,7 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("spec_draft_adaptive_probe",     "--spec-draft-adaptive-probe",     "value"),
     # Draft head subset (patched build): the MTP draft steps read only these rows of the output head from device memory.
     ("spec_draft_head_subset",        "--spec-draft-head-subset",        "value_nz"),
+    ("spec_draft_head_subset_ids",    "--spec-draft-head-subset-ids",    "path"),
     ("spec_synth_len",           "--spec-synth-len",       "value_nz"),
     ("spec_synth_rates",         "--spec-synth-rates",     "value"),
     # How the draft is sampled (greedy argmax vs probabilistic + rejection sampling) and
@@ -636,7 +637,9 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
         suppressed_global.update({"spec_draft_adaptive", "spec_draft_adaptive_min_gain",
                                   "spec_draft_adaptive_ema", "spec_draft_adaptive_probe"})
     if not (spec_active or gcfg.get("spec_default")):
-        suppressed_global.add("spec_draft_head_subset")
+        suppressed_global.update({"spec_draft_head_subset", "spec_draft_head_subset_ids"})
+    if cfg.as_int(gcfg.get("spec_draft_head_subset")) <= 0:
+        suppressed_global.add("spec_draft_head_subset_ids")
     for k, flag, kind in _GLOBAL_FLAG_SPECS:
         if k in suppressed_global:
             continue
@@ -658,6 +661,14 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
     suppressed_model: set[str] = set()
     if bool(mcfg.get("fit")):
         suppressed_model.update({"n_gpu_layers", "n_gpu_layers_draft"})
+        # a VRAM budget instead of a margin: the fitter may use at most this much of the card (the weights, the KV cache, the draft / MTP context
+        # and the head subset all count, the stock fitter measures them); --fit-target is what it leaves free
+        budget = cfg.as_int(mcfg.get("vram_budget_mib"))
+        if budget > 0 and not cfg.as_int(mcfg.get("fit_target")):
+            from llamacpp import vram
+            total = vram.total_vram_mib()
+            if total:
+                mcfg["fit_target"] = max(0, total - budget)
     cache_on = cfg.as_int(mcfg.get("moe_cache_mib")) > 0
     if not (bool(mcfg.get("moe_cache_cpu_miss")) and cache_on):
         suppressed_model.update(_MOE_CACHE_TUNING)

@@ -383,6 +383,9 @@ def _gguf_inspector_card(p: str) -> QWidget:
     inspect_btn = QPushButton("Inspect GGUF")
     apply_btn = QPushButton("Apply suggested cache size")
     apply_btn.setEnabled(False)
+    mtp_btn = QPushButton("MTP layer to CPU")
+    mtp_btn.setEnabled(False)
+    mtp_blocks: dict[str, int] = {}
     out = QPlainTextEdit()
     out.setReadOnly(True)
     out.setMinimumHeight(170)
@@ -402,6 +405,8 @@ def _gguf_inspector_card(p: str) -> QWidget:
     def _finish(res: Any) -> None:
         inspect_btn.setEnabled(True)
         suggestion.clear()
+        mtp_blocks.clear()
+        mtp_btn.setEnabled(False)
         if isinstance(res, str):
             out.setPlainText(res)
             apply_btn.setEnabled(False)
@@ -412,6 +417,8 @@ def _gguf_inspector_card(p: str) -> QWidget:
         if sg:
             suggestion.update(sg)
         apply_btn.setEnabled(bool(sg))
+        mtp_blocks.update(res.get("mtp_blocks") or {})
+        mtp_btn.setEnabled(bool(mtp_blocks))
 
     bridge.done.connect(_finish)
 
@@ -438,14 +445,26 @@ def _gguf_inspector_card(p: str) -> QWidget:
                 patch_settings(f"{p}.n_cpu_moe", int(suggestion["n_moe_layers"]))
             patch_settings(f"{p}.moe_cache_mib", int(suggestion["moe_cache_mib"]))
 
+    def _mtp_to_cpu() -> None:
+        # one override_tensor entry per MTP block: the whole block stays in RAM, the main model is untouched
+        cur = str(get_path(read_settings(), f"{p}.override_tensor", "") or "").strip()
+        have = [x.strip() for x in cur.split(",") if x.strip()]
+        for blk in mtp_blocks:
+            entry = rf"^blk\.{blk}\.=CPU"
+            if entry not in have:
+                have.append(entry)
+        patch_settings(f"{p}.override_tensor", ",".join(have))
+
     inspect_btn.clicked.connect(_inspect)
     apply_btn.clicked.connect(_apply)
+    mtp_btn.clicked.connect(_mtp_to_cpu)
     btns = QWidget()
     bl = QHBoxLayout(btns)
     bl.setContentsMargins(0, 0, 0, 0)
     bl.setSpacing(8)
     bl.addWidget(inspect_btn)
     bl.addWidget(apply_btn)
+    bl.addWidget(mtp_btn)
     bl.addStretch(1)
     body.addWidget(btns)
     body.addWidget(out)
@@ -2506,6 +2525,13 @@ def _llama(window) -> QWidget:
                      "in host memory (an output.weight=CPU override) every drafted token otherwise reads the whole head from RAM. The target model "
                      "still verifies with the full head, so the output is exact. 32768 is a good start. 0 = off.", default=0),
         ["llamacpp.spec_type", "llamacpp.spec_default"], _spec_on))
+    adp_body.addWidget(_dependent(
+        _line_row("llamacpp.spec_draft_head_subset_ids", "Draft Head Subset: Token List", "(empty = the first tokens of the vocabulary)",
+                   "--spec-draft-head-subset-ids (patched build): a text file with token ids, one per line, the most useful first. The GPU rows are then the "
+                   "tokens YOU use instead of the first ones of the vocabulary, so more drafted tokens are found among them. Build one from your own "
+                   "chats with tools/build_head_subset_ids.py (needs a running server for the tokenizer)."),
+        ["llamacpp.spec_type", "llamacpp.spec_default", "llamacpp.spec_draft_head_subset"],
+        lambda st, sd, hs: _spec_on(st, sd) and float(hs or 0) > 0))
     _adaptive_on = lambda st, sd, ad: (_spec_value_is_active(st) or bool(sd)) and bool(ad)
     _adaptive_deps = ["llamacpp.spec_type", "llamacpp.spec_default", "llamacpp.spec_draft_adaptive"]
     adp_body.addWidget(_dependent(
@@ -5547,6 +5573,13 @@ def _models(window) -> QWidget:
         _sl.addWidget(_dependent(
             _number_row(f"{p}.fit_target",   "Fit Target Headroom", 0,  16384,   16,   0, "MB",
                          "--fit-target: free VRAM/RAM (MB) to leave after fitting."),
+            [f"{p}.fit"], _fit_on))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.vram_budget_mib", "VRAM Budget", 0, 262144, 256, 0, "MiB",
+                         "Telecode: the most the fitter may use of the first NVIDIA GPU (11878 = 11.6 GB). At every start it sets the target headroom to the card's "
+                         "total memory minus this budget, so the same number works on any card. The fitter counts the weights, the KV cache, the draft / MTP context "
+                         "and the draft head subset, and trades layers on the GPU and the context size against it. Used only while the Fit Target Headroom above is 0. "
+                         "0 = not used. Needs nvidia-smi."),
             [f"{p}.fit"], _fit_on))
 
         _sl = _sec("Cache",
