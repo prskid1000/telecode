@@ -121,4 +121,4 @@ for r in unknown:
 print("problems:", len(problems))
 for p in problems:
     print("  ", p)
-json.dump({"rows": rows, "problems": problems}, open(os.path.join(os.path.dirname(__file__), "audit_static.json"), "w"), indent=1)
+json.dump({"rows": rows, "problems": problems}, open(os.path.join(tmp, "audit_static.json"), "w"), indent=1)
