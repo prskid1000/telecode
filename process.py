@@ -427,6 +427,7 @@ class LlamaSupervisor:
         self._idle_task: Optional[asyncio.Task] = None
         self._watchdog_task: Optional[asyncio.Task] = None
         self._loaded_at: float = 0.0
+        self._vram_task: Optional[asyncio.Task] = None
         self._spawn_logged = False  # the current spawn attempt wrote its marker to llama.log
         self._planned_mib: Optional[int] = None  # the automatic cache size of the current spawn attempt
 
@@ -451,6 +452,7 @@ class LlamaSupervisor:
             if self._proc and self._proc.poll() is None and self._active_model == resolved:
                 self._ensure_idle_watcher()
                 self._ensure_watchdog()
+                self._ensure_vram_guard()
                 return resolved
             await self._stop_locked()
             await self._spawn_with_retry(resolved)
@@ -508,6 +510,39 @@ class LlamaSupervisor:
         return self._loaded_at
 
     # ── Idle unload watcher ──────────────────────────────────────────
+
+    def _ensure_vram_guard(self) -> None:
+        if self._vram_task is not None and not self._vram_task.done():
+            return
+        if cfg.vram_ceiling_mib() <= 0:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._vram_task = loop.create_task(self._vram_guard_loop())
+
+    async def _vram_guard_loop(self) -> None:
+        """Kill llama-server when the GPU memory in use passes llamacpp.vram_ceiling_mib.
+
+        Started at the spawn, so the model load is covered. It does not take the supervisor lock (a spawn holds it until the
+        server is ready): it kills the process, the spawn then fails with 'server exited' and the next request starts it again."""
+        from llamacpp import vram
+        loop = asyncio.get_running_loop()
+        while True:
+            await asyncio.sleep(0.5)
+            proc = self._proc
+            if proc is None or proc.poll() is not None:
+                return
+            ceiling = cfg.vram_ceiling_mib()
+            if ceiling <= 0:
+                return
+            used = await loop.run_in_executor(None, vram.used_vram_mib)
+            if used is not None and used > ceiling:
+                _LLAMA_LOG.error("llama.cpp: GPU memory in use %d MiB passed llamacpp.vram_ceiling_mib %d MiB, killing llama-server (pid %d)",
+                                 used, ceiling, proc.pid)
+                kill_process_tree(proc.pid, force=True)
+                return
 
     def _ensure_watchdog(self) -> None:
         if self._watchdog_task is not None and not self._watchdog_task.done():
@@ -691,6 +726,7 @@ class LlamaSupervisor:
             ) from exc
 
         _apply_win_process_tuning(self._proc.pid)
+        self._ensure_vram_guard()
 
         # Bind to the shared kill-on-close Job so the OS kills llama-server
         # if THIS Python process dies unexpectedly. No-op on non-Windows.

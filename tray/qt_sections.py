@@ -58,10 +58,10 @@ def _page() -> tuple[QScrollArea, QWidget, QVBoxLayout]:
     return scroll, content, layout
 
 
-def _card(title: str, sub: str = "") -> tuple[QFrame, QVBoxLayout]:
-    """Card frame with header + body."""
+def _card(title: str, sub: str = "", patched: bool = False) -> tuple[QFrame, QVBoxLayout]:
+    """Card frame with header + body. `patched`: the settings in it only exist in the patched llama.cpp build (badge + accent)."""
     card = QFrame()
-    card.setProperty("class", "card")
+    card.setProperty("class", "patched" if patched else "card")
     outer = QVBoxLayout(card)
     outer.setContentsMargins(0, 0, 0, 0)
     outer.setSpacing(0)
@@ -75,6 +75,12 @@ def _card(title: str, sub: str = "") -> tuple[QFrame, QVBoxLayout]:
     t = QLabel(title)
     t.setProperty("class", "card_title")
     title_row.addWidget(t, 0, Qt.AlignmentFlag.AlignVCenter)
+    if patched:
+        badge = QLabel("PATCHED BUILD")
+        badge.setProperty("class", "patched_badge")
+        badge.setToolTip("These settings need the patched llama.cpp (Patched Build card on the llama.cpp page). "
+                         "A stock llama-server does not know the flags: telecode leaves them out of its command line.")
+        title_row.addWidget(badge, 0, Qt.AlignmentFlag.AlignVCenter)
     title_row.addStretch(1)
     head_l.addLayout(title_row)
     if sub:
@@ -2199,6 +2205,12 @@ def _llama(window) -> QWidget:
                                       "into shared system memory (much slower). 0 = no check. Skipped (logged once) when "
                                       "nvidia-smi is not available."))
 
+    spawn_body.addWidget(_number_row("llamacpp.vram_ceiling_mib", "VRAM Ceiling (kill above)", 0, 262144, 256, 0, "MiB",
+                                      "Kill llama-server the moment the memory in use on the first NVIDIA GPU passes this value, checked every half "
+                                      "second from the start on (the model load included). A GPU that runs full can hard-crash a machine; a killed "
+                                      "server only costs a reload (the request that was waiting fails, the next one starts it again). Counts the whole "
+                                      "GPU, other programs included. 11878 = 11.6 GB. 0 = off. Needs nvidia-smi."))
+
     spawn_body.addWidget(_section_header("Scheduling"))
     spawn_body.addWidget(_line_row("llamacpp.cpu_mask", "CPU Mask",
                                     "hex, e.g. c03c03 — empty = all cores",
@@ -2461,6 +2473,8 @@ def _llama(window) -> QWidget:
     # Speculative decoding card — server-wide algorithm, per-model draft pair
     spec_card, spec_body = _card("Speculative Decoding",
                                   "llamacpp.* — algorithm choice & tuning. Draft model lives per-model.")
+    adp_card, adp_body = _card("Adaptive Draft Length & Head Subset",
+                             "--spec-draft-adaptive-* and --spec-draft-head-subset: smarter drafts for speculative decoding (the output stays exact)", patched=True)
     # Multi-select Spec Type. v9243+ accepts a comma-separated list, so stacking
     # is supported (e.g. "draft-mtp,ngram-mod" = MTP heads for high-confidence
     # guesses + ngram-mod for verbatim runs). Serialized as a comma-joined string
@@ -2479,13 +2493,13 @@ def _llama(window) -> QWidget:
         lambda st: not _spec_value_is_active(st),
     ))
     _spec_on = lambda st, sd: _spec_value_is_active(st) or bool(sd)
-    spec_body.addWidget(_dependent(
+    adp_body.addWidget(_dependent(
         _toggle_row("llamacpp.spec_draft_adaptive", "Adaptive Draft Length",
                      "--spec-draft-adaptive (patched build): pick the length of every draft from the measured acceptance of each "
                      "draft position and the measured time of rounds of each size, up to the draft Max Tokens. Drafts nothing when "
                      "that is faster. Needs a draft model or MTP head."),
         ["llamacpp.spec_type", "llamacpp.spec_default"], _spec_on))
-    spec_body.addWidget(_dependent(
+    adp_body.addWidget(_dependent(
         _number_row("llamacpp.spec_draft_head_subset", "Draft Head Subset (GPU rows)", 0, 1000000, 1024, 0, "rows",
                      "--spec-draft-head-subset (patched build): keep this many rows of the output head (the first tokens of the vocabulary "
                      "and the last 1024 special ones) in GPU memory and let the MTP draft steps choose among them. When the output head sits "
@@ -2494,17 +2508,17 @@ def _llama(window) -> QWidget:
         ["llamacpp.spec_type", "llamacpp.spec_default"], _spec_on))
     _adaptive_on = lambda st, sd, ad: (_spec_value_is_active(st) or bool(sd)) and bool(ad)
     _adaptive_deps = ["llamacpp.spec_type", "llamacpp.spec_default", "llamacpp.spec_draft_adaptive"]
-    spec_body.addWidget(_dependent(
+    adp_body.addWidget(_dependent(
         _number_row("llamacpp.spec_draft_adaptive_min_gain", "Adaptive Min Gain", 0, 1, 0.01, 2, "",
                      "--spec-draft-adaptive-min-gain: a draft must beat not drafting by this fraction of tokens per ms. "
                      "Higher = drafts only when clearly worth it.", default=0.03),
         _adaptive_deps, _adaptive_on))
-    spec_body.addWidget(_dependent(
+    adp_body.addWidget(_dependent(
         _number_row("llamacpp.spec_draft_adaptive_ema", "Adaptive Learning Rate", 0.01, 1, 0.01, 2, "",
                      "--spec-draft-adaptive-ema: weight of a new round in the acceptance and round-time estimates. "
                      "Low = steady, high = follows the current text quickly.", default=0.1),
         _adaptive_deps, _adaptive_on))
-    spec_body.addWidget(_dependent(
+    adp_body.addWidget(_dependent(
         _number_row("llamacpp.spec_draft_adaptive_probe", "Adaptive Probe Interval", 0, 1000, 1, 0, "rounds",
                      "--spec-draft-adaptive-probe: every N rounds try a draft length next to the best one, so sizes that were "
                      "never measured get real timings. 0 = never.", default=16),
@@ -2619,6 +2633,7 @@ def _llama(window) -> QWidget:
                      "(default: Draft Polling)."),
         ["llamacpp.spec_type"], _draft_active))
     layout.addWidget(spec_card)
+    layout.addWidget(adp_card)
 
     # Proxy Behavior card — global behavior knobs with NO per-model equivalent.
     # Sampling defaults (temperature/top_p/etc.) live in the Models section per
@@ -5455,8 +5470,8 @@ def _models(window) -> QWidget:
         # They are cards now, matching the llama.cpp page: _sec() opens one and
         # returns its body layout, which _sl then points at, so every row after
         # it lands inside that card without touching the ~90 addWidget calls.
-        def _sec(title: str, sub: str = ""):
-            _c, _b = _card(title, sub)
+        def _sec(title: str, sub: str = "", patched: bool = False):
+            _c, _b = _card(title, sub, patched)
             form_layout.addWidget(_c)
             return _b
 
@@ -5552,8 +5567,25 @@ def _models(window) -> QWidget:
                                               "--flash-attn: set Flash Attention use ('on', 'off', or 'auto')."))
         _sl.addWidget(_toggle_row(f"{p}.cpu_moe",       "CPU MoE (all experts)",
                                            "--cpu-moe: keep ALL MoE expert layers on CPU (overrides n_cpu_moe)."))
+        _sl = _sec("Fewer Experts per Token",
+                    "--moe-expert-reduce-* — compute fewer experts for the tokens that do not need them (changes the output)", patched=True)
+        _sl.addWidget(_number_row(f"{p}.moe_reduce_min", "Always Use the Best", 0, 64, 1, 0, "experts",
+                                  "--moe-expert-reduce-min (patched build): the N best experts of a token are always computed, of the others only those whose weight "
+                                  "is at least the threshold below times the weight of the best one. The skipped experts are not computed on the CPU layers. "
+                                  "Changes the output (check it on your prompts). Not used together with the MoE cache, expert biases or LoRA. 0 = off.", default=0))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.moe_reduce_thresh", "Weight Threshold", 0, 1, 0.05, 2, "",
+                         "--moe-expert-reduce-thresh (patched build): the weight an expert beyond the first N needs, as a fraction of the weight of the best one. "
+                         "Higher = fewer experts computed and a larger change of the output.", default=0.4),
+            [f"{p}.moe_reduce_min"], lambda m: float(m or 0) > 0))
         _sl = _sec("MoE Expert Cache",
-                    "--moe-cache-* — keep the hottest experts of CPU-resident layers in VRAM")
+                    "llama.cpp --moe-cache-mib + telecode's automatic sizing — keep the hottest experts of CPU-resident layers in VRAM")
+        _sl_cm = _sec("CPU-Miss Mode & Promotion",
+                       "--moe-cache-cpu-miss and what goes into the cache: compute the experts that are not cached on the CPU, upload the ones missed often", patched=True)
+        _sl_pf = _sec("Prefetch, Routing & PCIe",
+                       "which experts are uploaded when, over which path, and how the router is nudged towards cached experts (some of it changes the output)", patched=True)
+        _sl_pb = _sec("Prompt Batches",
+                       "--moe-cache-prefill-* — the missed experts of a prompt batch are shared between the CPU and the GPU", patched=True)
         _sl.addWidget(_number_row(f"{p}.moe_cache_mib", "Cache Size", 0, 262144, 256, 0, "MiB",
                                            "--moe-cache-mib: VRAM for the experts of layers kept on the CPU (--n-cpu-moe / --cpu-moe), "
                                            "split among GPUs like the layers. 0 = off. Without CPU-miss mode a missing expert is uploaded "
@@ -5566,157 +5598,159 @@ def _models(window) -> QWidget:
             _number_row(f"{p}.moe_cache_auto_headroom_mib", "Auto Cache Headroom", 0, 16384, 128, 0, "MiB",
                          "VRAM kept free for compute buffers, the CUDA context and other programs when the cache size is chosen automatically.", default=1500),
             [f"{p}.moe_cache_auto"], lambda a: bool(a)))
-        _sl.addWidget(_toggle_row(f"{p}.moe_cache_cpu_miss", "Compute Misses on CPU",
+        _sl_cm.addWidget(_toggle_row(f"{p}.moe_cache_cpu_miss", "Compute Misses on CPU",
                                            "--moe-cache-cpu-miss (patched build): experts not in the cache are computed on the CPU "
                                            "instead of uploaded, and only experts missed often enough are promoted into VRAM. "
                                            "Applies to small batches (decode, speculative verify); larger batches behave as usual."))
         _mc_on = lambda m, c: bool(c) and float(m or 0) > 0
         _mc_cache = lambda m: float(m or 0) > 0
-        _sl.addWidget(_dependent(
+        _sl_cm.addWidget(_dependent(
             _toggle_row(f"{p}.moe_cache_prewarm", "Prewarm From Stats",
                          "--moe-cache-prewarm (patched build): fill the cache with the experts used most in earlier runs before the "
                          "first token, instead of starting empty. Needs the stats file below (a default one per model is used if empty)."),
             [f"{p}.moe_cache_mib"], _mc_cache))
-        _sl.addWidget(_dependent(
+        _sl_cm.addWidget(_dependent(
             _line_row(f"{p}.moe_cache_stats_file", "Expert Stats File", "(empty = data/moe-cache/<model>.bin when prewarm is on)",
                        "--moe-cache-stats-file (patched build): where how often each expert is selected is kept between runs. "
                        "It is tied to the model's layer and expert counts; a file from another model is ignored."),
             [f"{p}.moe_cache_mib"], _mc_cache))
-        _sl.addWidget(_dependent(
+        _sl_cm.addWidget(_dependent(
             _number_row(f"{p}.moe_cache_promote_after", "Promote After Misses", 0, 1000, 1, 0, "",
                          "--moe-cache-promote-after: misses of an expert before it is uploaded into the cache. "
                          "0/1 = on the first miss (upstream-like). Higher = only hot experts earn VRAM.",
                          default=2),
             [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
-        _sl.addWidget(_dependent(
+        _sl_cm.addWidget(_dependent(
             _number_row(f"{p}.moe_cache_promote_max", "Max Uploads / Layer / Token", 0, 64, 1, 0, "",
                          "--moe-cache-promote-max: cap on experts uploaded per layer and token, bounds the PCIe traffic "
                          "a token can cause. 0 = no limit.", default=2),
             [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
-        _sl.addWidget(_dependent(
+        _sl_cm.addWidget(_dependent(
             _number_row(f"{p}.moe_cache_decay", "Miss Count Decay", 0, 1000000, 16, 0, "tok",
                          "--moe-cache-decay: halve all miss counts every N tokens so promotion follows the current topic, "
                          "not the whole history. 0 = never.", default=256),
             [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
-        _sl.addWidget(_dependent(
+        _sl_cm.addWidget(_dependent(
             _number_row(f"{p}.moe_cache_cpu_miss_max_tokens", "CPU-Miss Max Batch", 1, 31, 1, 0, "tok",
                          "--moe-cache-cpu-miss-max-tokens: largest batch (decode, speculative verify, short prompt) that uses "
                          "CPU-miss mode. Larger batches use the normal path; keep it below 32, where the scheduler "
                          "moves host experts to the GPU on its own.", default=16),
             [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
-        _sl.addWidget(_dependent(
+        _sl_pf.addWidget(_dependent(
             _number_row(f"{p}.moe_cache_route_bias", "Route Bias", 0, 100, 0.05, 2, "",
                          "--moe-cache-route-bias (patched build): bias the router toward experts already in the GPU cache "
                          "(lossy: it changes which experts a token uses; 0 = off).", default=0),
             [f"{p}.moe_cache_mib"], _mc_cache))
-        _sl.addWidget(_dependent(
+        _sl_cm.addWidget(_dependent(
             _number_row(f"{p}.moe_cache_promote_gain", "Promote Gain", 0, 100, 0.05, 2, "",
                          "--moe-cache-promote-gain (patched build): promote an expert only when its recent use beats the "
                          "expert it evicts by this fraction (0 = always promote).", default=0),
             [f"{p}.moe_cache_mib"], _mc_cache))
-        _sl.addWidget(_dependent(
+        _sl_pf.addWidget(_dependent(
             _number_row(f"{p}.moe_cache_foresight", "Foresight Prefetch", 0, 64, 1, 0, "experts",
                          "--moe-cache-foresight (patched build): run the next layer's router on this layer's input and upload up to N "
                          "of the experts it predicts, while this layer computes, so they are in the cache when the next layer needs them. "
                          "0 = off. Costs PCIe traffic; works best with pinned host memory (GGML_CUDA_REGISTER_HOST=1 under Environment).",
                          default=0),
             [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
-        _sl.addWidget(_dependent(
-            _number_row(f"{p}.moe_cache_evict_window", "Eviction Window", 0, 64, 1, 0, "slots",
+        _sl_cm.addWidget(_dependent(
+            _number_row(f"{p}.moe_cache_evict_window", "Eviction Window", 0, 1000000, 1, 0, "slots",
                          "--moe-cache-evict-window (patched build): when a slot is needed, give up the least used of the N least recently "
-                         "used slots instead of the least recently used one. 0 = plain LRU.", default=0),
+                         "used slots instead of the least recently used one. 0 = plain LRU; a value of at least the number of cache slots "
+                         "(e.g. 100000) = least frequently used, which beat LRU in a published expert trace (exllamav3 #254).", default=0),
             [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
-        _sl.addWidget(_dependent(
+        _sl_pf.addWidget(_dependent(
             _number_row(f"{p}.moe_cache_pcie_share", "PCIe Share of Misses", 0, 1, 0.05, 2, "",
                          "--moe-cache-pcie-share (patched build): this fraction of the missed experts of a call is uploaded and computed "
                          "on the GPU in that same call, most used first; the rest stays on the CPU. 0 = all on the CPU.", default=0),
             [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
-        _sl.addWidget(_dependent(
+        _sl_pf.addWidget(_dependent(
             _number_row(f"{p}.moe_cache_pcie_max", "PCIe Share Max / Layer", 0, 256, 1, 0, "experts",
                          "--moe-cache-pcie-max (patched build): most experts per layer and call uploaded for the GPU at once.", default=2),
             [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss", f"{p}.moe_cache_pcie_share"],
             lambda m, c, sh: _mc_on(m, c) and float(sh or 0) > 0))
-        _sl.addWidget(_dependent(
+        _sl_pf.addWidget(_dependent(
             _toggle_row(f"{p}.moe_cache_async_upload", "Async Uploads (second stream)",
                          "--moe-cache-async-upload (patched build): upload promoted and predicted experts on a second CUDA stream so "
                          "they overlap with compute. Best with pinned host memory: GGML_CUDA_REGISTER_HOST=1 under Environment."),
             [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
-        _sl.addWidget(_dependent(
+        _sl_pf.addWidget(_dependent(
             _toggle_row(f"{p}.moe_cache_pcie_auto", "Auto-Tune PCIe Share",
                          "--moe-cache-pcie-auto (patched build): while running, move the PCIe share of misses up and down every window of "
                          "tokens, keep the value that makes decode tokens faster, settle, and look again now and then. The PCIe Share above "
                          "is the starting value; the cap per layer (PCIe Share Max) still applies, raise it for a wider search."),
             [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
-        _sl.addWidget(_dependent(
+        _sl_pf.addWidget(_dependent(
             _number_row(f"{p}.moe_cache_pcie_auto_window", "Auto-Tune Window", 4, 4096, 4, 0, "tokens",
                          "--moe-cache-pcie-auto-window (patched build): decode tokens measured before the share is changed. Longer = steadier "
                          "but slower to adapt.", default=32),
             [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss", f"{p}.moe_cache_pcie_auto"],
             lambda m, c, a: _mc_on(m, c) and bool(a)))
-        _sl.addWidget(_dependent(
+        _sl_pf.addWidget(_dependent(
             _toggle_row(f"{p}.moe_cache_upload_batch", "Batch Expert Uploads",
                          "--moe-cache-upload-batch (patched build): submit the expert copies of a call (all tensors, and the layers the call "
                          "prefetches or promotes for) as one batch, a single CUDA driver call, instead of one copy each. Falls back to plain "
                          "copies where the driver cannot batch."),
             [f"{p}.moe_cache_mib"], _mc_cache))
-        _sl.addWidget(_dependent(
+        _sl_pb.addWidget(_dependent(
             _number_row(f"{p}.moe_cache_prefill_share", "Prompt: CPU Share of Misses", 0, 1, 0.05, 2, "",
                          "--moe-cache-prefill-share (patched build): in prompt batches (above the decode batch size) this fraction of the "
                          "missed experts is computed on the CPU while the GPU computes the others, which are uploaded through staging slots. "
                          "The hot-expert cache is left alone. Strata does this by default and measured 20-49% less prompt time at 512-3000 tokens. "
                          "0 = off: experts are copied to the GPU as without the cache.", default=0),
             [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
-        _sl.addWidget(_dependent(
+        _sl_pb.addWidget(_dependent(
             _number_row(f"{p}.moe_cache_prefill_max_tokens", "Prompt: Largest Batch", 32, 16384, 32, 0, "tok",
                          "--moe-cache-prefill-max-tokens (patched build): largest prompt batch (the ubatch size) that uses the CPU share. "
                          "Each layer keeps host buffers of this many tokens, about 8 KiB per token and layer.", default=2048),
             [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss", f"{p}.moe_cache_prefill_share"],
             lambda m, c, sh: _mc_on(m, c) and float(sh or 0) > 0))
-        _sl.addWidget(_dependent(
+        _sl_pb.addWidget(_dependent(
             _number_row(f"{p}.moe_cache_staging_slots", "Prompt: Staging Slots", 0, 4096, 8, 0, "slots",
                          "--moe-cache-staging-slots (patched build): cache slots set apart for the experts a prompt batch uploads, so it does not "
                          "push the hot experts out. At most half of the cache; more slots = more experts computed on the GPU (the rest of the "
                          "share goes to the CPU anyway).", default=64),
             [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss", f"{p}.moe_cache_prefill_share"],
             lambda m, c, sh: _mc_on(m, c) and float(sh or 0) > 0))
-        _sl.addWidget(_dependent(
+        _sl_pf.addWidget(_dependent(
             _number_row(f"{p}.moe_cache_swap_every", "Swap Rounds Every", 0, 100000, 1, 0, "tokens",
                          "--moe-cache-swap-every (patched build): promote experts in rounds, every N tokens, choosing the most missed "
                          "experts of all layers together (Strata style) instead of in every call. 0 = off.", default=0),
             [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
-        _sl.addWidget(_dependent(
+        _sl_pf.addWidget(_dependent(
             _number_row(f"{p}.moe_cache_swap_max", "Swap Round Max", 0, 100000, 1, 0, "experts",
                          "--moe-cache-swap-max (patched build): most experts promoted per round. 0 = no limit.", default=0),
             [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss", f"{p}.moe_cache_swap_every"],
             lambda m, c, ev: _mc_on(m, c) and float(ev or 0) > 0))
-        _sl.addWidget(_dependent(
+        _sl_pf.addWidget(_dependent(
             _number_row(f"{p}.moe_cache_tail_skip_rank", "Tail Skip Rank (Strata rule)", 0, 256, 1, 0, "rank",
                          "--moe-cache-tail-skip-rank (patched build): in a batch of several tokens (speculative verification) skip a "
                          "missed expert when every token ranks it N-th or lower by weight (Strata uses 7). Lossy. 0 = off.", default=0),
             [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
-        _sl.addWidget(_dependent(
+        _sl_pf.addWidget(_dependent(
             _number_row(f"{p}.moe_cache_tail_skip_auto_off", "Tail Skip Auto-Off", 0, 100, 1, 0, "%",
                          "--moe-cache-tail-skip-auto-off (patched build): do not skip experts when this percent or more of the experts "
                          "of the batch are already in the cache.", default=90),
             [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss", f"{p}.moe_cache_tail_skip_rank"],
             lambda m, c, r: _mc_on(m, c) and float(r or 0) > 0))
-        _sl.addWidget(_dependent(
+        _sl_pf.addWidget(_dependent(
             _number_row(f"{p}.moe_cache_route_top", "Route: Always Keep Top", 0, 256, 1, 0, "experts",
                          "--moe-cache-route-top (patched build): with Route Bias on, the N best-scored experts of a token are always "
                          "selected whatever the bias. Cuts the quality cost of the bias. 0 = none.", default=0),
             [f"{p}.moe_cache_mib", f"{p}.moe_cache_route_bias"], lambda m, b: _mc_cache(m) and float(b or 0) > 0))
-        _sl.addWidget(_dependent(
+        _sl_pf.addWidget(_dependent(
             _toggle_row(f"{p}.moe_cache_route_scale", "Route: Scale Bias By Score Gap",
                          "--moe-cache-route-scale (patched build): with Route Bias on, scale each token's bias by the gap between its best "
                          "and last selected score, so the bias follows the router's own confidence."),
             [f"{p}.moe_cache_mib", f"{p}.moe_cache_route_bias"], lambda m, b: _mc_cache(m) and float(b or 0) > 0))
-        _sl.addWidget(_dependent(
+        _sl_pf.addWidget(_dependent(
             _number_row(f"{p}.moe_cache_tail_skip", "Tail Skip (verify windows)", 0, 32, 1, 0, "experts",
                          "--moe-cache-tail-skip (patched build): when a batch has several tokens (speculative verification) compute only "
                          "the N cache misses with the highest routing weight per token and drop the rest. Lossy. 0 = compute all.",
                          default=0),
             [f"{p}.moe_cache_mib", f"{p}.moe_cache_cpu_miss"], _mc_on))
 
+        _sl = _sec("Chat Template", "--jinja / --chat-template-file / --chat-template — how the conversation is turned into a prompt")
         _sl.addWidget(_toggle_row(f"{p}.jinja",         "Jinja Chat Template",
                                            "Use the built-in tokenizer chat template (required for tools)."))
         _sl.addWidget(_code_row(f"{p}.chat_template",   "Chat Template Override",

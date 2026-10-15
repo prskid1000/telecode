@@ -118,6 +118,21 @@ QFrame.card {{
     border: 1px solid {BORDER};
     border-radius: 8px;
 }}
+QFrame.patched {{
+    background: {BG_CARD};
+    border: 1px solid {BORDER};
+    border-left: 3px solid {ACCENT_2};
+    border-radius: 8px;
+}}
+QLabel.patched_badge {{
+    font-size: 9px;
+    font-weight: 700;
+    color: {BG};
+    background: {ACCENT_2};
+    border-radius: 3px;
+    padding: 1px 6px;
+    letter-spacing: 0.04em;
+}}
 QLabel.card_title {{
     font-size: 13px;
     font-weight: 600;

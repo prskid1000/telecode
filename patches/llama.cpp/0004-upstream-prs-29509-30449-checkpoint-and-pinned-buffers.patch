@@ -1,0 +1,59 @@
+Title: Upstream PRs 29509, 30449
+Add-on: cherry-picks of two open upstream pull requests, exactly as proposed there; drop this patch when they are merged.
+  ggml-org/llama.cpp#29509: the draft (MTP) KV is not stored in the context checkpoints (it is a prefix-addressed cache that stays resident, and it made every checkpoint grow with the context).
+  ggml-org/llama.cpp#30449: the pinned host buffer type of CUDA has a 4 GiB maximum size, so a large set of CPU-resident expert weights (--load-mode none) is split into several
+  pinned buffers instead of one allocation that fails on Windows and silently falls back to pageable memory (which makes the expert uploads of --moe-cache-mib much slower).
+
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index e95fb63ab3cc..e9727aaf4259 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -2361,7 +2361,7 @@ struct server_context_impl {
+         cur.update_pos(slot.prompt.n_tokens() - n_tokens_cur, pos_min, pos_max);
+ 
+         cur.update_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+-        cur.update_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
++
+         // stash the draft's speculative state with the checkpoint
+         common_speculative_get_state(spec.get(), slot.id, cur.data_spec);
+ 
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index 957908f65e63..8199cdc52e49 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -1304,6 +1304,12 @@ static ggml_backend_buffer_t ggml_backend_cuda_host_buffer_type_alloc_buffer(ggm
+     return buffer;
+ }
+ 
++static size_t ggml_backend_cuda_host_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
++    GGML_UNUSED(buft);
++    // very large pinned allocations can fail (e.g. on Windows) and fall back to pageable memory, smaller ones succeed
++    return 4ull*1024*1024*1024;
++}
++
+ ggml_backend_buffer_type_t ggml_backend_cuda_host_buffer_type() {
+     static struct ggml_backend_buffer_type ggml_backend_cuda_buffer_type_host = {
+         /* .iface    = */ {
+@@ -1311,7 +1317,7 @@ ggml_backend_buffer_type_t ggml_backend_cuda_host_buffer_type() {
+             /* .alloc_buffer        = */ ggml_backend_cuda_host_buffer_type_alloc_buffer,
+             /* .alloc_buffer_n      = */ NULL,
+             /* .get_alignment       = */ ggml_backend_cpu_buffer_type()->iface.get_alignment,
+-            /* .get_max_size        = */ NULL, // defaults to SIZE_MAX
++            /* .get_max_size        = */ ggml_backend_cuda_host_buffer_type_get_max_size,
+             /* .get_alloc_size      = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
+             /* .get_alloc_size_n    = */ NULL,
+             /* .is_host             = */ ggml_backend_cpu_buffer_type()->iface.is_host,
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index 6872589fa45e..ea859d1eff09 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -1947,7 +1947,8 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+             if (buf == nullptr) {
+                 throw std::runtime_error(format("unable to allocate %s buffer", ggml_backend_buft_name(buft)));
+             }
+-            if (use_mlock && ggml_backend_buffer_is_host(buf)) {
++            // a multi_buffer has no base to lock, its parts are usually pinned memory (host buffer types with a max size)
++            if (use_mlock && ggml_backend_buffer_is_host(buf) && ggml_backend_buffer_get_base(buf) != nullptr) {
+                 pimpl->mlock_bufs.emplace_back(new llama_mlock);
+                 auto & mlock_buf = pimpl->mlock_bufs.back();
+                 mlock_buf->init   (ggml_backend_buffer_get_base(buf));

@@ -373,6 +373,9 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("moe_cache_prefill_share",         "--moe-cache-prefill-share",         "value_nz"),
     ("moe_cache_prefill_max_tokens",    "--moe-cache-prefill-max-tokens",    "value_nz"),
     ("moe_cache_staging_slots",         "--moe-cache-staging-slots",         "value"),
+    # fewer experts per token: works with or without the cache (not with the cache itself)
+    ("moe_reduce_min",                  "--moe-expert-reduce-min",           "value_nz"),
+    ("moe_reduce_thresh",               "--moe-expert-reduce-thresh",        "value"),
 
     # RoPE / YaRN (0 = model default; YaRN factors default to -1.00 = auto,
     # so emit only when explicitly set to a non-zero override).
@@ -659,6 +662,8 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
     if not (bool(mcfg.get("moe_cache_cpu_miss")) and cache_on):
         suppressed_model.update(_MOE_CACHE_TUNING)
         suppressed_model.add("moe_cache_cpu_miss")
+    if cfg.as_int(mcfg.get("moe_reduce_min")) <= 0:
+        suppressed_model.add("moe_reduce_thresh")
     if not cache_on:
         suppressed_model.update({"moe_cache_stats_file", "moe_cache_prewarm",
                                  "moe_cache_route_bias", "moe_cache_promote_gain"})
@@ -695,7 +700,7 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
 
 
 # flags that only a patched llama.cpp (llamacpp/patcher.py) or a recent build has: a binary that does not list them in --help refuses to start
-_PATCHED_PREFIXES = ("--moe-cache-", "--spec-draft-adaptive", "--spec-draft-head-subset")
+_PATCHED_PREFIXES = ("--moe-cache-", "--moe-expert-reduce", "--spec-draft-adaptive", "--spec-draft-head-subset")
 _HELP_FLAGS: dict[tuple, Optional[set]] = {}
 
 

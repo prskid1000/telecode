@@ -11,10 +11,10 @@ All off by default; stock behaviour is unchanged without the flags.
 Requires: 0002-ggml-skip-negative-expert-ids-and-cpu-split-overlap.patch
 
 diff --git a/common/arg.cpp b/common/arg.cpp
-index 6bc4a84e2..c7b979f4b 100644
+index 6bc4a84e2..f21da51ad 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
-@@ -2786,6 +2786,90 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -2786,6 +2786,94 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.moe_cache_size = (size_t) value*1024*1024;
          }
      ).set_env("LLAMA_ARG_MOE_CACHE_MIB"));
@@ -57,8 +57,8 @@ index 6bc4a84e2..c7b979f4b 100644
 +        "with --moe-cache-cpu-miss, predict the experts of the next layer from the current one and upload up to N missing ones during this layer, 0 = off (default: 0)");
 +    MC_INT("--moe-cache-tail-skip", "N", moe_cache.tail_skip, value < 0, "LLAMA_ARG_MOE_CACHE_TAIL_SKIP",
 +        "with --moe-cache-cpu-miss and several tokens in a batch (speculative verification), compute only the N cache misses with the highest weight per token and skip the rest. This changes the output. 0 = compute all (default: 0)");
-+    MC_INT("--moe-cache-evict-window", "N", moe_cache.evict_window, value < 0 || value > 64, "LLAMA_ARG_MOE_CACHE_EVICT_WINDOW",
-+        "when a cache slot is needed, give up the least used of the N least recently used slots instead of the least recently used one, 0 = plain LRU (default: 0)");
++    MC_INT("--moe-cache-evict-window", "N", moe_cache.evict_window, value < 0 || value > 1000000, "LLAMA_ARG_MOE_CACHE_EVICT_WINDOW",
++        "when a cache slot is needed, give up the least used of the N least recently used slots instead of the least recently used one, 0 = plain LRU, N of at least the number of slots = least frequently used (default: 0)");
 +    MC_FLOAT("--moe-cache-pcie-share", "F", moe_cache.pcie_share, v >= 0.0f && v <= 1.0f, "LLAMA_ARG_MOE_CACHE_PCIE_SHARE",
 +        "with --moe-cache-cpu-miss, this fraction (0-1) of the missed experts of a call is uploaded and computed on the GPU in that call instead of on the CPU, most used first, 0 = all on the CPU (default: 0.0)");
 +    MC_INT("--moe-cache-pcie-max", "N", moe_cache.pcie_max, value < 0 || value > 256, "LLAMA_ARG_MOE_CACHE_PCIE_MAX",
@@ -99,6 +99,10 @@ index 6bc4a84e2..c7b979f4b 100644
 +        string_format("rounds between tries of a draft length next to the best one, 0 = never, with --spec-draft-adaptive (default: %d)", params.speculative.adaptive_probe));
 +    MC_INT("--spec-draft-head-subset", "N", speculative.draft.head_subset, value < 0 || value > 10000000, "LLAMA_ARG_SPEC_DRAFT_HEAD_SUBSET",
 +        "keep N rows of the output head in device memory (the first N tokens of the vocabulary and the last 1024, the special ones) and let the MTP draft steps choose among them, instead of reading the whole head from host memory, 0 = off (default: 0)");
++    MC_INT("--moe-expert-reduce-min", "N", moe_cache.reduce_min, value < 0 || value > 64, "LLAMA_ARG_MOE_EXPERT_REDUCE_MIN",
++        "use fewer experts per token: always the N best, of the others only those whose weight is at least --moe-expert-reduce-thresh times that of the best one. The skipped experts are not computed (on the CPU layers). Not used with the MoE cache, with expert biases or with LoRA. This changes the output. 0 = off (default: 0)");
++    MC_FLOAT("--moe-expert-reduce-thresh", "F", moe_cache.reduce_thresh, v >= 0.0f && v <= 1.0f, "LLAMA_ARG_MOE_EXPERT_REDUCE_THRESH",
++        "with --moe-expert-reduce-min, the weight an expert beyond the first N needs, as a fraction of the weight of the best one (default: 0.40)");
 +#undef MC_BOOL
 +#undef MC_INT
 +#undef MC_FLOAT
@@ -163,7 +167,7 @@ index b6683fe67..f2c15ce1a 100644
      common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
  
 diff --git a/common/speculative.cpp b/common/speculative.cpp
-index c5043a4a8..05e166318 100644
+index c5043a4a8..591d689d8 100644
 --- a/common/speculative.cpp
 +++ b/common/speculative.cpp
 @@ -882,7 +882,8 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
@@ -338,15 +342,16 @@ index c5043a4a8..05e166318 100644
  
      if (has_draft) {
          // default to global devices value
-@@ -2567,6 +2700,7 @@ common_params common_base_params_to_speculative(const common_params & params) {
+@@ -2567,6 +2700,8 @@ common_params common_base_params_to_speculative(const common_params & params) {
  
      // the MoE cache is only used by the target context
      result.moe_cache_size = 0;
 +    result.moe_cache.cpu_miss = false;
++    result.moe_cache.reduce_min = 0;
  
      // dflash/dspark decode the whole noise block in a single pass and sample every block position on the backend
      // TODO: refactor such properties to be announced by the speculative types
-@@ -2801,6 +2935,24 @@ common_speculative * common_speculative_init(common_params_speculative & params,
+@@ -2801,6 +2936,24 @@ common_speculative * common_speculative_init(common_params_speculative & params,
          /* .synth_probs = */ {},
      });
  
@@ -371,7 +376,7 @@ index c5043a4a8..05e166318 100644
      const int32_t n_max_configured = common_speculative_n_max(&params);
      const int32_t n_max_effective  = common_speculative_n_max(result.get());
      const auto rates = common_speculative_synth_rates_resolve(&params, n_max_effective);
-@@ -2895,6 +3047,32 @@ void common_speculative_draft(common_speculative * spec) {
+@@ -2895,6 +3048,32 @@ void common_speculative_draft(common_speculative * spec) {
          }
      }
  
@@ -404,7 +409,7 @@ index c5043a4a8..05e166318 100644
      for (auto & impl : spec->impls) {
          {
              common_time_meas tm(impl->t_draft_us, !impl->gen_perf);
-@@ -2936,6 +3114,9 @@ void common_speculative_draft(common_speculative * spec) {
+@@ -2936,6 +3115,9 @@ void common_speculative_draft(common_speculative * spec) {
  
                      // remember which implementation was used
                      spec->impl_last[seq_id] = impl.get();
@@ -414,7 +419,7 @@ index c5043a4a8..05e166318 100644
  
                      impl->n_gen_drafts++;
                      impl->n_gen_tokens += result.size();
-@@ -2963,6 +3144,11 @@ void common_speculative_draft(common_speculative * spec) {
+@@ -2963,6 +3145,11 @@ void common_speculative_draft(common_speculative * spec) {
  }
  
  void common_speculative_accept(common_speculative * spec, llama_seq_id seq_id, uint16_t n_accepted) {
@@ -426,7 +431,7 @@ index c5043a4a8..05e166318 100644
      common_speculative_impl * impl = spec->impl_last[seq_id];
  
      if (impl == nullptr) {
-@@ -3028,6 +3214,16 @@ void common_speculative_print_stats(const common_speculative * spec) {
+@@ -3028,6 +3215,16 @@ void common_speculative_print_stats(const common_speculative * spec) {
          return;
      }
  
@@ -478,7 +483,7 @@ index 97250c2e8..c68d64e77 100644
      llama-memory-hybrid-iswa.cpp
      llama-memory-hybrid-idx.cpp
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 9ee64b566..2aa9a85a5 100644
+index 9ee64b566..d2cf9c259 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -9,6 +9,7 @@
@@ -489,15 +494,17 @@ index 9ee64b566..2aa9a85a5 100644
  #include "llama-moe-cache.h"
  #include "llama-ext.h"
  #include "llama-sampler.h"
-@@ -359,6 +360,7 @@ llama_context::llama_context(
+@@ -359,6 +360,9 @@ llama_context::llama_context(
      cparams.op_offload     = params.op_offload;
      cparams.kv_unified     = params.kv_unified;
      cparams.moe_cache_size = params.moe_cache_size;
 +    cparams.head_subset = params.head_subset;
++    cparams.moe_reduce_min    = params.moe_cache_params ? params.moe_cache_params->reduce_min : 0;
++    cparams.moe_reduce_thresh = params.moe_cache_params ? params.moe_cache_params->reduce_thresh : 0.0f;
  
      // initialized later
      cparams.pipeline_parallel = false;
-@@ -549,7 +551,25 @@ llama_context::llama_context(
+@@ -549,7 +553,25 @@ llama_context::llama_context(
          }
  
          if (cparams.moe_cache_size > 0) {
@@ -524,7 +531,7 @@ index 9ee64b566..2aa9a85a5 100644
          }
  
          sched_reserve();
-@@ -709,6 +729,7 @@ void llama_context::sched_new(size_t max_nodes, bool parallel) {
+@@ -709,6 +731,7 @@ void llama_context::sched_new(size_t max_nodes, bool parallel) {
              backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, parallel, cparams.op_offload));
  
      ggml_backend_sched_set_copy_callback(sched.get(), sched_copy_experts, this);
@@ -532,7 +539,7 @@ index 9ee64b566..2aa9a85a5 100644
      ggml_backend_sched_set_realloc_callback(sched.get(), sched_graph_realloc, this);
  }
  
-@@ -2700,6 +2721,7 @@ llm_graph_params llama_context::graph_params(
+@@ -2700,6 +2723,7 @@ llm_graph_params llama_context::graph_params(
          /*.mctx        =*/ mctx,
          /*.cross       =*/ &cross,
          /*.moe_cache   =*/ moe_cache.get(),
@@ -540,7 +547,7 @@ index 9ee64b566..2aa9a85a5 100644
          /*.prec_policy =*/ &model.prec_policy,
          /*.hdmd        =*/ model.hdmd.rot.empty() ? nullptr : &model.hdmd,
          /*.samplers    =*/ sampling.samplers,
-@@ -3712,6 +3734,9 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
+@@ -3712,6 +3736,9 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
              ret[buft].context += size;
          }
      }
@@ -550,7 +557,7 @@ index 9ee64b566..2aa9a85a5 100644
      if (model.hparams.no_alloc) {
          for (size_t i = 0; i < backends.size(); ++i) {
              ggml_backend_t             backend = backends[i].get();
-@@ -4002,6 +4027,8 @@ llama_context_params llama_context_default_params() {
+@@ -4002,6 +4029,8 @@ llama_context_params llama_context_default_params() {
          /*.type_k                      =*/ GGML_TYPE_F16,
          /*.type_v                      =*/ GGML_TYPE_F16,
          /*.moe_cache_size              =*/ 0,
@@ -580,19 +587,21 @@ index 6938fb103..d326ab029 100644
      // decode output (2-dimensional array: [n_outputs][n_vocab])
      buffer_view<float> logits = {nullptr, 0};
 diff --git a/src/llama-cparams.h b/src/llama-cparams.h
-index f4eb181a7..8b516d563 100644
+index f4eb181a7..c65cb5c73 100644
 --- a/src/llama-cparams.h
 +++ b/src/llama-cparams.h
-@@ -56,6 +56,7 @@ struct llama_cparams {
+@@ -56,6 +56,9 @@ struct llama_cparams {
      bool training;           // set by llama_opt_init()
  
      size_t moe_cache_size;
 +    int32_t head_subset;
++    int32_t moe_reduce_min;
++    float   moe_reduce_thresh;
  
      std::vector<bool> embeddings_layer_inp; // [n_layer()] extract input embeddings for layer
  
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index f69fe63f8..5bc9cd53e 100644
+index f69fe63f8..b93225ea4 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -2,6 +2,7 @@
@@ -711,7 +720,33 @@ index f69fe63f8..5bc9cd53e 100644
      // select experts
      ggml_tensor * selected_experts = selected_experts_in;
      if (selected_experts == nullptr) {
-@@ -2282,8 +2349,23 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2259,6 +2326,25 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+         cb(weights, "ffn_moe_weights_softmax", il);
+     }
+ 
++    // fewer experts per token (opt-in, changes the output): the best moe_reduce_min stay, of the others only those with at least moe_reduce_thresh times the
++    // weight of the best one. The rest get the id -1 and the weight 0: mul_mat_id skips them (CPU and CUDA), so on the CPU layers they are not computed
++    // it needs plain expert matmuls (the ids are read by nothing else) and the experts in their normal place (no MoE cache)
++    const int32_t n_reduce_min = cparams.moe_reduce_min;
++    const bool reduce = n_reduce_min > 0 && n_reduce_min < (int32_t) n_expert_used && moe_cache == nullptr && selected_experts_in == nullptr && !weight_before_ffn &&
++        arch != LLM_ARCH_GROVEMOE && !hdmd_experts && loras->empty() && !(up_exps_b || gate_exps_b || down_exps_b || gate_up_exps_b) && !(up_exps_s || gate_exps_s || down_exps_s);
++    if (reduce) {
++        ggml_tensor * w2     = ggml_reshape_2d(ctx0, weights, n_expert_used, n_tokens);
++        ggml_tensor * best   = ggml_cont(ctx0, ggml_view_2d(ctx0, w2, 1, n_tokens, w2->nb[1], 0)); // [1, n_tokens], the best expert is first
++        ggml_tensor * strong = ggml_step(ctx0, ggml_sub(ctx0, w2, ggml_scale(ctx0, best, cparams.moe_reduce_thresh)));
++        ggml_tensor * first  = ggml_step(ctx0, ggml_scale_bias(ctx0, ggml_arange(ctx0, 0.0f, (float) n_expert_used, 1.0f), -1.0f, (float) n_reduce_min - 0.5f)); // 1 for rank < min
++        ggml_tensor * keep   = ggml_clamp(ctx0, ggml_add(ctx0, strong, first), 0.0f, 1.0f); // [n_expert_used, n_tokens]
++        cb(keep, "ffn_moe_keep", il);
++        ggml_tensor * ids_f  = ggml_cast(ctx0, selected_experts, GGML_TYPE_F32);
++        ids_f = ggml_scale_bias(ctx0, ggml_mul(ctx0, ggml_scale_bias(ctx0, ids_f, 1.0f, 1.0f), keep), 1.0f, -1.0f); // id where kept, -1 elsewhere
++        selected_experts = ggml_cast(ctx0, ids_f, GGML_TYPE_I32);
++        weights = ggml_reshape_3d(ctx0, ggml_mul(ctx0, w2, keep), 1, n_expert_used, n_tokens);
++    }
++
+     if (norm_w) {
+         weights = ggml_reshape_2d(ctx0, weights, n_expert_used, n_tokens);
+ 
+@@ -2282,8 +2368,23 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
      //call early so that topk-moe can be used
      ggml_build_forward_expand(gf, weights);
  
@@ -736,7 +771,7 @@ index f69fe63f8..5bc9cd53e 100644
  
      cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
  
-@@ -2296,6 +2378,23 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2296,6 +2397,26 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
  
      ggml_tensor * up = nullptr;
      ggml_tensor * experts = nullptr;
@@ -747,6 +782,9 @@ index f69fe63f8..5bc9cd53e 100644
 +    if (n_pass == 2) {
 +        // the CPU branch reads host inputs filled by the cache, so it runs while the GPU computes the cached experts
 +        moe_cache->set_hybrid(il, weights);
++        moe_skip_neg = true;
++    }
++    if (reduce) {
 +        moe_skip_neg = true;
 +    }
 +    for (int pass = 0; pass < n_pass; ++pass) {
@@ -760,11 +798,14 @@ index f69fe63f8..5bc9cd53e 100644
  
      if (gate_up_exps) {
          // merged gate_up path: one mul_mat_id, then split into gate and up views
-@@ -2452,6 +2551,15 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2452,6 +2573,18 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          experts = ggml_mul(ctx0, experts, weights);
          cb(experts, "ffn_moe_weighted", il);
      }
 +    } // passes (the block above is not indented on purpose: it is upstream's)
++    if (reduce) {
++        moe_skip_neg = false;
++    }
 +    if (n_pass == 2) {
 +        moe_pin_cpu  = false;
 +        moe_skip_neg = false;
@@ -776,7 +817,7 @@ index f69fe63f8..5bc9cd53e 100644
  
      ggml_build_forward_expand(gf, experts);
  
-@@ -2495,12 +2603,13 @@ ggml_tensor * llm_graph_context::build_moe_cache_slots(
+@@ -2495,12 +2628,13 @@ ggml_tensor * llm_graph_context::build_moe_cache_slots(
           ggml_tensor * gate_exps,
           ggml_tensor * down_exps,
           ggml_tensor * gate_up_exps,
@@ -2300,10 +2341,10 @@ index f22d986dc..71b9106f2 100644
  
  ggml_tensor * llama_moe_cache::get_experts(const ggml_tensor * w) const {
 diff --git a/src/llama-moe-cache.h b/src/llama-moe-cache.h
-index 3b6726b86..83293c738 100644
+index 3b6726b86..85d5c287b 100644
 --- a/src/llama-moe-cache.h
 +++ b/src/llama-moe-cache.h
-@@ -4,23 +4,81 @@
+@@ -4,23 +4,83 @@
  
  #include <map>
  #include <memory>
@@ -2341,6 +2382,8 @@ index 3b6726b86..83293c738 100644
 +    float prefill_share = 0.0f;
 +    int32_t prefill_max_tokens = 2048;
 +    int32_t staging_slots = 64;
++    int32_t reduce_min = 0;        // fewer experts per token: always the best reduce_min, 0 = off (not a cache option: it also works without a cache)
++    float   reduce_thresh = 0.4f;  // of the others only those with at least this fraction of the weight of the best one
 +    int32_t n_ubatch = 0; // rows of a micro batch (0 = unknown), bounds the host inputs of the prompt batches
 +};
  

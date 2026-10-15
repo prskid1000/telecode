@@ -125,6 +125,15 @@ def prevent_sleep() -> bool:
     return bool(app_config.get_nested("llamacpp.prevent_sleep", False))
 
 
+def vram_ceiling_mib() -> int:
+    """Stop llama-server the moment the memory in use on the first NVIDIA GPU passes this many MiB (0 = off).
+
+    A GPU that runs full can hard-crash a machine (WDDM thrashing), a killed server only costs a reload; the check
+    runs every half second from the spawn on, so it covers the model load too. It counts the whole GPU, other programs included.
+    Not a llama-server flag, so it never reaches argv."""
+    return as_int(app_config.get_nested("llamacpp.vram_ceiling_mib", 0))
+
+
 def min_free_vram_mib() -> int:
     """Refuse to spawn llama-server when the first NVIDIA GPU has less free VRAM (MiB).
 
