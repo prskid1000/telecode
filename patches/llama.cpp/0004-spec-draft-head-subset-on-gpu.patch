@@ -254,10 +254,10 @@ index f7a1dcc..05dc1da 100644
  
 diff --git a/src/llama-head-subset.cpp b/src/llama-head-subset.cpp
 new file mode 100644
-index 0000000..a25c1e4
+index 0000000..1c4fdbf
 --- /dev/null
 +++ b/src/llama-head-subset.cpp
-@@ -0,0 +1,112 @@
+@@ -0,0 +1,115 @@
 +#include "llama-head-subset.h"
 +
 +#include "llama-impl.h"
@@ -331,18 +331,21 @@ index 0000000..a25c1e4
 +        // as weights, the ops that read it run on the device that holds it
 +        ggml_backend_buffer_set_usage(buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 +
-+        const size_t row = src->nb[1];
-+        ggml_backend_tensor_set(w, src->data, 0, n_first*row);
-+        ggml_backend_tensor_set(w, (const uint8_t *) src->data + (n_vocab - n_last)*row, n_first*row, n_last*row);
++        // the memory fit of the server loads the model without weights: the buffer is counted, nothing is copied
++        if (!model.hparams.no_alloc) {
++            const size_t row = src->nb[1];
++            ggml_backend_tensor_set(w, src->data, 0, n_first*row);
++            ggml_backend_tensor_set(w, (const uint8_t *) src->data + (n_vocab - n_last)*row, n_first*row, n_last*row);
 +
-+        std::vector<int32_t> tokens(n_rows);
-+        for (int64_t i = 0; i < n_first; ++i) {
-+            tokens[i] = (int32_t) i;
++            std::vector<int32_t> tokens(n_rows);
++            for (int64_t i = 0; i < n_first; ++i) {
++                tokens[i] = (int32_t) i;
++            }
++            for (int64_t i = 0; i < n_last; ++i) {
++                tokens[n_first + i] = (int32_t) (n_vocab - n_last + i);
++            }
++            ggml_backend_tensor_set(ids, tokens.data(), 0, ggml_nbytes(ids));
 +        }
-+        for (int64_t i = 0; i < n_last; ++i) {
-+            tokens[n_first + i] = (int32_t) (n_vocab - n_last + i);
-+        }
-+        ggml_backend_tensor_set(ids, tokens.data(), 0, ggml_nbytes(ids));
 +
 +        LLAMA_LOG_INFO("%s: %" PRId64 " of %" PRId64 " rows of the output head on the device, %.2f MiB\n", __func__,
 +                n_rows, n_vocab, ggml_backend_buffer_get_size(buf.get())/1024.0/1024.0);

@@ -142,6 +142,8 @@ def main() -> int:
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                     help="model key edit before argv is built (repeatable), e.g. n_cpu_moe=99")
     ap.add_argument("--extra", default="", help="extra llama-server args, one quoted string")
+    ap.add_argument("--probs", type=int, default=0, help="also record the top-N token probabilities of every generated token (tc_<label>_probs.json)")
+    ap.add_argument("--pad", type=int, default=0, help="prepend this many filler sentences (about 12 tokens each) so prompts reach the prompt-batch paths")
     ap.add_argument("--prompts", type=int, default=len(PROMPTS), help="how many prompts to run (cycles the 4 built-in)")
     ap.add_argument("--n-predict", type=int, default=192)
     ap.add_argument("--label", default="run")
@@ -171,6 +173,9 @@ def main() -> int:
     if args.extra:
         cmd += [a.strip('"') for a in shlex.split(args.extra, posix=(os.name != "nt"))]
 
+    if os.environ.get("BENCH_PRINT_CMD"):
+        print(json.dumps(cmd))
+        return 0
     os.makedirs(args.out, exist_ok=True)
     log = open(os.path.join(args.out, f"tc_{args.label}.log"), "w")
     peak = _VramPeak()
@@ -196,17 +201,22 @@ def main() -> int:
                 pass
             time.sleep(2)
 
-        _post(args.port, "/completion", {"prompt": PROMPTS[0], "n_predict": 16, "temperature": 0, "cache_prompt": False})
-        outs, tg, pp = [], [], []
+        filler = "The archive keeps a ledger of shipments, one line per crate. " * args.pad
+        _post(args.port, "/completion", {"prompt": filler + PROMPTS[0], "n_predict": 16, "temperature": 0, "cache_prompt": False})
+        outs, tg, pp, probs = [], [], [], []
         for i in range(max(1, args.prompts)):
             r = _post(args.port, "/completion",
-                      {"prompt": PROMPTS[i % len(PROMPTS)], "n_predict": args.n_predict, "temperature": 0,
-                       "top_k": 1, "seed": 1, "cache_prompt": False})
+                      {"prompt": filler + PROMPTS[i % len(PROMPTS)], "n_predict": args.n_predict, "temperature": 0,
+                       "top_k": 1, "seed": 1, "cache_prompt": False, **({"n_probs": args.probs} if args.probs else {})})
             outs.append(r["content"])
+            probs.append(r.get("completion_probabilities"))
             tg.append(r["timings"]["predicted_per_second"])
             pp.append(r["timings"]["prompt_per_second"])
         with open(os.path.join(args.out, f"tc_{args.label}.json"), "w", encoding="utf-8") as fh:
             json.dump(outs, fh)
+        if args.probs:
+            with open(os.path.join(args.out, f"tc_{args.label}_probs.json"), "w", encoding="utf-8") as fh:
+                json.dump(probs, fh)
         print(json.dumps({
             "label": args.label,
             "pp_tok_s": round(sum(pp) / len(pp), 1),
