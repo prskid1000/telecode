@@ -140,6 +140,12 @@ def preflight_vram() -> bool:
     return bool(app_config.get_nested("llamacpp.preflight_vram", False))
 
 
+def preflight_overhead_mib() -> int:
+    """Memory of the CUDA runtime itself (context, cuBLAS workspaces, graph pools) that llama.cpp's plan does not count; measured about 440-450 MiB
+    with the 27B. Added to the plan by the preflight check."""
+    return as_int(app_config.get_nested("llamacpp.preflight_overhead_mib", 512))
+
+
 def min_free_vram_mib() -> int:
     """Refuse to spawn llama-server when the first NVIDIA GPU has less free VRAM (MiB).
 

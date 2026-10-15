@@ -22,6 +22,7 @@ from llamacpp import vram
 
 _LOG = logging.getLogger("telecode.llamacpp.preflight")
 
+_MMPROJ = re.compile(r"estimated worst-case memory usage of mmproj is ([\d.]+) MiB")
 _ROW = re.compile(r"CUDA0 \(.*?\)\s*\|\s*(\d+) =\s*(\d+) \+ \((\d+) =\s*(\d+) \+\s*(\d+) \+\s*(\d+)\)")
 # more than this on the GPU while only the plan is being made means the weights are being loaded: stop at once
 _LOAD_GUARD_MIB = 3000
@@ -32,7 +33,11 @@ def _expects_draft(argv: list[str]) -> bool:
 
 
 def planned_mib(argv: list[str], env: Optional[dict] = None, timeout: float = 30.0) -> Optional[dict]:
-    """{"target": MiB, "draft": MiB, "total": MiB} of the first GPU, or None when the plan could not be read."""
+    """{"target": MiB, "draft": MiB, "mmproj": MiB, "total": MiB} of the first GPU, or None when the plan could not be read.
+
+    target: the model, the KV cache of every slot (--parallel), the recurrent state and the compute buffers; draft: the draft / MTP context on top;
+    mmproj: the vision projector, only when it is offloaded to the GPU. The CUDA runtime's own memory is NOT in the plan (about 0.4-0.5 GB, see
+    llamacpp.preflight_overhead_mib) and neither are other programs."""
     need = 2 if _expects_draft(argv) else 1
     cmd = list(argv) + ["-lv", "4"]
     creation = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
@@ -75,4 +80,7 @@ def planned_mib(argv: list[str], env: Optional[dict] = None, timeout: float = 30
     target = rows[0][2]  # what the server plans to use on the GPU
     # the draft context shares the weights: only its own context and compute buffers come on top
     draft = sum(r[4] + r[5] for r in rows[1:need])
-    return {"target": target, "draft": draft, "total": target + draft}
+    mm = _MMPROJ.search("".join(lines))
+    offloaded = ("--mmproj" in argv or "-mm" in argv or "--mmproj-url" in argv) and "--no-mmproj-offload" not in argv
+    mmproj = int(float(mm.group(1))) if (mm and offloaded) else 0
+    return {"target": target, "draft": draft, "mmproj": mmproj, "total": target + draft + mmproj}

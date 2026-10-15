@@ -685,13 +685,17 @@ class LlamaSupervisor:
                 _LLAMA_LOG.warning("llama.cpp: preflight memory plan for '%s' could not be read, starting without the check", model_name)
             else:
                 base = (await loop.run_in_executor(None, vram.used_vram_mib)) or 0
-                _LLAMA_LOG.info("llama.cpp: '%s' plans %d MiB of GPU memory (model + context %d, draft context %d), other programs use %d MiB, ceiling %d MiB",
-                                model_name, plan["total"], plan["target"], plan["draft"], base, ceiling)
-                if plan["total"] + base > ceiling:
+                overhead = cfg.preflight_overhead_mib()
+                needed = plan["total"] + overhead + base
+                _LLAMA_LOG.info("llama.cpp: '%s' plans %d MiB of GPU memory (model, KV of every slot and compute buffers %d, draft context %d, vision projector %d), "
+                                "CUDA runtime %d, other programs %d: %d MiB of the %d MiB ceiling",
+                                model_name, plan["total"], plan["target"], plan["draft"], plan["mmproj"], overhead, base, needed, ceiling)
+                if needed > ceiling:
                     raise RuntimeError(
-                        f"llama-server not started for '{model_name}': it plans {plan['total']} MiB of GPU memory (main model {plan['target']} MiB, draft / MTP context "
-                        f"{plan['draft']} MiB) and other programs already use {base} MiB, which is {plan['total'] + base} MiB, above llamacpp.vram_ceiling_mib "
-                        f"({ceiling} MiB). Lower the context (ctx_size, ctx_size_spec), the micro-batch (ubatch_size) or the draft depth, or raise the ceiling.")
+                        f"llama-server not started for '{model_name}': it plans {plan['total']} MiB of GPU memory (model, KV cache of every slot and compute buffers "
+                        f"{plan['target']} MiB, draft / MTP context {plan['draft']} MiB, vision projector {plan['mmproj']} MiB), the CUDA runtime needs about {overhead} MiB "
+                        f"and other programs already use {base} MiB: {needed} MiB, above llamacpp.vram_ceiling_mib ({ceiling} MiB). Lower the context "
+                        f"(ctx_size, ctx_size_spec), the number of parallel slots, the micro-batch (ubatch_size) or the draft depth, or raise the ceiling.")
 
         log_path = cfg.log_file()
         self._log_fp = open(log_path, "ab", buffering=0)
