@@ -573,36 +573,78 @@ index 5bd2ed5..09de2ff 100644
      void clear() {
          map_idx_to_media.clear();
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-index 9933771..00cd11e 100644
+index a18b7542c..15f27b27c 100644
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
-@@ -328,6 +328,25 @@ struct server_slot {
+@@ -328,9 +328,50 @@ struct server_slot {
              llama_state_seq_get_data_ext(ctx_dft, cur->data.drft.data(), cur_size_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE);
          }
  
-+        if (llama_lmcache::instance().is_enabled() && !prompt.tokens.has_media() && prompt.tokens.size() > 0) {
-+            const int chunk_sz = llama_lmcache::instance().params().chunk_size;
-+            if (chunk_sz > 0 && prompt.tokens.size() >= (size_t)chunk_sz) {
-+                const llama_tokens raw_tokens = prompt.tokens.has_mtmd ? prompt.tokens.get_text_tokens() : prompt.tokens.get_tokens();
-+                size_t n_chunks = raw_tokens.size() / chunk_sz;
-+                uint64_t chain_hash = 0;
-+                for (size_t c = 0; c < n_chunks; ++c) {
-+                    chain_hash = llama_lmcache::instance().hash_chunk(raw_tokens.data() + c * chunk_sz, chunk_sz, chain_hash);
-+                    llama_lmcache::instance().put_chunk(chain_hash, raw_tokens.data() + c * chunk_sz, chunk_sz, cur->data.main.data(), cur_size_tgt);
-+                    if (llama_lmcache::instance().params().blend) {
-+                        uint64_t iso_hash = llama_lmcache::instance().hash_chunk(raw_tokens.data() + c * chunk_sz, chunk_sz, 0);
-+                        if (iso_hash != chain_hash) {
-+                            llama_lmcache::instance().put_chunk(iso_hash, raw_tokens.data() + c * chunk_sz, chunk_sz, cur->data.main.data(), cur_size_tgt);
-+                        }
-+                    }
-+                }
-+            }
-+        }
++        save_to_lmcache();
 +
          return true;
      }
  
-@@ -1503,6 +1522,13 @@ private:
++    bool lmcache_restored = false;
++
++    void save_to_lmcache() const {
++        if (!llama_lmcache::instance().is_enabled() || prompt.tokens.has_media() || prompt.tokens.size() == 0) {
++            return;
++        }
++        const int chunk_sz = llama_lmcache::instance().params().chunk_size;
++        if (chunk_sz <= 0 || prompt.tokens.size() < (size_t)chunk_sz) {
++            return;
++        }
++
++        const size_t cur_size_tgt = llama_state_seq_get_size_ext(ctx_tgt, id, LLAMA_STATE_SEQ_FLAGS_NONE);
++        if (cur_size_tgt == 0) {
++            return;
++        }
++
++        std::vector<uint8_t> state_buf(cur_size_tgt);
++        llama_state_seq_get_data_ext(ctx_tgt, state_buf.data(), cur_size_tgt, id, LLAMA_STATE_SEQ_FLAGS_NONE);
++
++        const llama_tokens raw_tokens = prompt.tokens.has_mtmd ? prompt.tokens.get_text_tokens() : prompt.tokens.get_tokens();
++        const size_t n_chunks = raw_tokens.size() / chunk_sz;
++        if (n_chunks == 0) {
++            return;
++        }
++
++        uint64_t chain_hash = 0;
++        for (size_t c = 0; c < n_chunks; ++c) {
++            chain_hash = llama_lmcache::instance().hash_chunk(raw_tokens.data() + c * chunk_sz, chunk_sz, chain_hash);
++            llama_lmcache::instance().put_chunk(chain_hash, raw_tokens.data() + c * chunk_sz, chunk_sz, state_buf.data(), cur_size_tgt);
++            if (llama_lmcache::instance().params().blend) {
++                uint64_t iso_hash = llama_lmcache::instance().hash_chunk(raw_tokens.data() + c * chunk_sz, chunk_sz, 0);
++                if (iso_hash != chain_hash) {
++                    llama_lmcache::instance().put_chunk(iso_hash, raw_tokens.data() + c * chunk_sz, chunk_sz, state_buf.data(), cur_size_tgt);
++                }
++            }
++        }
++        SLT_INF(*this, "LMCache: cached %zu chunks (%d tokens) into RAM/disk\n", n_chunks, (int)(n_chunks * chunk_sz));
++    }
++
+     bool prompt_load(server_prompt_cache & prompt_cache, const server_tokens & tokens) {
+         bool res = prompt_cache.load(prompt, tokens, ctx_tgt, ctx_dft, id);
+         if (!res) {
+@@ -378,6 +419,7 @@ struct server_slot {
+     void reset() {
+         SLT_DBG(*this, "%s", "\n");
+ 
++        lmcache_restored = false;
+         spec_is_replay = false;
+ 
+         last_nl_pos    = 0;
+@@ -589,6 +631,8 @@ struct server_slot {
+ 
+             SLT_INF(*this, "stop processing: n_tokens = %d, truncated = %d\n", prompt.n_tokens(), truncated);
+ 
++            save_to_lmcache();
++
+             t_last_used = ggml_time_us();
+ 
+             state = SLOT_STATE_IDLE;
+@@ -1511,6 +1555,13 @@ private:
          }
          SRV_TRC("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
  
@@ -616,7 +658,7 @@ index 9933771..00cd11e 100644
          if (params_base.n_ctx_checkpoints > 0) {
              SRV_TRC("context checkpoints enabled, max = %d, min spacing = %d\n",
                      params_base.n_ctx_checkpoints, params_base.checkpoint_min_step);
-@@ -3603,6 +3629,37 @@ private:
+@@ -3699,6 +3750,39 @@ private:
                                  // reuse any previously computed tokens that are common with the new prompt
                                  n_past = slot.prompt.tokens.get_common_prefix(input_tokens);
  
@@ -635,10 +677,12 @@ index 9933771..00cd11e 100644
 +                                            if (llama_lmcache::instance().get_chunk(chain_hash, chunk)) {
 +                                                llama_state_seq_set_data_ext(ctx_tgt, chunk.data.data(), chunk.data.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_NONE);
 +                                                n_past = plan.n_prefix_tokens;
++                                                slot.lmcache_restored = true;
 +                                                slot.prompt.tokens.clear();
 +                                                for (int i = 0; i < n_past; ++i) {
 +                                                    slot.prompt.tokens.push_back(raw_in_tokens[i]);
 +                                                }
++                                                SLT_INF(slot, "LMCache: matched %d prefix tokens (bypassing prefill for %zu chunks)\n", plan.n_prefix_tokens, n_chunks);
 +                                            }
 +                                        }
 +                                    }
@@ -654,3 +698,21 @@ index 9933771..00cd11e 100644
                                  // the children start from the shared prefix, do not go past it
                                  if (slot.task->n_tokens_shared > 0) {
                                      n_past = std::min(n_past, slot.task->n_tokens_shared);
+@@ -3881,7 +3965,7 @@ private:
+                                         SLT_TRC(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, n_past, (float) it->size() / 1024 / 1024);
+                                     }
+ 
+-                                    if (do_reset) {
++                                    if (do_reset && !slot.lmcache_restored) {
+                                         SLT_TRC(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see %s)\n",
+                                                 "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
+                                         pos_next = 0;
+@@ -4137,6 +4221,8 @@ private:
+                     if (slot.prompt.n_tokens() == slot.task->n_tokens()) {
+                         slot.state = SLOT_STATE_DONE_PROMPT;
+ 
++                        slot.save_to_lmcache();
++
+                         GGML_ASSERT(batch.size() > 0);
+ 
+                         // extract the logits only for the last token
