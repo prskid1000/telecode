@@ -111,13 +111,8 @@ def clean_copy(repo: Path, rev: str) -> Path:
 def verify(series_dir: Path) -> int:
     spec, repo = load(series_dir)
     order = [series_dir / p["file"] for p in spec["patches"]]
-    ok = True
-    for f in reversed(order):
-        r = apply(repo, f, reverse=True, cwd=w if 'w' in locals() else None, check=False)
-    # Re-apply to keep tree intact
-    for f in order:
-        apply(repo, f, cwd=w if 'w' in locals() else None)
     w = clean_copy(repo, "HEAD")
+    ok = True
     try:
         for f in order:
             r = apply(repo, f, cwd=w)

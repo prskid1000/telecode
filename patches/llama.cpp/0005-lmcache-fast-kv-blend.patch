@@ -11,7 +11,8 @@ Add-on: LMCache hardware-accelerated chunked KV reuse and non-prefix CacheBlend 
   --lmcache-blend-min-tokens N: minimum token count for blended chunk (default: 128)
   --lmcache-compress TYPE: quantization format for offloaded chunks (default: q8_0)
   --lmcache-async-save: asynchronous storage offload on background threads
-Requires: 0003-moe-cache-modes-expert-reduction-adaptive-draft-head-subset.patch, 0004-upstream-draft-kv-out-of-checkpoints-and-pinned-host-buffers.patch
+Requires: 0003-moe-cache-modes-expert-reduction-adaptive-draft-head-subset.patch
+Requires: 0004-upstream-draft-kv-out-of-checkpoints-and-pinned-host-buffers.patch
 
 diff --git a/common/arg.cpp b/common/arg.cpp
 index 555b61d..8830535 100644

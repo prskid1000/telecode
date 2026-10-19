@@ -341,7 +341,10 @@ def patch_requires(p: Path) -> list[str]:
             if line.startswith("diff --git"):
                 break
             if line.startswith("Requires:"):
-                out.append(line.split(":", 1)[1].strip())
+                for req in line.split(":", 1)[1].split(","):
+                    r = req.strip()
+                    if r:
+                        out.append(r)
     except OSError:
         pass
     return out
@@ -404,23 +407,45 @@ def applied_patches() -> list[str]:
     """Patches whose changes are already present in the working tree.
 
     Determined by asking git to reverse-apply: if that succeeds the patch is in.
-    Cheaper and more honest than tracking state in a file that can go stale.
+    For stacked patches that depend on earlier ones, a topmost applied patch
+    implies all of its prerequisites are in the tree as well.
     """
     src = source_dir()
     if not (src / ".git").is_dir():
         return []
-    out: list[str] = []
-    for p in patches():
-        kwargs: dict[str, Any] = {"cwd": str(src), "capture_output": True, "timeout": 60}
-        if sys.platform == "win32":
-            kwargs["creationflags"] = 0x08000000
+    all_patches = patches()
+    if not all_patches:
+        return []
+
+    kwargs: dict[str, Any] = {"cwd": str(src), "capture_output": True, "timeout": 60}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = 0x08000000
+
+    applied_set: set[str] = set()
+
+    # Pass 1: Direct reverse-check (topmost patches or non-overlapping patches succeed directly)
+    for p in reversed(all_patches):
+        key = patch_key(p)
         try:
             res = subprocess.run(["git", "apply", "--reverse", "--check", str(p)], **kwargs)
             if res.returncode == 0:
-                out.append(patch_key(p))
+                applied_set.add(key)
         except Exception:
             continue
-    return out
+
+    # Pass 2: Closure over requirements (if a patch is present, its prerequisites are in the tree)
+    changed = True
+    while changed:
+        changed = False
+        for p in all_patches:
+            key = patch_key(p)
+            if key in applied_set:
+                for req in patch_requires(p):
+                    if req not in applied_set:
+                        applied_set.add(req)
+                        changed = True
+
+    return [patch_key(p) for p in all_patches if patch_key(p) in applied_set]
 
 
 def status() -> dict[str, Any]:
