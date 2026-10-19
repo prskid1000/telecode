@@ -193,7 +193,7 @@ def _row(left: QWidget, right: QWidget) -> QWidget:
     l.setSpacing(14)
     left.setMinimumWidth(160)
     left.setMaximumWidth(280)
-    l.addWidget(left, 0, Qt.AlignmentFlag.AlignTop)
+    l.addWidget(left, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
     l.addWidget(right, 1)
     return w
 
@@ -3140,7 +3140,7 @@ def _llama(window) -> QWidget:
     cache_reuse_toggle.setChecked(False)
     sp_body.addWidget(_row(row_label("Reuse KV Cache (LMCache)",
                                       "When enabled, reuses pre-computed KV cache to benchmark warm prompt prefill bypass and LMCache retrieval rather than cold recomputation."),
-                            cache_reuse_toggle))
+                            _wrap_align(cache_reuse_toggle, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)))
 
     _TMPL_OVERHEAD = 512  # chat-template + BOS/role tokens headroom
 
