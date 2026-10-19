@@ -15,10 +15,10 @@ Requires: 0003-moe-cache-modes-expert-reduction-adaptive-draft-head-subset.patch
 Requires: 0004-upstream-draft-kv-out-of-checkpoints-and-pinned-host-buffers.patch
 
 diff --git a/common/arg.cpp b/common/arg.cpp
-index 555b61d..8830535 100644
+index e5089c5..9b7b9ba 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
-@@ -2878,6 +2878,100 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -2879,6 +2879,100 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.moe_cache.head_subset_ids = value;
          }
      ).set_env("LLAMA_ARG_SPEC_DRAFT_HEAD_SUBSET_IDS"));
@@ -120,10 +120,10 @@ index 555b61d..8830535 100644
  #undef MC_INT
  #undef MC_FLOAT
 diff --git a/common/common.cpp b/common/common.cpp
-index 8179586..e8a414b 100644
+index b51d13b..6976470 100644
 --- a/common/common.cpp
 +++ b/common/common.cpp
-@@ -1745,6 +1745,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
+@@ -1746,6 +1746,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
  
      cparams.moe_cache_size = params.moe_cache_size;
      cparams.moe_cache_params = &params.moe_cache;
@@ -132,7 +132,7 @@ index 8179586..e8a414b 100644
  
      return cparams;
 diff --git a/common/common.h b/common/common.h
-index 3f6194e..a8d1794 100644
+index 87c7b79..5cb706d 100644
 --- a/common/common.h
 +++ b/common/common.h
 @@ -8,6 +8,7 @@
@@ -199,10 +199,10 @@ index 9ab9c3e..24a2fed 100644
          /*.embeddings                  =*/ false,
 diff --git a/src/llama-lmcache.cpp b/src/llama-lmcache.cpp
 new file mode 100644
-index 0000000..133f2f6
+index 0000000..a613d17
 --- /dev/null
 +++ b/src/llama-lmcache.cpp
-@@ -0,0 +1,254 @@
+@@ -0,0 +1,317 @@
 +#include "llama-lmcache.h"
 +#include "llama-impl.h"
 +#define XXH_INLINE_ALL
@@ -250,9 +250,21 @@ index 0000000..133f2f6
 +void llama_lmcache::init(const llama_lmcache_params & params) {
 +    std::lock_guard<std::mutex> lock(m_mutex);
 +    m_params = params;
++    m_disk_index.clear();
++    m_current_disk_bytes = 0;
++
 +    if (m_params.disk_enabled && !m_params.disk_dir.empty()) {
 +        try {
 +            fs::create_directories(m_params.disk_dir);
++            for (const auto & entry : fs::directory_iterator(m_params.disk_dir)) {
++                if (entry.is_regular_file() && entry.path().extension() == ".bin") {
++                    try {
++                        uint64_t h = std::stoull(entry.path().stem().string());
++                        m_disk_index.insert(h);
++                        m_current_disk_bytes += entry.file_size();
++                    } catch (...) {}
++                }
++            }
 +        } catch (...) {
 +            // directory creation failure handled gracefully
 +        }
@@ -271,31 +283,27 @@ index 0000000..133f2f6
 +    }
 +
 +    const size_t chunk_sz = static_cast<size_t>(m_params.chunk_size);
-+    size_t pos = 0;
-+    uint64_t chain_hash = 0;
-+
-+    // 1. Chained prefix scan (exact historical dependency)
-+    while (pos + chunk_sz <= tokens.size()) {
-+        chain_hash = fast_xxh3_tokens(tokens.data() + pos, chunk_sz, chain_hash);
-+        if (m_index.find(chain_hash) != m_index.end()) {
-+            plan.n_prefix_tokens += static_cast<int32_t>(chunk_sz);
-+            pos += chunk_sz;
-+        } else {
-+            break;
-+        }
++    const size_t n_chunks = tokens.size() / chunk_sz;
++    if (n_chunks == 0) {
++        return plan;
 +    }
 +
-+    // 2. CacheBlend non-prefix chunk scan (isolated block content matching)
-+    if (m_params.blend && pos + static_cast<size_t>(m_params.blend_min_tokens) <= tokens.size()) {
-+        while (pos + chunk_sz <= tokens.size()) {
-+            uint64_t isolated_hash = fast_xxh3_tokens(tokens.data() + pos, chunk_sz, 0);
-+            if (m_index.find(isolated_hash) != m_index.end()) {
-+                plan.blended_ranges.push_back({pos, chunk_sz});
-+                plan.n_blended_tokens += static_cast<int32_t>(chunk_sz);
-+                pos += chunk_sz;
-+            } else {
-+                pos += chunk_sz;
-+            }
++    // 1. Chained prefix cumulative hashes
++    std::vector<uint64_t> chain_hashes(n_chunks);
++    uint64_t chain_hash = 0;
++    for (size_t c = 0; c < n_chunks; ++c) {
++        chain_hash = fast_xxh3_tokens(tokens.data() + c * chunk_sz, chunk_sz, chain_hash);
++        chain_hashes[c] = chain_hash;
++    }
++
++    // 2. Backward search for longest matched prefix
++    for (size_t c = n_chunks; c > 0; --c) {
++        uint64_t cand = chain_hashes[c - 1];
++        if (m_index.find(cand) != m_index.end() ||
++            (m_params.disk_enabled && m_disk_index.find(cand) != m_disk_index.end())) {
++            plan.n_prefix_tokens = static_cast<int32_t>(c * chunk_sz);
++            plan.best_hash = cand;
++            break;
 +        }
 +    }
 +
@@ -359,9 +367,13 @@ index 0000000..133f2f6
 +
 +    evict_if_needed();
 +
-+    // Queue for NVMe SSD storage via dedicated worker thread
++    // Queue for NVMe SSD storage via dedicated worker thread (strictly bounded depth = 1)
 +    if (m_params.disk_enabled && !m_params.disk_dir.empty()) {
 +        std::lock_guard<std::mutex> qlock(m_disk_mutex);
++        if (m_disk_queue.size() >= 1) {
++            std::queue<lmcache_disk_task> empty;
++            std::swap(m_disk_queue, empty);
++        }
 +        lmcache_disk_task task;
 +        task.hash = hash;
 +        task.data.assign(data, data + data_size);
@@ -386,11 +398,55 @@ index 0000000..133f2f6
 +    }
 +}
 +
++void llama_lmcache::evict_disk_if_needed() {
++    const size_t max_disk_bytes = static_cast<size_t>(m_params.disk_max_mb) * 1024ULL * 1024ULL;
++    if (max_disk_bytes == 0 || m_params.disk_dir.empty()) return;
++
++    if (m_current_disk_bytes > max_disk_bytes) {
++        const size_t target_bytes = static_cast<size_t>(max_disk_bytes * 0.85);
++        struct file_meta {
++            fs::path path;
++            uint64_t hash;
++            size_t size;
++            fs::file_time_type mtime;
++        };
++        std::vector<file_meta> files;
++        try {
++            for (const auto & entry : fs::directory_iterator(m_params.disk_dir)) {
++                if (entry.is_regular_file() && entry.path().extension() == ".bin") {
++                    try {
++                        uint64_t h = std::stoull(entry.path().stem().string());
++                        files.push_back({entry.path(), h, entry.file_size(), entry.last_write_time()});
++                    } catch (...) {}
++                }
++            }
++            std::sort(files.begin(), files.end(), [](const file_meta & a, const file_meta & b) {
++                return a.mtime < b.mtime;
++            });
++
++            for (const auto & f : files) {
++                if (m_current_disk_bytes <= target_bytes) break;
++                std::error_code ec;
++                if (fs::remove(f.path, ec)) {
++                    if (m_current_disk_bytes >= f.size) {
++                        m_current_disk_bytes -= f.size;
++                    } else {
++                        m_current_disk_bytes = 0;
++                    }
++                    m_disk_index.erase(f.hash);
++                }
++            }
++        } catch (...) {}
++    }
++}
++
 +void llama_lmcache::clear() {
 +    std::lock_guard<std::mutex> lock(m_mutex);
 +    m_ram_chunks.clear();
 +    m_index.clear();
++    m_disk_index.clear();
 +    m_current_ram_bytes = 0;
++    m_current_disk_bytes = 0;
 +}
 +
 +void llama_lmcache::disk_worker_loop() {
@@ -422,6 +478,13 @@ index 0000000..133f2f6
 +            if (fp) {
 +                fwrite(task.data.data(), 1, task.data.size(), fp);
 +                fclose(fp);
++
++                {
++                    std::lock_guard<std::mutex> lock(m_mutex);
++                    m_disk_index.insert(task.hash);
++                    m_current_disk_bytes += task.data.size();
++                    evict_disk_if_needed();
++                }
 +            }
 +        } catch (...) {
 +            // Silently suppress disk write failures in hot path
@@ -459,10 +522,10 @@ index 0000000..133f2f6
 +}
 diff --git a/src/llama-lmcache.h b/src/llama-lmcache.h
 new file mode 100644
-index 0000000..5a3f2c4
+index 0000000..0bbd472
 --- /dev/null
 +++ b/src/llama-lmcache.h
-@@ -0,0 +1,97 @@
+@@ -0,0 +1,103 @@
 +#pragma once
 +
 +#include "llama.h"
@@ -478,6 +541,8 @@ index 0000000..5a3f2c4
 +#include <queue>
 +#include <condition_variable>
 +#include <atomic>
++
++#include <unordered_set>
 +
 +struct llama_lmcache_params {
 +    bool        enabled           = false;
@@ -495,6 +560,7 @@ index 0000000..5a3f2c4
 +
 +struct lmcache_match_plan {
 +    int32_t n_prefix_tokens = 0;
++    uint64_t best_hash = 0;
 +    int32_t n_blended_tokens = 0;
 +    std::vector<std::pair<size_t, size_t>> blended_ranges; // [start_pos, count]
 +};
@@ -548,7 +614,9 @@ index 0000000..5a3f2c4
 +
 +    std::list<lmcache_chunk> m_ram_chunks; // LRU list
 +    std::unordered_map<uint64_t, std::list<lmcache_chunk>::iterator> m_index;
++    std::unordered_set<uint64_t> m_disk_index;
 +    size_t m_current_ram_bytes = 0;
++    size_t m_current_disk_bytes = 0;
 +
 +    // Dedicated background I/O worker (zero thread-spawning overhead)
 +    std::thread m_disk_worker;
@@ -558,6 +626,7 @@ index 0000000..5a3f2c4
 +    std::atomic<bool> m_stop_worker{false};
 +
 +    void disk_worker_loop();
++    void evict_disk_if_needed();
 +    bool load_from_disk(uint64_t hash, lmcache_chunk & out_chunk);
 +};
 diff --git a/tools/server/server-common.h b/tools/server/server-common.h
@@ -573,10 +642,10 @@ index 5bd2ed5..09de2ff 100644
      void clear() {
          map_idx_to_media.clear();
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-index a18b7542c..15f27b27c 100644
+index b223aa0..acda999 100644
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
-@@ -328,9 +328,50 @@ struct server_slot {
+@@ -328,9 +328,45 @@ struct server_slot {
              llama_state_seq_get_data_ext(ctx_dft, cur->data.drft.data(), cur_size_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE);
          }
  
@@ -613,21 +682,16 @@ index a18b7542c..15f27b27c 100644
 +        uint64_t chain_hash = 0;
 +        for (size_t c = 0; c < n_chunks; ++c) {
 +            chain_hash = llama_lmcache::instance().hash_chunk(raw_tokens.data() + c * chunk_sz, chunk_sz, chain_hash);
-+            llama_lmcache::instance().put_chunk(chain_hash, raw_tokens.data() + c * chunk_sz, chunk_sz, state_buf.data(), cur_size_tgt);
-+            if (llama_lmcache::instance().params().blend) {
-+                uint64_t iso_hash = llama_lmcache::instance().hash_chunk(raw_tokens.data() + c * chunk_sz, chunk_sz, 0);
-+                if (iso_hash != chain_hash) {
-+                    llama_lmcache::instance().put_chunk(iso_hash, raw_tokens.data() + c * chunk_sz, chunk_sz, state_buf.data(), cur_size_tgt);
-+                }
-+            }
 +        }
-+        SLT_INF(*this, "LMCache: cached %zu chunks (%d tokens) into RAM/disk\n", n_chunks, (int)(n_chunks * chunk_sz));
++        llama_lmcache::instance().put_chunk(chain_hash, raw_tokens.data(), n_chunks * chunk_sz, state_buf.data(), cur_size_tgt);
++        SLT_INF(*this, "LMCache: cached prefix snapshot for %zu chunks (%d tokens, %.1f MiB)\n",
++                n_chunks, (int)(n_chunks * chunk_sz), (float)cur_size_tgt / (1024 * 1024));
 +    }
 +
      bool prompt_load(server_prompt_cache & prompt_cache, const server_tokens & tokens) {
          bool res = prompt_cache.load(prompt, tokens, ctx_tgt, ctx_dft, id);
          if (!res) {
-@@ -378,6 +419,7 @@ struct server_slot {
+@@ -378,6 +414,7 @@ struct server_slot {
      void reset() {
          SLT_DBG(*this, "%s", "\n");
  
@@ -635,7 +699,7 @@ index a18b7542c..15f27b27c 100644
          spec_is_replay = false;
  
          last_nl_pos    = 0;
-@@ -589,6 +631,8 @@ struct server_slot {
+@@ -589,6 +626,8 @@ struct server_slot {
  
              SLT_INF(*this, "stop processing: n_tokens = %d, truncated = %d\n", prompt.n_tokens(), truncated);
  
@@ -644,7 +708,7 @@ index a18b7542c..15f27b27c 100644
              t_last_used = ggml_time_us();
  
              state = SLOT_STATE_IDLE;
-@@ -1511,6 +1555,13 @@ private:
+@@ -1511,6 +1550,13 @@ private:
          }
          SRV_TRC("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
  
@@ -658,7 +722,7 @@ index a18b7542c..15f27b27c 100644
          if (params_base.n_ctx_checkpoints > 0) {
              SRV_TRC("context checkpoints enabled, max = %d, min spacing = %d\n",
                      params_base.n_ctx_checkpoints, params_base.checkpoint_min_step);
-@@ -3699,6 +3750,39 @@ private:
+@@ -3699,6 +3745,24 @@ private:
                                  // reuse any previously computed tokens that are common with the new prompt
                                  n_past = slot.prompt.tokens.get_common_prefix(input_tokens);
  
@@ -666,31 +730,16 @@ index a18b7542c..15f27b27c 100644
 +                                    const llama_tokens raw_in_tokens = input_tokens.has_mtmd ? input_tokens.get_text_tokens() : input_tokens.get_tokens();
 +                                    lmcache_match_plan plan = llama_lmcache::instance().match_prompt(raw_in_tokens);
 +                                    if (plan.n_prefix_tokens > n_past) {
-+                                        const int chunk_sz = llama_lmcache::instance().params().chunk_size;
-+                                        if (chunk_sz > 0) {
-+                                            size_t n_chunks = plan.n_prefix_tokens / chunk_sz;
-+                                            uint64_t chain_hash = 0;
-+                                            for (size_t c = 0; c < n_chunks; ++c) {
-+                                                chain_hash = llama_lmcache::instance().hash_chunk(raw_in_tokens.data() + c * chunk_sz, chunk_sz, chain_hash);
++                                        lmcache_chunk chunk;
++                                        if (llama_lmcache::instance().get_chunk(plan.best_hash, chunk)) {
++                                            llama_state_seq_set_data_ext(ctx_tgt, chunk.data.data(), chunk.data.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_NONE);
++                                            n_past = plan.n_prefix_tokens;
++                                            slot.lmcache_restored = true;
++                                            slot.prompt.tokens.clear();
++                                            for (int i = 0; i < n_past; ++i) {
++                                                slot.prompt.tokens.push_back(raw_in_tokens[i]);
 +                                            }
-+                                            lmcache_chunk chunk;
-+                                            if (llama_lmcache::instance().get_chunk(chain_hash, chunk)) {
-+                                                llama_state_seq_set_data_ext(ctx_tgt, chunk.data.data(), chunk.data.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_NONE);
-+                                                n_past = plan.n_prefix_tokens;
-+                                                slot.lmcache_restored = true;
-+                                                slot.prompt.tokens.clear();
-+                                                for (int i = 0; i < n_past; ++i) {
-+                                                    slot.prompt.tokens.push_back(raw_in_tokens[i]);
-+                                                }
-+                                                SLT_INF(slot, "LMCache: matched %d prefix tokens (bypassing prefill for %zu chunks)\n", plan.n_prefix_tokens, n_chunks);
-+                                            }
-+                                        }
-+                                    }
-+                                    if (llama_lmcache::instance().params().blend && plan.n_blended_tokens > 0) {
-+                                        int32_t total_match = plan.n_prefix_tokens + plan.n_blended_tokens;
-+                                        if (total_match > n_past) {
-+                                            int32_t recomputed_boundary = static_cast<int32_t>(plan.n_blended_tokens * llama_lmcache::instance().params().blend_recompute);
-+                                            n_past = std::min<int32_t>(input_tokens.size(), total_match - recomputed_boundary);
++                                            SLT_INF(slot, "LMCache: matched %d prefix tokens (bypassing prefill)\n", plan.n_prefix_tokens);
 +                                        }
 +                                    }
 +                                }
@@ -698,7 +747,7 @@ index a18b7542c..15f27b27c 100644
                                  // the children start from the shared prefix, do not go past it
                                  if (slot.task->n_tokens_shared > 0) {
                                      n_past = std::min(n_past, slot.task->n_tokens_shared);
-@@ -3881,7 +3965,7 @@ private:
+@@ -3881,7 +3945,7 @@ private:
                                          SLT_TRC(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, n_past, (float) it->size() / 1024 / 1024);
                                      }
  
@@ -707,7 +756,7 @@ index a18b7542c..15f27b27c 100644
                                          SLT_TRC(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see %s)\n",
                                                  "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
                                          pos_next = 0;
-@@ -4137,6 +4221,8 @@ private:
+@@ -4137,6 +4201,8 @@ private:
                      if (slot.prompt.n_tokens() == slot.task->n_tokens()) {
                          slot.state = SLOT_STATE_DONE_PROMPT;
  

@@ -220,7 +220,7 @@
     "lmcache_ram_mb": 16384,
     "lmcache_disk": false,
     "lmcache_disk_dir": "./data/lmcache",
-    "lmcache_disk_max_mb": 65536,
+    "lmcache_disk_max_mb": 16384,
     "lmcache_blend": false,
     "lmcache_blend_recompute": 0.15,
     "lmcache_blend_min_tokens": 128,
