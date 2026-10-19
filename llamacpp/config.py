@@ -397,3 +397,53 @@ def spawn_env(model_name: str = "") -> dict[str, str] | None:
     env = dict(os.environ)
     env.update(extra)
     return env
+
+
+# ---------------------------------------------------------------------------
+# LMCache (patched build) configuration accessors
+# ---------------------------------------------------------------------------
+
+def lmcache_enabled() -> bool:
+    """Whether LMCache chunked KV acceleration is enabled (patched llama.cpp build)."""
+    return bool(app_config.get_nested("llamacpp.lmcache.enabled", False))
+
+
+def lmcache_chunk_size() -> int:
+    return as_int(app_config.get_nested("llamacpp.lmcache.chunk_size", 256))
+
+
+def lmcache_ram_mb() -> int:
+    return as_int(app_config.get_nested("llamacpp.lmcache.ram_mb", 16384))
+
+
+def lmcache_disk_enabled() -> bool:
+    return bool(app_config.get_nested("llamacpp.lmcache.disk_enabled", False))
+
+
+def lmcache_disk_dir() -> str:
+    return str(app_config.get_nested("llamacpp.lmcache.disk_dir", "./data/lmcache"))
+
+
+def lmcache_disk_max_mb() -> int:
+    return as_int(app_config.get_nested("llamacpp.lmcache.disk_max_mb", 65536))
+
+
+def lmcache_blend() -> bool:
+    return bool(app_config.get_nested("llamacpp.lmcache.blend", False))
+
+
+def lmcache_blend_recompute() -> float:
+    return as_float(app_config.get_nested("llamacpp.lmcache.blend_recompute", 0.15))
+
+
+def lmcache_blend_min_tokens() -> int:
+    return as_int(app_config.get_nested("llamacpp.lmcache.blend_min_tokens", 128))
+
+
+def lmcache_compression() -> str:
+    return str(app_config.get_nested("llamacpp.lmcache.compression", "q8_0"))
+
+
+def lmcache_async_save() -> bool:
+    return bool(app_config.get_nested("llamacpp.lmcache.async_save", True))
+

@@ -33,6 +33,10 @@
     {
       "file": "0004-upstream-draft-kv-out-of-checkpoints-and-pinned-host-buffers.patch",
       "exact": true
+    },
+    {
+      "file": "0005-lmcache-fast-kv-blend.patch",
+      "exact": true
     }
   ]
 }

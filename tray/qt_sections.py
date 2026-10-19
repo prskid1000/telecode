@@ -2560,6 +2560,63 @@ def _llama(window) -> QWidget:
                                     "--slot-save-path: directory for /slots/save & /slots/restore."))
     layout.addWidget(cache_card)
 
+    # LMCache card (patched build) — pure speed acceleration & CacheBlend
+    lmcache_card, lmcache_body = _card("LMCache: Fast KV Reuse & CacheBlend",
+                                       "--lmcache: hardware-accelerated chunked KV reuse and non-prefix CacheBlend prefill acceleration",
+                                       patched=True)
+    lmcache_body.addWidget(_toggle_row("llamacpp.lmcache", "Enable LMCache Speedup",
+                                       "--lmcache (patched build): bypass prompt prefill whenever tokens match previous prompt chunks in RAM or NVMe."))
+    _lmc_on = lambda on: bool(on)
+    lmcache_body.addWidget(_dependent(
+        _number_row("llamacpp.lmcache_chunk_size", "Chunk Size", 16, 8192, 64, 0, "tok",
+                    help_text="--lmcache-chunk-size: token granularity for hashing and caching (default: 256).",
+                    default=256),
+        ["llamacpp.lmcache"], _lmc_on))
+    lmcache_body.addWidget(_dependent(
+        _number_row("llamacpp.lmcache_ram_mb", "Host RAM Cache (L2)", 0, 524288, 512, 0, "MiB",
+                    help_text="--lmcache-ram-mb: pinned host RAM budget for hot KV chunks (default: 16384 MiB). 0 = off.",
+                    default=16384),
+        ["llamacpp.lmcache"], _lmc_on))
+    lmcache_body.addWidget(_dependent(
+        _toggle_row("llamacpp.lmcache_disk", "Enable NVMe Disk Tier (L3)",
+                    "--lmcache-disk: persist cold chunks to fast NVMe storage across reboots and context switches."),
+        ["llamacpp.lmcache"], _lmc_on))
+    _lmc_disk = lambda on, disk: bool(on) and bool(disk)
+    lmcache_body.addWidget(_dependent(
+        _line_row("llamacpp.lmcache_disk_dir", "NVMe Cache Directory", "./data/lmcache",
+                  "--lmcache-disk-dir: folder path for binary chunk storage."),
+        ["llamacpp.lmcache", "llamacpp.lmcache_disk"], _lmc_disk))
+    lmcache_body.addWidget(_dependent(
+        _number_row("llamacpp.lmcache_disk_max_mb", "NVMe Cache Limit", 0, 2097152, 1024, 0, "MiB",
+                    help_text="--lmcache-disk-max-mb: maximum disk allocation in MiB (default: 65536 MiB = 64 GB).",
+                    default=65536),
+        ["llamacpp.lmcache", "llamacpp.lmcache_disk"], _lmc_disk))
+    lmcache_body.addWidget(_dependent(
+        _toggle_row("llamacpp.lmcache_blend", "Enable CacheBlend",
+                    "--lmcache-blend: splice pre-computed chunks from anywhere in the prompt (RAG docs, tool outputs, system instructions)."),
+        ["llamacpp.lmcache"], _lmc_on))
+    _lmc_blend = lambda on, blend: bool(on) and bool(blend)
+    lmcache_body.addWidget(_dependent(
+        _number_row("llamacpp.lmcache_blend_recompute", "Boundary Recompute", 0.0, 1.0, 0.01, 2, "",
+                    help_text="--lmcache-blend-recompute: fraction of boundary tokens re-evaluated to smooth attention transitions (default: 0.15). Lower = faster.",
+                    default=0.15),
+        ["llamacpp.lmcache", "llamacpp.lmcache_blend"], _lmc_blend))
+    lmcache_body.addWidget(_dependent(
+        _number_row("llamacpp.lmcache_blend_min_tokens", "Min Blend Size", 16, 4096, 32, 0, "tok",
+                    help_text="--lmcache-blend-min-tokens: minimum token count to accept a non-prefix chunk match (default: 128).",
+                    default=128),
+        ["llamacpp.lmcache", "llamacpp.lmcache_blend"], _lmc_blend))
+    lmcache_body.addWidget(_dependent(
+        _enum_row_strs("llamacpp.lmcache_compress", "Transfer Compression",
+                       [("none", "none"), ("q8_0 (Recommended)", "q8_0"), ("q4_0", "q4_0"), ("fp8", "fp8")],
+                       help_text="--lmcache-compress: cuts PCIe transfer time across host memory and NVMe by up to 50% (default: q8_0)."),
+        ["llamacpp.lmcache"], _lmc_on))
+    lmcache_body.addWidget(_dependent(
+        _toggle_row("llamacpp.lmcache_async_save", "Async Background Staging",
+                    "--lmcache-async-save: offload KV chunks to storage on background threads so generation never stalls."),
+        ["llamacpp.lmcache"], _lmc_on))
+    layout.addWidget(lmcache_card)
+
     # Speculative decoding card — server-wide algorithm, per-model draft pair
     spec_card, spec_body = _card("Speculative Decoding",
                                   "llamacpp.* — algorithm choice & tuning. Draft model lives per-model.")

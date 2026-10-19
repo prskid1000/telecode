@@ -139,6 +139,19 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("slot_save_path",             "--slot-save-path",            "path"),
     ("sleep_idle_seconds",         "--sleep-idle-seconds",        "value_nz"),
 
+    # LMCache tiered KV cache & CacheBlend (patched build)
+    ("lmcache",                     "--lmcache",                   "flag"),
+    ("lmcache_chunk_size",          "--lmcache-chunk-size",        "value_nz"),
+    ("lmcache_ram_mb",              "--lmcache-ram-mb",            "value"),
+    ("lmcache_disk",                "--lmcache-disk",              "flag"),
+    ("lmcache_disk_dir",            "--lmcache-disk-dir",          "path"),
+    ("lmcache_disk_max_mb",         "--lmcache-disk-max-mb",       "value_nz"),
+    ("lmcache_blend",               "--lmcache-blend",             "flag"),
+    ("lmcache_blend_recompute",     "--lmcache-blend-recompute",   "value_nz"),
+    ("lmcache_blend_min_tokens",    "--lmcache-blend-min-tokens",  "value_nz"),
+    ("lmcache_compress",            "--lmcache-compress",          "value"),
+    ("lmcache_async_save",          ("--lmcache-async-save", "--no-lmcache-async-save"), "bool_pair"),
+
     # Speculative decoding:
     # - spec_type is dispatched in _emit_spec_type() so the "none" sentinel
     #   used by the tray (when spec_default is the active toggle) doesn't leak
@@ -641,6 +654,18 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
         suppressed_global.update({"spec_draft_head_subset", "spec_draft_head_subset_ids", "spec_draft_n_ubatch"})
     if cfg.as_int(gcfg.get("spec_draft_head_subset")) <= 0:
         suppressed_global.add("spec_draft_head_subset_ids")
+    if not gcfg.get("lmcache"):
+        suppressed_global.update({
+            "lmcache", "lmcache_chunk_size", "lmcache_ram_mb", "lmcache_disk",
+            "lmcache_disk_dir", "lmcache_disk_max_mb", "lmcache_blend",
+            "lmcache_blend_recompute", "lmcache_blend_min_tokens",
+            "lmcache_compress", "lmcache_async_save"
+        })
+    else:
+        if not gcfg.get("lmcache_disk"):
+            suppressed_global.update({"lmcache_disk_dir", "lmcache_disk_max_mb"})
+        if not gcfg.get("lmcache_blend"):
+            suppressed_global.update({"lmcache_blend_recompute", "lmcache_blend_min_tokens"})
     for k, flag, kind in _GLOBAL_FLAG_SPECS:
         if k in suppressed_global:
             continue

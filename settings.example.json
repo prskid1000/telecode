@@ -213,6 +213,20 @@
     "sleep_idle_seconds": 0,
     "slot_save_path": "",
 
+    "_comment_lmcache":
+      "LMCache (patched build): hardware-accelerated chunked KV cache reuse and non-prefix CacheBlend prefill acceleration. Bypasses prompt prefill whenever tokens match previous prompt chunks across RAM and fast NVMe storage.",
+    "lmcache": false,
+    "lmcache_chunk_size": 256,
+    "lmcache_ram_mb": 16384,
+    "lmcache_disk": false,
+    "lmcache_disk_dir": "./data/lmcache",
+    "lmcache_disk_max_mb": 65536,
+    "lmcache_blend": false,
+    "lmcache_blend_recompute": 0.15,
+    "lmcache_blend_min_tokens": 128,
+    "lmcache_compress": "q8_0",
+    "lmcache_async_save": true,
+
     "_comment_spec_type":
       "spec_type accepts a comma-separated list (v9243+). Values: none, draft-simple, draft-eagle3, draft-mtp, ngram-simple, ngram-map-k, ngram-map-k4v, ngram-mod, ngram-cache. Set spec_default=true instead to let the server auto-pick based on model heads.",
     "spec_type": "",

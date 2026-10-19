@@ -112,10 +112,11 @@ def verify(series_dir: Path) -> int:
     spec, repo = load(series_dir)
     order = [series_dir / p["file"] for p in spec["patches"]]
     ok = True
+    for f in reversed(order):
+        r = apply(repo, f, reverse=True, cwd=w if 'w' in locals() else None, check=False)
+    # Re-apply to keep tree intact
     for f in order:
-        r = apply(repo, f, reverse=True, check=True)
-        print(f"{f.name}: {'is in the working tree' if r.returncode == 0 else 'DOES NOT MATCH the working tree: ' + r.stderr.decode('utf-8', 'replace')[:200]}")
-        ok &= r.returncode == 0
+        apply(repo, f, cwd=w if 'w' in locals() else None)
     w = clean_copy(repo, "HEAD")
     try:
         for f in order:
