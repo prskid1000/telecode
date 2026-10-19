@@ -58,10 +58,30 @@ def _page() -> tuple[QScrollArea, QWidget, QVBoxLayout]:
     return scroll, content, layout
 
 
-def _card(title: str, sub: str = "", patched: bool = False) -> tuple[QFrame, QVBoxLayout]:
+def _bind_patch_toggle_visibility(widget: QWidget, patch_prefix: str) -> None:
+    """Dynamically hide/show `widget` based on whether the patch matching `patch_prefix` is enabled in build settings."""
+    try:
+        from llamacpp import patcher
+        matching = [p for p in patcher.patches() if p.name.startswith(patch_prefix)]
+        if not matching:
+            return
+        key = f"llamacpp.custom_build.patches.{patcher.patch_setting_name(matching[0])}"
+        def _apply(val: Any) -> None:
+            widget.setVisible(bool(val if val is not None else True))
+        _apply(get_path(read_settings(), key, True))
+        _follow_setting(key, widget, _apply)
+    except Exception:
+        pass
+
+
+def _card(title: str, sub: str = "", patched: bool = False, patch: str = "") -> tuple[QFrame, QVBoxLayout]:
     """Card frame with header + body. `patched`: the settings in it only exist in the patched llama.cpp build (badge + accent)."""
+    if patch:
+        patched = True
     card = QFrame()
     card.setProperty("class", "patched" if patched else "card")
+    if patch:
+        _bind_patch_toggle_visibility(card, patch)
     outer = QVBoxLayout(card)
     outer.setContentsMargins(0, 0, 0, 0)
     outer.setSpacing(0)
@@ -2563,7 +2583,7 @@ def _llama(window) -> QWidget:
     # LMCache card (patched build) — pure speed acceleration & CacheBlend
     lmcache_card, lmcache_body = _card("LMCache: Fast KV Reuse & CacheBlend",
                                        "--lmcache: hardware-accelerated chunked KV reuse and non-prefix CacheBlend prefill acceleration",
-                                       patched=True)
+                                       patch="0005")
     lmcache_body.addWidget(_toggle_row("llamacpp.lmcache", "Enable LMCache Speedup",
                                        "--lmcache (patched build): bypass prompt prefill whenever tokens match previous prompt chunks in RAM or NVMe."))
     _lmc_on = lambda on: bool(on)
@@ -2621,7 +2641,7 @@ def _llama(window) -> QWidget:
     spec_card, spec_body = _card("Speculative Decoding",
                                   "llamacpp.* — algorithm choice & tuning. Draft model lives per-model.")
     adp_card, adp_body = _card("Adaptive Draft Length & Head Subset",
-                             "--spec-draft-adaptive-* and --spec-draft-head-subset: smarter drafts for speculative decoding (the output stays exact)", patched=True)
+                             "--spec-draft-adaptive-* and --spec-draft-head-subset: smarter drafts for speculative decoding (the output stays exact)", patch="0003")
     # Multi-select Spec Type. v9243+ accepts a comma-separated list, so stacking
     # is supported (e.g. "draft-mtp,ngram-mod" = MTP heads for high-confidence
     # guesses + ngram-mod for verbatim runs). Serialized as a comma-joined string
@@ -5635,8 +5655,8 @@ def _models(window) -> QWidget:
         # They are cards now, matching the llama.cpp page: _sec() opens one and
         # returns its body layout, which _sl then points at, so every row after
         # it lands inside that card without touching the ~90 addWidget calls.
-        def _sec(title: str, sub: str = "", patched: bool = False):
-            _c, _b = _card(title, sub, patched)
+        def _sec(title: str, sub: str = "", patched: bool = False, patch: str = ""):
+            _c, _b = _card(title, sub, patched, patch)
             form_layout.addWidget(_c)
             return _b
 
@@ -5740,7 +5760,7 @@ def _models(window) -> QWidget:
         _sl.addWidget(_toggle_row(f"{p}.cpu_moe",       "CPU MoE (all experts)",
                                            "--cpu-moe: keep ALL MoE expert layers on CPU (overrides n_cpu_moe)."))
         _sl = _sec("Fewer Experts per Token",
-                    "--moe-expert-reduce-* — compute fewer experts for the tokens that do not need them (changes the output)", patched=True)
+                    "--moe-expert-reduce-* — compute fewer experts for the tokens that do not need them (changes the output)", patch="0003")
         _sl.addWidget(_number_row(f"{p}.moe_reduce_min", "Always Use the Best", 0, 64, 1, 0, "experts",
                                   "--moe-expert-reduce-min (patched build): the N best experts of a token are always computed, of the others only those whose weight "
                                   "is at least the threshold below times the weight of the best one. The skipped experts are not computed on the CPU layers. "
@@ -5755,11 +5775,11 @@ def _models(window) -> QWidget:
         _sl = _sec("MoE Expert Cache",
                     "llama.cpp --moe-cache-mib + telecode's automatic sizing — keep the hottest experts of CPU-resident layers in VRAM")
         _sl_cm = _sec("CPU-Miss Mode & Promotion",
-                       "--moe-cache-cpu-miss and what goes into the cache: compute the experts that are not cached on the CPU, upload the ones missed often", patched=True)
+                       "--moe-cache-cpu-miss and what goes into the cache: compute the experts that are not cached on the CPU, upload the ones missed often", patch="0003")
         _sl_pf = _sec("Prefetch, Routing & PCIe",
-                       "which experts are uploaded when, over which path, and how the router is nudged towards cached experts (some of it changes the output)", patched=True)
+                       "which experts are uploaded when, over which path, and how the router is nudged towards cached experts (some of it changes the output)", patch="0003")
         _sl_pb = _sec("Prompt Batches",
-                       "--moe-cache-prefill-* — the missed experts of a prompt batch are shared between the CPU and the GPU", patched=True)
+                       "--moe-cache-prefill-* — the missed experts of a prompt batch are shared between the CPU and the GPU", patch="0003")
         _sl.addWidget(_number_row(f"{p}.moe_cache_mib", "Cache Size", 0, 262144, 256, 0, "MiB",
                                            "--moe-cache-mib: VRAM for the experts of layers kept on the CPU (--n-cpu-moe / --cpu-moe), "
                                            "split among GPUs like the layers. 0 = off. Without CPU-miss mode a missing expert is uploaded "

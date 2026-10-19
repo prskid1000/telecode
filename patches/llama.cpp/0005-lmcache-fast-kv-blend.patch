@@ -199,10 +199,10 @@ index 9ab9c3e..24a2fed 100644
          /*.embeddings                  =*/ false,
 diff --git a/src/llama-lmcache.cpp b/src/llama-lmcache.cpp
 new file mode 100644
-index 0000000..a613d17
+index 0000000..ae78244
 --- /dev/null
 +++ b/src/llama-lmcache.cpp
-@@ -0,0 +1,317 @@
+@@ -0,0 +1,330 @@
 +#include "llama-lmcache.h"
 +#include "llama-impl.h"
 +#define XXH_INLINE_ALL
@@ -336,27 +336,34 @@ index 0000000..a613d17
 +}
 +
 +void llama_lmcache::put_chunk(uint64_t hash, const llama_token * tokens, size_t n_tokens, const uint8_t * data, size_t data_size) {
++    if (!data || data_size == 0) return;
++    std::vector<uint8_t> vec(data, data + data_size);
++    put_chunk(hash, tokens, n_tokens, std::move(vec));
++}
++
++void llama_lmcache::put_chunk(uint64_t hash, const llama_token * tokens, size_t n_tokens, std::vector<uint8_t> && data) {
 +    std::lock_guard<std::mutex> lock(m_mutex);
-+    if (!m_params.enabled || data_size == 0) {
++    if (!m_params.enabled || data.empty()) {
 +        return;
 +    }
++    const size_t data_size = data.size();
 +
 +    auto it = m_index.find(hash);
 +    if (it != m_index.end()) {
 +        // Update existing chunk in RAM
 +        m_current_ram_bytes -= it->second->size_bytes;
-+        it->second->data.assign(data, data + data_size);
++        it->second->data = std::move(data);
 +        it->second->tokens.assign(tokens, tokens + n_tokens);
 +        it->second->size_bytes = data_size;
 +        it->second->last_used = get_now_ms();
 +        m_current_ram_bytes += data_size;
 +        m_ram_chunks.splice(m_ram_chunks.begin(), m_ram_chunks, it->second);
 +    } else {
-+        // Insert new chunk into LRU
++        // Insert new chunk into LRU (Zero-copy move into RAM chunk)
 +        lmcache_chunk chunk;
 +        chunk.hash = hash;
 +        chunk.tokens.assign(tokens, tokens + n_tokens);
-+        chunk.data.assign(data, data + data_size);
++        chunk.data = std::move(data);
 +        chunk.size_bytes = data_size;
 +        chunk.last_used = get_now_ms();
 +
@@ -376,7 +383,7 @@ index 0000000..a613d17
 +        }
 +        lmcache_disk_task task;
 +        task.hash = hash;
-+        task.data.assign(data, data + data_size);
++        task.data = m_ram_chunks.front().data;
 +        m_disk_queue.push(std::move(task));
 +        m_disk_cv.notify_one();
 +    }
@@ -473,13 +480,17 @@ index 0000000..a613d17
 +        if (m_params.disk_dir.empty() || task.data.empty()) continue;
 +
 +        try {
-+            fs::path p = fs::path(m_params.disk_dir) / (std::to_string(task.hash) + ".bin");
-+            FILE * fp = fopen(p.string().c_str(), "wb");
++            fs::path p_final = fs::path(m_params.disk_dir) / (std::to_string(task.hash) + ".bin");
++            fs::path p_tmp   = fs::path(m_params.disk_dir) / (std::to_string(task.hash) + ".bin.tmp");
++            FILE * fp = fopen(p_tmp.string().c_str(), "wb");
 +            if (fp) {
++                setvbuf(fp, nullptr, _IONBF, 0); // Direct OS DMA bypassing 4 KB CRT buffering
 +                fwrite(task.data.data(), 1, task.data.size(), fp);
 +                fclose(fp);
 +
-+                {
++                std::error_code ec;
++                fs::rename(p_tmp, p_final, ec);
++                if (!ec) {
 +                    std::lock_guard<std::mutex> lock(m_mutex);
 +                    m_disk_index.insert(task.hash);
 +                    m_current_disk_bytes += task.data.size();
@@ -498,6 +509,8 @@ index 0000000..a613d17
 +        fs::path p = fs::path(m_params.disk_dir) / (std::to_string(hash) + ".bin");
 +        FILE * fp = fopen(p.string().c_str(), "rb");
 +        if (!fp) return false;
++
++        setvbuf(fp, nullptr, _IONBF, 0); // Direct OS DMA read
 +
 +        fseek(fp, 0, SEEK_END);
 +        long sz = ftell(fp);
@@ -522,10 +535,10 @@ index 0000000..a613d17
 +}
 diff --git a/src/llama-lmcache.h b/src/llama-lmcache.h
 new file mode 100644
-index 0000000..d104d4a
+index 0000000..795321a
 --- /dev/null
 +++ b/src/llama-lmcache.h
-@@ -0,0 +1,103 @@
+@@ -0,0 +1,104 @@
 +#pragma once
 +
 +#include "llama.h"
@@ -598,6 +611,7 @@ index 0000000..d104d4a
 +
 +    // Store chunk into L2 RAM and queue for L3 Disk
 +    void put_chunk(uint64_t hash, const llama_token * tokens, size_t n_tokens, const uint8_t * data, size_t data_size);
++    void put_chunk(uint64_t hash, const llama_token * tokens, size_t n_tokens, std::vector<uint8_t> && data);
 +
 +    // Prune storage to limits
 +    void evict_if_needed();
@@ -642,7 +656,7 @@ index 5bd2ed5..09de2ff 100644
      void clear() {
          map_idx_to_media.clear();
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-index b223aa0..acda999 100644
+index b223aa0..9fbbc98 100644
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
 @@ -328,9 +328,45 @@ struct server_slot {
@@ -683,7 +697,7 @@ index b223aa0..acda999 100644
 +        for (size_t c = 0; c < n_chunks; ++c) {
 +            chain_hash = llama_lmcache::instance().hash_chunk(raw_tokens.data() + c * chunk_sz, chunk_sz, chain_hash);
 +        }
-+        llama_lmcache::instance().put_chunk(chain_hash, raw_tokens.data(), n_chunks * chunk_sz, state_buf.data(), cur_size_tgt);
++        llama_lmcache::instance().put_chunk(chain_hash, raw_tokens.data(), n_chunks * chunk_sz, std::move(state_buf));
 +        SLT_INF(*this, "LMCache: cached prefix snapshot for %zu chunks (%d tokens, %.1f MiB)\n",
 +                n_chunks, (int)(n_chunks * chunk_sz), (float)cur_size_tgt / (1024 * 1024));
 +    }
