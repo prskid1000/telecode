@@ -2608,8 +2608,8 @@ def _llama(window) -> QWidget:
         ["llamacpp.lmcache", "llamacpp.lmcache_blend"], _lmc_blend))
     lmcache_body.addWidget(_dependent(
         _enum_row_strs("llamacpp.lmcache_compress", "Transfer Compression",
-                       [("none", "none"), ("q8_0 (Recommended)", "q8_0"), ("q4_0", "q4_0"), ("fp8", "fp8")],
-                       help_text="--lmcache-compress: cuts PCIe transfer time across host memory and NVMe by up to 50% (default: q8_0)."),
+                       [("none", "none"), ("q4_0 (Recommended)", "q4_0"), ("q8_0", "q8_0"), ("fp8", "fp8")],
+                       help_text="--lmcache-compress: cuts PCIe transfer time across host memory and NVMe by up to 50% (default: q4_0)."),
         ["llamacpp.lmcache"], _lmc_on))
     lmcache_body.addWidget(_dependent(
         _toggle_row("llamacpp.lmcache_async_save", "Async Background Staging",
