@@ -224,7 +224,7 @@
     "lmcache_blend": false,
     "lmcache_blend_recompute": 0.15,
     "lmcache_blend_min_tokens": 128,
-    "lmcache_compress": "q8_0",
+    "lmcache_compress": "q4_0",
     "lmcache_async_save": true,
 
     "_comment_spec_type":
