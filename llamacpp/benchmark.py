@@ -197,6 +197,7 @@ async def run_speed_test(
     target_prompt_tokens: int,
     n_predict: int = 128,
     timeout_sec: float = 600.0,
+    cache_prompt: bool = False,
 ) -> dict:
     """Run a single benchmark pass against llama-server.
 
@@ -244,7 +245,7 @@ async def run_speed_test(
         payload: dict = {
             "prompt": prompt,
             "n_predict": int(n_predict),
-            "cache_prompt": False,
+            "cache_prompt": bool(cache_prompt),
             "stream": False,
             "seed": 0xC0FFEE,
             "ignore_eos": True,
