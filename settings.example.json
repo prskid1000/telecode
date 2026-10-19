@@ -208,8 +208,8 @@
     "_comment_cache_ram": "--cache-ram N, in MiB. 0 DISABLES the host-RAM prompt cache (upstream default is 8192); -1 = no limit. With cache_idle_slots it lets an idle slot be swapped to RAM when a new task claims it, instead of destroyed. Both off means a short unrelated request evicts a long conversation and forces a full re-prefill.",
     "cache_ram": 8192,
     "swa_full": false,
-    "ctx_checkpoints": 32,
-    "checkpoint_min_step": 256,
+    "ctx_checkpoints": 64,
+    "checkpoint_min_step": 3072,
     "sleep_idle_seconds": 0,
     "slot_save_path": "",
 
