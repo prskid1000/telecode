@@ -209,7 +209,7 @@
         "spec_draft_head_subset": 32768,
         "vram_budget_mib": 11400,
         "draft_n": 3,
-        "ubatch_size": 4096,
+        "ubatch_size": 1024,
         "env": "GGML_CUDA_REGISTER_HOST=1",
         "draft_n_min": 1,
         "draft_p_min": 0.75,
@@ -280,7 +280,8 @@
       "cuda": true
     },
     "vram_budget_mib": 11400,
-    "vram_ceiling_mib": 0
+    "vram_ceiling_mib": 11900,
+    "preflight_vram": true
   },
   "heartbeat": {
     "enabled": false,
