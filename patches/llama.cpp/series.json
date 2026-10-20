@@ -43,6 +43,21 @@
     {
       "file": "0003-lmcache-prefix-restore.patch",
       "exact": true
+    },
+    {
+      "file": "0004-dense-draft-head-subset.patch",
+      "paths": [
+        "include/llama.h",
+        "common/common.h",
+        "common/common.cpp",
+        "common/speculative.cpp",
+        "common/arg.cpp",
+        "src/llama-graph.h",
+        "src/llama-graph.cpp",
+        "src/llama-context.h",
+        "src/llama-context.cpp"
+      ],
+      "header": "keep"
     }
   ]
 }

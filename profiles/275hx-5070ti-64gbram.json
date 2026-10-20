@@ -203,7 +203,9 @@
             }
           }
         },
-        "reasoning_preserve": true
+        "reasoning_preserve": true,
+        "spec_draft_head_subset": 32768,
+        "vram_budget_mib": 11200
       }
     },
     "inference": {

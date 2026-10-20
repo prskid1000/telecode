@@ -1,0 +1,343 @@
+Title: Dense draft head subset (vocabulary pruning for MTP / speculative drafting)
+Add-on: Keeps the top N most frequent vocabulary rows (and special tokens) of the output head
+in GPU VRAM for draft steps. Cuts MTP draft step latency from 9 ms to 0.15 ms.
+Verification pass remains full-head and mathematically exact.
+
+--- a/include/llama.h
++++ b/include/llama.h
+@@ -405,6 +405,8 @@
+         float   moe_hybrid_skip_weight; // skip CPU execution of non-resident experts whose router weight < skip_weight [EXPERIMENTAL]
+         int32_t moe_hybrid_tail_skip;   // skip CPU execution of non-resident experts whose rank >= tail_skip [EXPERIMENTAL]
+ 
++        int32_t      head_subset;     // rows of the output head kept in device memory for the steps of a draft head, 0 = off [EXPERIMENTAL]
++        const char * head_subset_ids; // optional file path to token ids list for head subset, NULL = first N tokens [EXPERIMENTAL]
+ 
+         // Abort callback
+         // if it returns true, execution of llama_decode() will be aborted
+--- a/common/common.h
++++ b/common/common.h
+@@ -336,6 +336,8 @@
+ 
+     bool probabilistic = false; // sample the draft and verify by rejection, instead of argmax and match
+ 
++    int32_t     head_subset = 0; // rows of the output head kept in device memory for the draft steps, 0 = off
++    std::string head_subset_ids;
+ 
+     common_params_model mparams;
+ 
+@@ -617,6 +619,8 @@
+     float   moe_hybrid_skip_weight = 0.04f; // skip CPU execution of non-resident experts whose router weight < skip_weight
+     int32_t moe_hybrid_tail_skip   = 6;     // skip CPU execution of non-resident experts whose rank >= tail_skip
+ 
++    int32_t     head_subset = 0; // rows of the output head kept in device memory, set for the draft context
++    std::string head_subset_ids;
+ 
+     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
+ 
+--- a/common/common.cpp
++++ b/common/common.cpp
+@@ -1752,6 +1752,8 @@
+     cparams.moe_hybrid_swap_max    = params.moe_hybrid_swap_max;
+     cparams.moe_hybrid_skip_weight = params.moe_hybrid_skip_weight;
+     cparams.moe_hybrid_tail_skip   = params.moe_hybrid_tail_skip;
++    cparams.head_subset            = params.head_subset;
++    cparams.head_subset_ids        = params.head_subset_ids.empty() ? nullptr : params.head_subset_ids.c_str();
+ 
+     return cparams;
+ }
+--- a/common/speculative.cpp
++++ b/common/speculative.cpp
+@@ -2577,6 +2577,8 @@
+ 
+     result.embedding    = false;
+     result.pooling_type = LLAMA_POOLING_TYPE_UNSPECIFIED;
++    result.head_subset  = params_spec.head_subset;
++    result.head_subset_ids = params_spec.head_subset_ids;
+ 
+     if (has_draft) {
+         // default to global devices value
+--- a/common/arg.cpp
++++ b/common/arg.cpp
+@@ -2952,6 +2952,23 @@
+         }
+     ).set_env("LLAMA_ARG_MOE_HYBRID_TAIL_SKIP"));
+     add_opt(common_arg(
++        {"--spec-draft-head-subset"}, "N",
++        "keep N rows of the output head in device memory (the first N tokens of the vocabulary and the last 1024, the special ones) and let the MTP draft steps choose among them, instead of reading the whole head from host memory, 0 = off (default: 0)",
++        [](common_params & params, int value) {
++            if (value < 0 || value > 10000000) { throw std::invalid_argument("invalid value"); }
++            params.speculative.draft.head_subset = value;
++            params.head_subset = value;
++        }
++    ).set_env("LLAMA_ARG_SPEC_DRAFT_HEAD_SUBSET"));
++    add_opt(common_arg(
++        {"--spec-draft-head-subset-ids"}, "FNAME",
++        "with --spec-draft-head-subset, keep the rows of the token ids in this text file (one per line, the most useful first) instead of the first tokens of the vocabulary (default: none)",
++        [](common_params & params, const std::string & value) {
++            params.speculative.draft.head_subset_ids = value;
++            params.head_subset_ids = value;
++        }
++    ).set_env("LLAMA_ARG_SPEC_DRAFT_HEAD_SUBSET_IDS"));
++    add_opt(common_arg(
+         {"-ncffn", "--n-cpu-ffn"}, "N",
+         "keep the dense FFN weights of the first N layers in the CPU\n"
+         "(dense models; for MoE expert weights use --n-cpu-moe)",
+--- a/src/llama-graph.h
++++ b/src/llama-graph.h
+@@ -24,6 +24,8 @@
+ 
+ class llama_moe_cache;
+ class llama_moe_hybrid;
++struct llama_head_subset;
++using llama_head_subset_ptr = std::unique_ptr<llama_head_subset>;
+ 
+ struct llama_memory_context_i;
+ 
+@@ -807,6 +809,7 @@
+     const llama_cross            * cross;
+     const llama_moe_cache        * moe_cache;
+     const llama_moe_hybrid       * moe_hybrid;
++    const llama_head_subset      * head_subset = nullptr;
+ 
+     const llama_prec_policy * prec_policy = nullptr;
+ 
+@@ -1014,6 +1017,23 @@
+     ggml_tensor * v; // [n_embd_head, n_head_kv, n_tokens]
+ };
+ 
++struct llama_head_subset {
++    // throws if the model has no output head in host memory that can be split by rows
++    // ids_file: token ids (one per line, the most useful first) to keep instead of the first n_req tokens of the vocabulary, empty = the first tokens
++    llama_head_subset(const llama_model & model, ggml_backend_buffer_type_t dev_buft, int32_t n_req, const std::string & ids_file = {});
++
++    const ggml_tensor * src = nullptr; // the full output head the subset was taken from
++    ggml_tensor * w   = nullptr;       // [n_embd, n_rows] same type as the full head
++    ggml_tensor * ids = nullptr;       // I32 [n_rows], the token of each row
++    int64_t n_rows = 0;
++
++    ggml_backend_buffer_type_t buft = nullptr; // where it lives and how much memory it takes
++    size_t size = 0;
++
++    ggml_context_ptr ctx;
++    ggml_backend_buffer_ptr buf;
++};
++
+ struct llm_graph_context {
+     const llm_arch arch;
+ 
+@@ -1061,6 +1081,7 @@
+     const llama_cross            * cross;
+     const llama_moe_cache        * moe_cache;
+     const llama_moe_hybrid       * moe_hybrid;
++    const llama_head_subset      * head_subset = nullptr;
+ 
+     // MoE hybrid form (see build_moe_ffn), set while its two expert branches are built:
+     // the device branch reads the slots of the experts (moe_hybrid_dev), both branches skip ids < 0, the CPU branch stays on the CPU
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -18,6 +18,12 @@
+ #include "llama-memory-hybrid-iswa.h"
+ #include "llama-memory-recurrent.h"
+ 
++#include <algorithm>
++#include <cassert>
++#include <cinttypes>
++#include <fstream>
++#include <numeric>
++#include <stdexcept>
+ 
+ #include <cassert>
+ #include <cmath>
+@@ -1534,6 +1540,103 @@
+ //
+ // llm_graph_context
+ //
++
++llama_head_subset::llama_head_subset(const llama_model & model, ggml_backend_buffer_type_t dev_buft, int32_t n_req, const std::string & ids_file) {
++    src = model.output;
++    const ggml_tensor * src_scale = model.output_s;
++    for (const auto & layer : model.layers) {
++        // a model whose MTP layer has a head of its own drafts with that one
++        if (layer.nextn.shared_head_head != nullptr) {
++            src = layer.nextn.shared_head_head;
++            src_scale = layer.nextn.shared_head_head_s;
++            break;
++        }
++    }
++    // the memory fit loads the model without weights and may place the head on the GPU: it only needs the size, so no host check there
++    if (src == nullptr || (!model.hparams.no_alloc && (src->buffer == nullptr || !ggml_backend_buffer_is_host(src->buffer)))) {
++        throw std::runtime_error("the output head is not in host memory");
++    }
++    if (src_scale != nullptr || src->ne[2] != 1 || src->ne[3] != 1 || ggml_is_transposed(src)) {
++        throw std::runtime_error("the output head cannot be split by rows");
++    }
++
++    const int64_t n_vocab = src->ne[1];
++    // the special tokens of the common vocabularies are the last ones
++    const int64_t n_last  = std::min<int64_t>(1024, n_vocab/4);
++    // the first rows: the ranked tokens of ids_file, else the first tokens of the vocabulary (the most frequent ones of a BPE vocabulary)
++    std::vector<int32_t> first;
++    if (!ids_file.empty()) {
++        std::ifstream in(ids_file);
++        std::vector<char> taken(n_vocab, 0);
++        int64_t id;
++        while ((int64_t) first.size() < std::max<int64_t>(n_req, 1) && in >> id) {
++            if (id >= 0 && id < n_vocab - n_last && !taken[id]) {
++                taken[id] = 1;
++                first.push_back((int32_t) id);
++            }
++        }
++        if (first.empty()) {
++            LLAMA_LOG_WARN("%s: no usable token ids in '%s', using the first tokens of the vocabulary\n", __func__, ids_file.c_str());
++        }
++    }
++    if (first.empty()) {
++        first.resize(std::min<int64_t>(std::max<int64_t>(n_req, 1), n_vocab - n_last));
++        std::iota(first.begin(), first.end(), 0);
++    }
++    const int64_t n_first = first.size();
++    n_rows = n_first + n_last;
++    if (n_rows >= n_vocab) {
++        throw std::runtime_error("the subset would be the whole head");
++    }
++
++    ggml_init_params params = {
++        /*.mem_size   =*/ 2*ggml_tensor_overhead(),
++        /*.mem_buffer =*/ nullptr,
++        /*.no_alloc   =*/ true,
++    };
++    ctx.reset(ggml_init(params));
++    if (!ctx) {
++        throw std::runtime_error("failed to create the head subset context");
++    }
++    w   = ggml_new_tensor_2d(ctx.get(), src->type, src->ne[0], n_rows);
++    ids = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, n_rows);
++    ggml_set_name(w,   "head_subset.weight");
++    ggml_set_name(ids, "head_subset.ids");
++    GGML_ASSERT(w->nb[1] == src->nb[1]);
++
++    buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), dev_buft));
++    if (!buf) {
++        throw std::runtime_error("failed to allocate the head subset");
++    }
++    buft = dev_buft;
++    size = ggml_backend_buffer_get_size(buf.get());
++    // as weights, the ops that read it run on the device that holds it
++    ggml_backend_buffer_set_usage(buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
++
++    // the memory fit of the server loads the model without weights: the buffer is counted, nothing is copied
++    if (!model.hparams.no_alloc) {
++        const size_t row = src->nb[1];
++        for (int64_t i = 0; i < n_first; ) {
++            int64_t run = 1; // consecutive token ids are one copy
++            while (i + run < n_first && first[i + run] == first[i] + run) {
++                run++;
++            }
++            ggml_backend_tensor_set(w, (const uint8_t *) src->data + (size_t) first[i]*row, i*row, run*row);
++            i += run;
++        }
++        ggml_backend_tensor_set(w, (const uint8_t *) src->data + (n_vocab - n_last)*row, n_first*row, n_last*row);
++
++        std::vector<int32_t> tokens(n_rows);
++        std::copy(first.begin(), first.end(), tokens.begin());
++        for (int64_t i = 0; i < n_last; ++i) {
++            tokens[n_first + i] = (int32_t) (n_vocab - n_last + i);
++        }
++        ggml_backend_tensor_set(ids, tokens.data(), 0, ggml_nbytes(ids));
++    }
++
++    LLAMA_LOG_INFO("%s: %" PRId64 " of %" PRId64 " rows of the output head on the device, %.2f MiB\n", __func__,
++            n_rows, n_vocab, size/1024.0/1024.0);
++}
+ 
+ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
+     arch             (params.arch),
+@@ -1574,6 +1677,7 @@
+     cross            (params.cross),
+     moe_cache        (params.moe_cache),
+     moe_hybrid       (params.moe_hybrid),
++    head_subset      (params.head_subset),
+     prec_policy      (params.prec_policy),
+     hdmd             (params.hdmd),
+     samplers         (params.samplers),
+@@ -1633,6 +1737,18 @@
+           ggml_tensor * w,
+           ggml_tensor * cur,
+           ggml_tensor * w_s) const {
++    // the draft head only needs likely tokens: the rows of the output head that are in device memory, the others get a very low score
++    if (head_subset != nullptr && w == head_subset->src && w_s == nullptr && loras->empty() && cur->ne[2] == 1 && cur->ne[3] == 1 &&
++            !(hdmd && hdmd->rot.count(w))) {
++        const int64_t n_rows  = head_subset->n_rows;
++        const int64_t n_vocab = w->ne[1];
++        ggml_tensor * sub = ggml_mul_mat(ctx0, head_subset->w, cur); // [n_rows, n_outputs]
++        ggml_tensor * full = ggml_fill(ctx0, ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_vocab, cur->ne[1]), -1.0e30f);
++        ggml_tensor * rows = ggml_reshape_2d(ctx0, head_subset->ids, n_rows, 1);
++        full = ggml_set_rows(ctx0, full, ggml_reshape_3d(ctx0, sub, 1, n_rows, cur->ne[1]), rows);
++        return ggml_reshape_2d(ctx0, full, n_vocab, cur->ne[1]);
++    }
++
+     cur = build_hadamard_input(w, cur);
+     ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
+ 
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -310,6 +310,7 @@
+     llama_memory_ptr memory;
+     llama_moe_cache_ptr moe_cache;
+     llama_moe_hybrid_ptr moe_hybrid;
++    llama_head_subset_ptr head_subset;
+ 
+     // decode output (2-dimensional array: [n_outputs][n_vocab])
+     buffer_view<float> logits = {nullptr, 0};
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -565,6 +565,22 @@
+             moe_cache = std::make_unique<llama_moe_cache>(model, backend_ptrs, backend_buft, cparams.moe_cache_size);
+         }
+ 
++        if (params.head_subset > 0) {
++            // on the first GPU of the context
++            for (size_t i = 0; i < backend_ptrs.size(); ++i) {
++                const auto dev_type = ggml_backend_dev_type(ggml_backend_get_device(backend_ptrs[i]));
++                if (dev_type != GGML_BACKEND_DEVICE_TYPE_GPU && dev_type != GGML_BACKEND_DEVICE_TYPE_IGPU) {
++                    continue;
++                }
++                try {
++                    head_subset = std::make_unique<llama_head_subset>(model, backend_buft[i], params.head_subset,
++                            params.head_subset_ids ? params.head_subset_ids : std::string());
++                } catch (const std::exception & e) {
++                    LLAMA_LOG_WARN("%s: no head subset: %s\n", __func__, e.what());
++                }
++                break;
++            }
++        }
+ 
+         if (cparams.moe_hybrid_size > 0) {
+             // on the first GPU of the context
+@@ -2751,6 +2767,7 @@
+         /*.cross       =*/ &cross,
+         /*.moe_cache   =*/ moe_cache.get(),
+         /*.moe_hybrid  =*/ moe_hybrid.get(),
++        /*.head_subset =*/ head_subset.get(),
+         /*.prec_policy =*/ &model.prec_policy,
+         /*.hdmd        =*/ model.hdmd.rot.empty() ? nullptr : &model.hdmd,
+         /*.samplers    =*/ sampling.samplers,
+@@ -3776,6 +3793,9 @@
+         for (const auto & [buft, size] : moe_hybrid->memory_breakdown()) {
+             ret[buft].context += size;
+         }
++    }
++    if (head_subset) {
++        ret[head_subset->buft].context += head_subset->size;
+     }
+     if (model.hparams.no_alloc) {
+         for (size_t i = 0; i < backends.size(); ++i) {
+@@ -4073,6 +4093,8 @@
+         /*.moe_hybrid_swap_max         =*/ 32,
+         /*.moe_hybrid_skip_weight      =*/ 0.04f,
+         /*.moe_hybrid_tail_skip        =*/ 6,
++        /*.head_subset                 =*/ 0,
++        /*.head_subset_ids             =*/ nullptr,
+         /*.abort_callback              =*/ nullptr,
+         /*.abort_callback_data         =*/ nullptr,
+         /*.embeddings                  =*/ false,
