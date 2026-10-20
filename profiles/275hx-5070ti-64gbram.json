@@ -74,8 +74,8 @@
     "cpu_strict_batch": true,
     "prio": 3,
     "prio_batch": 3,
-    "poll": 0,
-    "poll_batch": 0,
+    "poll": 100,
+    "poll_batch": 100,
     "threads_http": 0,
     "no_host": false,
     "repack": true,
@@ -151,7 +151,8 @@
         "reasoning_preserve": true,
         "moe_hybrid": true,
         "moe_hybrid_auto": true,
-        "moe_hybrid_mib": 0
+        "moe_hybrid_mib": 0,
+        "env": "GGML_CUDA_REGISTER_HOST=1"
       },
       "qwen3.8-27b": {
         "path": "D:\\.models\\qwen3.8\\Qwen3.8-27B-UD-IQ3_XXS.gguf",
