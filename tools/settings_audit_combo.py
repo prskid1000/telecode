@@ -80,7 +80,7 @@ def flags_of(argv):
 import random
 random.seed(11)
 tables = [("global", k, f, kd) for k, f, kd in A._GLOBAL_FLAG_SPECS] + [("model", k, f, kd) for k, f, kd in A._MODEL_FLAG_SPECS]
-EXCL = {"moe_cache_cpu_miss", "moe_cache_mib", "fit", "n_gpu_layers", "n_gpu_layers_draft", "spec_default", "spec_type"}
+EXCL = {"moe_hybrid", "moe_cache_mib", "fit", "n_gpu_layers", "n_gpu_layers_draft", "spec_default", "spec_type"}
 bad = 0
 n_checked = 0
 for trial in range(400):
@@ -88,7 +88,7 @@ for trial in range(400):
     g, m = {}, {}
     # parents on at random so the dependent rows get emitted
     if random.random() < 0.7:
-        m.update({"moe_cache_mib": 2000, "moe_cache_cpu_miss": True})
+        m["moe_hybrid"] = True
     if random.random() < 0.5:
         g["spec_type"] = "draft-mtp"
     wanted = []

@@ -1,41 +1,47 @@
 {
   "repo": "build/llama.cpp",
-  "new_files": [],
+  "new_files": [
+    "src/llama-moe-hybrid.cpp",
+    "src/llama-moe-hybrid.h"
+  ],
   "patches": [
     {
       "file": "0001-common-add-defer_loading-to-tool-definitions.patch",
       "exact": true
     },
     {
-      "file": "0002-ggml-skip-negative-expert-ids-and-cpu-split-overlap.patch",
-      "paths": [
-        "ggml"
-      ],
-      "header": "keep"
-    },
-    {
-      "file": "0003-moe-cache-modes-expert-reduction-adaptive-draft-head-subset.patch",
+      "file": "0002-moe-hybrid-strata.patch",
       "paths": [
         "common/arg.cpp",
         "common/common.cpp",
         "common/common.h",
         "common/speculative.cpp",
+        "ggml/include/ggml-backend.h",
+        "ggml/include/ggml.h",
+        "ggml/src/ggml-backend-impl.h",
+        "ggml/src/ggml-backend.cpp",
+        "ggml/src/ggml-cpu/ggml-cpu.c",
+        "ggml/src/ggml-cpu/repack.cpp",
+        "ggml/src/ggml-cuda/ggml-cuda.cu",
+        "ggml/src/ggml-cuda/mmid.cu",
+        "ggml/src/ggml-cuda/mmid.cuh",
+        "ggml/src/ggml-cuda/mmvq.cu",
+        "ggml/src/ggml.c",
         "include/llama.h",
+        "src/CMakeLists.txt",
         "src/llama-context.cpp",
         "src/llama-context.h",
+        "src/llama-cparams.h",
         "src/llama-graph.cpp",
         "src/llama-graph.h",
-        "src/llama-moe-cache.cpp",
-        "src/llama-moe-cache.h"
+        "src/llama-moe-hybrid.cpp",
+        "src/llama-moe-hybrid.h",
+        "src/models/qwen35moe.cpp"
       ],
-      "header": "Title: MoE cache modes, fewer experts per token, adaptive draft, head subset\nAdd-on: MoE expert cache modes for models whose experts live in host memory, an adaptive speculative draft length, and a GPU subset of the output head for draft steps.\n  --moe-cache-cpu-miss (+ --moe-cache-promote-after/-max/-gain, --moe-cache-decay, --moe-cache-cpu-miss-max-tokens)\n  --moe-cache-stats-file, --moe-cache-prewarm, --moe-cache-route-bias/-route-top/-route-scale, --moe-cache-foresight, --moe-cache-tail-skip(-rank, -auto-off)\n  --moe-cache-evict-window, --moe-cache-pcie-share/-pcie-max/-pcie-auto(-window), --moe-cache-async-upload, --moe-cache-upload-batch, --moe-cache-swap-every/-swap-max\n  --moe-cache-prefill-share, --moe-cache-prefill-max-tokens, --moe-cache-staging-slots (CPU share of prompt batches)\n  --spec-draft-adaptive (+ -min-gain, -ema, -probe)\n  --spec-draft-head-subset N: the MTP draft steps read the output head once per drafted token; with the head in host memory that is the biggest cost of a\n  draft step. This keeps the first N rows and the last 1024 rows of the head in device memory for the draft. The target still verifies with the full head.\nAll off by default; stock behaviour is unchanged without the flags.\nRequires: 0002-ggml-skip-negative-expert-ids-and-cpu-split-overlap.patch\n\n"
+      "header": "keep"
     },
     {
-      "file": "0004-upstream-draft-kv-out-of-checkpoints-and-pinned-host-buffers.patch",
-      "exact": true
-    },
-    {
-      "file": "0005-lmcache-fast-kv-blend.patch",
+      "file": "0003-lmcache-prefix-restore.patch",
       "exact": true
     }
   ]

@@ -645,7 +645,8 @@ class LlamaSupervisor:
                         or not self._planned_mib or not auto_cache.log_says_oom(cfg.log_file())):
                     raise
                 nxt = await asyncio.get_running_loop().run_in_executor(None, auto_cache.plan, model_name, scale*0.8)
-                if nxt is None or int(nxt.get("moe_cache_mib") or 0) >= self._planned_mib:
+                key = auto_cache.target_key(model_name)
+                if nxt is None or int(nxt.get(key) or 0) >= self._planned_mib:
                     raise
                 scale *= 0.8
                 _LLAMA_LOG.warning("llama.cpp: '%s' ran out of GPU memory (%s), trying again with a cache %d%% of the planned size",
@@ -670,7 +671,8 @@ class LlamaSupervisor:
         from llamacpp import auto_cache
         if auto_cache.enabled(model_name):
             overrides = await asyncio.get_running_loop().run_in_executor(None, auto_cache.plan, model_name, cache_scale)
-        self._planned_mib = int(overrides["moe_cache_mib"]) if overrides and overrides.get("moe_cache_mib") else None
+        key = auto_cache.target_key(model_name)
+        self._planned_mib = int(overrides[key]) if overrides and overrides.get(key) else None
         argv = build_argv(model_name, overrides)
         binary = argv[0]
         resolved_binary = shutil.which(binary) or binary

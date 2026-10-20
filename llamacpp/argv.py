@@ -139,18 +139,15 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("slot_save_path",             "--slot-save-path",            "path"),
     ("sleep_idle_seconds",         "--sleep-idle-seconds",        "value_nz"),
 
-    # LMCache tiered KV cache & CacheBlend (patched build)
+    # LMCache tiered KV cache (patched build)
     ("lmcache",                     "--lmcache",                   "flag"),
     ("lmcache_chunk_size",          "--lmcache-chunk-size",        "value_nz"),
     ("lmcache_ram_mb",              "--lmcache-ram-mb",            "value"),
+    ("lmcache_checkpoints",         "--lmcache-checkpoints",       "value"),
     ("lmcache_disk",                "--lmcache-disk",              "flag"),
     ("lmcache_disk_dir",            "--lmcache-disk-dir",          "path"),
     ("lmcache_disk_max_mb",         "--lmcache-disk-max-mb",       "value_nz"),
-    ("lmcache_blend",               "--lmcache-blend",             "flag"),
-    ("lmcache_blend_recompute",     "--lmcache-blend-recompute",   "value_nz"),
-    ("lmcache_blend_min_tokens",    "--lmcache-blend-min-tokens",  "value_nz"),
-    ("lmcache_compress",            "--lmcache-compress",          "value"),
-    ("lmcache_async_save",          ("--lmcache-async-save", "--no-lmcache-async-save"), "bool_pair"),
+    ("lmcache_disk_idle_sec",       "--lmcache-disk-idle-sec",     "value"),
 
     # Speculative decoding:
     # - spec_type is dispatched in _emit_spec_type() so the "none" sentinel
@@ -162,16 +159,7 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     #   it when spec_type is meaningfully set (the two are mutually
     #   exclusive — set one or the other, not both).
     ("spec_default",             "--spec-default",         "flag"),
-    # Adaptive draft length (patched build): the length of each draft is chosen from measured
-    # acceptance and round time. The tuning knobs only mean something with it on.
-    ("spec_draft_adaptive",           "--spec-draft-adaptive",           "flag"),
-    ("spec_draft_adaptive_min_gain",  "--spec-draft-adaptive-min-gain",  "value"),
-    ("spec_draft_adaptive_ema",       "--spec-draft-adaptive-ema",       "value"),
-    ("spec_draft_adaptive_probe",     "--spec-draft-adaptive-probe",     "value"),
-    # Draft head subset (patched build): the MTP draft steps read only these rows of the output head from device memory.
     ("spec_draft_n_ubatch",           "--spec-draft-n-ubatch",           "value_nz"),  # newer upstream builds only
-    ("spec_draft_head_subset",        "--spec-draft-head-subset",        "value_nz"),
-    ("spec_draft_head_subset_ids",    "--spec-draft-head-subset-ids",    "path"),
     ("spec_synth_len",           "--spec-synth-len",       "value_nz"),
     ("spec_synth_rates",         "--spec-synth-rates",     "value"),
     # How the draft is sampled (greedy argmax vs probabilistic + rejection sampling) and
@@ -354,43 +342,12 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("n_cpu_ffn",     "--n-cpu-ffn",       "value_nz"),
     ("cpu_moe",       "--cpu-moe",         "flag"),
 
-    # MoE expert cache (--moe-cache-mib is upstream; the rest is the
-    # patches/llama.cpp/0002-moe-cache-compute-misses-on-the-cpu series).
-    # The tuning knobs are only emitted with moe_cache_cpu_miss on, see
-    # _MOE_CACHE_TUNING below: a stock binary rejects them as unknown flags.
     ("moe_cache_mib",                   "--moe-cache-mib",                   "value_nz"),
-    ("moe_cache_cpu_miss",              "--moe-cache-cpu-miss",              "flag"),
-    ("moe_cache_promote_after",         "--moe-cache-promote-after",         "value"),
-    ("moe_cache_promote_max",           "--moe-cache-promote-max",           "value"),
-    ("moe_cache_decay",                 "--moe-cache-decay",                 "value"),
-    ("moe_cache_cpu_miss_max_tokens",   "--moe-cache-cpu-miss-max-tokens",   "value"),
-    ("moe_cache_stats_file",            "--moe-cache-stats-file",            "path"),
-    ("moe_cache_prewarm",               "--moe-cache-prewarm",               "flag"),
-    # Patched build only. Need a cache (suppressed when moe_cache_mib is 0), not CPU-miss mode.
-    # 0 / absent = off, nothing emitted.
-    ("moe_cache_route_bias",            "--moe-cache-route-bias",            "value_nz"),
-    ("moe_cache_promote_gain",          "--moe-cache-promote-gain",          "value_nz"),
-    ("moe_cache_foresight",             "--moe-cache-foresight",             "value_nz"),
-    ("moe_cache_tail_skip",             "--moe-cache-tail-skip",             "value_nz"),
-    ("moe_cache_tail_skip_rank",        "--moe-cache-tail-skip-rank",        "value_nz"),
-    ("moe_cache_tail_skip_auto_off",    "--moe-cache-tail-skip-auto-off",    "value"),
-    ("moe_cache_evict_window",          "--moe-cache-evict-window",          "value_nz"),
-    ("moe_cache_pcie_share",            "--moe-cache-pcie-share",            "value_nz"),
-    ("moe_cache_pcie_max",              "--moe-cache-pcie-max",              "value"),
-    ("moe_cache_async_upload",          "--moe-cache-async-upload",          "flag"),
-    ("moe_cache_swap_every",            "--moe-cache-swap-every",            "value_nz"),
-    ("moe_cache_swap_max",              "--moe-cache-swap-max",              "value_nz"),
-    ("moe_cache_route_top",             "--moe-cache-route-top",             "value_nz"),
-    ("moe_cache_route_scale",           "--moe-cache-route-scale",           "flag"),
-    ("moe_cache_pcie_auto",             "--moe-cache-pcie-auto",             "flag"),
-    ("moe_cache_pcie_auto_window",      "--moe-cache-pcie-auto-window",      "value_nz"),
-    ("moe_cache_upload_batch",          "--moe-cache-upload-batch",          "flag"),
-    ("moe_cache_prefill_share",         "--moe-cache-prefill-share",         "value_nz"),
-    ("moe_cache_prefill_max_tokens",    "--moe-cache-prefill-max-tokens",    "value_nz"),
-    ("moe_cache_staging_slots",         "--moe-cache-staging-slots",         "value"),
-    # fewer experts per token: works with or without the cache (not with the cache itself)
-    ("moe_reduce_min",                  "--moe-expert-reduce-min",           "value_nz"),
-    ("moe_reduce_thresh",               "--moe-expert-reduce-thresh",        "value"),
+    # MoE hybrid mode (patches/llama.cpp/0002-moe-hybrid-strata.patch)
+    ("moe_hybrid_mib",                  "--moe-hybrid-mib",                  "value_nz"),
+    ("moe_hybrid_max_tokens",           "--moe-hybrid-max-tokens",           "value_nz"),
+    ("moe_hybrid_swap_every",           "--moe-hybrid-swap-every",           "value_nz"),
+    ("moe_hybrid_swap_max",             "--moe-hybrid-swap-max",             "value"),
 
     # RoPE / YaRN (0 = model default; YaRN factors default to -1.00 = auto,
     # so emit only when explicitly set to a non-zero override).
@@ -484,18 +441,6 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
 ]
 
 
-# Knobs of the CPU-miss mode of the MoE cache. Meaningless (and unknown to a
-# stock llama-server) unless moe_cache_cpu_miss is on, so they are suppressed.
-_MOE_CACHE_TUNING = frozenset({
-    "moe_cache_promote_after", "moe_cache_promote_max", "moe_cache_decay",
-    "moe_cache_cpu_miss_max_tokens", "moe_cache_foresight", "moe_cache_tail_skip",
-    "moe_cache_tail_skip_rank", "moe_cache_tail_skip_auto_off", "moe_cache_evict_window",
-    "moe_cache_pcie_share", "moe_cache_pcie_max", "moe_cache_async_upload",
-    "moe_cache_swap_every", "moe_cache_swap_max", "moe_cache_pcie_auto", "moe_cache_pcie_auto_window",
-    "moe_cache_prefill_share", "moe_cache_prefill_max_tokens", "moe_cache_staging_slots",
-})
-# These two only act with the router bias on
-_MOE_CACHE_ROUTE_RECIPE = frozenset({"moe_cache_route_top", "moe_cache_route_scale"})
 
 
 def _emit_flag(argv: list[str], cfg_dict: dict, key: str, flag: object, kind: str) -> None:
@@ -612,6 +557,11 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
     mcfg = cfg.model_cfg(resolved)
     if overrides:
         mcfg = {**mcfg, **overrides}
+
+    # MoE hybrid mode: every layer's experts stay in host memory, the GPU keeps the most used ones
+    hybrid = bool(mcfg.get("moe_hybrid"))
+    if hybrid:
+        mcfg = {**mcfg, "cpu_moe": True}
     model_path = mcfg.get("path")
     if not model_path:
         raise KeyError(f"llamacpp.models.{resolved}.path is required")
@@ -647,25 +597,13 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
     # tray, in case settings.json was hand-edited).
     if spec_active:
         suppressed_global.add("spec_default")
-    if not (spec_active or gcfg.get("spec_default")) or not gcfg.get("spec_draft_adaptive"):
-        suppressed_global.update({"spec_draft_adaptive", "spec_draft_adaptive_min_gain",
-                                  "spec_draft_adaptive_ema", "spec_draft_adaptive_probe"})
     if not (spec_active or gcfg.get("spec_default")):
-        suppressed_global.update({"spec_draft_head_subset", "spec_draft_head_subset_ids", "spec_draft_n_ubatch"})
-    if cfg.as_int(gcfg.get("spec_draft_head_subset")) <= 0:
-        suppressed_global.add("spec_draft_head_subset_ids")
+        suppressed_global.add("spec_draft_n_ubatch")
     if not gcfg.get("lmcache"):
-        suppressed_global.update({
-            "lmcache", "lmcache_chunk_size", "lmcache_ram_mb", "lmcache_disk",
-            "lmcache_disk_dir", "lmcache_disk_max_mb", "lmcache_blend",
-            "lmcache_blend_recompute", "lmcache_blend_min_tokens",
-            "lmcache_compress", "lmcache_async_save"
-        })
-    else:
-        if not gcfg.get("lmcache_disk"):
-            suppressed_global.update({"lmcache_disk_dir", "lmcache_disk_max_mb"})
-        if not gcfg.get("lmcache_blend"):
-            suppressed_global.update({"lmcache_blend_recompute", "lmcache_blend_min_tokens"})
+        suppressed_global.update({"lmcache", "lmcache_chunk_size", "lmcache_ram_mb", "lmcache_checkpoints", "lmcache_disk",
+                                  "lmcache_disk_dir", "lmcache_disk_max_mb", "lmcache_disk_idle_sec"})
+    elif not gcfg.get("lmcache_disk"):
+        suppressed_global.update({"lmcache_disk_dir", "lmcache_disk_max_mb", "lmcache_disk_idle_sec"})
     for k, flag, kind in _GLOBAL_FLAG_SPECS:
         if k in suppressed_global:
             continue
@@ -695,22 +633,10 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
             total = vram.total_vram_mib()
             if total:
                 mcfg["fit_target"] = max(0, total - budget)
-    cache_on = cfg.as_int(mcfg.get("moe_cache_mib")) > 0
-    if not (bool(mcfg.get("moe_cache_cpu_miss")) and cache_on):
-        suppressed_model.update(_MOE_CACHE_TUNING)
-        suppressed_model.add("moe_cache_cpu_miss")
-    if cfg.as_int(mcfg.get("moe_reduce_min")) <= 0:
-        suppressed_model.add("moe_reduce_thresh")
-    if not cache_on:
-        suppressed_model.update({"moe_cache_stats_file", "moe_cache_prewarm",
-                                 "moe_cache_route_bias", "moe_cache_promote_gain"})
-        suppressed_model.update(_MOE_CACHE_ROUTE_RECIPE)
-        suppressed_model.add("moe_cache_upload_batch")
-    if cache_on and not cfg.as_float(mcfg.get("moe_cache_route_bias")) > 0:
-        suppressed_model.update(_MOE_CACHE_ROUTE_RECIPE)
-    if cache_on and mcfg.get("moe_cache_prewarm") and not mcfg.get("moe_cache_stats_file"):
-        # prewarm needs a stats file; keep one per model next to the other runtime data
-        mcfg["moe_cache_stats_file"] = str(Path(cfg.resolve_path("data/moe-cache")) / f"{resolved}.bin")
+    if hybrid:
+        suppressed_model.update({"n_cpu_moe", "moe_cache_mib"})   # all layers on the CPU; the MoE cache excludes the hybrid mode
+    else:
+        suppressed_model.update({"moe_hybrid_mib", "moe_hybrid_max_tokens", "moe_hybrid_swap_every", "moe_hybrid_swap_max"})
     # rope_scale and rope_freq_scale are the same lever; the older key wins.
     if cfg.as_float(mcfg.get("rope_freq_scale")) != 0.0:
         suppressed_model.add("rope_scale")
@@ -737,7 +663,7 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
 
 
 # flags that only a patched llama.cpp (llamacpp/patcher.py) or a recent build has: a binary that does not list them in --help refuses to start
-_PATCHED_PREFIXES = ("--moe-cache-", "--moe-expert-reduce", "--spec-draft-n-ubatch", "--spec-draft-adaptive", "--spec-draft-head-subset")
+_PATCHED_PREFIXES = ("--moe-cache-", "--moe-hybrid-", "--lmcache", "--moe-expert-reduce", "--spec-draft-n-ubatch", "--spec-draft-adaptive", "--spec-draft-head-subset")
 _HELP_FLAGS: dict[tuple, Optional[set]] = {}
 
 

@@ -24,7 +24,13 @@ _OOM = re.compile(r"out of memory|failed to allocate|cudamalloc failed|unable to
 
 
 def enabled(model_name: str) -> bool:
-    return bool(cfg.model_cfg(model_name).get("moe_cache_auto"))
+    m = cfg.model_cfg(model_name)
+    return bool(m.get("moe_hybrid_auto") if m.get("moe_hybrid") else m.get("moe_cache_auto"))
+
+
+def target_key(model_name: str) -> str:
+    """The setting the plan sizes: the hybrid mode's slots or the MoE cache."""
+    return "moe_hybrid_mib" if cfg.model_cfg(model_name).get("moe_hybrid") else "moe_cache_mib" 
 
 
 def headroom_mib(model_name: str) -> int:
@@ -63,8 +69,9 @@ def plan(model_name: str, scale: float = 1.0) -> Optional[dict]:
 
     scale < 1 is applied after an out-of-memory start. A configured moe_cache_mib above 0 is a ceiling."""
     mcfg = cfg.model_cfg(model_name)
-    if not mcfg.get("moe_cache_auto"):
+    if not enabled(model_name):
         return None
+    key = target_key(model_name)
     free = _free_mib()
     if free is None:
         _LOG.info("auto cache: free VRAM unknown (no nvidia-smi), using moe_cache_mib as configured")
@@ -93,20 +100,20 @@ def plan(model_name: str, scale: float = 1.0) -> Optional[dict]:
         # experts of layers that are not offloaded sit on the GPU too
         # n_cpu_moe 0 or absent = no expert layer on the CPU (llama.cpp's meaning), so every layer's experts sit on the GPU
         try:
-            n_cpu = n_moe if mcfg.get("cpu_moe") else max(0, min(n_moe, cfg.as_int(mcfg.get("n_cpu_moe"))))
+            n_cpu = n_moe if (mcfg.get("cpu_moe") or mcfg.get("moe_hybrid")) else max(0, min(n_moe, cfg.as_int(mcfg.get("n_cpu_moe"))))
         except (TypeError, ValueError):
             n_cpu = 0
         avail -= max(0, n_moe - n_cpu) * float(s["expert_bytes_total"]) / n_moe / (1 << 20)
     mib = int(max(0.0, avail) * 0.7 * max(0.05, min(1.0, scale)))
     mib = (mib // 64) * 64
-    cap = cfg.as_int(mcfg.get("moe_cache_mib"))
+    cap = cfg.as_int(mcfg.get(key))
     if cap > 0:
         mib = min(mib, cap)
     if mib < 256:
         mib = 0
-    _LOG.info("auto cache: %d MiB free, ctx %d, headroom %d, scale %.2f -> moe_cache_mib %d%s",
-              free, sg["ctx_size"], headroom, scale, mib, f" (ceiling {cap})" if cap > 0 else "")
-    return {"moe_cache_mib": mib}
+    _LOG.info("auto cache: %d MiB free, ctx %d, headroom %d, scale %.2f -> %s %d%s",
+              free, sg["ctx_size"], headroom, scale, key, mib, f" (ceiling {cap})" if cap > 0 else "")
+    return {key: mib}
 
 
 def log_says_oom(log_path: str, tail_bytes: int = 96 * 1024) -> bool:

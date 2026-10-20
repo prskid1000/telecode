@@ -1,0 +1,892 @@
+Title: LMCache: save finished conversations and continue new prompts from them (llama-server)
+Add-on: replaces 0005 (no bundled zstd, nothing in libllama, no llama.h change). Off by default.
+  --lmcache                  keep the state of each finished conversation (KV cache + recurrent state + up to N checkpoints) and continue a
+                             new prompt from the saved one that saves the most work, from any slot
+  --lmcache-chunk-size N     prompts are matched in steps of N tokens (default 256)
+  --lmcache-ram-mb N         RAM for the saved conversations (default 8192)
+  --lmcache-checkpoints N    checkpoints kept per saved conversation, half the earliest and half the latest (default 4)
+  --lmcache-disk             also keep them on disk; they survive restarts
+  --lmcache-disk-dir DIR     (default ./data/lmcache)
+  --lmcache-disk-max-mb N    disk space, oldest files go first (default 65536)
+  --lmcache-disk-idle-sec N  write to disk only after N seconds without requests, and at shutdown (default 30)
+  --lmcache-blend, -blend-recompute, -blend-min-tokens, -compress, --(no-)lmcache-async-save: accepted and ignored (old settings keep working)
+Restoring puts the slot exactly where it would be had it processed the saved conversation itself (state, tokens, checkpoints); the server's
+own prompt-reuse logic then keeps the shared tokens and, for recurrent models like Qwen3.6, goes back to a checkpoint before the first
+difference. So a saved conversation is used when it is a whole prefix of the prompt and when the prompt changes inside it (compacted or
+edited conversations), whenever that resumes further than the slot's own state. At most 2 saved conversations per conversation (the latest
+and the previous turn). Disk writes happen on a background thread after the server has been quiet, and earlier turns are not written.
+Fixes against the old 0005: it restored a longer state than n_past and skipped the server's "reprocess" safety (wrong text on Qwen3.6); it
+saved twice per request; it kept checkpoints of other tokens. Not used with a draft model / MTP or with images.
+
+diff --git a/common/arg.cpp b/common/arg.cpp
+index 621e97d..fc3854d 100644
+--- a/common/arg.cpp
++++ b/common/arg.cpp
+@@ -1724,6 +1724,106 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+             params.cache_ram_explicit = true;
+         }
+     ).set_env("LLAMA_ARG_CACHE_RAM").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
++    add_opt(common_arg(
++        {"--lmcache"},
++        "LMCache: keep the state of finished conversations and restore the longest one whose tokens start a new prompt, from any slot "
++        "(default: disabled)",
++        [](common_params & params) {
++            params.lmcache.enabled = true;
++        }
++    ).set_env("LLAMA_ARG_LMCACHE").set_examples({LLAMA_EXAMPLE_SERVER}));
++    add_opt(common_arg(
++        {"--lmcache-chunk-size"}, "N",
++        string_format("LMCache: prompts are matched in steps of N tokens, 16..8192 (default: %d)", params.lmcache.chunk_size),
++        [](common_params & params, int value) {
++            if (value < 16 || value > 8192) {
++                throw std::invalid_argument("invalid lmcache chunk size");
++            }
++            params.lmcache.chunk_size = value;
++        }
++    ).set_env("LLAMA_ARG_LMCACHE_CHUNK_SIZE").set_examples({LLAMA_EXAMPLE_SERVER}));
++    add_opt(common_arg(
++        {"--lmcache-ram-mb"}, "N",
++        string_format("LMCache: RAM in MiB for the states (default: %d)", params.lmcache.ram_mb),
++        [](common_params & params, int value) {
++            if (value < 0) {
++                throw std::invalid_argument("invalid lmcache ram size");
++            }
++            params.lmcache.ram_mb = value;
++        }
++    ).set_env("LLAMA_ARG_LMCACHE_RAM_MB").set_examples({LLAMA_EXAMPLE_SERVER}));
++    add_opt(common_arg(
++        {"--lmcache-disk"},
++        "LMCache: also keep the states on disk, they survive restarts (default: disabled)",
++        [](common_params & params) {
++            params.lmcache.disk_enabled = true;
++        }
++    ).set_env("LLAMA_ARG_LMCACHE_DISK").set_examples({LLAMA_EXAMPLE_SERVER}));
++    add_opt(common_arg(
++        {"--lmcache-disk-dir"}, "DIR",
++        string_format("LMCache: folder for the states on disk (default: %s)", params.lmcache.disk_dir.c_str()),
++        [](common_params & params, const std::string & value) {
++            params.lmcache.disk_dir = value;
++        }
++    ).set_env("LLAMA_ARG_LMCACHE_DISK_DIR").set_examples({LLAMA_EXAMPLE_SERVER}));
++    add_opt(common_arg(
++        {"--lmcache-disk-max-mb"}, "N",
++        string_format("LMCache: disk space in MiB, the oldest files go first (default: %d)", params.lmcache.disk_max_mb),
++        [](common_params & params, int value) {
++            if (value < 0) {
++                throw std::invalid_argument("invalid lmcache disk max size");
++            }
++            params.lmcache.disk_max_mb = value;
++        }
++    ).set_env("LLAMA_ARG_LMCACHE_DISK_MAX_MB").set_examples({LLAMA_EXAMPLE_SERVER}));
++    add_opt(common_arg(
++        {"--lmcache-disk-idle-sec"}, "N",
++        string_format("LMCache: write new states to disk only after N seconds without requests, and at shutdown; the earlier turns of a "
++                      "conversation are not written (default: %d)", params.lmcache.disk_idle_sec),
++        [](common_params & params, int value) {
++            if (value < 0) {
++                throw std::invalid_argument("invalid lmcache disk idle time");
++            }
++            params.lmcache.disk_idle_sec = value;
++        }
++    ).set_env("LLAMA_ARG_LMCACHE_DISK_IDLE_SEC").set_examples({LLAMA_EXAMPLE_SERVER}));
++    add_opt(common_arg(
++        {"--lmcache-checkpoints"}, "N",
++        string_format("LMCache: context checkpoints kept with each saved state, half the earliest and half the latest; they let a later prompt "
++                      "that changes earlier (a compacted conversation) restart near the change (default: %d, 0 = none)", params.lmcache.max_checkpoints),
++        [](common_params & params, int value) {
++            if (value < 0) {
++                throw std::invalid_argument("invalid lmcache checkpoint count");
++            }
++            params.lmcache.max_checkpoints = value;
++        }
++    ).set_env("LLAMA_ARG_LMCACHE_CHECKPOINTS").set_examples({LLAMA_EXAMPLE_SERVER}));
++    // accepted so older launch settings keep working; they do nothing
++    add_opt(common_arg(
++        {"--lmcache-blend"},
++        "LMCache: ignored (not implemented), kept for compatibility",
++        [](common_params &) {}
++    ).set_examples({LLAMA_EXAMPLE_SERVER}));
++    add_opt(common_arg(
++        {"--lmcache-blend-recompute"}, "F",
++        "LMCache: ignored (not implemented), kept for compatibility",
++        [](common_params &, const std::string &) {}
++    ).set_examples({LLAMA_EXAMPLE_SERVER}));
++    add_opt(common_arg(
++        {"--lmcache-blend-min-tokens"}, "N",
++        "LMCache: ignored (not implemented), kept for compatibility",
++        [](common_params &, int) {}
++    ).set_examples({LLAMA_EXAMPLE_SERVER}));
++    add_opt(common_arg(
++        {"--lmcache-compress"}, "TYPE",
++        "LMCache: ignored (states are stored as they are), kept for compatibility",
++        [](common_params &, const std::string &) {}
++    ).set_examples({LLAMA_EXAMPLE_SERVER}));
++    add_opt(common_arg(
++        {"--lmcache-async-save"}, {"--no-lmcache-async-save"},
++        "LMCache: ignored (disk writes are always on a background thread), kept for compatibility",
++        [](common_params &, bool) {}
++    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+     add_opt(common_arg(
+         {"-kvu", "--kv-unified"},
+         {"-no-kvu", "--no-kv-unified"},
+diff --git a/common/common.h b/common/common.h
+index 8130926..e962f3c 100644
+--- a/common/common.h
++++ b/common/common.h
+@@ -374,6 +374,18 @@ struct common_params_speculative_ngram_cache {
+     std::string lookup_cache_dynamic; // path of dynamic ngram cache file for lookup decoding
+ };
+ 
++// LMCache: conversation states kept in RAM / on disk and restored for a prompt that starts with one (llama-server)
++struct common_params_lmcache {
++    bool        enabled      = false;
++    int32_t     chunk_size   = 256;   // prompts are matched in steps of this many tokens
++    int32_t     ram_mb       = 8192;  // RAM for the states
++    bool        disk_enabled = false; // also keep them on disk (survives restarts)
++    std::string disk_dir     = "./data/lmcache";
++    int32_t     disk_max_mb  = 65536;
++    int32_t     disk_idle_sec = 30;   // write new states to disk only after this many seconds without requests (and at shutdown)
++    int32_t     max_checkpoints = 4;  // context checkpoints kept with each saved state (half the earliest, half the latest)
++};
++
+ struct common_params_speculative {
+     std::vector<enum common_speculative_type> types = { COMMON_SPECULATIVE_TYPE_NONE };
+ 
+@@ -645,6 +657,7 @@ struct common_params {
+     int32_t kv_unified_per_slot = 0;     // max context per parallel slot; 0 = unset
+     int32_t checkpoint_min_step = 8192;  // minimum spacing between context checkpoints
+     int32_t cache_ram_mib       = 8192;  // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
++    common_params_lmcache lmcache;       // --lmcache, see tools/server/server-lmcache.h
+     bool    cache_ram_explicit  = false; // set by --cache-ram, decision models disable the cache otherwise
+ 
+     std::string public_path   = "";                                                                         // NOLINT
+diff --git a/tools/server/CMakeLists.txt b/tools/server/CMakeLists.txt
+index 70b8d7d..241aa5e 100644
+--- a/tools/server/CMakeLists.txt
++++ b/tools/server/CMakeLists.txt
+@@ -17,6 +17,8 @@ add_library(${TARGET} STATIC
+     server-decision.h
+     server-context.cpp
+     server-context.h
++    server-lmcache.cpp
++    server-lmcache.h
+     server-stream.cpp
+     server-stream.h
+     server-tools.cpp
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index a18b754..7322da9 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -3,6 +3,7 @@
+ #include "server-common.h"
+ #include "server-decision.h"
+ #include "server-http.h"
++#include "server-lmcache.h"
+ #include "server-task.h"
+ #include "server-queue.h"
+ #include "server-schema.h"
+@@ -248,6 +249,8 @@ struct server_slot {
+     llama_context * ctx_tgt = nullptr;
+     llama_context * ctx_dft = nullptr;
+ 
++    server_lmcache * lmcache = nullptr; // --lmcache, shared by the slots
++
+     common_memory mem;
+ 
+     // multimodal
+@@ -589,6 +592,11 @@ struct server_slot {
+ 
+             SLT_INF(*this, "stop processing: n_tokens = %d, truncated = %d\n", prompt.n_tokens(), truncated);
+ 
++            // LMCache: keep the finished conversation (its state holds exactly these tokens), text-only, without a draft model
++            if (lmcache && !task->is_child() && !task->is_stateless() && ctx_dft == nullptr && !prompt.tokens.has_mtmd) {
++                lmcache->save(ctx_tgt, id, prompt.tokens.get_tokens(), prompt.checkpoints);
++            }
++
+             t_last_used = ggml_time_us();
+ 
+             state = SLOT_STATE_IDLE;
+@@ -1023,6 +1031,7 @@ private:
+     int n_empty_consecutive = 0;
+ 
+     std::unique_ptr<server_prompt_cache> prompt_cache;
++    std::unique_ptr<server_lmcache>      lmcache;
+ 
+     server_metrics metrics;
+ 
+@@ -1511,6 +1520,14 @@ private:
+         }
+         SRV_TRC("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
+ 
++        if (params_base.lmcache.enabled) {
++            lmcache = std::make_unique<server_lmcache>(params_base.lmcache,
++                    llama_model_is_recurrent(model_tgt) || llama_model_is_hybrid(model_tgt));
++            for (auto & slot : slots) {
++                slot.lmcache = lmcache.get();
++            }
++        }
++
+         if (params_base.n_ctx_checkpoints > 0) {
+             SRV_TRC("context checkpoints enabled, max = %d, min spacing = %d\n",
+                     params_base.n_ctx_checkpoints, params_base.checkpoint_min_step);
+@@ -3699,6 +3716,35 @@ private:
+                                 // reuse any previously computed tokens that are common with the new prompt
+                                 n_past = slot.prompt.tokens.get_common_prefix(input_tokens);
+ 
++                                // LMCache: a conversation saved by any slot (or a previous run) from which this prompt can resume further than
++                                // from the slot's own state replaces it; only where nothing below cuts n_past back on its own
++                                if (lmcache && slot.ctx_dft == nullptr && !input_tokens.has_mtmd && slot.task->n_tokens_shared == 0 &&
++                                    n_decision_first < 0 && slot.alora_invocation_start <= 0) {
++                                    server_lmcache::restored r;
++                                    if (lmcache->restore(ctx_tgt, slot.id, input_tokens.get_tokens(), (size_t) n_past, r)) {
++                                        // the slot now holds the entry exactly as if it had processed it: its tokens, its state and its
++                                        // checkpoints; the slot's own checkpoints stay valid inside the tokens both share with the prompt
++                                        std::list<common_prompt_checkpoint> ckpts;
++                                        const llama_pos n_valid = (llama_pos) std::min<size_t>((size_t) n_past, r.n_common);
++                                        for (auto & c : slot.prompt.checkpoints) {
++                                            if (c.pos_max < n_valid) {
++                                                ckpts.push_back(std::move(c));
++                                            }
++                                        }
++                                        for (auto & c : r.checkpoints) {
++                                            const bool dup = std::any_of(ckpts.begin(), ckpts.end(), [&](const auto & k) { return k.pos_max == c.pos_max; });
++                                            if (!dup) {
++                                                ckpts.push_back(std::move(c));
++                                            }
++                                        }
++                                        ckpts.sort([](const auto & x, const auto & y) { return x.pos_max < y.pos_max; });
++                                        slot.prompt.tokens      = server_tokens(r.tokens, false);
++                                        slot.prompt.checkpoints = std::move(ckpts);
++                                        // the shared tokens; the code below goes back to a checkpoint if the state must be cut back
++                                        n_past = (int) r.n_common;
++                                    }
++                                }
++
+                                 // the children start from the shared prefix, do not go past it
+                                 if (slot.task->n_tokens_shared > 0) {
+                                     n_past = std::min(n_past, slot.task->n_tokens_shared);
+diff --git a/tools/server/server-lmcache.cpp b/tools/server/server-lmcache.cpp
+new file mode 100644
+index 0000000..0f7e902
+--- /dev/null
++++ b/tools/server/server-lmcache.cpp
+@@ -0,0 +1,516 @@
++#include "server-lmcache.h"
++
++#include "log.h"
++
++#include <algorithm>
++#include <cinttypes>
++#include <cstdio>
++#include <cstring>
++#include <filesystem>
++#include <fstream>
++
++namespace fs = std::filesystem;
++
++namespace {
++
++// file: magic, n_tokens (u64), state size (u64), n_checkpoints (u32), tokens, state,
++//       then per checkpoint: n_tokens (i64), pos_min (i32), pos_max (i32), size (u64), data
++constexpr char     LMCACHE_MAGIC[4] = { 'L', 'M', 'C', '2' };
++constexpr uint64_t FNV_OFFSET = 1469598103934665603ULL;
++constexpr uint64_t FNV_PRIME  = 1099511628211ULL;
++
++uint64_t hash_tokens(const llama_token * tokens, size_t n, uint64_t h = FNV_OFFSET) {
++    const auto * p = reinterpret_cast<const uint8_t *>(tokens);
++    for (size_t i = 0; i < n*sizeof(llama_token); ++i) {
++        h ^= p[i];
++        h *= FNV_PRIME;
++    }
++    return h;
++}
++
++bool is_prefix(const llama_tokens & a, const llama_tokens & b) { // a is a strict prefix of b
++    return a.size() < b.size() && std::equal(a.begin(), a.end(), b.begin());
++}
++
++template <typename T> void put(std::ofstream & out, const T & v) {
++    out.write((const char *) &v, sizeof(v));
++}
++
++template <typename T> bool get(std::ifstream & in, T & v) {
++    in.read((char *) &v, sizeof(v));
++    return (bool) in;
++}
++
++} // namespace
++
++size_t server_lmcache::payload::bytes() const {
++    size_t res = state.size();
++    for (const auto & c : checkpoints) {
++        res += c.size();
++    }
++    return res;
++}
++
++server_lmcache::server_lmcache(const common_params_lmcache & p, bool recurrent) : params(p), recurrent(recurrent) {
++    params.chunk_size      = std::max(params.chunk_size, 16);
++    params.max_checkpoints = std::max(params.max_checkpoints, 0);
++    if (params.disk_enabled && !params.disk_dir.empty()) {
++        std::error_code ec;
++        fs::create_directories(params.disk_dir, ec);
++        load_disk_index();
++        writer = std::thread(&server_lmcache::writer_loop, this);
++    }
++    LOG_INF("%s: LMCache on: chunk %d tokens, RAM %d MiB, %d checkpoints per entry, disk %s (%zu entries found, written after %d s without requests)\n",
++            __func__, params.chunk_size, params.ram_mb, params.max_checkpoints, params.disk_enabled ? params.disk_dir.c_str() : "off",
++            entries.size(), params.disk_idle_sec);
++}
++
++server_lmcache::~server_lmcache() {
++    {
++        std::lock_guard<std::mutex> lock(mutex);
++        stop = true;
++    }
++    cv.notify_all();
++    if (writer.joinable()) {
++        writer.join();
++    }
++}
++
++std::vector<uint64_t> server_lmcache::chunk_keys(const llama_tokens & tokens) const {
++    const size_t n_chunks = tokens.size() / (size_t) params.chunk_size;
++    std::vector<uint64_t> keys(n_chunks);
++    uint64_t h = FNV_OFFSET;
++    for (size_t c = 0; c < n_chunks; ++c) {
++        h = hash_tokens(tokens.data() + c*(size_t) params.chunk_size, params.chunk_size, h);
++        keys[c] = h;
++    }
++    return keys;
++}
++
++// where the server resumes when the prompt shares n_common tokens with entry e: everything shared when the entry is a whole prefix
++// (or the model can cut its state back), else the position after the latest checkpoint inside the shared part
++size_t server_lmcache::resume_point(const entry & e, size_t n_common) const {
++    if (n_common >= e.tokens.size() || !recurrent) {
++        return n_common;
++    }
++    size_t best = 0;
++    for (int32_t pos : e.ckpt_pos) {
++        if (pos >= 0 && (size_t) pos < n_common) {
++            best = std::max(best, (size_t) pos + 1);
++        }
++    }
++    return best;
++}
++
++std::string server_lmcache::path_of(uint64_t hash) const {
++    char name[32];
++    snprintf(name, sizeof(name), "%016" PRIx64 ".bin", hash);
++    return (fs::path(params.disk_dir) / name).string();
++}
++
++void server_lmcache::save(llama_context * ctx, llama_seq_id seq, const llama_tokens & tokens, const std::list<common_prompt_checkpoint> & checkpoints) {
++    const size_t n_chunks = tokens.size() / (size_t) params.chunk_size;
++    if (n_chunks == 0) {
++        return;
++    }
++    const uint64_t hash = hash_tokens(tokens.data(), tokens.size());
++    std::vector<uint64_t> keys = chunk_keys(tokens);
++    {
++        std::lock_guard<std::mutex> lock(mutex);
++        last_activity = std::chrono::steady_clock::now();
++        auto range = index.equal_range(keys.back());
++        for (auto it = range.first; it != range.second; ++it) {
++            if (it->second->hash == hash && it->second->tokens == tokens) {
++                entries.splice(entries.begin(), entries, it->second); // already stored
++                return;
++            }
++        }
++    }
++
++    auto data = std::make_shared<payload>();
++    const size_t size = llama_state_seq_get_size_ext(ctx, seq, LLAMA_STATE_SEQ_FLAGS_NONE);
++    if (size == 0) {
++        return;
++    }
++    data->state.resize(size);
++    if (llama_state_seq_get_data_ext(ctx, data->state.data(), size, seq, LLAMA_STATE_SEQ_FLAGS_NONE) != size) {
++        return;
++    }
++
++    // the checkpoints that belong to these tokens: the earliest ones (a compacted conversation keeps the start of the prompt) and the
++    // latest ones (an edited or regenerated last message)
++    std::vector<const common_prompt_checkpoint *> valid;
++    for (const auto & c : checkpoints) {
++        if (!c.empty() && c.data_dft.empty() && c.pos_max >= 0 && (size_t) c.pos_max < tokens.size()) {
++            valid.push_back(&c);
++        }
++    }
++    std::sort(valid.begin(), valid.end(), [](const auto * a, const auto * b) { return a->pos_max < b->pos_max; });
++    const size_t n_keep  = std::min(valid.size(), (size_t) params.max_checkpoints);
++    const size_t n_first = (n_keep + 1) / 2;
++    for (size_t i = 0; i < valid.size(); ++i) {
++        if (i < n_first || i >= valid.size() - (n_keep - n_first)) {
++            common_prompt_checkpoint c = *valid[i];
++            c.id_task = -1; // restored later: a checkpoint that does not load falls back to processing the prompt
++            c.data_spec.clear();
++            data->checkpoints.push_back(std::move(c));
++        }
++    }
++
++    entry e;
++    e.hash    = hash;
++    e.tokens  = tokens;
++    e.keys    = std::move(keys);
++    for (const auto & c : data->checkpoints) {
++        e.ckpt_pos.push_back(c.pos_max);
++    }
++    e.data    = data;
++    e.bytes   = data->bytes();
++    e.pending = writer.joinable();
++
++    std::lock_guard<std::mutex> lock(mutex);
++    last_activity = std::chrono::steady_clock::now();
++    entries.push_front(std::move(e));
++    for (uint64_t k : entries.front().keys) {
++        index.emplace(k, entries.begin());
++    }
++    ram_bytes += entries.front().bytes;
++    drop_earlier_turns(entries.begin());
++    evict_ram();
++    LOG_INF("%s: LMCache: saved %zu tokens, %.1f MiB (%zu checkpoints)\n", __func__, tokens.size(), size/1024.0/1024.0, data->checkpoints.size());
++}
++
++bool server_lmcache::restore(llama_context * ctx, llama_seq_id seq, const llama_tokens & prompt, size_t n_have, restored & out) {
++    if (prompt.empty()) {
++        return false;
++    }
++    const std::vector<uint64_t> keys = chunk_keys(prompt);
++    // at least one prompt token is evaluated, so at most prompt.size() - 1 can be reused
++    const size_t n_max = prompt.size() - 1;
++
++    entry best;
++    size_t best_common = 0;
++    size_t best_resume = n_have;
++    bool found = false;
++    {
++        std::lock_guard<std::mutex> lock(mutex);
++        last_activity = std::chrono::steady_clock::now();
++        std::vector<const entry *> seen;
++        // the longest shared chunk-aligned prefix first; an entry first met at c chunks shares fewer than (c + 1) chunks with the prompt
++        for (size_t c = keys.size(); c >= 1; --c) {
++            if (c*(size_t) params.chunk_size + (size_t) params.chunk_size <= best_resume) {
++                break; // nothing below can resume further
++            }
++            auto range = index.equal_range(keys[c - 1]);
++            for (auto it = range.first; it != range.second; ++it) {
++                const entry & e = *it->second;
++                if (std::find(seen.begin(), seen.end(), &e) != seen.end()) {
++                    continue;
++                }
++                seen.push_back(&e);
++                size_t n_common = 0;
++                const size_t n_cmp = std::min(e.tokens.size(), prompt.size());
++                while (n_common < n_cmp && e.tokens[n_common] == prompt[n_common]) {
++                    n_common++;
++                }
++                n_common = std::min(n_common, n_max);
++                const size_t resume = resume_point(e, n_common);
++                if (resume > best_resume || (found && resume == best_resume && n_common > best_common)) {
++                    best        = e; // a copy: the payload is shared, the writer thread may evict the entry meanwhile
++                    best_common = n_common;
++                    best_resume = resume;
++                    found       = true;
++                    entries.splice(entries.begin(), entries, it->second);
++                }
++            }
++        }
++    }
++    if (!found) {
++        return false;
++    }
++
++    payload from_disk;
++    const payload * data = best.data.get();
++    if (data == nullptr) {
++        if (!read_file(best, from_disk)) {
++            return false;
++        }
++        data = &from_disk;
++    }
++
++    llama_memory_seq_rm(llama_get_memory(ctx), seq, -1, -1);
++    if (llama_state_seq_set_data_ext(ctx, data->state.data(), data->state.size(), seq, LLAMA_STATE_SEQ_FLAGS_NONE) == 0) {
++        llama_memory_seq_rm(llama_get_memory(ctx), seq, -1, -1);
++        LOG_WRN("%s: LMCache: could not restore an entry of %zu tokens\n", __func__, best.tokens.size());
++        return false;
++    }
++    out.tokens      = best.tokens;
++    out.n_common    = best_common;
++    out.n_resume    = best_resume;
++    out.checkpoints = data->checkpoints;
++    LOG_INF("%s: LMCache: restored an entry of %zu tokens, the prompt shares %zu, resuming at %zu of %zu (%zu checkpoints)%s\n", __func__,
++            best.tokens.size(), best_common, best_resume, prompt.size(), out.checkpoints.size(), best.data ? "" : " (from disk)");
++    return true;
++}
++
++void server_lmcache::erase(entry_it it, bool remove_file) {
++    if (it->data) {
++        ram_bytes -= std::min(ram_bytes, it->bytes);
++    }
++    if (remove_file && it->on_disk) {
++        std::error_code ec;
++        fs::remove(path_of(it->hash), ec);
++    }
++    for (uint64_t k : it->keys) {
++        auto range = index.equal_range(k);
++        for (auto jt = range.first; jt != range.second; ++jt) {
++            if (jt->second == it) {
++                index.erase(jt);
++                break;
++            }
++        }
++    }
++    entries.erase(it);
++}
++
++void server_lmcache::drop_earlier_turns(entry_it newest) {
++    // the earlier turns of this conversation are the entries whose tokens start it; keep the longest (the previous turn)
++    std::vector<entry_it> earlier;
++    for (auto it = entries.begin(); it != entries.end(); ++it) {
++        if (it != newest && is_prefix(it->tokens, newest->tokens)) {
++            earlier.push_back(it);
++        }
++    }
++    std::sort(earlier.begin(), earlier.end(), [](entry_it a, entry_it b) { return a->tokens.size() > b->tokens.size(); });
++    for (size_t i = 1; i < earlier.size(); ++i) {
++        erase(earlier[i], true);
++    }
++}
++
++void server_lmcache::evict_ram() {
++    const size_t max_bytes = (size_t) std::max(params.ram_mb, 0)*1024*1024;
++    // the oldest entries give up their state: an entry that is on disk stays restorable from there, the others are dropped
++    for (auto it = entries.end(); ram_bytes > max_bytes && it != entries.begin(); ) {
++        --it;
++        if (!it->data) {
++            continue;
++        }
++        if (it->on_disk) {
++            ram_bytes -= std::min(ram_bytes, it->bytes);
++            it->data.reset();
++            it->pending = false;
++        } else {
++            auto next = std::next(it);
++            erase(it, false);
++            it = next;
++        }
++    }
++}
++
++void server_lmcache::evict_disk() {
++    if (!params.disk_enabled || params.disk_max_mb <= 0) {
++        return;
++    }
++    const uintmax_t max_bytes = (uintmax_t) params.disk_max_mb*1024*1024;
++    std::vector<std::pair<fs::file_time_type, fs::path>> files;
++    uintmax_t total = 0;
++    std::error_code ec;
++    for (const auto & f : fs::directory_iterator(params.disk_dir, ec)) {
++        if (f.is_regular_file() && f.path().extension() == ".bin") {
++            files.emplace_back(f.last_write_time(), f.path());
++            total += f.file_size();
++        }
++    }
++    std::sort(files.begin(), files.end());
++    for (const auto & [t, p] : files) {
++        if (total <= max_bytes) {
++            break;
++        }
++        const uintmax_t sz = fs::file_size(p, ec);
++        fs::remove(p, ec);
++        total -= std::min(total, sz);
++        // its entry is gone unless RAM still holds the state
++        std::lock_guard<std::mutex> lock(mutex);
++        for (auto it = entries.begin(); it != entries.end(); ++it) {
++            if (it->on_disk && path_of(it->hash) == p.string()) {
++                it->on_disk = false;
++                if (!it->data) {
++                    erase(it, false);
++                }
++                break;
++            }
++        }
++    }
++}
++
++void server_lmcache::load_disk_index() {
++    std::error_code ec;
++    for (const auto & f : fs::directory_iterator(params.disk_dir, ec)) {
++        if (!f.is_regular_file() || f.path().extension() != ".bin") {
++            continue;
++        }
++        std::ifstream in(f.path(), std::ios::binary);
++        char magic[4];
++        uint64_t n_tokens = 0, state_size = 0;
++        uint32_t n_ckpt = 0;
++        in.read(magic, 4);
++        if (!in || memcmp(magic, LMCACHE_MAGIC, 4) != 0 || !get(in, n_tokens) || !get(in, state_size) || !get(in, n_ckpt) ||
++            n_tokens == 0 || n_tokens > (1u << 26)) {
++            continue;
++        }
++        entry e;
++        e.tokens.resize(n_tokens);
++        in.read((char *) e.tokens.data(), n_tokens*sizeof(llama_token));
++        if (!in) {
++            continue;
++        }
++        e.keys = chunk_keys(e.tokens);
++        if (e.keys.empty()) {
++            continue; // written with a larger chunk size
++        }
++        // the checkpoint positions, after the state
++        in.seekg((std::streamoff) state_size, std::ios::cur);
++        for (uint32_t i = 0; i < n_ckpt && in; ++i) {
++            int64_t n = 0;
++            int32_t pmin = 0, pmax = 0;
++            uint64_t size = 0;
++            if (!get(in, n) || !get(in, pmin) || !get(in, pmax) || !get(in, size)) {
++                break;
++            }
++            e.ckpt_pos.push_back(pmax);
++            in.seekg((std::streamoff) size, std::ios::cur);
++        }
++        e.hash    = hash_tokens(e.tokens.data(), e.tokens.size());
++        e.bytes   = (size_t) f.file_size(ec);
++        e.on_disk = true;
++        entries.push_back(std::move(e));
++        for (uint64_t k : entries.back().keys) {
++            index.emplace(k, std::prev(entries.end()));
++        }
++    }
++}
++
++bool server_lmcache::write_file(const entry & e) const {
++    const std::string path = path_of(e.hash);
++    const std::string tmp  = path + ".tmp";
++    bool ok = true;
++    {
++        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
++        out.write(LMCACHE_MAGIC, 4);
++        put(out, (uint64_t) e.tokens.size());
++        put(out, (uint64_t) e.data->state.size());
++        put(out, (uint32_t) e.data->checkpoints.size());
++        out.write((const char *) e.tokens.data(), e.tokens.size()*sizeof(llama_token));
++        out.write((const char *) e.data->state.data(), e.data->state.size());
++        for (const auto & c : e.data->checkpoints) {
++            put(out, (int64_t) c.n_tokens);
++            put(out, (int32_t) c.pos_min);
++            put(out, (int32_t) c.pos_max);
++            put(out, (uint64_t) c.data_tgt.size());
++            out.write((const char *) c.data_tgt.data(), c.data_tgt.size());
++        }
++        ok = (bool) out;
++    }
++    std::error_code ec;
++    if (ok) {
++        fs::rename(tmp, path, ec);
++        ok = !ec;
++    }
++    if (!ok) {
++        fs::remove(tmp, ec);
++    }
++    return ok;
++}
++
++bool server_lmcache::read_file(const entry & e, payload & out) const {
++    std::ifstream in(path_of(e.hash), std::ios::binary);
++    char magic[4];
++    uint64_t n_tokens = 0, state_size = 0;
++    uint32_t n_ckpt = 0;
++    in.read(magic, 4);
++    if (!in || memcmp(magic, LMCACHE_MAGIC, 4) != 0 || !get(in, n_tokens) || !get(in, state_size) || !get(in, n_ckpt) ||
++        n_tokens != e.tokens.size()) {
++        return false;
++    }
++    llama_tokens tokens(n_tokens);
++    in.read((char *) tokens.data(), n_tokens*sizeof(llama_token));
++    if (!in || tokens != e.tokens) {
++        return false;
++    }
++    out.state.resize(state_size);
++    in.read((char *) out.state.data(), state_size);
++    out.checkpoints.clear();
++    for (uint32_t i = 0; i < n_ckpt && in; ++i) {
++        common_prompt_checkpoint c;
++        int64_t n = 0;
++        int32_t pmin = 0, pmax = 0;
++        uint64_t size = 0;
++        if (!get(in, n) || !get(in, pmin) || !get(in, pmax) || !get(in, size)) {
++            break;
++        }
++        c.n_tokens = n;
++        c.pos_min  = pmin;
++        c.pos_max  = pmax;
++        c.id_task  = -1;
++        c.data_tgt.resize(size);
++        in.read((char *) c.data_tgt.data(), size);
++        if (in) {
++            out.checkpoints.push_back(std::move(c));
++        }
++    }
++    return out.state.size() == state_size && !out.state.empty();
++}
++
++void server_lmcache::writer_loop() {
++    const auto idle = std::chrono::seconds(std::max(params.disk_idle_sec, 0));
++    for (;;) {
++        std::vector<entry> todo;
++        bool last = false;
++        {
++            std::unique_lock<std::mutex> lock(mutex);
++            cv.wait_for(lock, std::chrono::seconds(1), [&] { return stop; });
++            last = stop;
++            if (!last && std::chrono::steady_clock::now() - last_activity < idle) {
++                continue;
++            }
++            for (auto & e : entries) {
++                if (!e.pending || !e.data) {
++                    continue;
++                }
++                e.pending = false;
++                // an earlier turn of a conversation that a longer entry continues is not worth a write
++                const bool superseded = std::any_of(entries.begin(), entries.end(), [&](const entry & f) { return is_prefix(e.tokens, f.tokens); });
++                if (!superseded) {
++                    todo.push_back(e); // shares the payload
++                }
++            }
++        }
++        size_t n_written = 0;
++        for (const entry & e : todo) {
++            if (!write_file(e)) {
++                continue;
++            }
++            n_written++;
++            std::lock_guard<std::mutex> lock(mutex);
++            bool alive = false;
++            for (auto & x : entries) {
++                if (x.hash == e.hash && x.tokens == e.tokens) {
++                    x.on_disk = true;
++                    alive = true;
++                }
++            }
++            if (!alive) {
++                // the entry was dropped while it was written (a later turn replaced it)
++                std::error_code ec;
++                fs::remove(path_of(e.hash), ec);
++            }
++        }
++        if (n_written > 0) {
++            LOG_INF("%s: LMCache: wrote %zu entr%s to disk\n", __func__, n_written, n_written == 1 ? "y" : "ies");
++            evict_disk();
++        }
++        if (last) {
++            return;
++        }
++    }
++}
+diff --git a/tools/server/server-lmcache.h b/tools/server/server-lmcache.h
+new file mode 100644
+index 0000000..3e3f2e4
+--- /dev/null
++++ b/tools/server/server-lmcache.h
+@@ -0,0 +1,97 @@
++#pragma once
++
++#include "common.h"
++#include "llama.h"
++
++#include <chrono>
++#include <condition_variable>
++#include <cstdint>
++#include <list>
++#include <memory>
++#include <mutex>
++#include <string>
++#include <thread>
++#include <unordered_map>
++#include <vector>
++
++// LMCache: keeps the saved state of finished conversations in RAM (and optionally on disk) and restores the one that saves the most
++// prompt processing for a new prompt. Works across slots and, with the disk tier, across restarts.
++//
++// - An entry is the whole sequence state of a slot after a request (KV cache and recurrent state), the exact tokens it holds, and up to
++//   max_checkpoints of the slot's context checkpoints (the earliest and the latest).
++// - Restoring an entry puts the slot exactly where it would be had it processed the entry itself: its state, its tokens and its
++//   checkpoints. The server's own prompt-reuse logic then continues as usual: it keeps the tokens the entry shares with the new prompt
++//   and, for a model with recurrent layers, goes back to a checkpoint at or before the first difference. So an entry is used both when
++//   it is a whole prefix of the prompt and when the prompt changes inside it (a compacted conversation keeps its system prompt, an
++//   edited message), as long as the point the server can resume from is further than what the slot already has.
++// - At most two entries per conversation: a new entry drops every earlier turn of the same conversation except the previous one (that
++//   one serves a regenerated answer).
++// - Entries are indexed by a hash of every chunk-aligned prefix of their tokens; a candidate is always checked token by token.
++// - Disk tier: new entries are written only after the server has been quiet for disk_idle_sec (and at shutdown), and an entry that a
++//   longer entry of the same conversation continues is not written, so a long agent session costs one write per quiet period.
++class server_lmcache {
++public:
++    // recurrent: the model has recurrent layers (its state cannot be cut back; only a checkpoint brings it back to an earlier position)
++    server_lmcache(const common_params_lmcache & params, bool recurrent);
++    ~server_lmcache();
++
++    // store the state of sequence seq of ctx, which holds exactly these tokens, with the slot's checkpoints
++    void save(llama_context * ctx, llama_seq_id seq, const llama_tokens & tokens, const std::list<common_prompt_checkpoint> & checkpoints);
++
++    struct restored {
++        llama_tokens tokens;                             // the tokens the slot now holds (the whole entry)
++        size_t       n_common = 0;                       // of them, the ones the prompt starts with (the server's n_past)
++        size_t       n_resume = 0;                       // where the server will resume (n_common, or a checkpoint before it)
++        std::list<common_prompt_checkpoint> checkpoints; // the entry's checkpoints
++    };
++
++    // restore into sequence seq of ctx the entry from which the prompt can resume furthest, if that is beyond n_have (what the slot can
++    // already reuse); returns false if none (the sequence is then untouched)
++    bool restore(llama_context * ctx, llama_seq_id seq, const llama_tokens & prompt, size_t n_have, restored & out);
++
++private:
++    struct payload {
++        std::vector<uint8_t> state;
++        std::list<common_prompt_checkpoint> checkpoints;
++
++        size_t bytes() const;
++    };
++
++    struct entry {
++        uint64_t hash = 0; // hash of all tokens, also the disk file name
++        llama_tokens tokens;
++        std::vector<uint64_t> keys;      // hash of every chunk-aligned prefix, keys[c - 1] for c chunks
++        std::vector<int32_t> ckpt_pos;   // pos_max of its checkpoints, also when only on disk
++        std::shared_ptr<payload> data; // null when only on disk
++        size_t bytes = 0;              // RAM it takes when in RAM
++        bool on_disk = false;          // a file holds it
++        bool pending = false;          // to be written at the next quiet period
++    };
++    using entry_it = std::list<entry>::iterator;
++
++    common_params_lmcache params;
++    bool recurrent = false;
++
++    std::mutex mutex;
++    std::list<entry> entries; // most recently used first
++    std::unordered_multimap<uint64_t, entry_it> index; // every chunk key of every entry
++    size_t ram_bytes = 0;
++
++    // disk tier: one writer thread
++    std::thread writer;
++    std::condition_variable cv;
++    bool stop = false;
++    std::chrono::steady_clock::time_point last_activity = std::chrono::steady_clock::now();
++
++    std::vector<uint64_t> chunk_keys(const llama_tokens & tokens) const;
++    size_t resume_point(const entry & e, size_t n_common) const;
++    void erase(entry_it it, bool remove_file);
++    void drop_earlier_turns(entry_it newest);
++    void evict_ram();
++    void evict_disk();
++    void load_disk_index();
++    std::string path_of(uint64_t hash) const;
++    bool write_file(const entry & e) const;
++    bool read_file(const entry & e, payload & out) const;
++    void writer_loop();
++};

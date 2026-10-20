@@ -5,7 +5,7 @@
   "cases": [
     {"label": "baseline"},
     {"label": "long_prompts", "pad": 160, "prompts": 3, "n_predict": 64},
-    {"label": "cache_cpu_miss", "sets": ["n_cpu_moe=99", "moe_cache_mib=4000", "moe_cache_cpu_miss=true"]},
+    {"label": "moe_hybrid", "sets": ["moe_hybrid=true"]},
     {"label": "pinned_weights", "extra": "--load-mode none", "env": {"GGML_CUDA_REGISTER_HOST": "1"}},
     {"label": "dense_model", "model": "qwen3.8-27b", "ctx": 80000, "extra": "-ub 512"}
   ]

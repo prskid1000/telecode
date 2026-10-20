@@ -127,7 +127,7 @@
     "custom_build": {
       "source_dir": "",
       "_comment_source_dir": "Empty = ~/Projects/llama.cpp. A checkout is several GB of upstream source, so it defaults outside the settings dir. Every Build Patched hard-resets this tree to the target tag - keep nothing of your own in it.",
-      "tag": "",
+      "tag": "b11731",
       "cuda": true
     },
     "host": "127.0.0.1",
@@ -214,18 +214,15 @@
     "slot_save_path": "",
 
     "_comment_lmcache":
-      "LMCache (patched build): hardware-accelerated chunked KV cache reuse and non-prefix CacheBlend prefill acceleration. Bypasses prompt prefill whenever tokens match previous prompt chunks across RAM and fast NVMe storage.",
+      "LMCache (patched build): keep finished conversations and continue new prompts from them, across slots and restarts.",
     "lmcache": false,
     "lmcache_chunk_size": 256,
-    "lmcache_ram_mb": 16384,
+    "lmcache_ram_mb": 8192,
+    "lmcache_checkpoints": 4,
     "lmcache_disk": false,
     "lmcache_disk_dir": "./data/lmcache",
-    "lmcache_disk_max_mb": 16384,
-    "lmcache_blend": false,
-    "lmcache_blend_recompute": 0.15,
-    "lmcache_blend_min_tokens": 128,
-    "lmcache_compress": "q4_0",
-    "lmcache_async_save": true,
+    "lmcache_disk_max_mb": 65536,
+    "lmcache_disk_idle_sec": 30,
 
     "_comment_spec_type":
       "spec_type accepts a comma-separated list (v9243+). Values: none, draft-simple, draft-eagle3, draft-mtp, ngram-simple, ngram-map-k, ngram-map-k4v, ngram-mod, ngram-cache. Set spec_default=true instead to let the server auto-pick based on model heads.",
@@ -265,6 +262,12 @@
 
         "n_cpu_moe": 0,
         "cpu_moe": false,
+        "moe_hybrid": false,
+        "moe_hybrid_auto": true,
+        "moe_hybrid_mib": 0,
+        "moe_hybrid_max_tokens": 16,
+        "moe_hybrid_swap_every": 32,
+        "moe_hybrid_swap_max": 8,
 
         "rope_scaling": "",
         "rope_freq_base": 0,
