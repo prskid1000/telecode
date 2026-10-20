@@ -2,20 +2,23 @@ Title: MoE hybrid mode (Strata-style): resident experts on the GPU, missed exper
 Add-on: replaces 0002 (ggml), 0003 (cache modes) and 0004 (draft KV). Off by default; stock behaviour is unchanged without the flags.
   --moe-hybrid-mib N          GPU memory for expert slots; every layer whose experts are in host memory (--cpu-moe / --n-cpu-moe) keeps
                               the same number of its most used experts on the GPU (CUDA / ROCm only)
-  --moe-hybrid-max-tokens N   largest batch (1..31, default 16) that uses the hybrid form; larger batches (prompts) copy experts as before
-  --moe-hybrid-swap-every N   generated tokens between two rebalances (default 32)
-  --moe-hybrid-swap-max N     experts moved per rebalance while generating (default 8); after a prompt (32+ tokens) up to 2048
+  --moe-hybrid-max-tokens N   largest batch (1..64, default 64) that uses the hybrid form; larger batches (prompts) copy experts as before
+  --moe-hybrid-swap-every N   generated tokens between two rebalances (default 16)
+  --moe-hybrid-swap-max N     experts moved per rebalance while generating (default 32); after a prompt (64+ tokens) up to 2048
+  --moe-hybrid-skip-weight F  skip CPU execution of experts whose router weight < F (default 0.05)
+  --moe-hybrid-tail-skip N    skip CPU execution of experts whose rank >= N (default 5)
 How a small batch runs (per MoE layer): the GPU looks up each selected expert in a slot table kept on the GPU and computes the resident ones;
 the CPU computes the others from the host copy at the same time (the scheduler copies the ids and activations to the host right after the
 router, with an event, instead of waiting for the whole GPU split); the two results are summed on the GPU. The Qwen3.5/3.6 MoE shared expert
-is computed by the GPU while the CPU works. Experts move only between graph computes, by routing counts halved at each rebalance; swaps are
-chosen by score gain over all layers and copied asynchronously. Prompt batches copy the host experts to the GPU as before, but the ones with a
-slot are copied from GPU memory; their routing is counted in the copy callback. Lossless: same experts, same weights.
+is computed by the GPU while the CPU works. Experts move only between graph computes, by routing counts decayed by 0.7 at each rebalance; swaps are
+chosen by additive score gain (cand >= victim + 1.5, floor 2.0) over all layers and copied asynchronously with lag-1 event completion.
+Prompt batches copy the host experts to the GPU as before, but the ones with a slot are copied from GPU memory; their routing is counted in the copy callback.
 ggml pieces: mul_mat_id skips ids < 0 and leaves zero rows (CPU, CUDA; fused paths disabled for them); ggml_backend_event_query (aborts on a
-device fault); ggml_backend_sched_set_early_cpu_inputs (bounded, skipped with GGML_CUDA_GRAPH_OPT, keeps CUDA graph reuse via stable uids).
+device fault); ggml_backend_sched_set_early_cpu_inputs (bounded, skipped with GGML_CUDA_GRAPH_OPT, keeps CUDA graph reuse via stable uids);
+WDDM hit poke via event query on Windows forcing immediate concurrent GPU submission before CPU drain; Blackwell sm_120 MMVQ tuning.
 
 diff --git a/common/arg.cpp b/common/arg.cpp
-index 8b302d5d7..ada751d72 100644
+index 8b302d5d7..58bd7ad11 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
 @@ -1724,6 +1724,106 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
@@ -143,9 +146,9 @@ index 8b302d5d7..ada751d72 100644
 +    ).set_env("LLAMA_ARG_MOE_HYBRID_MIB"));
 +    add_opt(common_arg(
 +        {"--moe-hybrid-max-tokens"}, "N",
-+        string_format("MoE hybrid mode: largest batch that uses it, 1..31; larger batches stream the experts to the GPU (default: %d)", params.moe_hybrid_max_tokens),
++        string_format("MoE hybrid mode: largest batch that uses it, 1..64; larger batches stream the experts to the GPU (default: %d)", params.moe_hybrid_max_tokens),
 +        [](common_params & params, int value) {
-+            if (value < 1 || value > 31) {
++            if (value < 1 || value > 64) {
 +                throw std::invalid_argument("invalid value");
 +            }
 +            params.moe_hybrid_max_tokens = value;
@@ -324,7 +327,7 @@ index dc7367dec..4227a946e 100644
  
      struct ggml_backend_device {
 diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
-index ffbcba366..5ca39f93b 100644
+index ffbcba366..8853aa611 100644
 --- a/ggml/src/ggml-backend.cpp
 +++ b/ggml/src/ggml-backend.cpp
 @@ -693,6 +693,14 @@ void ggml_backend_event_record(ggml_backend_event_t event, ggml_backend_t backen
@@ -353,7 +356,7 @@ index ffbcba366..5ca39f93b 100644
  };
  
  struct ggml_backend_sched {
-@@ -977,6 +989,15 @@ struct ggml_backend_sched {
+@@ -977,6 +989,19 @@ struct ggml_backend_sched {
  
      bool op_offload;
  
@@ -366,10 +369,14 @@ index ffbcba366..5ca39f93b 100644
 +    ggml_backend_event_t early_wait; // recorded after those copies
 +    int n_early_last;                // last node of the split that produces one of them
 +
++    // Strata Hit Poke: force GPU submission before CPU compute on Windows / WDDM
++    ggml_backend_event_t poke_events[GGML_SCHED_MAX_BACKENDS];
++    bool poke_tried[GGML_SCHED_MAX_BACKENDS];
++
      int debug;
  
      // graph size of the current and the previous scheduling, used by the realloc callback and for debugging
-@@ -1749,6 +1770,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
+@@ -1749,6 +1774,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
      // set ids for all splits
      for (int i = 0; i < sched->n_splits; ++i) {
          sched->splits[i].graph.uid = ggml_graph_next_uid();
@@ -377,7 +384,7 @@ index ffbcba366..5ca39f93b 100644
      }
  }
  
-@@ -1862,17 +1884,104 @@ static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggm
+@@ -1862,17 +1888,104 @@ static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggm
      }
  }
  
@@ -482,7 +489,7 @@ index ffbcba366..5ca39f93b 100644
          // ensure the previous split's async work has completed before we start
          // this split, the allocator may have reused buffer regions across splits
          if (split->n_inputs == 0 && prev_backend_id >= 0 && prev_backend_id != split_backend_id) {
-@@ -1886,17 +1995,52 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
+@@ -1886,21 +1999,84 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
          // copy the input tensors to the split backend
          // the weights in host memory are copied last, so that the copy callback can read the other inputs of the split
          for (int input_id = 0; input_id < split->n_inputs; input_id++) {
@@ -537,17 +544,87 @@ index ffbcba366..5ca39f93b 100644
              enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
              if (ec != GGML_STATUS_SUCCESS) {
                  return ec;
-@@ -2026,6 +2170,9 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
+             }
++        }
++
++        // Strata breakthrough: Hit Poke on Windows / WDDM
++        // When a GPU split is followed by a CPU split, force WDDM to submit the GPU command buffer
++        // immediately via an event record + query. Without this, WDDM defers the GPU commands in host memory
++        // while the CPU thread executes, killing parallelism between GPU hits and CPU misses.
++        if (split_id + 1 < sched->n_splits && split_backend_id >= 0 && split_backend_id < GGML_SCHED_MAX_BACKENDS) {
++            struct ggml_backend_sched_split * next = &splits[split_id + 1];
++            if (next->backend_id >= 0 && next->backend_id < sched->n_backends) {
++                ggml_backend_t next_backend = sched->backends[next->backend_id];
++                ggml_backend_dev_t split_dev = ggml_backend_get_device(split_backend);
++                ggml_backend_dev_t next_dev  = ggml_backend_get_device(next_backend);
++                if (split_dev != NULL && next_dev != NULL &&
++                    ggml_backend_dev_type(split_dev) != GGML_BACKEND_DEVICE_TYPE_CPU &&
++                    ggml_backend_dev_type(next_dev)  == GGML_BACKEND_DEVICE_TYPE_CPU &&
++                    split_backend->iface.event_record != NULL &&
++                    split_dev->iface.event_new != NULL &&
++                    split_dev->iface.event_query != NULL) {
++                    if (sched->poke_events[split_backend_id] == NULL && !sched->poke_tried[split_backend_id]) {
++                        sched->poke_tried[split_backend_id] = true;
++                        sched->poke_events[split_backend_id] = ggml_backend_event_new(split_dev);
++                    }
++                    if (sched->poke_events[split_backend_id] != NULL) {
++                        ggml_backend_event_record(sched->poke_events[split_backend_id], split_backend);
++                        (void) ggml_backend_event_query(sched->poke_events[split_backend_id]); // WDDM hardware flush
++                    }
++                }
++            }
+         } else {
+             // similar to ggml_backend_compare_graph_backend
+             for (int j0 = 0; j0 < split->graph.n_nodes; j0++) {
+@@ -1935,6 +2111,34 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
+             }
+         }
+ 
++        // Strata breakthrough: Hit Poke on Windows / WDDM
++        // When a GPU split is followed by a CPU split, force WDDM to submit the GPU command buffer
++        // immediately via an event record + query. Without this, WDDM defers the GPU commands in host memory
++        // while the CPU thread executes, killing parallelism between GPU hits and CPU misses.
++        if (split_id + 1 < sched->n_splits && split_backend_id >= 0 && split_backend_id < GGML_SCHED_MAX_BACKENDS) {
++            struct ggml_backend_sched_split * next = &splits[split_id + 1];
++            if (next->backend_id >= 0 && next->backend_id < sched->n_backends) {
++                ggml_backend_t next_backend = sched->backends[next->backend_id];
++                ggml_backend_dev_t split_dev = ggml_backend_get_device(split_backend);
++                ggml_backend_dev_t next_dev  = ggml_backend_get_device(next_backend);
++                if (split_dev != NULL && next_dev != NULL &&
++                    ggml_backend_dev_type(split_dev) != GGML_BACKEND_DEVICE_TYPE_CPU &&
++                    ggml_backend_dev_type(next_dev)  == GGML_BACKEND_DEVICE_TYPE_CPU &&
++                    split_backend->iface.event_record != NULL &&
++                    split_dev->iface.event_new != NULL &&
++                    split_dev->iface.event_query != NULL) {
++                    if (sched->poke_events[split_backend_id] == NULL && !sched->poke_tried[split_backend_id]) {
++                        sched->poke_tried[split_backend_id] = true;
++                        sched->poke_events[split_backend_id] = ggml_backend_event_new(split_dev);
++                    }
++                    if (sched->poke_events[split_backend_id] != NULL) {
++                        ggml_backend_event_record(sched->poke_events[split_backend_id], split_backend);
++                        (void) ggml_backend_event_query(sched->poke_events[split_backend_id]); // WDDM hardware flush
++                    }
++                }
++            }
++        }
++
+         // record the event of this split
+         if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+             ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy], split_backend);
+@@ -2026,6 +2230,12 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
          for (int c = 0; c < sched->n_copies; c++) {
              ggml_backend_event_free(sched->events[b][c]);
          }
 +        if (sched->early_events[b] != NULL) {
 +            ggml_backend_event_free(sched->early_events[b]);
 +        }
++        if (sched->poke_events[b] != NULL) {
++            ggml_backend_event_free(sched->poke_events[b]);
++        }
      }
      ggml_gallocr_free(sched->galloc);
      ggml_free(sched->ctx);
-@@ -2155,6 +2302,11 @@ void ggml_backend_sched_set_copy_callback(ggml_backend_sched_t sched, ggml_backe
+@@ -2155,6 +2365,11 @@ void ggml_backend_sched_set_copy_callback(ggml_backend_sched_t sched, ggml_backe
      sched->callback_copy_user_data = user_data;
  }
  
@@ -805,9 +882,27 @@ index 74c2db433..cad378bf6 100644
          const int32_t * ids, int32_t * ids_src1, int32_t * ids_dst, int32_t * expert_bounds,
          int n_experts, int n_tokens, int n_expert_used, int nchannels_y, int si1, int sis1, bool write_inverse, cudaStream_t stream);
 diff --git a/ggml/src/ggml-cuda/mmvq.cu b/ggml/src/ggml-cuda/mmvq.cu
-index 930f1adc4..61735d430 100644
+index 930f1adc4..53c5ef64d 100644
 --- a/ggml/src/ggml-cuda/mmvq.cu
 +++ b/ggml/src/ggml-cuda/mmvq.cu
+@@ -114,7 +114,7 @@ static constexpr __device__ mmvq_parameter_table_id get_device_table_id() {
+     return MMVQ_PARAMETERS_GCN;
+ #elif __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA && __CUDA_ARCH__ < GGML_CUDA_CC_AMPERE
+     return MMVQ_PARAMETERS_TURING;
+-#elif __CUDA_ARCH__ == GGML_CUDA_CC_DGX_SPARK
++#elif __CUDA_ARCH__ >= GGML_CUDA_CC_BLACKWELL
+     return MMVQ_PARAMETERS_GB10;
+ #else
+     return MMVQ_PARAMETERS_GENERIC;
+@@ -137,7 +137,7 @@ static __host__ mmvq_parameter_table_id get_device_table_id(int cc) {
+     if (GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA && ggml_cuda_highest_compiled_arch(cc) < GGML_CUDA_CC_AMPERE) {
+         return MMVQ_PARAMETERS_TURING;
+     }
+-    if (GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) == GGML_CUDA_CC_DGX_SPARK) {
++    if (GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_BLACKWELL) {
+         return MMVQ_PARAMETERS_GB10;
+     }
+     return MMVQ_PARAMETERS_GENERIC;
 @@ -664,6 +664,16 @@ static __global__ void mul_mat_vec_q(
      channel_y  = ncols_dst == 1 && ids ? fastmodulo(channel_dst, nchannels_y) : channel_dst;
      sample_dst = blockIdx.z;
@@ -1315,9 +1410,10 @@ index fdbb2c63d..eb3f70930 100644
      } else {
 diff --git a/src/llama-moe-hybrid.cpp b/src/llama-moe-hybrid.cpp
 new file mode 100644
+index 000000000..73db3f6d3
 --- /dev/null
 +++ b/src/llama-moe-hybrid.cpp
-@@ -0,0 +1,455 @@
+@@ -0,0 +1,480 @@
 +#include "llama-moe-hybrid.h"
 +
 +#include "llama-impl.h"
@@ -1385,10 +1481,11 @@ new file mode 100644
 +    int64_t since = 0;
 +    size_t n_swaps = 0;
 +    size_t n_rebalance = 0;
++    ggml_backend_event_t swap_event = nullptr;
 +
 +    impl(const llama_model & model, ggml_backend_t backend, ggml_backend_buffer_type_t buft, const llama_moe_hybrid_params & p) :
 +            params(p), backend(backend), buft(buft) {
-+        params.max_tokens = std::clamp(params.max_tokens, 1, 31); // from 32 tokens the scheduler offloads host experts to the device
++        params.max_tokens = std::clamp(params.max_tokens, 1, 64); // short prompts <= 64 tokens run via hybrid decode window
 +        params.swap_every = std::max(params.swap_every, 1);
 +        params.swap_max   = std::max(params.swap_max, 0);
 +        no_alloc = model.hparams.no_alloc;
@@ -1529,6 +1626,9 @@ new file mode 100644
 +    }
 +
 +    ~impl() {
++        if (swap_event != nullptr) {
++            ggml_backend_event_free(swap_event);
++        }
 +        if (n_rebalance > 0) {
 +            LLAMA_LOG_INFO("llama_moe_hybrid: %zu rebalances moved %zu experts\n", n_rebalance, n_swaps);
 +        }
@@ -1573,9 +1673,13 @@ new file mode 100644
 +                    continue;
 +                }
 +                const int32_t s = victims[vi];
++                // Strata Breakthrough #3: Candidate floor (2.0) and Additive Swap Margin (1.5)
++                if (l.score[x] < 2.0) {
++                    break; // candidate floor: do not swap for sporadic 1-time routed noise
++                }
 +                const double gain = l.score[x] - l.score[l.exp_in_slot[s]];
-+                if (gain <= 0.0) {
-+                    break; // the newcomer must beat the expert it replaces
++                if (gain < 1.5) {
++                    break; // additive margin: must beat victim by at least 1.5 routed weight
 +                }
 +                cand.push_back({ gain, l.il, x, s });
 +                vi++;
@@ -1587,8 +1691,19 @@ new file mode 100644
 +        }
 +
 +        if (!cand.empty()) {
-+            // the device may still read the slots
-+            ggml_backend_synchronize(backend);
++            if (swap_event == nullptr) {
++                ggml_backend_dev_t dev = ggml_backend_get_device(backend);
++                if (dev != nullptr) {
++                    swap_event = ggml_backend_event_new(dev);
++                }
++            }
++            if (swap_event != nullptr) {
++                if (!ggml_backend_event_query(swap_event)) {
++                    ggml_backend_event_synchronize(swap_event);
++                }
++            } else {
++                ggml_backend_synchronize(backend);
++            }
 +        }
 +        std::vector<char> dirty(layers.size(), 0);
 +        for (const swap & c : cand) {
@@ -1612,13 +1727,19 @@ new file mode 100644
 +                ggml_backend_tensor_set_async(backend, l.slot_tab, l.slot_of.data(), 0, l.slot_of.size()*sizeof(int32_t));
 +            }
 +            if (!cand.empty()) {
++                // Strata Breakthrough #3: 0.7 exponential decay per round preserves routing stability
 +                for (double & v : l.score) {
-+                    v *= 0.5;
++                    v *= 0.7;
 +                }
 +            }
 +        }
 +        if (!cand.empty()) {
-+            ggml_backend_synchronize(backend); // the host mirror (slot_of) is the source of the table copies
++            // Strata Breakthrough #4: Async promotion with lag-1 event instead of blocking host thread
++            if (swap_event != nullptr) {
++                ggml_backend_event_record(swap_event, backend);
++            } else {
++                ggml_backend_synchronize(backend);
++            }
 +        }
 +        n_swaps += cand.size();
 +        n_rebalance++;
@@ -1775,6 +1896,7 @@ new file mode 100644
 +}
 diff --git a/src/llama-moe-hybrid.h b/src/llama-moe-hybrid.h
 new file mode 100644
+index 000000000..8a670b455
 --- /dev/null
 +++ b/src/llama-moe-hybrid.h
 @@ -0,0 +1,71 @@
@@ -1798,13 +1920,13 @@ new file mode 100644
 +//    by routing counts that are halved at each move
 +struct llama_moe_hybrid_params {
 +    size_t  size        = 0;     // device memory for the slots in bytes, 0 = off
-+    int32_t max_tokens  = 16;    // largest batch that runs in the hybrid form (1..31), larger batches use the normal path
++    int32_t max_tokens  = 64;    // largest batch that runs in the hybrid form (1..64), larger batches use the normal path
 +    int32_t swap_every  = 16;    // generated tokens between two rebalances (default: 16)
 +    int32_t swap_max    = 32;    // experts moved per rebalance while generating (default: 32)
 +    int32_t swap_prompt = 2048;  // experts moved by the rebalance after a prompt
-+    int32_t prompt_min  = 32;    // a batch of at least this many tokens is a prompt (it triggers the rebalance after a prompt)
-+    float   skip_weight = 0.04f; // skip CPU execution of experts whose router weight < skip_weight (0 = off, default: 0.04)
-+    int32_t tail_skip   = 6;     // skip CPU execution of experts whose rank >= tail_skip (0 = off, default: 6)
++    int32_t prompt_min  = 64;    // a batch of at least this many tokens is a prompt (it triggers the rebalance after a prompt)
++    float   skip_weight = 0.05f; // skip CPU execution of experts whose router weight < skip_weight (default: 0.05)
++    int32_t tail_skip   = 5;     // skip CPU execution of experts whose rank >= tail_skip (default: 5)
 +};
 +
 +class llama_moe_hybrid {
