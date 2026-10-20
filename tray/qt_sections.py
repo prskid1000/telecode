@@ -5646,12 +5646,12 @@ def _models(window) -> QWidget:
             [f"{p}.mmproj"], _has_mmproj))
 
         _sl = _sec("Capacity",
-                    "llamacpp.models.<m>.* — context window and layer placement")
+                    "llamacpp.models.<m>.* — context window, batching, and layer placement")
         _sl.addWidget(_number_row(f"{p}.ctx_size",     "Context Size",       512, 1048576, 256, 0, "tok"))
-        _sl.addWidget(_number_row(f"{p}.ctx_size_spec", "Context With Speculative Decoding", 0, 1048576, 256, 0, "tok",
-                                           "Context size used instead while speculative decoding is on (MTP / draft model / ngram). "
-                                           "The draft context needs extra VRAM, so a model that just fits without it needs a smaller window. "
-                                           "0 = same as Context Size."))
+        _sl.addWidget(_number_row(f"{p}.batch_size",   "Batch Size",         0,   8192,    32,  0, "tok",
+                                  "--batch-size: logical batch size for this model. 0 = use server default."))
+        _sl.addWidget(_number_row(f"{p}.ubatch_size",  "Micro-Batch Size",   0,   8192,    32,  0, "tok",
+                                  "--ubatch-size: physical sub-batch for this model. 0 = use server default."))
         # n_gpu_layers is greyed when fit is on — the auto-fitter aborts if it
         # sees a user-pinned ngl, so argv.build_argv() suppresses --n-gpu-layers
         # in that case. This dependency mirrors that suppression in the UI.
@@ -5832,7 +5832,10 @@ def _models(window) -> QWidget:
             [f"{p}.rope_scaling"], _yarn_active))
 
         _sl = _sec("Draft Model (Speculative)",
-                    "--spec-* / --draft-* — a small draft model proposes tokens the main model verifies")
+                    "--spec-* / --draft-* — speculative decoding algorithm & draft tuning for this model")
+        _sl.addWidget(_spec_type_multi_row(f"{p}.spec_type", "Spec Type"))
+        _sl.addWidget(_toggle_row(f"{p}.spec_default", "Spec Default (auto-pick)",
+                                  "--spec-default: let llama-server auto-pick a working spec config for this model (e.g. enables draft-mtp automatically if model has MTP heads)."))
         _sl.addWidget(_line_row(f"{p}.draft_model", "Draft Model (GGUF)",
                                          "D:/models/draft-0.6b.gguf",
                                          "--model-draft: separate small LM for draft tokens. "
@@ -5840,8 +5843,8 @@ def _models(window) -> QWidget:
                                          "or Spec Type=draft-mtp to use the main model's MTP heads."))
         # Draft knobs are active when either: a draft GGUF is set, OR a draft-*
         # spec strategy is active (draft-mtp uses model's own heads, no draft GGUF).
-        _draft_knobs_active = lambda dm, st: bool(str(dm or "").strip()) or _has_spec(st, "draft-simple", "draft-eagle3", "draft-mtp")
-        _draft_paths = [f"{p}.draft_model", "llamacpp.spec_type"]
+        _draft_knobs_active = lambda dm, mst, gst: bool(str(dm or "").strip()) or _has_spec(mst or gst, "draft-simple", "draft-eagle3", "draft-mtp")
+        _draft_paths = [f"{p}.draft_model", f"{p}.spec_type", "llamacpp.spec_type"]
         _sl.addWidget(_dependent(
             _number_row(f"{p}.n_gpu_layers_draft", "Draft GPU Layers", 0, 200, 1, 0, "",
                          "--n-gpu-layers-draft / -ngld: layers of the draft model on GPU."),
@@ -5885,18 +5888,43 @@ def _models(window) -> QWidget:
                          "--spec-draft-p-split: speculative decoding split probability (default 0.10)."),
             _draft_paths, _draft_knobs_active))
         _sl.addWidget(_dependent(
+            _number_row(f"{p}.spec_draft_head_subset", "Draft Head Subset", 0, 152064, 256, 0, "rows",
+                         "--spec-draft-head-subset: GPU-resident draft vocabulary rows (Patch 0004). 32768 rows = ~90 MiB VRAM for 0.15ms GPU drafts."),
+            _draft_paths, _draft_knobs_active))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.spec_draft_n_ubatch", "Draft Micro-Batch", 0, 8192, 64, 0, "tok",
+                         "--spec-draft-n-ubatch: draft micro-batch size. 0 = same as main ubatch."),
+            _draft_paths, _draft_knobs_active))
+        _sl.addWidget(_dependent(
             _line_row(f"{p}.spec_draft_override_tensor", "Draft Tensor Override",
                        "blk\\.[0-9]+\\.ffn_.*=CPU",
                        "--spec-draft-override-tensor: per-tensor buffer override for the draft model. Pattern=buffer (regex)."),
             _draft_paths, _draft_knobs_active))
+        _sl.addWidget(_dependent(
+            _enum_row_strs(f"{p}.spec_draft_sampling", "Draft Sampling",
+                           [("Default", ""), ("greedy", "greedy"), ("probabilistic", "probabilistic")],
+                           "--spec-draft-sampling: how the draft is sampled. Empty = server default."),
+            _draft_paths, _draft_knobs_active))
+        _sl.addWidget(_dependent(
+            _line_row(f"{p}.spec_draft_cpu_mask", "Draft CPU Mask", "hex -- empty = default",
+                       "--spec-draft-cpu-mask: affinity mask for the draft model threads."),
+            _draft_paths, _draft_knobs_active))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.spec_draft_prio", "Draft Priority", 0, 3, 1, 0, "",
+                         "--spec-draft-prio: draft thread priority. 0=normal, 1=med, 2=high, 3=realtime."),
+            _draft_paths, _draft_knobs_active))
+        _sl.addWidget(_dependent(
+            _toggle_row(f"{p}.spec_draft_poll", "Draft Polling",
+                         "--spec-draft-poll <0|1>: busy-poll for draft work."),
+            _draft_paths, _draft_knobs_active))
         # Lookup caches only matter for spec_type=ngram-cache.
-        _ngram_cache_active = lambda st: _has_spec(st, "ngram-cache")
+        _ngram_cache_active = lambda mst, gst: _has_spec(mst or gst, "ngram-cache")
         _sl.addWidget(_dependent(
             _line_row(f"{p}.lookup_cache_static", "Lookup Cache (static)",
                        "./data/lookup-static.bin",
                        "--lookup-cache-static. Only used when Spec Type = ngram-cache. "
                        "Precomputed via llama-lookup-create; read-only at runtime."),
-            ["llamacpp.spec_type"], _ngram_cache_active))
+            [f"{p}.spec_type", "llamacpp.spec_type"], _ngram_cache_active))
         _sl.addWidget(_dependent(
             _line_row(f"{p}.lookup_cache_dynamic", "Lookup Cache (dynamic)",
                        "./data/lookup-dyn.bin",

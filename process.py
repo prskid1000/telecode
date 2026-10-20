@@ -697,7 +697,7 @@ class LlamaSupervisor:
                         f"llama-server not started for '{model_name}': it plans {plan['total']} MiB of GPU memory (model, KV cache of every slot and compute buffers "
                         f"{plan['target']} MiB, draft / MTP context {plan['draft']} MiB, vision projector {plan['mmproj']} MiB), the CUDA runtime needs about {overhead} MiB "
                         f"and other programs already use {base} MiB: {needed} MiB, above llamacpp.vram_ceiling_mib ({ceiling} MiB). Lower the context "
-                        f"(ctx_size, ctx_size_spec), the number of parallel slots, the micro-batch (ubatch_size) or the draft depth, or raise the ceiling.")
+                        f"(ctx_size), the number of parallel slots, the micro-batch (ubatch_size) or the draft depth, or raise the ceiling.")
 
         log_path = cfg.log_file()
         self._log_fp = open(log_path, "ab", buffering=0)

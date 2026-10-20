@@ -330,6 +330,7 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("ctx_size",      "--ctx-size",        "value"),
     ("n_gpu_layers",  "--n-gpu-layers",    "value"),
     ("device",        "--device",          "value"),
+    ("batch_size",    "--batch-size",      "value_nz"),
 
     # Attention
     ("flash_attn",    "--flash-attn",      "value"),
@@ -401,6 +402,20 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("draft_p_min",                 "--spec-draft-p-min",             "value"),
     ("draft_p_split",               "--spec-draft-p-split",           "value_nz"),
     ("spec_draft_override_tensor",  "--spec-draft-override-tensor",   "value"),
+    ("spec_draft_sampling",         "--spec-draft-sampling",          "value"),
+    ("spec_draft_backend_sampling",
+     ("--spec-draft-backend-sampling", "--no-spec-draft-backend-sampling"), "bool_pair"),
+    ("threads_draft",               "--threads-draft",                "value_nz"),
+    ("threads_batch_draft",         "--threads-batch-draft",          "value_nz"),
+    ("spec_draft_cpu_mask",         "--spec-draft-cpu-mask",          "value"),
+    ("spec_draft_cpu_range",        "--spec-draft-cpu-range",         "value"),
+    ("spec_draft_cpu_strict",       "--spec-draft-cpu-strict",        "value"),
+    ("spec_draft_prio",             "--spec-draft-prio",              "value"),
+    ("spec_draft_poll",             "--spec-draft-poll",              "value"),
+    ("spec_draft_cpu_mask_batch",   "--spec-draft-cpu-mask-batch",    "value"),
+    ("spec_draft_cpu_strict_batch", "--spec-draft-cpu-strict-batch",  "value"),
+    ("spec_draft_prio_batch",       "--spec-draft-prio-batch",        "value"),
+    ("spec_draft_poll_batch",       "--spec-draft-poll-batch",        "value"),
 
     # N-gram lookup cache (only active when spec_type=ngram-cache; server
     # does not implement save, so dynamic file is never written — load only)
@@ -578,6 +593,8 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
     gcfg = app_config.get_nested("llamacpp", {}) or {}
     if "spec_type" in mcfg:
         gcfg = {**gcfg, "spec_type": mcfg["spec_type"]}
+    if "spec_default" in mcfg:
+        gcfg = {**gcfg, "spec_default": mcfg["spec_default"]}
 
     argv: list[str] = [cfg.binary()]
 
@@ -624,11 +641,14 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
     _emit_spec_type(argv, gcfg)
     _emit_spec_ngram(argv, gcfg)
 
-    # ctx_size_spec lowers the window while speculative decoding runs (draft context VRAM).
+    # Context sizing
     mcfg = dict(mcfg)
-    eff_ctx = cfg.effective_ctx_size(resolved)
-    if eff_ctx > 0:
-        mcfg["ctx_size"] = eff_ctx
+    if overrides and "ctx_size" in overrides:
+        mcfg["ctx_size"] = overrides["ctx_size"]
+    else:
+        eff_ctx = cfg.effective_ctx_size(resolved)
+        if eff_ctx > 0:
+            mcfg["ctx_size"] = eff_ctx
 
     # Per-model flags. When fit is on, suppress n_gpu_layers / n_gpu_layers_draft —
     # llama-server's auto-fitter aborts the moment it sees a user-pinned ngl

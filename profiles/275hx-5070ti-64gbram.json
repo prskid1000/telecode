@@ -159,7 +159,9 @@
         "moe_hybrid_skip_weight": 0.05,
         "moe_hybrid_tail_skip": 5,
         "vram_budget_mib": 11400,
-        "ubatch_size": 4096
+        "ubatch_size": 4096,
+        "batch_size": 4096,
+        "spec_type": "none"
       },
       "qwen3.8-27b": {
         "path": "D:/.models/qwen3.8/Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf",
@@ -216,7 +218,9 @@
         "spec_draft_sampling": "greedy",
         "spec_draft_cpu_mask": "c03c03",
         "spec_draft_prio": 3,
-        "spec_draft_poll": 100
+        "spec_draft_poll": 100,
+        "batch_size": 4096,
+        "spec_type": "draft-mtp"
       }
     },
     "inference": {
@@ -416,7 +420,7 @@
   "tools": {
     "claude": {
       "name": "Claude Code",
-      "icon": "\ud83d\udfe3",
+      "icon": "🟣",
       "startup_cmd": [
         "claude"
       ],
@@ -433,7 +437,7 @@
     },
     "claude-local": {
       "name": "Claude Code (Local)",
-      "icon": "\ud83d\udfe4",
+      "icon": "🟤",
       "startup_cmd": [
         "claude"
       ],
@@ -462,7 +466,7 @@
     },
     "computer": {
       "name": "Computer Control",
-      "icon": "\ud83d\udda5\ufe0f",
+      "icon": "🖥️",
       "api": {
         "base_url": "http://localhost:1235/v1",
         "api_key": "local",
@@ -536,3 +540,4 @@
     }
   }
 }
+
