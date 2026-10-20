@@ -2210,8 +2210,6 @@ def _llama(window) -> QWidget:
                                     "--timeout: server read/write timeout. 0 = use llama-server default (600s)."))
     srv_body.addWidget(_line_row("llamacpp.api_prefix", "API Prefix", "/llama",
                                   "--api-prefix: mount the server under a path prefix (for reverse-proxy setups)."))
-    srv_body.addWidget(_line_row("llamacpp.media_path", "Media Path", "./data/media",
-                                  "--media-path: directory served via file:// URLs in chat completion image refs."))
     srv_body.addWidget(_pair_list_row("llamacpp.extra_args", "Extra CLI Args",
                                   "Global — appended to every model's spawn, after that model's own "
                                   'Extra Args (Models → Extra CLI Args), so for a flag set in both the '
@@ -2349,24 +2347,11 @@ def _llama(window) -> QWidget:
                                       "--poll <0..100>: polling intensity when waiting for work. 0=no polling, 50=default."))
     spawn_body.addWidget(_number_row("llamacpp.poll_batch",       "Polling (batch)",   0, 100, 5, 0, "",
                                       "--poll-batch: polling for the batch pool."))
-    spawn_body.addWidget(_number_row("llamacpp.threads_http",     "HTTP Threads",      0, 128, 1, 0, "",
-                                      "--threads-http: HTTP request worker threads. 0 = unset (server default)."))
-
     spawn_body.addWidget(_section_header("Memory / Offload"))
-    spawn_body.addWidget(_toggle_row("llamacpp.no_host",          "No Host Buffer",
-                                      "--no-host: skip host (CPU) buffer allocations so secondary buffers can be used. Advanced."))
-    spawn_body.addWidget(_line_row("llamacpp.lazy_mode",          "Lazy Mode",
-                                      "e.g. per-layer-embd",
-                                      "--lazy-mode: read certain tensors on demand rather than up front "
-                                      "(per-layer embeddings, for instance). Empty = off."))
     spawn_body.addWidget(_toggle_row("llamacpp.repack",           "Weight Repack",
                                       "--repack / --no-repack: pack weights for faster CPU kernels (default enabled)."))
     spawn_body.addWidget(_toggle_row("llamacpp.op_offload",       "Op Offload",
                                       "--op-offload / --no-op-offload: offload host tensor ops to device (default enabled)."))
-    spawn_body.addWidget(_toggle_row("llamacpp.check_tensors",    "Check Tensors",
-                                      "--check-tensors: verify model tensor data on load (slows startup; catches corrupted GGUFs)."))
-    spawn_body.addWidget(_toggle_row("llamacpp.skip_chat_parsing", "Skip Chat Parsing (debug)",
-                                      "--skip-chat-parsing: force the server to skip Jinja chat-template parsing. Useful for debugging template bugs."))
     spawn_body.addWidget(_number_row("llamacpp.n_predict",         "N-Predict (default)", -1, 1048576, 64, 0, "tok",
                                       "--n-predict: server-wide default cap on tokens generated. -1 = unlimited."))
     spawn_body.addWidget(_section_header("Server Behaviour"))
@@ -2380,11 +2365,6 @@ def _llama(window) -> QWidget:
     spawn_body.addWidget(_toggle_row("llamacpp.lora_init_without_apply", "Load LoRA Unapplied",
                                       "--lora-init-without-apply: load LoRA adapters but do not apply them; scale them later "
                                       "through POST /lora-adapters."))
-    spawn_body.addWidget(_line_row("llamacpp.rpc", "RPC Servers", "host:port,host:port",
-                                    "--rpc: comma-separated llama.cpp RPC servers whose GPUs this server may use. "
-                                    "Needs a build with the RPC backend. Empty = none."))
-    spawn_body.addWidget(_toggle_row("llamacpp.offline", "Offline Mode",
-                                      "--offline: use cached files only and never touch the network at startup."))
     layout.addWidget(spawn_card)
 
     # ── Environment card — variables for the spawned llama-server ────
@@ -2395,141 +2375,6 @@ def _llama(window) -> QWidget:
                                   "GGML_CUDA_REGISTER_HOST=1\n# GGML_OP_OFFLOAD_MIN_BATCH=32",
                                   _ENV_HELP, height=130))
     layout.addWidget(env_card)
-
-    # ── Sampler defaults — llama-server launch flags ─────────────────
-    smp_card, smp_body = _card("Sampler Defaults (server)",
-                                "llamacpp.* - llama-server's own sampler defaults; a request that sets a value "
-                                "wins. Untouched rows emit nothing (restart required)")
-    smp_body.addWidget(_line_row("llamacpp.samplers", "Sampler Order",
-                                  "penalties;dry;top_n_sigma;top_k;typ_p;top_p;min_p;xtc;temperature",
-                                  "--samplers: samplers in the order they run, separated by ';'. Empty = server default."))
-    smp_body.addWidget(_line_row("llamacpp.sampler_seq", "Sampler Sequence", "edskypmxt",
-                                  "--sampler-seq: the same thing as one letter per sampler "
-                                  "(server default edskypmxt). Ignored by the server if Sampler Order is set."))
-    smp_body.addWidget(_number_row("llamacpp.top_nsigma", "Top-n-sigma", -1, 10, 0.1, 2, "",
-                                    "--top-nsigma: keep tokens within n standard deviations of the top logit. "
-                                    "-1 = disabled (default).", default=-1))
-    smp_body.addWidget(_number_row("llamacpp.xtc_probability", "XTC Probability", 0, 1, 0.05, 2, "",
-                                    "--xtc-probability: chance per token that XTC removes the top choices (creativity "
-                                    "sampler). 0 = disabled (default).", default=0))
-    smp_body.addWidget(_dependent(
-        _number_row("llamacpp.xtc_threshold", "XTC Threshold", 0, 1, 0.05, 2, "",
-                     "--xtc-threshold: tokens above this probability are candidates for removal. 1.0 = disabled; "
-                     "default 0.10.", default=0.1),
-        ["llamacpp.xtc_probability"], lambda v: _num_gt0(v)))
-    smp_body.addWidget(_number_row("llamacpp.typical", "Typical-p", 0, 1, 0.05, 2, "",
-                                    "--typical: locally typical sampling, parameter p. 1.0 = disabled (default).", default=1))
-    smp_body.addWidget(_number_row("llamacpp.repeat_last_n", "Repeat Penalty Window", -1, 65536, 16, 0, "tok",
-                                    "--repeat-last-n: how many recent tokens the repeat / presence / frequency penalties "
-                                    "look at. 0 = disabled, -1 = whole context. Default 64.", default=64))
-    smp_body.addWidget(_number_row("llamacpp.dry_multiplier", "DRY Multiplier", 0, 10, 0.1, 2, "",
-                                    "--dry-multiplier: strength of DRY (penalises repeating a sequence the context already "
-                                    "contains). 0 = disabled (default); 0.8 is a common start.", default=0))
-    _dry_on = lambda m: _num_gt0(m)
-    smp_body.addWidget(_dependent(
-        _number_row("llamacpp.dry_base", "DRY Base", 1, 10, 0.05, 2, "",
-                     "--dry-base: how fast the DRY penalty grows with the repeated length. Default 1.75.", default=1.75),
-        ["llamacpp.dry_multiplier"], _dry_on))
-    smp_body.addWidget(_dependent(
-        _number_row("llamacpp.dry_allowed_length", "DRY Allowed Length", 0, 256, 1, 0, "tok",
-                     "--dry-allowed-length: repeats up to this long are not penalised. Default 2.", default=2),
-        ["llamacpp.dry_multiplier"], _dry_on))
-    smp_body.addWidget(_dependent(
-        _number_row("llamacpp.dry_penalty_last_n", "DRY Window", -1, 65536, 16, 0, "tok",
-                     "--dry-penalty-last-n: how far back DRY looks. 0 = disabled, -1 = whole context. Default 64.",
-                     default=64),
-        ["llamacpp.dry_multiplier"], _dry_on))
-    smp_body.addWidget(_dependent(
-        _line_row("llamacpp.dry_sequence_breaker", "DRY Sequence Breaker", "none",
-                   "--dry-sequence-breaker: a string that resets DRY matching. Giving one REPLACES the defaults "
-                   "(newline, ':', '\"', '*'); 'none' uses no breakers. Empty = defaults."),
-        ["llamacpp.dry_multiplier"], _dry_on))
-    smp_body.addWidget(_number_row("llamacpp.dynatemp_range", "Dynamic Temperature Range", 0, 5, 0.05, 2, "",
-                                    "--dynatemp-range: the temperature moves within +-range around the request temperature, by the entropy of the "
-                                    "distribution. 0 = disabled (default).", default=0))
-    smp_body.addWidget(_dependent(
-        _number_row("llamacpp.dynatemp_exp", "Dynamic Temperature Exponent", 0.1, 10, 0.1, 2, "",
-                     "--dynatemp-exp: how fast the temperature follows the entropy (default 1.0).", default=1),
-        ["llamacpp.dynatemp_range"], lambda v: _num_gt0(v)))
-    smp_body.addWidget(_enum_row("llamacpp.mirostat", "Mirostat",
-                                  [("Off (default)", 0), ("Mirostat 1", 1), ("Mirostat 2", 2)],
-                                  "--mirostat: Mirostat sampling keeps the surprise of the text near a target instead of a fixed truncation; "
-                                  "it replaces top-k / top-p / typical / min-p while on."))
-    _miro_on = lambda v: int(v or 0) > 0
-    smp_body.addWidget(_dependent(
-        _number_row("llamacpp.mirostat_lr", "Mirostat Learning Rate (eta)", 0.0, 1.0, 0.01, 2, "",
-                     "--mirostat-lr: how fast Mirostat corrects toward its target entropy (default 0.10).", default=0.1),
-        ["llamacpp.mirostat"], _miro_on))
-    smp_body.addWidget(_dependent(
-        _number_row("llamacpp.mirostat_ent", "Mirostat Target Entropy (tau)", 0.0, 20.0, 0.1, 2, "",
-                     "--mirostat-ent: the surprise Mirostat aims for (default 5.0).", default=5),
-        ["llamacpp.mirostat"], _miro_on))
-    smp_body.addWidget(_number_row("llamacpp.adaptive_target", "Adaptive-P Target", -1, 1, 0.01, 2, "",
-                                    "--adaptive-target: adaptive-p sampling selects tokens near this probability (0 to 1). Negative = disabled (default).",
-                                    default=-1))
-    smp_body.addWidget(_dependent(
-        _number_row("llamacpp.adaptive_decay", "Adaptive-P Decay", 0.0, 0.99, 0.01, 2, "",
-                     "--adaptive-decay: decay rate of the target adaptation over time; lower follows the recent text more (default 0.90).", default=0.9),
-        ["llamacpp.adaptive_target"], lambda v: float(v if v is not None else -1) >= 0))
-    layout.addWidget(smp_card)
-
-    # ── Endpoints card — diagnostic / monitoring endpoints ───────────
-    ep_card, ep_body = _card("Endpoints",
-                              "llamacpp.* — diagnostic / monitoring HTTP endpoints (server-wide).")
-    ep_body.addWidget(_toggle_row("llamacpp.slots", "Slots Endpoint",
-                                   "--slots / --no-slots: expose /slots monitoring (default enabled). Slot state shows the live prompt cache and KV usage."))
-    ep_body.addWidget(_toggle_row("llamacpp.metrics", "Prometheus /metrics",
-                                   "--metrics: expose Prometheus-compatible /metrics endpoint."))
-    ep_body.addWidget(_toggle_row("llamacpp.props", "Mutable /props",
-                                   "--props: allow POST /props to change global properties (samplers etc.) at runtime."))
-    layout.addWidget(ep_card)
-
-    # ── Server Mode card — alternate endpoint modes ───────────────────
-    _mutex_bools("llamacpp.embedding", "llamacpp.rerank")
-    sm_card, sm_body = _card("Server Mode",
-                              "llamacpp.* — repurpose the running server for embedding or reranking. "
-                              "Leave all OFF for normal chat completions.")
-    sm_body.addWidget(_dependent(
-        _toggle_row("llamacpp.embedding", "Embedding Mode",
-                     "--embedding: restrict server to embedding requests. Requires an embedding-capable GGUF."),
-        ["llamacpp.rerank"], lambda r: not bool(r)))
-    sm_body.addWidget(_dependent(
-        _toggle_row("llamacpp.rerank", "Rerank Mode",
-                     "--rerank: enable /rerank endpoint. Requires a reranker GGUF."),
-        ["llamacpp.embedding"], lambda e: not bool(e)))
-    sm_body.addWidget(_dependent(
-        _enum_row("llamacpp.pooling", "Pooling",
-                   [("(model default)", ""),
-                    ("none",  "none"),
-                    ("mean",  "mean"),
-                    ("cls",   "cls"),
-                    ("last",  "last"),
-                    ("rank",  "rank")],
-                   "--pooling: pooling type for embedding output. Only meaningful when Embedding Mode is on."),
-        ["llamacpp.embedding"], lambda e: bool(e)))
-    layout.addWidget(sm_card)
-
-    # Video input card — llama-server decodes video through ffmpeg into frames
-    # and runs them past the vision projector. Needs a vision model + mmproj.
-    # The proxy routes video as well — proxy/translate.py maps Anthropic
-    # `video` blocks and OpenAI `video_url` parts onto llama.cpp's
-    # base64-only `input_video`.
-    vid_card, vid_body = _card("Video Input",
-                                "llamacpp.video_* — decode video via ffmpeg into frames for a vision model")
-    vid_body.addWidget(_number_row("llamacpp.video_fps", "Frame Rate", 0, 60, 1, 1, "fps",
-                                    "--video-fps: how many frames per second to sample from the video. "
-                                    "0 = server default (4.0). Every frame costs vision tokens, so this is "
-                                    "the main lever on context use."))
-    vid_body.addWidget(_number_row("llamacpp.video_timestamp_interval", "Timestamp Interval",
-                                    0, 60000, 500, 0, "ms",
-                                    "--video-timestamp-interval: how often to interleave a text timestamp "
-                                    "between frames, so the model can reason about when something happened. "
-                                    "0 = server default (5000)."))
-    vid_body.addWidget(_line_row("llamacpp.video_ffmpeg_dir", "ffmpeg Directory",
-                                  "(search PATH)",
-                                  "--video-ffmpeg-dir: directory containing ffmpeg and ffprobe. Leave empty "
-                                  "to search PATH."))
-    layout.addWidget(vid_card)
 
     # Caching policy card — server-wide
     cache_card, cache_body = _card("Caching",
@@ -6100,16 +5945,6 @@ def _models(window) -> QWidget:
         _sl.addWidget(_line_row(f"{p}.override_kv", "Override KV",
                                          "tokenizer.ggml.add_bos_token=bool:false",
                                          "--override-kv: override GGUF metadata at load. Format KEY=TYPE:VALUE, comma-separated."))
-
-        _sl = _sec("Generation Defaults",
-                    "--logit-bias / --ignore-eos - server defaults; a request's own value wins")
-        _sl.addWidget(_line_row(f"{p}.logit_bias", "Logit Bias", "15043+1, 2-5",
-                                         "--logit-bias: TOKEN_ID(+/-)BIAS - raise (+) or lower (-) the likelihood of a token, "
-                                         "e.g. 15043+1 or 15043-1. Several entries separated by commas or spaces become one "
-                                         "flag each. Empty = none."))
-        _sl.addWidget(_toggle_row(f"{p}.ignore_eos", "Ignore End-of-Stream",
-                                           "--ignore-eos: keep generating past the end-of-stream token (implies "
-                                           "--logit-bias EOS-inf). Output only stops at the token limit - for benchmarking."))
 
         _sl = _sec("Environment",
                     "llamacpp.models.<m>.env - variables for this model's llama-server; overrides the global Environment")
