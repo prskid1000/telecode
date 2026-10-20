@@ -104,7 +104,8 @@ def plan(model_name: str, scale: float = 1.0) -> Optional[dict]:
         except (TypeError, ValueError):
             n_cpu = 0
         avail -= max(0, n_moe - n_cpu) * float(s["expert_bytes_total"]) / n_moe / (1 << 20)
-    mib = int(max(0.0, avail) * 0.7 * max(0.05, min(1.0, scale)))
+    factor = 0.88 if mcfg.get("moe_hybrid") else 0.7
+    mib = int(max(0.0, avail) * factor * max(0.05, min(1.0, scale)))
     mib = (mib // 64) * 64
     cap = cfg.as_int(mcfg.get(key))
     if cap > 0:

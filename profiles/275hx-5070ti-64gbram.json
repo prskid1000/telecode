@@ -152,7 +152,12 @@
         "moe_hybrid": true,
         "moe_hybrid_auto": true,
         "moe_hybrid_mib": 0,
-        "env": "GGML_CUDA_REGISTER_HOST=1"
+        "env": "GGML_CUDA_REGISTER_HOST=1",
+        "moe_hybrid_max_tokens": 16,
+        "moe_hybrid_swap_every": 16,
+        "moe_hybrid_swap_max": 32,
+        "moe_hybrid_skip_weight": 0.04,
+        "moe_hybrid_tail_skip": 6
       },
       "qwen3.8-27b": {
         "path": "D:\\.models\\qwen3.8\\Qwen3.8-27B-UD-IQ3_XXS.gguf",
@@ -395,7 +400,7 @@
   "tools": {
     "claude": {
       "name": "Claude Code",
-      "icon": "🟣",
+      "icon": "\ud83d\udfe3",
       "startup_cmd": [
         "claude"
       ],
@@ -412,7 +417,7 @@
     },
     "claude-local": {
       "name": "Claude Code (Local)",
-      "icon": "🟤",
+      "icon": "\ud83d\udfe4",
       "startup_cmd": [
         "claude"
       ],
@@ -441,7 +446,7 @@
     },
     "computer": {
       "name": "Computer Control",
-      "icon": "🖥️",
+      "icon": "\ud83d\udda5\ufe0f",
       "api": {
         "base_url": "http://localhost:1235/v1",
         "api_key": "local",

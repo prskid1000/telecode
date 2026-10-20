@@ -5736,8 +5736,16 @@ def _models(window) -> QWidget:
             [f"{p}.moe_hybrid"], _hy_on))
         _sl_hy.addWidget(_dependent(
             _number_row(f"{p}.moe_hybrid_swap_max", "Moves per Rebalance", 0, 4096, 1, 0, "experts",
-                        "--moe-hybrid-swap-max: experts moved per rebalance while generating, over all layers (default 8). After a prompt "
-                        "up to 2048 move at once.", default=8),
+                        "--moe-hybrid-swap-max: experts moved per rebalance while generating, over all layers (default 32). After a prompt "
+                        "up to 2048 move at once.", default=32),
+            [f"{p}.moe_hybrid"], _hy_on))
+        _sl_hy.addWidget(_dependent(
+            _number_row(f"{p}.moe_hybrid_skip_weight", "Tail Skip Weight", 0.0, 0.5, 0.005, 3, "",
+                        help_text="--moe-hybrid-skip-weight: skip CPU computation of non-resident experts whose router weight is below this threshold, 0 = off (default: 0.04).", default=0.04),
+            [f"{p}.moe_hybrid"], _hy_on))
+        _sl_hy.addWidget(_dependent(
+            _number_row(f"{p}.moe_hybrid_tail_skip", "Tail Skip Rank", 0, 32, 1, 0, "",
+                        help_text="--moe-hybrid-tail-skip: skip CPU computation of non-resident experts ranked N or higher, 0 = off (default: 6).", default=6),
             [f"{p}.moe_hybrid"], _hy_on))
 
         _sl = _sec("MoE Expert Cache",

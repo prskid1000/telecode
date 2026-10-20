@@ -267,7 +267,9 @@
         "moe_hybrid_mib": 0,
         "moe_hybrid_max_tokens": 16,
         "moe_hybrid_swap_every": 32,
-        "moe_hybrid_swap_max": 8,
+        "moe_hybrid_swap_max": 32,
+        "moe_hybrid_skip_weight": 0.04,
+        "moe_hybrid_tail_skip": 6,
 
         "rope_scaling": "",
         "rope_freq_base": 0,

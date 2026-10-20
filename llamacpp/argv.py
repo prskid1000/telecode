@@ -348,6 +348,8 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("moe_hybrid_max_tokens",           "--moe-hybrid-max-tokens",           "value_nz"),
     ("moe_hybrid_swap_every",           "--moe-hybrid-swap-every",           "value_nz"),
     ("moe_hybrid_swap_max",             "--moe-hybrid-swap-max",             "value"),
+    ("moe_hybrid_skip_weight",          "--moe-hybrid-skip-weight",          "value"),
+    ("moe_hybrid_tail_skip",            "--moe-hybrid-tail-skip",            "value"),
 
     # RoPE / YaRN (0 = model default; YaRN factors default to -1.00 = auto,
     # so emit only when explicitly set to a non-zero override).
@@ -636,7 +638,8 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
     if hybrid:
         suppressed_model.update({"n_cpu_moe", "moe_cache_mib"})   # all layers on the CPU; the MoE cache excludes the hybrid mode
     else:
-        suppressed_model.update({"moe_hybrid_mib", "moe_hybrid_max_tokens", "moe_hybrid_swap_every", "moe_hybrid_swap_max"})
+        suppressed_model.update({"moe_hybrid_mib", "moe_hybrid_max_tokens", "moe_hybrid_swap_every", "moe_hybrid_swap_max",
+                                 "moe_hybrid_skip_weight", "moe_hybrid_tail_skip"})
     # rope_scale and rope_freq_scale are the same lever; the older key wins.
     if cfg.as_float(mcfg.get("rope_freq_scale")) != 0.0:
         suppressed_model.add("rope_scale")
