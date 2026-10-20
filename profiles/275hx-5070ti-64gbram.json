@@ -46,7 +46,7 @@
     "threads_batch": 24,
     "batch_size": 4096,
     "ubatch_size": 4096,
-    "parallel": 2,
+    "parallel": 1,
     "cont_batching": true,
     "main_gpu": 0,
     "tensor_split": "",
