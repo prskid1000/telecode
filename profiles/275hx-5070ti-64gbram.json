@@ -158,7 +158,7 @@
         "moe_hybrid_swap_max": 32,
         "moe_hybrid_skip_weight": 0.05,
         "moe_hybrid_tail_skip": 5,
-        "vram_budget_mib": 11700,
+        "vram_budget_mib": 11400,
         "ubatch_size": 4096
       },
       "qwen3.8-27b": {
@@ -207,7 +207,7 @@
         },
         "reasoning_preserve": true,
         "spec_draft_head_subset": 32768,
-        "vram_budget_mib": 11700,
+        "vram_budget_mib": 11400,
         "spec_type": "draft-mtp",
         "draft_n": 3,
         "ubatch_size": 4096,
@@ -275,7 +275,8 @@
       "tag": "b11731",
       "cuda": true
     },
-    "vram_budget_mib": 11700
+    "vram_budget_mib": 11400,
+    "vram_ceiling_mib": 11700
   },
   "heartbeat": {
     "enabled": false,
