@@ -413,8 +413,8 @@ Each layer's experts are copied whole to the GPU (double-buffered on a second st
 | `--moe-hybrid-max-tokens N` | 16 | Largest batch that uses the hybrid form, 1..31. Decoding (1 row) and speculative verify windows use it; prompts don't. |
 | `--moe-hybrid-swap-every N` | 16 | Generated tokens between two rebalances. |
 | `--moe-hybrid-swap-max N` | 32 | Experts moved per rebalance while generating (over all layers). After a prompt (a batch of 32+ tokens) up to 2048 move once. |
-| `--moe-hybrid-skip-weight F` | 0.04 | Skip CPU computation of non-resident experts whose router weight is below F, 0 = off (Strata/PolyStrata tail skip). |
-| `--moe-hybrid-tail-skip N` | 6 | Skip CPU computation of non-resident experts ranked N or higher, 0 = off (Strata/PolyStrata rank skip). |
+| `--moe-hybrid-skip-weight F` | 0.05 | Skip CPU computation of non-resident experts whose router weight is below F, 0 = off (Strata/PolyStrata tail skip). |
+| `--moe-hybrid-tail-skip N` | 5 | Skip CPU computation of non-resident experts ranked N or higher, 0 = off (Strata/PolyStrata rank skip). |
 
 The MoE cache (`--moe-cache-mib`) and the hybrid mode exclude each other; with both set, the hybrid mode wins. The MTP draft context never
 gets the hybrid mode (its MTP block runs on the CPU, about 8 experts per draft step).
