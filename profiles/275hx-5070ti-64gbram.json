@@ -157,12 +157,14 @@
         "moe_hybrid_swap_every": 16,
         "moe_hybrid_swap_max": 32,
         "moe_hybrid_skip_weight": 0.05,
-        "moe_hybrid_tail_skip": 5
+        "moe_hybrid_tail_skip": 5,
+        "vram_budget_mib": 11700,
+        "ubatch_size": 4096
       },
       "qwen3.8-27b": {
-        "path": "D:\\.models\\qwen3.8\\Qwen3.8-27B-UD-IQ3_XXS.gguf",
+        "path": "D:/.models/qwen3.8/Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf",
         "mmproj": "D:\\.models\\qwen3.8\\mmproj-F16.gguf",
-        "ctx_size": 72000,
+        "ctx_size": 100000,
         "n_gpu_layers": 99,
         "override_tensor": "^token_embd\\.weight=CPU,^output\\.weight=CPU",
         "flash_attn": "on",
@@ -205,7 +207,12 @@
         },
         "reasoning_preserve": true,
         "spec_draft_head_subset": 32768,
-        "vram_budget_mib": 11200
+        "vram_budget_mib": 11700,
+        "spec_type": "draft-mtp",
+        "draft_n": 3,
+        "ubatch_size": 4096,
+        "ctx_size_spec": 32768,
+        "env": "GGML_CUDA_REGISTER_HOST=1"
       }
     },
     "inference": {
@@ -267,7 +274,8 @@
       "source_dir": "",
       "tag": "b11731",
       "cuda": true
-    }
+    },
+    "vram_budget_mib": 11700
   },
   "heartbeat": {
     "enabled": false,

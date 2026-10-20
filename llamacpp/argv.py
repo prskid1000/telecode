@@ -354,6 +354,8 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("moe_hybrid_tail_skip",            "--moe-hybrid-tail-skip",            "value"),
     ("spec_draft_head_subset",          "--spec-draft-head-subset",          "value_nz"),
     ("spec_draft_head_subset_ids",      "--spec-draft-head-subset-ids",      "path"),
+    ("ubatch_size",                     "--ubatch-size",                     "value_nz"),
+    ("spec_draft_n_ubatch",             "--spec-draft-n-ubatch",             "value_nz"),
 
     # RoPE / YaRN (0 = model default; YaRN factors default to -1.00 = auto,
     # so emit only when explicitly set to a non-zero override).
@@ -574,6 +576,8 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
 
     # Top-level llamacpp.* block, for server-wide flags
     gcfg = app_config.get_nested("llamacpp", {}) or {}
+    if "spec_type" in mcfg:
+        gcfg = {**gcfg, "spec_type": mcfg["spec_type"]}
 
     argv: list[str] = [cfg.binary()]
 
@@ -611,6 +615,8 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
     elif not gcfg.get("lmcache_disk"):
         suppressed_global.update({"lmcache_disk_dir", "lmcache_disk_max_mb", "lmcache_disk_idle_sec"})
     for k, flag, kind in _GLOBAL_FLAG_SPECS:
+        if k in mcfg:
+            suppressed_global.add(k)
         if k in suppressed_global:
             continue
         _emit_flag(argv, gcfg, k, flag, kind)
