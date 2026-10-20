@@ -595,6 +595,11 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
         gcfg = {**gcfg, "spec_type": mcfg["spec_type"]}
     if "spec_default" in mcfg:
         gcfg = {**gcfg, "spec_default": mcfg["spec_default"]}
+    for nk in ("spec_ngram_size_n", "spec_ngram_size_m", "spec_ngram_min_hits",
+               "spec_ngram_mod_n_min", "spec_ngram_mod_n_max", "spec_ngram_mod_n_match",
+               "spec_synth_len", "spec_synth_rates"):
+        if nk in mcfg:
+            gcfg = {**gcfg, nk: mcfg[nk]}
 
     argv: list[str] = [cfg.binary()]
 

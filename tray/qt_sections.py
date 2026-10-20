@@ -614,13 +614,13 @@ def _mutex_bools(path_a: str, path_b: str) -> None:
     bus.settingChanged.connect(_on_change)
 
 
-def _mutex_spec_default_vs_type() -> None:
+def _mutex_spec_default_vs_type(sd_path: str = "llamacpp.spec_default", st_path: str = "llamacpp.spec_type") -> None:
     """spec_default ↔ spec_type checkboxes: enabling one clears the other.
 
     - spec_default=true → write spec_type="none"
     - spec_type becomes non-empty/non-none → write spec_default=false
     """
-    key = ("llamacpp.spec_default", "llamacpp.spec_type")
+    key = (sd_path, st_path)
     if key in _MUTEX_REGISTERED:
         return
     _MUTEX_REGISTERED.add(key)
@@ -632,18 +632,18 @@ def _mutex_spec_default_vs_type() -> None:
         if _busy["on"]:
             return
         snap = read_settings()
-        sd = bool(get_path(snap, "llamacpp.spec_default"))
-        st = get_path(snap, "llamacpp.spec_type")
-        if path == "llamacpp.spec_default" and sd and _spec_value_is_active(st):
+        sd = bool(get_path(snap, sd_path))
+        st = get_path(snap, st_path)
+        if path == sd_path and sd and _spec_value_is_active(st):
             _busy["on"] = True
             try:
-                patch_settings("llamacpp.spec_type", "none")
+                patch_settings(st_path, "none")
             finally:
                 _busy["on"] = False
-        elif path == "llamacpp.spec_type" and _spec_value_is_active(st) and sd:
+        elif path == st_path and _spec_value_is_active(st) and sd:
             _busy["on"] = True
             try:
-                patch_settings("llamacpp.spec_default", False)
+                patch_settings(sd_path, False)
             finally:
                 _busy["on"] = False
 
@@ -2226,8 +2226,6 @@ def _llama(window) -> QWidget:
                                       "--threads: CPU threads for generation."))
     spawn_body.addWidget(_number_row("llamacpp.threads_batch",  "Threads (batch)",   0,  128, 1, 0, "",
                                       "--threads-batch: CPU threads for prompt processing. 0 = match --threads."))
-    spawn_body.addWidget(_number_row("llamacpp.batch_size",     "Batch Size",        32, 8192, 32, 0, "tok",
-                                      "--batch-size: logical batch size. Tokens processed per upstream step."))
     spawn_body.addWidget(_enum_row("llamacpp.split_mode",       "Split Mode",
                                     [("Layer (default)", "layer"),
                                      ("Row",             "row"),
@@ -2240,8 +2238,6 @@ def _llama(window) -> QWidget:
                                      ("Isolate", "isolate"),
                                      ("Numactl", "numactl")],
                                     "--numa: attempt optimizations that help on some NUMA systems."))
-    spawn_body.addWidget(_number_row("llamacpp.ubatch_size",    "Micro-Batch Size",  32, 8192, 32, 0, "tok",
-                                      "--ubatch-size: physical sub-batch. Usually = batch_size / 2 or / 4."))
     spawn_body.addWidget(_number_row("llamacpp.parallel",       "Parallel Slots",    1,  32,  1, 0, "",
                                       "--parallel: number of concurrent request slots."))
     spawn_body.addWidget(_toggle_row("llamacpp.cont_batching",  "Continuous Batching",
@@ -2625,144 +2621,6 @@ def _llama(window) -> QWidget:
                     default=30),
         ["llamacpp.lmcache", "llamacpp.lmcache_disk"], _lmc_disk))
     layout.addWidget(lmcache_card)
-
-    # Speculative decoding card — server-wide algorithm, per-model draft pair
-    spec_card, spec_body = _card("Speculative Decoding",
-                                  "llamacpp.* — algorithm choice & tuning. Draft model lives per-model.")
-    # Multi-select Spec Type. v9243+ accepts a comma-separated list, so stacking
-    # is supported (e.g. "draft-mtp,ngram-mod" = MTP heads for high-confidence
-    # guesses + ngram-mod for verbatim runs). Serialized as a comma-joined string
-    # in settings.json. "none" is intentionally NOT a checkbox — uncheck all.
-    _mutex_spec_default_vs_type()
-    spec_body.addWidget(_dependent(
-        _spec_type_multi_row("llamacpp.spec_type", "Spec Type"),
-        ["llamacpp.spec_default"],
-        lambda sd: not bool(sd),
-    ))
-    spec_body.addWidget(_dependent(
-        _toggle_row("llamacpp.spec_default",         "Spec Default (auto-pick)",
-                     "--spec-default: let llama-server pick a working spec config based on what the model exposes "
-                     "(e.g. enables draft-mtp automatically if the model has MTP heads). Mutually exclusive with the checkboxes above."),
-        ["llamacpp.spec_type"],
-        lambda st: not _spec_value_is_active(st),
-    ))
-    _spec_on = lambda st, sd: _spec_value_is_active(st) or bool(sd)
-    # Synthetic acceptance: a benchmarking aid, not a speed knob. It fakes the
-    # accept/reject pattern of a draft model so spec-decode overhead can be
-    # measured without one. Leave at 0 / empty for normal use.
-    spec_body.addWidget(_dependent(
-        _number_row("llamacpp.spec_draft_n_ubatch", "Draft Micro-Batch", 0, 8192, 64, 0, "tok",
-                     "--spec-draft-n-ubatch (llama.cpp b11641 or newer; a build without it is skipped automatically): the largest batch of the draft / MTP "
-                     "context. A smaller value spares VRAM: the draft's compute buffer (about 0.4-0.5 GB at 2048 on a 27B) follows it, and a draft step only "
-                     "ever decodes a few tokens. 0 = same as the main micro-batch."),
-        ["llamacpp.spec_type", "llamacpp.spec_default"], _spec_on))
-    spec_body.addWidget(_number_row("llamacpp.spec_synth_len", "Synthetic Accept Length", 0, 64, 1, 0, "tok",
-                                     "--spec-synth-len: target mean synthetic acceptance length, including "
-                                     "the target token. 0 = off."))
-    spec_body.addWidget(_dependent(
-        _line_row("llamacpp.spec_synth_rates", "Synthetic Accept Rates",
-                   "0.8,0.6,0.4",
-                   "--spec-synth-rates: comma-separated per-position acceptance probabilities. "
-                   "Only read when Synthetic Accept Length is set."),
-        ["llamacpp.spec_synth_len"], lambda v: bool(v)))
-
-    # The three rows below feed --spec-ngram-{simple,map-k,map-k4v}-{size-n,size-m,min-hits}
-    # — argv.build_argv() picks the per-mode flag from the chosen Spec Type.
-    # ngram-mod has its own (n-min, n-max, n-match) shape — separate rows below.
-    # Shared ngram triplet for simple / map-k / map-k4v — greyed out when none active.
-    _ngram_simple_active = lambda st: _has_spec(st, "ngram-simple", "ngram-map-k", "ngram-map-k4v")
-    spec_body.addWidget(_dependent(
-        _number_row("llamacpp.spec_ngram_size_n",   "N-gram N (size-n)",   0, 64, 1, 0, "",
-                     "Lookup key length for ngram-simple / ngram-map-k / ngram-map-k4v. 0 = server default."),
-        ["llamacpp.spec_type"], _ngram_simple_active))
-    spec_body.addWidget(_dependent(
-        _number_row("llamacpp.spec_ngram_size_m",   "N-gram M (size-m)",   0, 64, 1, 0, "",
-                     "Draft length per match for ngram-simple / ngram-map-k / ngram-map-k4v. 0 = default."),
-        ["llamacpp.spec_type"], _ngram_simple_active))
-    spec_body.addWidget(_dependent(
-        _number_row("llamacpp.spec_ngram_min_hits", "N-gram Min Hits",     0, 64, 1, 0, "",
-                     "Minimum match frequency for ngram-simple / ngram-map-k / ngram-map-k4v. 0 = default."),
-        ["llamacpp.spec_type"], _ngram_simple_active))
-    # ngram-mod specific knobs (n-min/n-max added in v9243; n-match was already there) —
-    # greyed when ngram-mod is not in spec_type.
-    _ngram_mod_active = lambda st: _has_spec(st, "ngram-mod")
-    spec_body.addWidget(_dependent(
-        _number_row("llamacpp.spec_ngram_mod_n_min",   "N-gram Mod N-Min",   0, 256, 1, 0, "tok",
-                     "--spec-ngram-mod-n-min: minimum ngram tokens for ngram-mod (default 48)."),
-        ["llamacpp.spec_type"], _ngram_mod_active))
-    spec_body.addWidget(_dependent(
-        _number_row("llamacpp.spec_ngram_mod_n_max",   "N-gram Mod N-Max",   0, 256, 1, 0, "tok",
-                     "--spec-ngram-mod-n-max: maximum ngram tokens for ngram-mod (default 64)."),
-        ["llamacpp.spec_type"], _ngram_mod_active))
-    spec_body.addWidget(_dependent(
-        _number_row("llamacpp.spec_ngram_mod_n_match", "N-gram Mod N-Match", 0, 256, 1, 0, "tok",
-                     "--spec-ngram-mod-n-match: lookup length for ngram-mod (default 24). 0 = default."),
-        ["llamacpp.spec_type"], _ngram_mod_active))
-    # Draft-side thread knobs only matter when a draft-* spec type or ngram-cache is active.
-    _draft_active = lambda st: _has_spec(st, "draft-simple", "draft-eagle3", "draft-mtp", "ngram-cache")
-    spec_body.addWidget(_dependent(
-        _number_row("llamacpp.threads_draft",       "Threads (draft)",     0, 128, 1, 0, "",
-                     "--threads-draft: CPU threads for draft-model generation. 0 = match --threads."),
-        ["llamacpp.spec_type"], _draft_active))
-    spec_body.addWidget(_dependent(
-        _number_row("llamacpp.threads_batch_draft", "Threads (draft batch)", 0, 128, 1, 0, "",
-                     "--threads-batch-draft: CPU threads for draft-model prompt processing."),
-        ["llamacpp.spec_type"], _draft_active))
-    spec_body.addWidget(_dependent(
-        _enum_row_strs("llamacpp.spec_draft_sampling", "Draft Sampling",
-                       [("Greedy (default)", ""), ("greedy", "greedy"), ("probabilistic", "probabilistic")],
-                       "--spec-draft-sampling: how the draft is sampled. greedy takes the draft's argmax; probabilistic "
-                       "samples it and the target verifies by rejection sampling, which keeps acceptance up at "
-                       "temperature > 0. Empty = server default (greedy)."),
-        ["llamacpp.spec_type"], _draft_active))
-    spec_body.addWidget(_dependent(
-        _toggle_row("llamacpp.spec_draft_backend_sampling", "Draft Backend Sampling",
-                     "--spec-draft-backend-sampling / --no-...: run the draft's sampling on the backend (GPU) instead of "
-                     "the CPU (server default: enabled). Turn off only to rule it out when drafts misbehave.",
-                     default=True),
-        ["llamacpp.spec_type"], _draft_active))
-    spec_body.addWidget(_section_header("Draft Thread Scheduling"))
-    spec_body.addWidget(_dependent(
-        _line_row("llamacpp.spec_draft_cpu_mask", "Draft CPU Mask", "hex - empty = same as CPU Mask",
-                   "--spec-draft-cpu-mask: affinity mask for the draft model's threads, so they do not fight the main "
-                   "generation threads for cores. Empty = the main CPU Mask."),
-        ["llamacpp.spec_type"], _draft_active))
-    spec_body.addWidget(_dependent(
-        _line_row("llamacpp.spec_draft_cpu_range", "Draft CPU Range", "lo-hi, e.g. 8-11",
-                   "--spec-draft-cpu-range: contiguous CPU range for the draft threads. Complements Draft CPU Mask."),
-        ["llamacpp.spec_type"], _draft_active))
-    spec_body.addWidget(_dependent(
-        _toggle_row("llamacpp.spec_draft_cpu_strict", "Draft CPU Strict",
-                     "--spec-draft-cpu-strict <0|1>: pin the draft threads strictly to their cores "
-                     "(default: same as CPU Strict)."),
-        ["llamacpp.spec_type"], _draft_active))
-    spec_body.addWidget(_dependent(
-        _number_row("llamacpp.spec_draft_prio", "Draft Priority", 0, 3, 1, 0, "",
-                     "--spec-draft-prio: draft thread priority. 0=normal, 1=medium, 2=high, 3=realtime (default 0)."),
-        ["llamacpp.spec_type"], _draft_active))
-    spec_body.addWidget(_dependent(
-        _toggle_row("llamacpp.spec_draft_poll", "Draft Polling",
-                     "--spec-draft-poll <0|1>: busy-poll while waiting for draft work (default: same as Polling)."),
-        ["llamacpp.spec_type"], _draft_active))
-    spec_body.addWidget(_dependent(
-        _line_row("llamacpp.spec_draft_cpu_mask_batch", "Draft CPU Mask (batch)", "hex - empty = same as Draft CPU Mask",
-                   "--spec-draft-cpu-mask-batch: affinity mask for the draft model's prompt-processing threads."),
-        ["llamacpp.spec_type"], _draft_active))
-    spec_body.addWidget(_dependent(
-        _toggle_row("llamacpp.spec_draft_cpu_strict_batch", "Draft CPU Strict (batch)",
-                     "--spec-draft-cpu-strict-batch <0|1>: strict placement for the draft's prompt-processing threads "
-                     "(default: Draft CPU Strict)."),
-        ["llamacpp.spec_type"], _draft_active))
-    spec_body.addWidget(_dependent(
-        _number_row("llamacpp.spec_draft_prio_batch", "Draft Priority (batch)", 0, 3, 1, 0, "",
-                     "--spec-draft-prio-batch: priority of the draft's prompt-processing threads (0-3, default 0)."),
-        ["llamacpp.spec_type"], _draft_active))
-    spec_body.addWidget(_dependent(
-        _toggle_row("llamacpp.spec_draft_poll_batch", "Draft Polling (batch)",
-                     "--spec-draft-poll-batch <0|1>: busy-poll for the draft's prompt-processing pool "
-                     "(default: Draft Polling)."),
-        ["llamacpp.spec_type"], _draft_active))
-    layout.addWidget(spec_card)
 
     # Proxy Behavior card — global behavior knobs with NO per-model equivalent.
     # Sampling defaults (temperature/top_p/etc.) live in the Models section per
@@ -5833,9 +5691,18 @@ def _models(window) -> QWidget:
 
         _sl = _sec("Draft Model (Speculative)",
                     "--spec-* / --draft-* — speculative decoding algorithm & draft tuning for this model")
-        _sl.addWidget(_spec_type_multi_row(f"{p}.spec_type", "Spec Type"))
-        _sl.addWidget(_toggle_row(f"{p}.spec_default", "Spec Default (auto-pick)",
-                                  "--spec-default: let llama-server auto-pick a working spec config for this model (e.g. enables draft-mtp automatically if model has MTP heads)."))
+        _mutex_spec_default_vs_type(f"{p}.spec_default", f"{p}.spec_type")
+        _sl.addWidget(_dependent(
+            _spec_type_multi_row(f"{p}.spec_type", "Spec Type"),
+            [f"{p}.spec_default"],
+            lambda sd: not bool(sd),
+        ))
+        _sl.addWidget(_dependent(
+            _toggle_row(f"{p}.spec_default", "Spec Default (auto-pick)",
+                        "--spec-default: let llama-server auto-pick a working spec config for this model (e.g. enables draft-mtp automatically if model has MTP heads)."),
+            [f"{p}.spec_type"],
+            lambda st: not _spec_value_is_active(st),
+        ))
         _sl.addWidget(_line_row(f"{p}.draft_model", "Draft Model (GGUF)",
                                          "D:/models/draft-0.6b.gguf",
                                          "--model-draft: separate small LM for draft tokens. "
@@ -5843,8 +5710,8 @@ def _models(window) -> QWidget:
                                          "or Spec Type=draft-mtp to use the main model's MTP heads."))
         # Draft knobs are active when either: a draft GGUF is set, OR a draft-*
         # spec strategy is active (draft-mtp uses model's own heads, no draft GGUF).
-        _draft_knobs_active = lambda dm, mst, gst: bool(str(dm or "").strip()) or _has_spec(mst or gst, "draft-simple", "draft-eagle3", "draft-mtp")
-        _draft_paths = [f"{p}.draft_model", f"{p}.spec_type", "llamacpp.spec_type"]
+        _draft_knobs_active = lambda dm, st: bool(str(dm or "").strip()) or _has_spec(st, "draft-simple", "draft-eagle3", "draft-mtp")
+        _draft_paths = [f"{p}.draft_model", f"{p}.spec_type"]
         _sl.addWidget(_dependent(
             _number_row(f"{p}.n_gpu_layers_draft", "Draft GPU Layers", 0, 200, 1, 0, "",
                          "--n-gpu-layers-draft / -ngld: layers of the draft model on GPU."),
@@ -5917,20 +5784,45 @@ def _models(window) -> QWidget:
             _toggle_row(f"{p}.spec_draft_poll", "Draft Polling",
                          "--spec-draft-poll <0|1>: busy-poll for draft work."),
             _draft_paths, _draft_knobs_active))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.threads_draft", "Draft Threads", 0, 128, 1, 0, "",
+                         "--threads-draft: CPU threads for draft-model generation. 0 = match --threads."),
+            _draft_paths, _draft_knobs_active))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.threads_batch_draft", "Draft Batch Threads", 0, 128, 1, 0, "",
+                         "--threads-batch-draft: CPU threads for draft-model prompt processing."),
+            _draft_paths, _draft_knobs_active))
+
+        # N-gram knobs for spec_type=ngram-simple / ngram-map-k / ngram-mod
+        _ngram_simple_active = lambda st: _has_spec(st, "ngram-simple", "ngram-map-k", "ngram-map-k4v")
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.spec_ngram_size_n", "N-gram N (size-n)", 0, 64, 1, 0, "",
+                         "Lookup key length for ngram-simple / ngram-map-k. 0 = default."),
+            [f"{p}.spec_type"], _ngram_simple_active))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.spec_ngram_size_m", "N-gram M (size-m)", 0, 64, 1, 0, "",
+                         "Draft length per match for ngram-simple / ngram-map-k. 0 = default."),
+            [f"{p}.spec_type"], _ngram_simple_active))
+        _ngram_mod_active = lambda st: _has_spec(st, "ngram-mod")
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.spec_ngram_mod_n_match", "N-gram Mod Match", 0, 256, 1, 0, "tok",
+                         "--spec-ngram-mod-n-match: lookup length for ngram-mod (default 24)."),
+            [f"{p}.spec_type"], _ngram_mod_active))
+
         # Lookup caches only matter for spec_type=ngram-cache.
-        _ngram_cache_active = lambda mst, gst: _has_spec(mst or gst, "ngram-cache")
+        _ngram_cache_active = lambda st: _has_spec(st, "ngram-cache")
         _sl.addWidget(_dependent(
             _line_row(f"{p}.lookup_cache_static", "Lookup Cache (static)",
                        "./data/lookup-static.bin",
                        "--lookup-cache-static. Only used when Spec Type = ngram-cache. "
                        "Precomputed via llama-lookup-create; read-only at runtime."),
-            [f"{p}.spec_type", "llamacpp.spec_type"], _ngram_cache_active))
+            [f"{p}.spec_type"], _ngram_cache_active))
         _sl.addWidget(_dependent(
             _line_row(f"{p}.lookup_cache_dynamic", "Lookup Cache (dynamic)",
                        "./data/lookup-dyn.bin",
                        "--lookup-cache-dynamic. Only loaded when Spec Type = ngram-cache. "
                        "NOTE: llama-server does not persist writes — file will not be created or updated."),
-            ["llamacpp.spec_type"], _ngram_cache_active))
+            [f"{p}.spec_type"], _ngram_cache_active))
 
         # Per-model Inference Defaults — proxy-applied per-request body fields.
         # Override hierarchy: request body > this > top-level llamacpp.inference.
