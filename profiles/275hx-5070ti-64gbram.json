@@ -280,7 +280,7 @@
       "cuda": true
     },
     "vram_budget_mib": 11400,
-    "vram_ceiling_mib": 11700
+    "vram_ceiling_mib": 0
   },
   "heartbeat": {
     "enabled": false,
