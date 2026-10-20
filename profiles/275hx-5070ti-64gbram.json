@@ -212,7 +212,13 @@
         "draft_n": 3,
         "ubatch_size": 4096,
         "ctx_size_spec": 32768,
-        "env": "GGML_CUDA_REGISTER_HOST=1"
+        "env": "GGML_CUDA_REGISTER_HOST=1",
+        "draft_n_min": 1,
+        "draft_p_min": 0.75,
+        "spec_draft_sampling": "greedy",
+        "spec_draft_cpu_mask": "c03c03",
+        "spec_draft_prio": 3,
+        "spec_draft_poll": 100
       }
     },
     "inference": {
