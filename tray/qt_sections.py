@@ -58,17 +58,49 @@ def _page() -> tuple[QScrollArea, QWidget, QVBoxLayout]:
     return scroll, content, layout
 
 
+_MOE_CACHE: dict[str, bool] = {}
+
+def _is_moe_model(model_path: str, model_key: str = "") -> bool:
+    cache_key = f"{model_key}:{model_path}"
+    if cache_key in _MOE_CACHE:
+        return _MOE_CACHE[cache_key]
+    norm = f"{model_key} {model_path}".lower()
+    if any(k in norm for k in ("-a3b", "-a2b", "-a1b", "moe", "mixtral", "deepseek-v3", "deepseek-r1")):
+        _MOE_CACHE[cache_key] = True
+        return True
+    if model_path:
+        from llamacpp import config as _lcfg, gguf_info
+        try:
+            resolved = _lcfg.resolve_path(model_path)
+            if os.path.exists(resolved):
+                info = gguf_info.summarize(resolved)
+                exp_count = info.get("expert_count") or 0
+                is_moe = bool(exp_count > 1 or info.get("expert_bytes_total", 0) > 0)
+                _MOE_CACHE[cache_key] = is_moe
+                return is_moe
+        except Exception:
+            pass
+    if model_key:
+        snap = read_settings()
+        ek = model_key.replace(".", r"\.")
+        mcfg = get_path(snap, f"llamacpp.models.{ek}", {}) or {}
+        if int(mcfg.get("n_cpu_moe", 0) or 0) > 0 or bool(mcfg.get("moe_hybrid")):
+            _MOE_CACHE[cache_key] = True
+            return True
+    _MOE_CACHE[cache_key] = False
+    return False
+
 def _bind_patch_toggle_visibility(widget: QWidget, patch_prefix: str) -> None:
-    """Dynamically hide/show `widget` based on whether the patch matching `patch_prefix` is enabled in build settings."""
+    """Dynamically enable/disable (grey out) `widget` based on whether the patch matching `patch_prefix` is enabled."""
     try:
         from llamacpp import patcher
         matching = [p for p in patcher.patches() if p.name.startswith(patch_prefix)]
         if not matching:
-            widget.setVisible(False)  # the patch is not in the series: its settings do nothing
+            widget.setEnabled(False)
             return
         key = f"llamacpp.custom_build.patches.{patcher.patch_setting_name(matching[0])}"
         def _apply(val: Any) -> None:
-            widget.setVisible(bool(val if val is not None else True))
+            widget.setEnabled(bool(val if val is not None else True))
         _apply(get_path(read_settings(), key, True))
         _follow_setting(key, widget, _apply)
     except Exception:
@@ -5312,6 +5344,11 @@ def _models(window) -> QWidget:
             form_layout.addWidget(_c)
             return _b
 
+        def _sec_card(title: str, sub: str = "", patched: bool = False, patch: str = "") -> tuple[QFrame, QVBoxLayout]:
+            _c, _b = _card(title, sub, patched, patch)
+            form_layout.addWidget(_c)
+            return _c, _b
+
         _sl = form_layout   # anything before the first card (there is none today)
         _sl = _sec("Paths",
                     "llamacpp.models.<m>.path — GGUF file on disk")
@@ -5363,11 +5400,14 @@ def _models(window) -> QWidget:
             _number_row(f"{p}.n_gpu_layers", "GPU Layers",         0,   200,     1,   0, "",
                                                "Layers offloaded to GPU. Higher = faster, more VRAM."),
             [f"{p}.fit"], _fit_off))
-        _sl.addWidget(_number_row(f"{p}.n_cpu_moe",    "CPU MoE Layers",     0,   200,     1,   0, "",
-                                           "MoE experts kept on CPU. 0 = all on GPU."))
-        _sl.addWidget(_number_row(f"{p}.n_cpu_ffn",    "CPU Dense FFN Layers", 0,   200,     1,   0, "",
-                                           "--n-cpu-ffn: keep the dense FFN weights of the first N layers on the CPU "
-                                           "(dense models; for MoE expert weights use CPU MoE Layers). 0 = off."))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.n_cpu_moe",    "CPU MoE Layers",     0,   200,     1,   0, "",
+                         "MoE experts kept on CPU. 0 = all on GPU. (Disabled for dense models)"),
+            [f"{p}.path"], lambda pth: _is_moe_model(pth, key)))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.n_cpu_ffn",    "CPU Dense FFN Layers", 0,   200,     1,   0, "",
+                         "--n-cpu-ffn: keep the dense FFN weights of the first N layers on the CPU (Disabled for MoE models). 0 = off."),
+            [f"{p}.path"], lambda pth: not _is_moe_model(pth, key)))
         _sl.addWidget(_line_row(f"{p}.device",         "Devices",
                                          "e.g. CUDA0,CUDA1 / Vulkan0 / none",
                                          "--device: explicit comma-separated device list. Empty = let llama-server pick (split-mode applies)."))
@@ -5409,11 +5449,13 @@ def _models(window) -> QWidget:
                                                ("On", "on"),
                                                ("Off", "off")],
                                               "--flash-attn: set Flash Attention use ('on', 'off', or 'auto')."))
-        _sl.addWidget(_toggle_row(f"{p}.cpu_moe",       "CPU MoE (all experts)",
-                                           "--cpu-moe: keep ALL MoE expert layers on CPU (overrides n_cpu_moe)."))
-        _sl_hy = _sec("MoE Hybrid Mode",
-                      "--moe-hybrid-* — each layer keeps its most used experts on the GPU; the CPU computes the others at the same time",
-                      patch="0002-moe-hybrid")
+        _sl.addWidget(_dependent(
+            _toggle_row(f"{p}.cpu_moe",       "CPU MoE (all experts)",
+                         "--cpu-moe: keep ALL MoE expert layers on CPU (Disabled for dense models)."),
+            [f"{p}.path"], lambda pth: _is_moe_model(pth, key)))
+        _c_hy, _sl_hy = _sec_card("MoE Hybrid Mode",
+                                  "--moe-hybrid-* — each layer keeps its most used experts on the GPU; the CPU computes the others at the same time (MoE only)",
+                                  patch="0002-moe-hybrid")
         _hy_on = lambda on: bool(on)
         _sl_hy.addWidget(_toggle_row(f"{p}.moe_hybrid", "MoE Hybrid Mode",
                                      "For MoE models that do not fit in VRAM. Keeps every expert in RAM and the most used ones of each layer "
@@ -5451,20 +5493,29 @@ def _models(window) -> QWidget:
                         help_text="--moe-hybrid-tail-skip: skip CPU computation of non-resident experts ranked N or higher, 0 = off (default: 6).", default=6),
             [f"{p}.moe_hybrid"], _hy_on))
 
-        _sl = _sec("MoE Expert Cache",
-                    "llama.cpp --moe-cache-mib + telecode's automatic sizing — keep the hottest experts of CPU-resident layers in VRAM")
-        _sl.addWidget(_number_row(f"{p}.moe_cache_mib", "Cache Size", 0, 262144, 256, 0, "MiB",
+        _c_ec, _sl_ec = _sec_card("MoE Expert Cache",
+                                  "llama.cpp --moe-cache-mib + telecode's automatic sizing — keep the hottest experts of CPU-resident layers in VRAM (MoE only)")
+        _sl_ec.addWidget(_number_row(f"{p}.moe_cache_mib", "Cache Size", 0, 262144, 256, 0, "MiB",
                                            "--moe-cache-mib: VRAM for the experts of layers kept on the CPU (--n-cpu-moe / --cpu-moe), "
                                            "split among GPUs like the layers. 0 = off. Without CPU-miss mode a missing expert is uploaded "
                                            "before the layer runs (upstream behaviour)."))
-        _sl.addWidget(_toggle_row(f"{p}.moe_cache_auto", "Auto Cache Size",
+        _sl_ec.addWidget(_toggle_row(f"{p}.moe_cache_auto", "Auto Cache Size",
                                            "Size the cache at every start from the VRAM that is free then, minus the dense weights, the KV cache for the "
                                            "context in use and the headroom below, and start again with a smaller cache if the server still runs out of GPU "
                                            "memory (up to 3 times, 20% smaller each). Cache Size above, when set, becomes a ceiling. Needs nvidia-smi."))
-        _sl.addWidget(_dependent(
+        _sl_ec.addWidget(_dependent(
             _number_row(f"{p}.moe_cache_auto_headroom_mib", "Auto Cache Headroom", 0, 16384, 128, 0, "MiB",
                          "VRAM kept free for compute buffers, the CUDA context and other programs when the cache size is chosen automatically.", default=1500),
             [f"{p}.moe_cache_auto"], lambda a: bool(a)))
+
+        def _update_moe_cards(pth: str) -> None:
+            moe_active = _is_moe_model(pth, key)
+            _c_hy.setEnabled(moe_active)
+            _c_ec.setEnabled(moe_active)
+
+        _cur_mpath = str(get_path(read_settings(), f"{p}.path", "") or "")
+        _follow_setting(f"{p}.path", _c_hy, lambda pth: _update_moe_cards(str(pth or "")))
+        _update_moe_cards(_cur_mpath)
 
         _sl = _sec("Chat Template", "--jinja / --chat-template-file / --chat-template — how the conversation is turned into a prompt")
         _sl.addWidget(_toggle_row(f"{p}.jinja",         "Jinja Chat Template",
@@ -5574,14 +5625,15 @@ def _models(window) -> QWidget:
                        "e.g. CUDA0,CUDA1",
                        "--device-draft / -devd: comma-separated device list for draft offload."),
             _draft_paths, _draft_knobs_active))
+        _draft_moe_active = lambda dm, st: _draft_knobs_active(dm, st) and _is_moe_model(str(dm or ""), "")
         _sl.addWidget(_dependent(
             _toggle_row(f"{p}.cpu_moe_draft",      "Draft CPU MoE (all)",
-                         "--cpu-moe-draft: keep ALL MoE expert layers of the draft model on CPU (mirrors --cpu-moe)."),
-            _draft_paths, _draft_knobs_active))
+                         "--cpu-moe-draft: keep ALL MoE expert layers of the draft model on CPU. (Disabled for dense draft models)"),
+            _draft_paths, _draft_moe_active))
         _sl.addWidget(_dependent(
             _number_row(f"{p}.n_cpu_moe_draft",    "Draft CPU MoE Layers", 0, 200, 1, 0, "",
-                         "--n-cpu-moe-draft: first N MoE layers of the draft model on CPU. 0 = all on GPU."),
-            _draft_paths, _draft_knobs_active))
+                         "--n-cpu-moe-draft: first N MoE layers of the draft model on CPU. (Disabled for dense draft models)"),
+            _draft_paths, _draft_moe_active))
         _sl.addWidget(_dependent(
             _number_row(f"{p}.draft_n",     "Draft Max Tokens",  0, 32,   1,    0, "",
                          "--spec-draft-n-max: max draft tokens per step. v9243 default 3 (was 16)."),
