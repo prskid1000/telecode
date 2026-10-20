@@ -23,7 +23,7 @@ from llamacpp import vram
 _LOG = logging.getLogger("telecode.llamacpp.preflight")
 
 _MMPROJ = re.compile(r"estimated worst-case memory usage of mmproj is ([\d.]+) MiB")
-_ROW = re.compile(r"CUDA0 \(.*?\)\s*\|\s*(\d+) =\s*(\d+) \+ \((\d+) =\s*(\d+) \+\s*(\d+) \+\s*(\d+)\)")
+_ROW = re.compile(r"CUDA0 \(.*?\)\s*\|\s*(\d+)\s*=\s*(\d+)\s*\+\s*\(\s*(\d+)\s*=\s*(\d+)\s*\+\s*(\d+)\s*\+\s*(\d+)\)")
 # more than this on the GPU while only the plan is being made means the weights are being loaded: stop at once
 _LOAD_GUARD_MIB = 3000
 

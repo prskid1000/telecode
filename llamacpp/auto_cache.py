@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import config as app_config
 from llamacpp import config as cfg
 from llamacpp import gguf_info, vram
 
@@ -79,7 +80,23 @@ def plan(model_name: str, scale: float = 1.0) -> Optional[dict]:
     path = mcfg.get("path")
     if not path:
         return None
+    # Respect vram_budget_mib and vram_ceiling_mib
+    overhead = cfg.preflight_overhead_mib()
+    ceiling = cfg.vram_ceiling_mib()
+    budget = cfg.as_int(mcfg.get("vram_budget_mib"))
+    limit = budget if budget > 0 else ceiling
+    if limit > 0:
+        free = min(free, max(0, limit - overhead))
+
     headroom = headroom_mib(model_name)
+    ubatch = cfg.as_int(mcfg.get("ubatch_size")) or cfg.as_int(app_config.get_nested("llamacpp.ubatch_size")) or 512
+    parallel = cfg.as_int(mcfg.get("parallel")) or cfg.as_int(app_config.get_nested("llamacpp.parallel")) or 1
+    extra_headroom = 0
+    if ubatch >= 2048:
+        extra_headroom += 1000 if ubatch >= 4096 else 500
+    if parallel > 1:
+        extra_headroom += (parallel - 1) * 350
+    headroom += extra_headroom
     try:
         # the suggestion plans with 1500 MiB of headroom: shift the free memory so that it means the configured headroom
         # ctx_size 0 means the trained context for llama-server: plan the KV cache for that, not for 8192

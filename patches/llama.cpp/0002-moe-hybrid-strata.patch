@@ -18,117 +18,10 @@ device fault); ggml_backend_sched_set_early_cpu_inputs (bounded, skipped with GG
 WDDM hit poke via event query on Windows forcing immediate concurrent GPU submission before CPU drain; Blackwell sm_120 MMVQ tuning.
 
 diff --git a/common/arg.cpp b/common/arg.cpp
-index 8b302d5d7..58bd7ad11 100644
+index 8b302d5d7..621e97d11 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
-@@ -1724,6 +1724,106 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
-             params.cache_ram_explicit = true;
-         }
-     ).set_env("LLAMA_ARG_CACHE_RAM").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
-+    add_opt(common_arg(
-+        {"--lmcache"},
-+        "LMCache: keep the state of finished conversations and restore the longest one whose tokens start a new prompt, from any slot "
-+        "(default: disabled)",
-+        [](common_params & params) {
-+            params.lmcache.enabled = true;
-+        }
-+    ).set_env("LLAMA_ARG_LMCACHE").set_examples({LLAMA_EXAMPLE_SERVER}));
-+    add_opt(common_arg(
-+        {"--lmcache-chunk-size"}, "N",
-+        string_format("LMCache: prompts are matched in steps of N tokens, 16..8192 (default: %d)", params.lmcache.chunk_size),
-+        [](common_params & params, int value) {
-+            if (value < 16 || value > 8192) {
-+                throw std::invalid_argument("invalid lmcache chunk size");
-+            }
-+            params.lmcache.chunk_size = value;
-+        }
-+    ).set_env("LLAMA_ARG_LMCACHE_CHUNK_SIZE").set_examples({LLAMA_EXAMPLE_SERVER}));
-+    add_opt(common_arg(
-+        {"--lmcache-ram-mb"}, "N",
-+        string_format("LMCache: RAM in MiB for the states (default: %d)", params.lmcache.ram_mb),
-+        [](common_params & params, int value) {
-+            if (value < 0) {
-+                throw std::invalid_argument("invalid lmcache ram size");
-+            }
-+            params.lmcache.ram_mb = value;
-+        }
-+    ).set_env("LLAMA_ARG_LMCACHE_RAM_MB").set_examples({LLAMA_EXAMPLE_SERVER}));
-+    add_opt(common_arg(
-+        {"--lmcache-disk"},
-+        "LMCache: also keep the states on disk, they survive restarts (default: disabled)",
-+        [](common_params & params) {
-+            params.lmcache.disk_enabled = true;
-+        }
-+    ).set_env("LLAMA_ARG_LMCACHE_DISK").set_examples({LLAMA_EXAMPLE_SERVER}));
-+    add_opt(common_arg(
-+        {"--lmcache-disk-dir"}, "DIR",
-+        string_format("LMCache: folder for the states on disk (default: %s)", params.lmcache.disk_dir.c_str()),
-+        [](common_params & params, const std::string & value) {
-+            params.lmcache.disk_dir = value;
-+        }
-+    ).set_env("LLAMA_ARG_LMCACHE_DISK_DIR").set_examples({LLAMA_EXAMPLE_SERVER}));
-+    add_opt(common_arg(
-+        {"--lmcache-disk-max-mb"}, "N",
-+        string_format("LMCache: disk space in MiB, the oldest files go first (default: %d)", params.lmcache.disk_max_mb),
-+        [](common_params & params, int value) {
-+            if (value < 0) {
-+                throw std::invalid_argument("invalid lmcache disk max size");
-+            }
-+            params.lmcache.disk_max_mb = value;
-+        }
-+    ).set_env("LLAMA_ARG_LMCACHE_DISK_MAX_MB").set_examples({LLAMA_EXAMPLE_SERVER}));
-+    add_opt(common_arg(
-+        {"--lmcache-disk-idle-sec"}, "N",
-+        string_format("LMCache: write new states to disk only after N seconds without requests, and at shutdown; the earlier turns of a "
-+                      "conversation are not written (default: %d)", params.lmcache.disk_idle_sec),
-+        [](common_params & params, int value) {
-+            if (value < 0) {
-+                throw std::invalid_argument("invalid lmcache disk idle time");
-+            }
-+            params.lmcache.disk_idle_sec = value;
-+        }
-+    ).set_env("LLAMA_ARG_LMCACHE_DISK_IDLE_SEC").set_examples({LLAMA_EXAMPLE_SERVER}));
-+    add_opt(common_arg(
-+        {"--lmcache-checkpoints"}, "N",
-+        string_format("LMCache: context checkpoints kept with each saved state, half the earliest and half the latest; they let a later prompt "
-+                      "that changes earlier (a compacted conversation) restart near the change (default: %d, 0 = none)", params.lmcache.max_checkpoints),
-+        [](common_params & params, int value) {
-+            if (value < 0) {
-+                throw std::invalid_argument("invalid lmcache checkpoint count");
-+            }
-+            params.lmcache.max_checkpoints = value;
-+        }
-+    ).set_env("LLAMA_ARG_LMCACHE_CHECKPOINTS").set_examples({LLAMA_EXAMPLE_SERVER}));
-+    // accepted so older launch settings keep working; they do nothing
-+    add_opt(common_arg(
-+        {"--lmcache-blend"},
-+        "LMCache: ignored (not implemented), kept for compatibility",
-+        [](common_params &) {}
-+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
-+    add_opt(common_arg(
-+        {"--lmcache-blend-recompute"}, "F",
-+        "LMCache: ignored (not implemented), kept for compatibility",
-+        [](common_params &, const std::string &) {}
-+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
-+    add_opt(common_arg(
-+        {"--lmcache-blend-min-tokens"}, "N",
-+        "LMCache: ignored (not implemented), kept for compatibility",
-+        [](common_params &, int) {}
-+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
-+    add_opt(common_arg(
-+        {"--lmcache-compress"}, "TYPE",
-+        "LMCache: ignored (states are stored as they are), kept for compatibility",
-+        [](common_params &, const std::string &) {}
-+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
-+    add_opt(common_arg(
-+        {"--lmcache-async-save"}, {"--no-lmcache-async-save"},
-+        "LMCache: ignored (disk writes are always on a background thread), kept for compatibility",
-+        [](common_params &, bool) {}
-+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
-     add_opt(common_arg(
-         {"-kvu", "--kv-unified"},
-         {"-no-kvu", "--no-kv-unified"},
-@@ -2787,6 +2887,70 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -2787,6 +2787,70 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.moe_cache_size = (size_t) value*1024*1024;
          }
      ).set_env("LLAMA_ARG_MOE_CACHE_MIB"));
@@ -218,29 +111,10 @@ index b59e66e3b..8e17eb063 100644
  }
  
 diff --git a/common/common.h b/common/common.h
-index 0c2d5e46f..44a158187 100644
+index 0c2d5e46f..813092688 100644
 --- a/common/common.h
 +++ b/common/common.h
-@@ -374,6 +374,18 @@ struct common_params_speculative_ngram_cache {
-     std::string lookup_cache_dynamic; // path of dynamic ngram cache file for lookup decoding
- };
- 
-+// LMCache: conversation states kept in RAM / on disk and restored for a prompt that starts with one (llama-server)
-+struct common_params_lmcache {
-+    bool        enabled      = false;
-+    int32_t     chunk_size   = 256;   // prompts are matched in steps of this many tokens
-+    int32_t     ram_mb       = 8192;  // RAM for the states
-+    bool        disk_enabled = false; // also keep them on disk (survives restarts)
-+    std::string disk_dir     = "./data/lmcache";
-+    int32_t     disk_max_mb  = 65536;
-+    int32_t     disk_idle_sec = 30;   // write new states to disk only after this many seconds without requests (and at shutdown)
-+    int32_t     max_checkpoints = 4;  // context checkpoints kept with each saved state (half the earliest, half the latest)
-+};
-+
- struct common_params_speculative {
-     std::vector<enum common_speculative_type> types = { COMMON_SPECULATIVE_TYPE_NONE };
- 
-@@ -597,6 +609,13 @@ struct common_params {
+@@ -597,6 +597,13 @@ struct common_params {
  
      size_t moe_cache_size = 0; // GPU cache size in bytes for the MoE experts kept in the CPU, split among the GPUs like the layers
  
@@ -254,14 +128,6 @@ index 0c2d5e46f..44a158187 100644
      common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
  
      // multimodal models (see tools/mtmd)
-@@ -640,6 +659,7 @@ struct common_params {
-     int32_t kv_unified_per_slot = 0;     // max context per parallel slot; 0 = unset
-     int32_t checkpoint_min_step = 8192;  // minimum spacing between context checkpoints
-     int32_t cache_ram_mib       = 8192;  // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
-+    common_params_lmcache lmcache;       // --lmcache, see tools/server/server-lmcache.h
-     bool    cache_ram_explicit  = false; // set by --cache-ram, decision models disable the cache otherwise
- 
-     std::string public_path   = "";                                                                         // NOLINT
 diff --git a/common/speculative.cpp b/common/speculative.cpp
 index d8afd4095..894e98bc1 100644
 --- a/common/speculative.cpp
@@ -327,7 +193,7 @@ index dc7367dec..4227a946e 100644
  
      struct ggml_backend_device {
 diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
-index ffbcba366..8853aa611 100644
+index ffbcba366..0386b329e 100644
 --- a/ggml/src/ggml-backend.cpp
 +++ b/ggml/src/ggml-backend.cpp
 @@ -693,6 +693,14 @@ void ggml_backend_event_record(ggml_backend_event_t event, ggml_backend_t backen
@@ -489,7 +355,7 @@ index ffbcba366..8853aa611 100644
          // ensure the previous split's async work has completed before we start
          // this split, the allocator may have reused buffer regions across splits
          if (split->n_inputs == 0 && prev_backend_id >= 0 && prev_backend_id != split_backend_id) {
-@@ -1886,21 +1999,84 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
+@@ -1886,17 +1999,52 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
          // copy the input tensors to the split backend
          // the weights in host memory are copied last, so that the copy callback can read the other inputs of the split
          for (int input_id = 0; input_id < split->n_inputs; input_id++) {
@@ -544,39 +410,7 @@ index ffbcba366..8853aa611 100644
              enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
              if (ec != GGML_STATUS_SUCCESS) {
                  return ec;
-             }
-+        }
-+
-+        // Strata breakthrough: Hit Poke on Windows / WDDM
-+        // When a GPU split is followed by a CPU split, force WDDM to submit the GPU command buffer
-+        // immediately via an event record + query. Without this, WDDM defers the GPU commands in host memory
-+        // while the CPU thread executes, killing parallelism between GPU hits and CPU misses.
-+        if (split_id + 1 < sched->n_splits && split_backend_id >= 0 && split_backend_id < GGML_SCHED_MAX_BACKENDS) {
-+            struct ggml_backend_sched_split * next = &splits[split_id + 1];
-+            if (next->backend_id >= 0 && next->backend_id < sched->n_backends) {
-+                ggml_backend_t next_backend = sched->backends[next->backend_id];
-+                ggml_backend_dev_t split_dev = ggml_backend_get_device(split_backend);
-+                ggml_backend_dev_t next_dev  = ggml_backend_get_device(next_backend);
-+                if (split_dev != NULL && next_dev != NULL &&
-+                    ggml_backend_dev_type(split_dev) != GGML_BACKEND_DEVICE_TYPE_CPU &&
-+                    ggml_backend_dev_type(next_dev)  == GGML_BACKEND_DEVICE_TYPE_CPU &&
-+                    split_backend->iface.event_record != NULL &&
-+                    split_dev->iface.event_new != NULL &&
-+                    split_dev->iface.event_query != NULL) {
-+                    if (sched->poke_events[split_backend_id] == NULL && !sched->poke_tried[split_backend_id]) {
-+                        sched->poke_tried[split_backend_id] = true;
-+                        sched->poke_events[split_backend_id] = ggml_backend_event_new(split_dev);
-+                    }
-+                    if (sched->poke_events[split_backend_id] != NULL) {
-+                        ggml_backend_event_record(sched->poke_events[split_backend_id], split_backend);
-+                        (void) ggml_backend_event_query(sched->poke_events[split_backend_id]); // WDDM hardware flush
-+                    }
-+                }
-+            }
-         } else {
-             // similar to ggml_backend_compare_graph_backend
-             for (int j0 = 0; j0 < split->graph.n_nodes; j0++) {
-@@ -1935,6 +2111,34 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
+@@ -1935,6 +2083,34 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
              }
          }
  
@@ -611,7 +445,7 @@ index ffbcba366..8853aa611 100644
          // record the event of this split
          if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
              ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy], split_backend);
-@@ -2026,6 +2230,12 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
+@@ -2026,6 +2202,12 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
          for (int c = 0; c < sched->n_copies; c++) {
              ggml_backend_event_free(sched->events[b][c]);
          }
@@ -624,7 +458,7 @@ index ffbcba366..8853aa611 100644
      }
      ggml_gallocr_free(sched->galloc);
      ggml_free(sched->ctx);
-@@ -2155,6 +2365,11 @@ void ggml_backend_sched_set_copy_callback(ggml_backend_sched_t sched, ggml_backe
+@@ -2155,6 +2337,11 @@ void ggml_backend_sched_set_copy_callback(ggml_backend_sched_t sched, ggml_backe
      sched->callback_copy_user_data = user_data;
  }
  

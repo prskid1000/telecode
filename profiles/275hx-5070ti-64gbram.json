@@ -165,7 +165,7 @@
         "path": "D:/.models/qwen3.8/Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf",
         "mmproj": "D:\\.models\\qwen3.8\\mmproj-F16.gguf",
         "ctx_size": 100000,
-        "n_gpu_layers": 99,
+        "n_gpu_layers": 36,
         "override_tensor": "^token_embd\\.weight=CPU,^output\\.weight=CPU",
         "flash_attn": "on",
         "cache_type_k": "q4_0",
