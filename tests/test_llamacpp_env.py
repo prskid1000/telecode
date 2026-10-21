@@ -97,3 +97,40 @@ def test_extra_env_merge(monkeypatch):
         "GLOBAL_VAR_1": "global_val_1",
         "SHARED_VAR": "from_global",
     }
+
+
+def test_inference_for_model_overrides(monkeypatch):
+    from llamacpp.config import inference_for
+
+    test_settings = {
+        "llamacpp": {
+            "inference": {
+                "context_overflow": "truncate_middle",
+                "drop_prior_thinking": True,
+            },
+            "models": {
+                "custom-model": {
+                    "inference_defaults": {
+                        "context_overflow": "error",
+                        "drop_prior_thinking": False,
+                    }
+                },
+                "default-model": {}
+            }
+        }
+    }
+
+    monkeypatch.setattr(app_config, "get_nested", lambda path, default=None: (
+        test_settings["llamacpp"]["inference"] if path == "llamacpp.inference"
+        else test_settings["llamacpp"]["models"] if path == "llamacpp.models"
+        else test_settings.get("llamacpp") if path == "llamacpp"
+        else default
+    ))
+
+    custom = inference_for("custom-model")
+    assert custom["context_overflow"] == "error"
+    assert custom["drop_prior_thinking"] is False
+
+    default_inf = inference_for("default-model")
+    assert default_inf["context_overflow"] == "truncate_middle"
+    assert default_inf["drop_prior_thinking"] is True

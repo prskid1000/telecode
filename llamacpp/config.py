@@ -268,6 +268,7 @@ _INFERENCE_DEFAULTS: dict[str, Any] = {
     "max_tokens": None,
     "stop": [],
     "context_overflow": "truncate_middle",
+    "drop_prior_thinking": True,
     # Off by default: llama.cpp's own default is unrestricted thinking, and a
     # cap that bites is a deliberate choice, not something to inherit silently.
     "thinking_budget": {"enabled": False},
@@ -318,7 +319,11 @@ def inference_defaults() -> dict[str, Any]:
 def inference_for(model_name: str) -> dict[str, Any]:
     """Resolved inference config for a specific model (per-model overrides global)."""
     global_cfg = inference_defaults()
-    model_override = (model_cfg(model_name).get("inference_defaults") or {})
+    m_cfg = model_cfg(model_name)
+    model_override = dict(m_cfg.get("inference_defaults") or {})
+    for k in ("context_overflow", "drop_prior_thinking"):
+        if k in m_cfg and k not in model_override:
+            model_override[k] = m_cfg[k]
     return _deep_merge(global_cfg, model_override)
 
 

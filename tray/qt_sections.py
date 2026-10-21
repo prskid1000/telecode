@@ -2479,32 +2479,6 @@ def _llama(window) -> QWidget:
         ["llamacpp.lmcache", "llamacpp.lmcache_disk"], _lmc_disk))
     layout.addWidget(lmcache_card)
 
-    # Proxy Behavior card — global behavior knobs with NO per-model equivalent.
-    # Sampling defaults (temperature/top_p/etc.) live in the Models section per
-    # model since each model has its own sweet spot.
-    pb_card, pb_body = _card("Request Handling (all models)",
-                              "How the proxy shapes requests for every local model "
-                              "(llamacpp.inference.*) — these have no per-model override; sampler "
-                              "defaults are per model on the Models page. Client-facing proxy "
-                              "options live on the Proxy page.")
-    pb_body.addWidget(_enum_row("llamacpp.inference.context_overflow", "Context Overflow",
-                                 [("Truncate Middle", "truncate_middle"),
-                                  ("Truncate Left",   "truncate_left"),
-                                  ("Truncate Right",  "truncate_right"),
-                                  ("Error",           "error")],
-                                 "What to do when the prompt exceeds ctx_size."))
-    pb_body.addWidget(_toggle_row("llamacpp.inference.drop_prior_thinking",
-                                   "Drop Prior-Turn Thinking",
-                                   "LAYER 1 of 3, and the one that wins. On (default): strip thinking blocks "
-                                   "from prior assistant turns before the request leaves the proxy, so llama.cpp "
-                                   "never sees them and regenerates instead. Off: keep them, re-injected as "
-                                   "<think>...</think> for models that need prior reasoning for multi-turn "
-                                   "coherence." "\n\n" "While this is ON the other two layers have nothing to "
-                                   "act on: the model's Preserve Reasoning toggle (layer 3) greys out, and a "
-                                   "preserve_thinking chat-template kwarg (layer 2) is asking the template to "
-                                   "re-render content that was already deleted here."))
-    layout.addWidget(pb_card)
-
     # Structured output card
     so_card, so_body = _card("Structured Output",
                              "llamacpp.inference.structured_output.* — global: the proxy adds this JSON "
@@ -5725,6 +5699,12 @@ def _models(window) -> QWidget:
         _sl.addWidget(_list_row(f"{ip}.stop", "Stop Strings",
                                          "Generation halts when any of these appears (one per line).",
                                          "</s>"))
+        _sl.addWidget(_enum_row(f"{ip}.context_overflow", "Context Overflow",
+                                [("Truncate Middle", "truncate_middle"),
+                                 ("Truncate Left",   "truncate_left"),
+                                 ("Truncate Right",  "truncate_right"),
+                                 ("Error",           "error")],
+                                "What to do when the prompt exceeds ctx_size. Truncate Middle keeps the system prompt and recent turns so prefix caching survives."))
 
         _sl = _sec("Reasoning Parser",
                     "inference_defaults.reasoning.* — how the proxy detects and surfaces think blocks; does not change what the model generates")
@@ -6053,18 +6033,28 @@ def _models(window) -> QWidget:
                                               "carries none; 'default' keeps the template's own. Requests through the proxy get "
                                               "their level from the Reasoning Effort Map / per-model Reasoning Effort instead."),
             [f"{p}.reasoning"], _reason_not_off))
-        # Layer 3 of the prior-reasoning chain. Layer 1 (the proxy's
+        # Layer 1 & 3 of the prior-reasoning chain. Layer 1 (the proxy's
         # drop_prior_thinking) strips the content before llama.cpp ever sees it,
         # so while that is on this switch has nothing to preserve -- grey it out
         # rather than let it look effective.
+        _sl.addWidget(_dependent(
+            _toggle_row(f"{ip}.drop_prior_thinking", "Drop Prior-Turn Thinking",
+                "LAYER 1 of prior reasoning. On (default): strip thinking blocks "
+                "from prior assistant turns before the request leaves the proxy, so llama.cpp "
+                "never sees them and regenerates instead. Off: keep them, re-injected as "
+                "<think>...</think> for models that need prior reasoning for multi-turn "
+                "coherence (and unlocks Preserve Reasoning below).",
+                default=True),
+            [f"{p}.reasoning"], _reason_not_off))
         _sl.addWidget(_dependent(
             _toggle_row(f"{p}.reasoning_preserve", "Preserve Reasoning",
                 "--reasoning-preserve: keep the reasoning trace across the whole "
                 "history, not just the last assistant message. It drives the "
                 "template's preserve_thinking variable, so prefer it over setting "
-                "that kwarg by hand." "\n\n" "Needs Drop Prior-Turn Thinking (Proxy "
-                "Behavior card) OFF — otherwise nothing is left to keep."),
-            ["llamacpp.inference.drop_prior_thinking"], lambda d: not bool(d)))
+                "that kwarg by hand." "\n\n" "Needs Drop Prior-Turn Thinking OFF "
+                "— otherwise nothing is left to keep."),
+            [f"{p}.reasoning", f"{ip}.drop_prior_thinking"],
+            lambda r, d: _reason_not_off(r) and not (True if d is None else bool(d))))
 
     def _refresh_picker(preserve_key: str | None = None):
         picker.blockSignals(True)

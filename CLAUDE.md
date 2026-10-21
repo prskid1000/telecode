@@ -366,8 +366,8 @@ forces a full re-prefill — measured 2026-09-03: a 2,206-token session-title ca
 - `llamacpp.*` — server-wide CLI flags (threads, batch, load_mode, kv_*, spec_type, cache_ram, endpoints,
   server-mode, timeout, api_prefix, video_*).
 - `llamacpp.models.<m>.*` — per-model flags re-taking effect on respawn (ctx_size, n_gpu_layers, n_cpu_moe, mmproj, rope_*, yarn_*, draft_*, lora, grammar, reasoning_*, override_*, device, chat_template).
-- `llamacpp.models.<m>.inference_defaults.*` — proxy-applied request-body fields (temperature, top_p, max_tokens, stop, reasoning.*, chat_template_kwargs).
-- `llamacpp.inference.*` — proxy-applied global fallbacks. Hierarchy: request body > per-model > top-level. The llama.cpp page's "Request Handling (all models)" card exposes only keys without per-model equivalent (`context_overflow`, `drop_prior_thinking`, `structured_output.*`, `reasoning_effort_map.*`).
+- `llamacpp.models.<m>.inference_defaults.*` — proxy-applied request-body fields (temperature, top_p, max_tokens, stop, context_overflow, drop_prior_thinking, reasoning.*, chat_template_kwargs).
+- `llamacpp.inference.*` — proxy-applied global fallbacks. Hierarchy: request body > per-model > top-level (`structured_output.*`, `reasoning_effort_map.*`).
 
 **Reasoning is two layers, deliberately split.** `reasoning_effort_map` → `thinking_budget_tokens`, a llama.cpp *body* param (model-agnostic, so global; gated behind `thinking_budget.enabled`, **off by default**, and honoured only on builds ≥ b9982 with no `--reasoning-budget` on the CLI). Per-model `inference_defaults.reasoning_effort.{template_key,map}` → the *template* string, whose vocabulary each model defines itself — Qwen 3.8 accepts only `xhigh|medium|low` (aliasing `high`→`xhigh`) and `raise_exception`s otherwise, GPT-OSS wants `low|medium|high`. Map keys are Claude Code’s effort levels; values are the model’s. An unmapped or empty value emits nothing. Values are not validated — they are per-model and visible in the tray, so a bad one is a visible config error rather than something to guard here.
 
