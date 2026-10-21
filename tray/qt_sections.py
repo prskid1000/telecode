@@ -5488,7 +5488,6 @@ def _models(window) -> QWidget:
         _sl_ds.addWidget(_line_row(f"{p}.head_subset_ids", "Head Subset Token IDs",
                                    "path/to/tokens.txt",
                                    "--head-subset-ids: optional text file with specific token IDs (one per line, ranked by frequency) to keep in VRAM."))
-        _sl.addWidget(_c_ds)
 
         _sl = _sec("Chat Template", "--jinja / --chat-template-file / --chat-template — how the conversation is turned into a prompt")
         _sl.addWidget(_toggle_row(f"{p}.jinja",         "Jinja Chat Template",
