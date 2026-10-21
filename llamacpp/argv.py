@@ -330,6 +330,9 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("ctx_size",      "--ctx-size",        "value"),
     ("n_gpu_layers",  "--n-gpu-layers",    "value"),
     ("device",        "--device",          "value"),
+    ("split_mode",    "--split-mode",      "value"),
+    ("main_gpu",      "--main-gpu",        "value"),
+    ("tensor_split",  "--tensor-split",    "value"),
     ("batch_size",    "--batch-size",      "value_nz"),
 
     # Attention
@@ -382,6 +385,7 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("mmproj_auto",       ("--mmproj-auto", "--no-mmproj-auto"), "bool_pair"),
     ("mtmd_batch_max_tokens", "--mtmd-batch-max-tokens", "value_nz"),
     ("mmproj_offload",    ("--mmproj-offload", "--no-mmproj-offload"), "bool_pair"),
+    ("mmproj_device",     "--mmproj-device",     "value"),
     ("image_min_tokens",  "--image-min-tokens",  "value_nz"),
     ("image_max_tokens",  "--image-max-tokens",  "value_nz"),
 
@@ -425,6 +429,7 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     # LoRA
     ("lora",          "--lora",            "path"),
     ("lora_scale",    "--lora-scaled",     "value"),
+    ("lora_init_without_apply", "--lora-init-without-apply", "flag"),
 
     # Control vectors (steering). control_vector takes comma-separated paths;
     # control_vector_scaled takes path:scale,...; the layer range is "START END".

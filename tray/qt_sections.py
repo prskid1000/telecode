@@ -2256,12 +2256,6 @@ def _llama(window) -> QWidget:
                                       "--threads: CPU threads for generation."))
     spawn_body.addWidget(_number_row("llamacpp.threads_batch",  "Threads (batch)",   0,  128, 1, 0, "",
                                       "--threads-batch: CPU threads for prompt processing. 0 = match --threads."))
-    spawn_body.addWidget(_enum_row("llamacpp.split_mode",       "Split Mode",
-                                    [("Layer (default)", "layer"),
-                                     ("Row",             "row"),
-                                     ("Tensor (EXPERIMENTAL)", "tensor"),
-                                     ("None",            "none")],
-                                    "--split-mode: how layers are sharded across GPUs."))
     spawn_body.addWidget(_enum_row("llamacpp.numa",             "NUMA Strategy",
                                     [("(no tweaks)", ""),
                                      ("Distribute", "distribute"),
@@ -2288,15 +2282,6 @@ def _llama(window) -> QWidget:
                                       "deprecated Mlock / No mmap / Direct I/O toggles. mlock keeps the "
                                       "weights resident so they are never paged out; dio bypasses the OS "
                                       "page cache during load and is mutually exclusive with mlock."))
-    spawn_body.addWidget(_number_row("llamacpp.main_gpu",       "Main GPU",          0,  16,  1, 0, "",
-                                      "--main-gpu: index of the primary CUDA/ROCm device."))
-    spawn_body.addWidget(_line_row("llamacpp.mmproj_device",   "mmproj Device",
-                                      "none",
-                                      "--mmproj-device: which device runs the multimodal projector. "
-                                      "'none' keeps it off the GPU entirely."))
-    spawn_body.addWidget(_line_row("llamacpp.tensor_split",     "Tensor Split",
-                                    "e.g. 0.5,0.5",
-                                    "--tensor-split: comma-separated weights for multi-GPU split."))
 
     spawn_body.addWidget(_number_row("llamacpp.seed",           "Seed",             -1, 2147483647, 1, 0, "",
                                       "--seed: -1 = random."))
@@ -2394,9 +2379,6 @@ def _llama(window) -> QWidget:
     spawn_body.addWidget(_toggle_row("llamacpp.perf", "Performance Timings",
                                       "--perf / --no-perf: print libllama's internal timing breakdown to the llama log "
                                       "(server default: off). Cheap, handy when tuning."))
-    spawn_body.addWidget(_toggle_row("llamacpp.lora_init_without_apply", "Load LoRA Unapplied",
-                                      "--lora-init-without-apply: load LoRA adapters but do not apply them; scale them later "
-                                      "through POST /lora-adapters."))
     layout.addWidget(spawn_card)
 
     # ── Environment card — variables for the spawned llama-server ────
@@ -5384,6 +5366,11 @@ def _models(window) -> QWidget:
                          "--mtmd-batch-max-tokens: most image tokens encoded in one batch. Raise for fewer, larger "
                          "encode passes (more VRAM); 0 = server default (1024).", default=0),
             [f"{p}.mmproj"], _has_mmproj))
+        _sl.addWidget(_dependent(
+            _line_row(f"{p}.mmproj_device", "mmproj Device",
+                      "none",
+                      "--mmproj-device: which device runs the multimodal projector. 'none' keeps it off the GPU entirely."),
+            [f"{p}.mmproj"], _has_mmproj))
 
         _sl = _sec("Capacity",
                     "llamacpp.models.<m>.* — context window, batching, and layer placement")
@@ -5959,6 +5946,10 @@ def _models(window) -> QWidget:
                          0.0, 4.0, 0.05, 2, "",
                          "--lora-scaled: blend strength (1.0 = full)."),
             [f"{p}.lora"], lambda l: bool(str(l or "").strip())))
+        _sl.addWidget(_dependent(
+            _toggle_row(f"{p}.lora_init_without_apply", "Load LoRA Unapplied",
+                        "--lora-init-without-apply: load LoRA adapters but do not apply them; scale them later through POST /lora-adapters."),
+            [f"{p}.lora"], lambda l: bool(str(l or "").strip())))
 
         _sl = _sec("Control Vectors",
                     "--control-vector* - steer the model's activations with trained vectors")
@@ -5990,6 +5981,17 @@ def _models(window) -> QWidget:
 
         _sl = _sec("Advanced Placement",
                     "--override-* / --device — tensor and KV placement overrides")
+        _sl.addWidget(_enum_row(f"{p}.split_mode", "Split Mode",
+                                [("Layer (default)", "layer"),
+                                 ("Row",             "row"),
+                                 ("Tensor (EXPERIMENTAL)", "tensor"),
+                                 ("None",            "none")],
+                                "--split-mode: how layers are sharded across GPUs."))
+        _sl.addWidget(_number_row(f"{p}.main_gpu", "Main GPU", 0, 16, 1, 0, "",
+                                  "--main-gpu: index of the primary CUDA/ROCm device."))
+        _sl.addWidget(_line_row(f"{p}.tensor_split", "Tensor Split",
+                                "e.g. 0.5,0.5",
+                                "--tensor-split: comma-separated weights for multi-GPU split."))
         _sl.addWidget(_line_row(f"{p}.override_tensor", "Override Tensor",
                                          "blk\\.[0-9]+\\.ffn_.*=CPU",
                                          "--override-tensor: per-tensor buffer placement. Pattern=buffer (regex), comma-separated. "
