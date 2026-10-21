@@ -45,7 +45,7 @@
       "exact": true
     },
     {
-      "file": "0004-dense-draft-head-subset.patch",
+      "file": "0004-dense-head-subset-pruning.patch",
       "paths": [
         "include/llama.h",
         "common/common.h",

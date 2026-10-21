@@ -5478,6 +5478,18 @@ def _models(window) -> QWidget:
         _follow_setting(f"{p}.path", _c_hy, lambda pth: _update_moe_cards(str(pth or "")))
         _update_moe_cards(_cur_mpath)
 
+        _c_ds, _sl_ds = _sec_card("Dense Head Subset & Vocab Pruning",
+                                  "--head-subset — keep top N vocabulary rows of output head in GPU VRAM (works standalone or with MTP)",
+                                  patch="0004-dense-head-subset")
+        _sl_ds.addWidget(_number_row(f"{p}.head_subset", "Head Subset", 0, 152064, 256, 0, "rows",
+                                     "--head-subset: GPU-resident vocabulary rows (Patch 0004). Keeps top N rows + 1024 special tokens in VRAM. "
+                                     "Accelerates dense models when lm_head is offloaded to host RAM, eliminating PCIe/DRAM bandwidth bottleneck. "
+                                     "Works standalone without MTP or as default for MTP. 0 = off."))
+        _sl_ds.addWidget(_line_row(f"{p}.head_subset_ids", "Head Subset Token IDs",
+                                   "path/to/tokens.txt",
+                                   "--head-subset-ids: optional text file with specific token IDs (one per line, ranked by frequency) to keep in VRAM."))
+        _sl.addWidget(_c_ds)
+
         _sl = _sec("Chat Template", "--jinja / --chat-template-file / --chat-template — how the conversation is turned into a prompt")
         _sl.addWidget(_toggle_row(f"{p}.jinja",         "Jinja Chat Template",
                                            "Use the built-in tokenizer chat template (required for tools)."))
@@ -5613,8 +5625,13 @@ def _models(window) -> QWidget:
                          "--spec-draft-p-split: speculative decoding split probability (default 0.10)."),
             _draft_paths, _draft_knobs_active))
         _sl.addWidget(_dependent(
-            _number_row(f"{p}.spec_draft_head_subset", "Draft Head Subset", 0, 152064, 256, 0, "rows",
-                         "--spec-draft-head-subset: GPU-resident draft vocabulary rows (Patch 0004). 32768 rows = ~90 MiB VRAM for 0.15ms GPU drafts."),
+            _number_row(f"{p}.spec_draft_head_subset", "Draft Head Subset (MTP Override)", 0, 152064, 256, 0, "rows",
+                         "--spec-draft-head-subset: GPU-resident draft vocabulary rows (Patch 0004) specifically for MTP draft steps. "
+                         "When set, leaves base target model verification full-head and exact. If 0, inherits --head-subset."),
+            _draft_paths, _draft_knobs_active))
+        _sl.addWidget(_dependent(
+            _line_row(f"{p}.spec_draft_head_subset_ids", "Draft Head Subset IDs (MTP)", "path/to/draft-tokens.txt",
+                      "--spec-draft-head-subset-ids: optional token IDs file specifically for draft steps."),
             _draft_paths, _draft_knobs_active))
         _sl.addWidget(_dependent(
             _number_row(f"{p}.spec_draft_n_ubatch", "Draft Micro-Batch", 0, 8192, 64, 0, "tok",

@@ -1,6 +1,6 @@
-"""Build a ranked token-id list for --spec-draft-head-subset-ids from your own text.
+"""Build a ranked token-id list for --head-subset-ids / --spec-draft-head-subset-ids from your own text.
 
-The MTP draft head can keep only some rows of the output head on the GPU. By default these are the first tokens of the vocabulary; this tool
+The dense base output head or MTP draft head can keep only some rows of the output head on the GPU. By default these are the first tokens of the vocabulary; this tool
 ranks the tokens your own conversations use and writes them most used first, so the GPU rows are the ones the drafts really pick.
 
 usage: python tools/build_head_subset_ids.py --out data/head-ids.txt [--top 32768] [--server http://127.0.0.1:18080] FILE_OR_FOLDER ...

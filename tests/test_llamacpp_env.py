@@ -134,3 +134,51 @@ def test_inference_for_model_overrides(monkeypatch):
     default_inf = inference_for("default-model")
     assert default_inf["context_overflow"] == "truncate_middle"
     assert default_inf["drop_prior_thinking"] is True
+
+def test_head_subset_argv_generation(monkeypatch, tmp_path):
+    from llamacpp.argv import build_argv
+    from llamacpp import config as lcfg
+
+    dummy_ids = tmp_path / "tokens.txt"
+    dummy_ids.write_text("1\n2\n3\n", encoding="utf-8")
+
+    test_settings = {
+        "llamacpp": {
+            "models": {
+                "dense-32b": {
+                    "path": "models/qwen2.5-32b.gguf",
+                    "head_subset": 32768,
+                    "head_subset_ids": str(dummy_ids),
+                },
+                "mtp-model": {
+                    "path": "models/qwen2.5-mtp.gguf",
+                    "head_subset": 32768,
+                    "spec_draft_head_subset": 16384,
+                }
+            }
+        }
+    }
+
+    monkeypatch.setattr(app_config, "get_nested", lambda path, default=None: (
+        test_settings["llamacpp"]["models"] if path == "llamacpp.models"
+        else test_settings.get("llamacpp") if path == "llamacpp"
+        else default
+    ))
+    monkeypatch.setattr(lcfg, "binary", lambda: "llama-server")
+
+    # 1. Standalone dense model without MTP: produces --head-subset and --head-subset-ids
+    argv_dense = build_argv("dense-32b")
+    assert "--head-subset" in argv_dense
+    idx = argv_dense.index("--head-subset")
+    assert argv_dense[idx + 1] == "32768"
+    assert "--head-subset-ids" in argv_dense
+    idx_ids = argv_dense.index("--head-subset-ids")
+    assert argv_dense[idx_ids + 1] == str(dummy_ids)
+    assert "--spec-draft-head-subset" not in argv_dense
+
+    # 2. Model with both base head_subset and speculative draft override
+    argv_mtp = build_argv("mtp-model")
+    assert "--head-subset" in argv_mtp
+    assert argv_mtp[argv_mtp.index("--head-subset") + 1] == "32768"
+    assert "--spec-draft-head-subset" in argv_mtp
+    assert argv_mtp[argv_mtp.index("--spec-draft-head-subset") + 1] == "16384"

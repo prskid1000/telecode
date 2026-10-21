@@ -160,6 +160,8 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     #   exclusive — set one or the other, not both).
     ("spec_default",             "--spec-default",         "flag"),
     ("spec_draft_n_ubatch",           "--spec-draft-n-ubatch",           "value_nz"),  # newer upstream builds only
+    ("head_subset",                   "--head-subset",                   "value_nz"),
+    ("head_subset_ids",               "--head-subset-ids",               "path"),
     ("spec_draft_head_subset",        "--spec-draft-head-subset",        "value_nz"),
     ("spec_draft_head_subset_ids",    "--spec-draft-head-subset-ids",    "path"),
     ("spec_synth_len",           "--spec-synth-len",       "value_nz"),
@@ -356,6 +358,8 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("moe_hybrid_swap_max",             "--moe-hybrid-swap-max",             "value"),
     ("moe_hybrid_skip_weight",          "--moe-hybrid-skip-weight",          "value"),
     ("moe_hybrid_tail_skip",            "--moe-hybrid-tail-skip",            "value"),
+    ("head_subset",                     "--head-subset",                     "value_nz"),
+    ("head_subset_ids",                 "--head-subset-ids",                 "path"),
     ("spec_draft_head_subset",          "--spec-draft-head-subset",          "value_nz"),
     ("spec_draft_head_subset_ids",      "--spec-draft-head-subset-ids",      "path"),
     ("ubatch_size",                     "--ubatch-size",                     "value_nz"),
