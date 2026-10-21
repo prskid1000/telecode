@@ -161,7 +161,8 @@
         "vram_budget_mib": 11400,
         "ubatch_size": 4096,
         "batch_size": 4096,
-        "spec_type": "none"
+        "spec_type": "none",
+        "head_subset": 32768
       },
       "qwen3.8-27b": {
         "path": "D:/.models/qwen3.8/Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf",
