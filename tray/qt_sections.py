@@ -5667,6 +5667,14 @@ def _models(window) -> QWidget:
             _number_row(f"{p}.threads_batch_draft", "Draft Batch Threads", 0, 128, 1, 0, "",
                          "--threads-batch-draft: CPU threads for draft-model prompt processing."),
             _draft_paths, _draft_knobs_active))
+        _sl.addWidget(_dependent(
+            _line_row(f"{p}.spec_synth_rates", "Spec Synth Rates (SpecExec)", "e.g. 0.9,0.8,0.7",
+                      "--spec-synth-rates: synthetic candidate acceptance rates for evaluating tree speculation forward passes."),
+            _draft_paths, _draft_knobs_active))
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.spec_synth_len", "Spec Synth Length", 0, 128, 1, 0, "tok",
+                         "--spec-synth-len: mean synthetic speculation acceptance length (benchmarking SpecExec). 0 = off."),
+            _draft_paths, _draft_knobs_active))
 
         # N-gram knobs for spec_type=ngram-simple / ngram-map-k / ngram-mod
         _ngram_simple_active = lambda st: _has_spec(st, "ngram-simple", "ngram-map-k", "ngram-map-k4v")

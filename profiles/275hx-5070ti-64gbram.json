@@ -220,7 +220,8 @@
         "spec_draft_prio": 3,
         "spec_draft_poll": 100,
         "batch_size": 4096,
-        "spec_type": "draft-mtp"
+        "spec_type": "draft-mtp",
+        "head_subset": 32768
       }
     },
     "inference": {
@@ -420,7 +421,7 @@
   "tools": {
     "claude": {
       "name": "Claude Code",
-      "icon": "🟣",
+      "icon": "\ud83d\udfe3",
       "startup_cmd": [
         "claude"
       ],
@@ -437,7 +438,7 @@
     },
     "claude-local": {
       "name": "Claude Code (Local)",
-      "icon": "🟤",
+      "icon": "\ud83d\udfe4",
       "startup_cmd": [
         "claude"
       ],
@@ -466,7 +467,7 @@
     },
     "computer": {
       "name": "Computer Control",
-      "icon": "🖥️",
+      "icon": "\ud83d\udda5\ufe0f",
       "api": {
         "base_url": "http://localhost:1235/v1",
         "api_key": "local",
@@ -540,4 +541,3 @@
     }
   }
 }
-

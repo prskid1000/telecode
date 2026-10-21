@@ -35,7 +35,9 @@ three times). Rules for every test that loads a model:
 |---|---|
 | `moe_cache_lru_fuzz.bat` / `.cpp` | the expert-cache planner (`src/llama-moe-cache.cpp`) on random input, no GPU: invariants over 160000 steps. `FUZZ_TRACE=1` prints a fingerprint of the whole state per seed: build it against two versions and the traces must be equal for a refactor to be safe. |
 | `spec_policy_sim.cpp` | simulation of the adaptive draft-length policy in five worlds (copy of `common_spec_policy`). |
-| `build_head_subset_ids.py` | ranks the tokens of your own text for `--spec-draft-head-subset-ids`. |
+| `build_head_subset_ids.py` | ranks the tokens of your own text for `--head-subset-ids` and `--spec-draft-head-subset-ids`. |
+| `prune_layers.py` | ShortGPT structural layer pruner: removes redundant middle layers from GGUF models so 27B-32B dense models fit 100% in 12GB VRAM at 40+ tok/s. |
+| `prune_vocab.py` | Offline vocabulary trimmer: prunes unused multilingual tokens from `token_embd` and `output.weight`, saving 1.0–1.8 GB VRAM. |
 | `build_open_pencil.py`, `vendor_drift.py` | TeleDesign editor build, vendored llama.cpp forks (see CLAUDE.md). |
 
 ## Typical workflows
