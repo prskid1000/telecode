@@ -598,6 +598,9 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
     if not model_path:
         raise KeyError(f"llamacpp.models.{resolved}.path is required")
 
+    from llamacpp.runtime_prune import ensure_runtime_pruned_model
+    model_path = ensure_runtime_pruned_model(model_path, mcfg)
+
     # Top-level llamacpp.* block, for server-wide flags
     gcfg = app_config.get_nested("llamacpp", {}) or {}
     if "spec_type" in mcfg:
