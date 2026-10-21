@@ -5478,8 +5478,8 @@ def _models(window) -> QWidget:
         _follow_setting(f"{p}.path", _c_hy, lambda pth: _update_moe_cards(str(pth or "")))
         _update_moe_cards(_cur_mpath)
 
-        _c_ds, _sl_ds = _sec_card("Dense Head Subset & Vocab Pruning",
-                                  "--head-subset — keep top N vocabulary rows of output head in GPU VRAM (works standalone or with MTP)",
+        _c_ds, _sl_ds = _sec_card("Dense Optimizations (Head & Layer Pruning)",
+                                  "--head-subset and ShortGPT layer pruning — optimize dense models (27B/32B/70B) for 12GB VRAM",
                                   patch="0004-dense-head-subset")
         _sl_ds.addWidget(_number_row(f"{p}.head_subset", "Head Subset", 0, 152064, 256, 0, "rows",
                                      "--head-subset: GPU-resident vocabulary rows (Patch 0004). Keeps top N rows + 1024 special tokens in VRAM. "
@@ -5488,6 +5488,13 @@ def _models(window) -> QWidget:
         _sl_ds.addWidget(_line_row(f"{p}.head_subset_ids", "Head Subset Token IDs",
                                    "path/to/tokens.txt",
                                    "--head-subset-ids: optional text file with specific token IDs (one per line, ranked by frequency) to keep in VRAM."))
+        _sl_ds.addWidget(_number_row(f"{p}.layer_prune_ratio", "Layer Keep Ratio (ShortGPT)", 0.50, 1.00, 0.05, 2, "",
+                                     "ShortGPT layer pruning: fraction of layers to retain (e.g. 0.75 keeps 75% of layers, "
+                                     "dropping the redundant 25% middle layers to fit a 27B-32B model 100% in 12GB VRAM at 40+ tok/s). "
+                                     "1.00 = keep all layers (off).", default=1.00))
+        _sl_ds.addWidget(_line_row(f"{p}.layer_drop_range", "Custom Drop Layer Range",
+                                   "e.g. 16..23",
+                                   "Optional explicit middle layer range to drop (e.g. '16..23' or '14,15,16,17'). Empty = use Keep Ratio."))
 
         _sl = _sec("Chat Template", "--jinja / --chat-template-file / --chat-template — how the conversation is turned into a prompt")
         _sl.addWidget(_toggle_row(f"{p}.jinja",         "Jinja Chat Template",
