@@ -5478,8 +5478,8 @@ def _models(window) -> QWidget:
         _follow_setting(f"{p}.path", _c_hy, lambda pth: _update_moe_cards(str(pth or "")))
         _update_moe_cards(_cur_mpath)
 
-        _c_ds, _sl_ds = _sec_card("Dense Optimizations (Head Subset & Runtime Layer Pruning)",
-                                  "--head-subset and ShortGPT on-the-fly pruning — fits 27B-70B dense models in 12GB VRAM at pure GPU speed",
+        _c_ds, _sl_ds = _sec_card("Dense Head Subset & Vocab Pruning",
+                                  "--head-subset — keep top N vocabulary rows of output head in GPU VRAM (works standalone or with MTP)",
                                   patch="0004-dense-head-subset")
         _sl_ds.addWidget(_number_row(f"{p}.head_subset", "Head Subset", 0, 152064, 256, 0, "rows",
                                      "--head-subset: GPU-resident vocabulary rows (Patch 0004). Keeps top N rows + 1024 special tokens in VRAM. "
@@ -5488,17 +5488,6 @@ def _models(window) -> QWidget:
         _sl_ds.addWidget(_line_row(f"{p}.head_subset_ids", "Head Subset Token IDs",
                                    "path/to/tokens.txt",
                                    "--head-subset-ids: optional text file with specific token IDs (one per line, ranked by frequency) to keep in VRAM."))
-        _sl_ds.addWidget(_toggle_row(f"{p}.runtime_layer_prune", "Auto Layer Prune (ShortGPT)",
-                                     "On-the-fly layer pruning: drops redundant middle layers (ShortGPT) when starting the server so large dense "
-                                     "models (27B/32B) fit 100% inside 12GB VRAM at 40+ tok/s. Zero manual steps. Default: off."))
-        _sl_ds.addWidget(_dependent(
-            _number_row(f"{p}.runtime_layer_keep_ratio", "Layer Keep Ratio", 0.50, 0.95, 0.05, 2, "",
-                         "Fraction of layers to retain (e.g. 0.75 keeps 75% of layers, dropping the redundant 25% middle layers).", default=0.75),
-            [f"{p}.runtime_layer_prune"], lambda v: bool(v)))
-        _sl_ds.addWidget(_dependent(
-            _line_row(f"{p}.runtime_layer_drop_range", "Custom Drop Range", "e.g. 16..23",
-                      "Optional explicit layer range to drop instead of ratio. Empty = auto middle layers."),
-            [f"{p}.runtime_layer_prune"], lambda v: bool(v)))
         _sl.addWidget(_c_ds)
 
         _sl = _sec("Chat Template", "--jinja / --chat-template-file / --chat-template — how the conversation is turned into a prompt")
