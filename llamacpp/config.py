@@ -347,22 +347,75 @@ def resolve_path(path_str: str) -> str:
 # ── Environment for the spawned llama-server ─────────────────────────────
 
 def parse_env_text(text: Any, source: str = "env") -> dict[str, str]:
-    """Parse a multi-line `KEY=VALUE` block into a dict.
+    """Parse environment variables into a dict of {NAME: VALUE}.
 
-    Blank lines and lines starting with `#` are ignored. A name that is not
-    [A-Za-z_][A-Za-z0-9_]* or a line without `=` is dropped with a warning (the
-    rest still applies). The value is everything after the first `=`, stripped,
-    with one pair of matching surrounding quotes removed. Later lines win.
+    Supports:
+    - dict: {"NAME": "VALUE", ...} (direct structured mapping)
+    - list of pairs: [["NAME", "VALUE"], ...] or ["NAME=VALUE", ...]
+    - multi-line text: one NAME=VALUE per line. Blank lines and lines starting
+      with # are ignored. A line with multiple space-separated NAME=VALUE pairs
+      is also supported.
+    A name that is not [A-Za-z_][A-Za-z0-9_]* is dropped with a warning.
+    Values have one pair of matching surrounding quotes removed. Later entries win.
     """
     out: dict[str, str] = {}
-    if not isinstance(text, str):
-        if text not in (None, ""):
-            _LOG.warning("llamacpp: %s must be text (one KEY=VALUE per line); ignored", source)
+    if not text:
         return out
+
+    if isinstance(text, dict):
+        for k, v in text.items():
+            name = str(k).strip()
+            if not _ENV_NAME.match(name):
+                _LOG.warning("llamacpp: %s invalid env var name ignored: %r", source, name)
+                continue
+            val = str(v).strip()
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+                val = val[1:-1]
+            out[name] = val
+        return out
+
+    if isinstance(text, list):
+        for item in text:
+            if isinstance(item, (list, tuple)) and item:
+                name = str(item[0]).strip()
+                val = str(item[1]).strip() if len(item) > 1 else ""
+                if not _ENV_NAME.match(name):
+                    _LOG.warning("llamacpp: %s invalid env var name ignored: %r", source, name)
+                    continue
+                if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+                    val = val[1:-1]
+                out[name] = val
+            elif isinstance(item, str) and "=" in item:
+                name, _, val = item.partition("=")
+                name = name.strip()
+                if not _ENV_NAME.match(name):
+                    _LOG.warning("llamacpp: %s invalid env var name ignored: %r", source, name)
+                    continue
+                val = val.strip()
+                if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+                    val = val[1:-1]
+                out[name] = val
+        return out
+
+    if not isinstance(text, str):
+        _LOG.warning("llamacpp: %s must be a dict, list of pairs, or text; ignored: %r", source, type(text))
+        return out
+
     for n, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
+        # Support space-separated NAME=VALUE pairs on a single line (e.g. from existing settings/profiles)
+        tokens = line.split()
+        if len(tokens) > 1 and all("=" in t and _ENV_NAME.match(t.partition("=")[0].strip()) for t in tokens):
+            for t in tokens:
+                name, _, val = t.partition("=")
+                val = val.strip()
+                if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+                    val = val[1:-1]
+                out[name.strip()] = val
+            continue
+
         name, eq, value = line.partition("=")
         name = name.strip()
         if not eq or not _ENV_NAME.match(name):
@@ -379,10 +432,10 @@ def parse_env_text(text: Any, source: str = "env") -> dict[str, str]:
 def extra_env(model_name: str = "") -> dict[str, str]:
     """Environment variables to add for a llama-server spawn: global `llamacpp.env`,
     then the model's own `llamacpp.models.<m>.env` on top (it overrides)."""
-    env = parse_env_text(app_config.get_nested("llamacpp.env", "") or "", "llamacpp.env")
+    env = parse_env_text(app_config.get_nested("llamacpp.env", {}) or {}, "llamacpp.env")
     if model_name:
         resolved = resolve_model(model_name) or model_name
-        env.update(parse_env_text(model_cfg(resolved).get("env", "") or "",
+        env.update(parse_env_text(model_cfg(resolved).get("env", {}) or {},
                                   f"llamacpp.models.{resolved}.env"))
     return env
 

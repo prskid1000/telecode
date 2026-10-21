@@ -2383,11 +2383,9 @@ def _llama(window) -> QWidget:
 
     # ── Environment card — variables for the spawned llama-server ────
     env_card, env_body = _card("Environment",
-                                "llamacpp.env - variables set on the llama-server process (a model's own "
-                                "Environment overrides these)")
-    env_body.addWidget(_code_row("llamacpp.env", "Environment Variables",
-                                  "GGML_CUDA_REGISTER_HOST=1\n# GGML_OP_OFFLOAD_MIN_BATCH=32",
-                                  _ENV_HELP, height=130))
+                                "llamacpp.env — global variables set on every llama-server process (per-model Environment merges on top)")
+    env_body.addWidget(_kv_row("llamacpp.env", "Environment Variables",
+                               _ENV_HELP, key_placeholder="NAME", value_placeholder="value"))
     layout.addWidget(env_card)
 
     # Caching policy card — server-wide
@@ -5244,14 +5242,16 @@ _JinjaHighlighter = _make_rule_highlighter([
 
 
 _ENV_HELP = (
-    "Environment variables for the llama-server process, one NAME=VALUE per line. Blank lines and lines "
-    "starting with # are ignored; a line with an invalid name is skipped (see telecode.log). Read when the "
-    "server starts, so a change applies on the next (re)spawn. Useful ones:\n"
-    "GGML_CUDA_REGISTER_HOST=1 - pin (page-lock) the memory-mapped weights; may speed expert uploads to the GPU.\n"
-    "GGML_OP_OFFLOAD_MIN_BATCH=32 - smallest batch whose host-resident weights are streamed to the GPU "
-    "instead of computed on the CPU (default 32).\n"
-    "LLAMA_ATTN_ROT_DISABLE=1 - turn off the automatic rotation of quantized KV.\n"
-    "GGML_CUDA_DISABLE_GRAPHS=1 - do not use CUDA graphs (debugging, or if graphs misbehave)."
+    "Environment variables for the llama-server process (one variable per row). "
+    "Global variables (llama.cpp → Environment) and per-model variables merge on launch, "
+    "with model variables overriding global ones on collision.\n\n"
+    "Useful ones:\n"
+    "• GGML_CUDA_REGISTER_HOST=1 — pin (page-lock) memory-mapped weights; speeds expert uploads to GPU.\n"
+    "• GGML_OP_OFFLOAD_MIN_BATCH=64 — smallest batch streamed to GPU instead of CPU (default 32).\n"
+    "• LLAMA_ATTN_ROT_DISABLE=1 — disable automatic rotation of quantized KV.\n"
+    "• GGML_CUDA_DISABLE_GRAPHS=1 — do not use CUDA graphs (debugging, or if graphs misbehave).\n"
+    "• GGML_CUDA_GRAPH_OPT=1 — multi-stream CUDA graph optimization (off by default).\n"
+    "• CUDA_MODULE_LOADING=EAGER — pre-load all kernels to prevent mid-prompt VRAM allocation failures."
 )
 
 
@@ -6001,10 +6001,9 @@ def _models(window) -> QWidget:
                                          "--override-kv: override GGUF metadata at load. Format KEY=TYPE:VALUE, comma-separated."))
 
         _sl = _sec("Environment",
-                    "llamacpp.models.<m>.env - variables for this model's llama-server; overrides the global Environment")
-        _sl.addWidget(_code_row(f"{p}.env", "Environment Variables",
-                                         "GGML_OP_OFFLOAD_MIN_BATCH=64",
-                                         _ENV_HELP, height=110))
+                    "llamacpp.models.<m>.env — variables for this model's llama-server; merges with and overrides global Environment")
+        _sl.addWidget(_kv_row(f"{p}.env", "Environment Variables",
+                              _ENV_HELP, key_placeholder="NAME", value_placeholder="value"))
 
         _sl = _sec("Extra CLI Args",
                     "llamacpp.models.<m>.extra_args — raw flags appended to the spawn argv")
@@ -6354,7 +6353,10 @@ def _build_array_row(path: str, label: str, help_text: str,
 
 
 def _kv_row(path: str, label: str, help_text: str = "",
-            typed: bool = False) -> QWidget:
+            typed: bool = False,
+            key_placeholder: str = "KEY",
+            value_placeholder: str = "value",
+            show_equals: bool = True) -> QWidget:
     """Structured key→value dict editor (one row per pair).
 
     typed=True: values go through JSON parsing — so `enable_thinking=false`
@@ -6425,11 +6427,10 @@ def _kv_row(path: str, label: str, help_text: str = "",
         rl.setSpacing(6)
 
         k_edit = QLineEdit(); k_edit.setText(k)
-        k_edit.setPlaceholderText("KEY")
+        k_edit.setPlaceholderText(key_placeholder)
         k_edit.setMinimumWidth(160)
-        eq = QLabel("="); eq.setStyleSheet(f"color: {FG_DIM}; padding: 0 2px;")
         v_edit = QLineEdit(); v_edit.setText(v)
-        v_edit.setPlaceholderText("value")
+        v_edit.setPlaceholderText(value_placeholder)
         rm_btn = QPushButton("✕")
         rm_btn.setFlat(True)
         rm_btn.setFixedWidth(28)
@@ -6439,14 +6440,26 @@ def _kv_row(path: str, label: str, help_text: str = "",
         )
 
         rl.addWidget(k_edit)
-        rl.addWidget(eq)
+        if show_equals:
+            eq = QLabel("="); eq.setStyleSheet(f"color: {FG_DIM}; padding: 0 2px;")
+            rl.addWidget(eq)
         rl.addWidget(v_edit, 1)
         rl.addWidget(rm_btn)
 
         entry: tuple[QLineEdit, QLineEdit, QWidget] = (k_edit, v_edit, row)
         pairs.append(entry)
 
-        k_edit.editingFinished.connect(_commit)
+        def _on_key_finished():
+            # If user pasted NAME=VALUE into key box, auto-split
+            text = k_edit.text()
+            if "=" in text:
+                k_part, _, v_part = text.partition("=")
+                if k_part.strip() and not v_edit.text():
+                    k_edit.setText(k_part.strip())
+                    v_edit.setText(v_part.strip())
+            _commit()
+
+        k_edit.editingFinished.connect(_on_key_finished)
         v_edit.editingFinished.connect(_commit)
 
         def _remove():
@@ -6463,6 +6476,18 @@ def _kv_row(path: str, label: str, help_text: str = "",
         return row
 
     cur = get_path(read_settings(), path, {}) or {}
+    if isinstance(cur, str):
+        from llamacpp.config import parse_env_text
+        cur = parse_env_text(cur, path)
+    elif isinstance(cur, list):
+        parsed: dict[str, str] = {}
+        for item in cur:
+            if isinstance(item, (list, tuple)) and item:
+                parsed[str(item[0])] = str(item[1]) if len(item) > 1 else ""
+            elif isinstance(item, str) and "=" in item:
+                kp, _, vp = item.partition("=")
+                parsed[kp.strip()] = vp.strip()
+        cur = parsed
     if isinstance(cur, dict):
         for k, v in cur.items():
             _build_row(str(k), _stringify(v))
