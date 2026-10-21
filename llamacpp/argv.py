@@ -710,7 +710,7 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
 
 
 # flags that only a patched llama.cpp (llamacpp/patcher.py) or a recent build has: a binary that does not list them in --help refuses to start
-_PATCHED_PREFIXES = ("--moe-cache-", "--moe-hybrid-", "--lmcache", "--moe-expert-reduce", "--spec-draft-n-ubatch", "--spec-draft-adaptive", "--spec-draft-head-subset")
+_PATCHED_PREFIXES = ("--moe-cache-", "--moe-hybrid-", "--lmcache", "--moe-expert-reduce", "--spec-draft-n-ubatch", "--spec-draft-adaptive", "--head-subset", "--spec-draft-head-subset")
 _HELP_FLAGS: dict[tuple, Optional[set]] = {}
 
 

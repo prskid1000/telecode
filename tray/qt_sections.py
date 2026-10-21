@@ -2794,12 +2794,6 @@ def _llama(window) -> QWidget:
                                       "How many tokens to generate (gen-speed sample). "
                                       "Larger = more accurate gen rate but slower test."),
                             gen_editor))
-    cache_reuse_toggle = Toggle()
-    cache_reuse_toggle.setChecked(False)
-    sp_body.addWidget(_row(row_label("Reuse KV Cache (LMCache)",
-                                      "When enabled, reuses pre-computed KV cache to benchmark warm prompt prefill bypass and LMCache retrieval rather than cold recomputation."),
-                            _wrap_align(cache_reuse_toggle, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)))
-
     _TMPL_OVERHEAD = 512  # chat-template + BOS/role tokens headroom
 
     def _active_ctx_size() -> tuple[str, int]:
@@ -2911,7 +2905,7 @@ def _llama(window) -> QWidget:
         async def _do() -> None:
             try:
                 from llamacpp.benchmark import run_speed_test
-                res = await run_speed_test(target, n_predict=n_pred, cache_prompt=cache_reuse_toggle.isChecked())
+                res = await run_speed_test(target, n_predict=n_pred)
             except Exception as exc:
                 res = {"ok": False, "error": str(exc)}
             bench.finished.emit(res)
