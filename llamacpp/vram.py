@@ -47,3 +47,38 @@ def total_vram_mib() -> Optional[int]:
 def used_vram_mib() -> Optional[int]:
     """Used memory (MiB) of the first NVIDIA GPU, or None when it cannot be read."""
     return _query("memory.used", timeout=3.0)
+
+def _query_str(field: str, timeout: float = 5.0) -> str:
+    exe = shutil.which("nvidia-smi")
+    if not exe:
+        return ""
+    creation = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    try:
+        out = subprocess.run(
+            [exe, f"--query-gpu={field}", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=timeout, creationflags=creation,
+        )
+        if out.returncode != 0:
+            return ""
+        return (out.stdout or "").strip().splitlines()[0].strip()
+    except Exception as exc:
+        _LOG.debug("nvidia-smi %s failed: %s", field, exc)
+        return ""
+
+
+import functools
+import re
+
+@functools.lru_cache(maxsize=1)
+def is_blackwell_gpu() -> bool:
+    """Return True if an NVIDIA Blackwell architecture GPU (e.g. RTX 50-series, SM 12.x) is detected."""
+    name = _query_str("name")
+    if name and re.search(r"RTX\s*50|Blackwell|B100|B200|GB200", name, re.IGNORECASE):
+        return True
+    cap = _query_str("compute_cap")
+    if cap:
+        try:
+            return float(cap.split(".")[0]) >= 12
+        except ValueError:
+            pass
+    return False

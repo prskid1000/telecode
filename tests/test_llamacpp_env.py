@@ -58,6 +58,9 @@ def test_parse_env_text_space_separated_string():
 
 
 def test_extra_env_merge(monkeypatch):
+    import llamacpp.vram as lvram
+    monkeypatch.setattr(lvram, "is_blackwell_gpu", lambda: False)
+
     test_settings = {
         "llamacpp": {
             "env": {
@@ -97,6 +100,38 @@ def test_extra_env_merge(monkeypatch):
         "GLOBAL_VAR_1": "global_val_1",
         "SHARED_VAR": "from_global",
     }
+
+
+def test_blackwell_auto_register_host(monkeypatch):
+    import llamacpp.vram as lvram
+    monkeypatch.setattr(lvram, "is_blackwell_gpu", lambda: True)
+
+    test_settings = {
+        "llamacpp": {
+            "env": {},
+            "models": {
+                "default-model": {},
+                "opt-out-model": {
+                    "env": {"GGML_CUDA_REGISTER_HOST": "0"}
+                }
+            }
+        }
+    }
+
+    monkeypatch.setattr(app_config, "get_nested", lambda path, default=None: (
+        test_settings["llamacpp"]["env"] if path == "llamacpp.env"
+        else test_settings["llamacpp"]["models"] if path == "llamacpp.models"
+        else test_settings.get("llamacpp") if path == "llamacpp"
+        else default
+    ))
+
+    # 1. On Blackwell, GGML_CUDA_REGISTER_HOST=1 is automatically added
+    env = extra_env("default-model")
+    assert env.get("GGML_CUDA_REGISTER_HOST") == "1"
+
+    # 2. User explicit opt-out is respected
+    opt_out = extra_env("opt-out-model")
+    assert opt_out.get("GGML_CUDA_REGISTER_HOST") == "0" 
 
 
 def test_inference_for_model_overrides(monkeypatch):

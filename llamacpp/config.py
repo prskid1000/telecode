@@ -442,6 +442,16 @@ def extra_env(model_name: str = "") -> dict[str, str]:
         resolved = resolve_model(model_name) or model_name
         env.update(parse_env_text(model_cfg(resolved).get("env", {}) or {},
                                   f"llamacpp.models.{resolved}.env"))
+
+    # When Blackwell GPU is detected, keep GGML_CUDA_REGISTER_HOST=1 automatically on
+    # (page-locks host model buffers for high-speed PCIe DMA saturation) unless user explicitly opted out.
+    try:
+        from llamacpp.vram import is_blackwell_gpu
+        if is_blackwell_gpu() and "GGML_CUDA_REGISTER_HOST" not in env:
+            env["GGML_CUDA_REGISTER_HOST"] = "1"
+    except Exception:
+        pass
+
     return env
 
 
