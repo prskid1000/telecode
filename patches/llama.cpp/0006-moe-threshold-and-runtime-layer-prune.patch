@@ -68,6 +68,21 @@ index 53c5ef6..1df0291 100644
  
      const block_q8_1 * y = ((const block_q8_1 *) vy) + channel_y*stride_channel_y + token_idx*stride_col_y;
 
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 0716f51..e8d2abf 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -2864,6 +2864,9 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+         for (int64_t i1 = 0; i1 < ids->ne[1]; i1++) {
+             for (int64_t i0 = 0; i0 < ids->ne[0]; i0++) {
+                 const int32_t id = st.ids_data[i1*ids->nb[1]/sizeof(int32_t) + i0*ids->nb[0]/sizeof(int32_t)];
++                if (id < 0) {
++                    continue;
++                }
+                 if (lctx->moe_hybrid) {
+                     hy_ids.push_back(id);
+                 }
+
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
 index b4d7151..c84f2ec 100644
 --- a/src/llama-graph.cpp
