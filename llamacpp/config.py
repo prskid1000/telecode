@@ -461,6 +461,10 @@ def extra_env(model_name: str = "") -> dict[str, str]:
         except (ValueError, TypeError):
             pass
 
+    g_async = app_config.get_nested("llamacpp.async_decode", None)
+    if g_async is not None and "LLAMA_SERVER_ASYNC_DECODE" not in env:
+        env["LLAMA_SERVER_ASYNC_DECODE"] = "1" if bool(g_async) else "0" 
+
     if model_name:
         resolved = resolve_model(model_name) or model_name
         m_cfg = model_cfg(resolved)
@@ -488,6 +492,10 @@ def extra_env(model_name: str = "") -> dict[str, str]:
                     env["LLAMA_KEEP_RATIO"] = f"{rf:.4f}"
             except (ValueError, TypeError):
                 pass
+
+        m_async = m_cfg.get("async_decode")
+        if m_async is not None and "LLAMA_SERVER_ASYNC_DECODE" not in (m_cfg.get("env") or {}):
+            env["LLAMA_SERVER_ASYNC_DECODE"] = "1" if bool(m_async) else "0" 
 
     # When Blackwell GPU is detected, keep GGML_CUDA_REGISTER_HOST=1 automatically on
     # (page-locks host model buffers for high-speed PCIe DMA saturation) unless user explicitly opted out.

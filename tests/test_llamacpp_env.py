@@ -238,12 +238,16 @@ def test_moe_threshold_and_layer_prune_env(monkeypatch):
         }
     }
 
-    monkeypatch.setattr(app_config, 'get_nested', lambda path, default=None: (
-        test_settings['llamacpp']['env'] if path == 'llamacpp.env'
-        else test_settings['llamacpp']['models'] if path == 'llamacpp.models'
-        else test_settings.get('llamacpp') if path == 'llamacpp'
-        else default
-    ))
+    def mock_get_nested(path, default=None):
+        parts = path.split('.')
+        curr = test_settings
+        for p in parts:
+            if isinstance(curr, dict) and p in curr:
+                curr = curr[p]
+            else:
+                return default
+        return curr
+    monkeypatch.setattr(app_config, 'get_nested', mock_get_nested)
 
     env_moe = extra_env('moe-model')
     assert env_moe.get('GGML_CUDA_MOE_THRESHOLD') == '0.02'
@@ -251,3 +255,9 @@ def test_moe_threshold_and_layer_prune_env(monkeypatch):
     env_pruned = extra_env('dense-pruned')
     assert env_pruned.get('LLAMA_PRUNE_LAYERS') == '16..23'
     assert env_pruned.get('LLAMA_KEEP_RATIO') == '0.7500'
+
+    # Test async decode knob (Patch 0005)
+    test_settings['llamacpp']['async_decode'] = True
+    assert extra_env('moe-model').get('LLAMA_SERVER_ASYNC_DECODE') == '1'
+    test_settings['llamacpp']['async_decode'] = False
+    assert extra_env('moe-model').get('LLAMA_SERVER_ASYNC_DECODE') == '0'

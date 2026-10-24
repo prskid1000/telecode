@@ -2266,6 +2266,9 @@ def _llama(window) -> QWidget:
                                       "--parallel: number of concurrent request slots."))
     spawn_body.addWidget(_toggle_row("llamacpp.cont_batching",  "Continuous Batching",
                                       "--cont-batching: process multiple requests in one batch."))
+    spawn_body.addWidget(_toggle_row("llamacpp.async_decode",   "Async Scheduling Pipeline",
+                                      "DeepInfer Zero-Overhead Scheduling (Patch 0005): defers GPU-blocking synchronization to sampling, "
+                                      "allowing the CPU worker thread to process task queues and token routing concurrently with GPU forward kernels."))
     # One setting replaces --mlock / --no-mmap / --direct-io, all three of which
     # upstream deprecated. The values are a closed set, verified by probing the
     # binary: combinations beyond mmap+mlock are rejected outright, so this is a
