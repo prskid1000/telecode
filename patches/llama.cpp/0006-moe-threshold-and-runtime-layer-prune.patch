@@ -108,14 +108,14 @@ index a187c27..95f1fe3 100644
  
 
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 803a832..eb62d14 100644
+index 803a832..c90696c 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -3316,7 +3316,51 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
      return res;
  }
  
-+ggml_cgraph * void llama_model::init_prune_layers() {
++void llama_model::init_prune_layers() {
 +    if (prune_layer_start != -1 || prune_layer_end != -1) {
 +        return;
 +    }
@@ -164,21 +164,6 @@ index 803a832..eb62d14 100644
  
      // add on pooling layer
 
-diff --git a/src/models/llama.cpp b/src/models/llama.cpp
-index f9c1251..dff1c7d 100644
---- a/src/models/llama.cpp
-+++ b/src/models/llama.cpp
-@@ -124,6 +124,9 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
-     ggml_tensor * inp_out_ids = build_inp_out_ids();
- 
-     for (int il = 0; il < n_layer; ++il) {
-+        if (model.should_skip_layer(il)) {
-+            continue;
-+        }
-         res->t_layer_inp[il] = inpL;
- 
-         ggml_tensor * inpSA = inpL;
-
 diff --git a/src/models/qwen2.cpp b/src/models/qwen2.cpp
 index d2cd8e2..99c4a14 100644
 --- a/src/models/qwen2.cpp
@@ -193,6 +178,21 @@ index d2cd8e2..99c4a14 100644
          ggml_tensor * inpSA = inpL;
  
          // norm
+
+diff --git a/src/models/llama.cpp b/src/models/llama.cpp
+index f9c1251..dff1c7d 100644
+--- a/src/models/llama.cpp
++++ b/src/models/llama.cpp
+@@ -124,6 +124,9 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
+     ggml_tensor * inp_out_ids = build_inp_out_ids();
+ 
+     for (int il = 0; il < n_layer; ++il) {
++        if (model.should_skip_layer(il)) {
++            continue;
++        }
+         res->t_layer_inp[il] = inpL;
+ 
+         ggml_tensor * inpSA = inpL;
 
 diff --git a/src/models/qwen2moe.cpp b/src/models/qwen2moe.cpp
 index 5f9222f..449427d 100644

@@ -1,11 +1,10 @@
-From: DeepSeek-AI DeepInfer Architecture Port <support@deepseek.com>
-Subject: [PATCH] DeepInfer optimizations: discrete multi-batch CUDA graph cache & async pipeline
+From: DeepInfer Port <support@telecode.ai>
+Subject: [PATCH] DeepInfer Multi-Stream Parallelism & Asynchronous Pipeline
 
-Port key performance ideas from DeepSeek DeepInfer to llama.cpp for both dense and MoE models:
-1. Multi-batch discrete CUDA graph caching: key CUDA graphs by (first_node, n_nodes, batch_size)
-   so concurrent slots (e.g. batch=1 vs batch=2) don't invalidate each other's warm CUDA graphs.
-2. Zero-overhead asynchronous scheduling pipeline (ZOS): defer blocking GPU synchronization
-   in server-context decode loop so worker thread overlaps queue/slot prep with device execution.
+1. Discrete multi-batch CUDA graph runners (CudaGraphRunner) keyed on (first_node, n_nodes, batch_size)
+   so alternating single and parallel slot execution does not reset or invalidate graph captures.
+2. Zero-overhead asynchronous pipeline (ZOS) deferring GPU-blocking synchronization from the task yield
+   loop into sampling, letting the CPU worker process task queues concurrently with GPU forward pass.
 
 ---
 diff --git a/ggml/src/ggml-cuda/common.cuh b/ggml/src/ggml-cuda/common.cuh
@@ -75,10 +74,10 @@ index fea1cf9..1fba649 100644
          return it->second.get();
 
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index b1984c5..8095134 100644
+index b1984c5..1565288 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -2772,8 +2772,23 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
+@@ -2772,14 +2772,29 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
      return use_cuda_graph;
  }
  
@@ -104,6 +103,13 @@ index b1984c5..8095134 100644
  }
  
  static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph) {
+     bool res = false;
+ 
+-    const void * graph_key = ggml_cuda_graph_get_key(cgraph);
++    const ggml_cuda_graph_key graph_key = ggml_cuda_graph_get_key(cgraph);
+     ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
+ 
+     if (cgraph->uid != 0 &&
 @@ -2820,7 +2835,7 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
      return res;
  }
