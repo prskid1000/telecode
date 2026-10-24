@@ -1,0 +1,174 @@
+From: DeepSeek-AI DeepInfer Architecture Port <support@deepseek.com>
+Subject: [PATCH] DeepInfer optimizations: discrete multi-batch CUDA graph cache & async pipeline
+
+Port key performance ideas from DeepSeek DeepInfer to llama.cpp for both dense and MoE models:
+1. Multi-batch discrete CUDA graph caching: key CUDA graphs by (first_node, n_nodes, batch_size)
+   so concurrent slots (e.g. batch=1 vs batch=2) don't invalidate each other's warm CUDA graphs.
+2. Zero-overhead asynchronous scheduling pipeline (ZOS): defer blocking GPU synchronization
+   in server-context decode loop so worker thread overlaps queue/slot prep with device execution.
+
+---
+diff --git a/ggml/src/ggml-cuda/common.cuh b/ggml/src/ggml-cuda/common.cuh
+index fea1cf9..1fba649 100644
+--- a/ggml/src/ggml-cuda/common.cuh
++++ b/ggml/src/ggml-cuda/common.cuh
+@@ -1261,6 +1261,31 @@ struct ggml_tensor_extra_gpu {
+ #define USE_CUDA_GRAPH
+ #endif
+ 
++#ifdef USE_CUDA_GRAPH
++struct ggml_cuda_graph_key {
++    const void * first_node = nullptr;
++    int64_t      n_nodes    = 0;
++    int64_t      batch_size = 1;
++
++    bool operator==(const ggml_cuda_graph_key & o) const {
++        return first_node == o.first_node && n_nodes == o.n_nodes && batch_size == o.batch_size;
++    }
++};
++
++struct ggml_cuda_graph_key_hash {
++    size_t operator()(const ggml_cuda_graph_key & k) const {
++        size_t h = std::hash<const void *>{}(k.first_node);
++        h ^= std::hash<int64_t>{}(k.n_nodes) + 0x9e3779b9 + (h << 6) + (h >> 2);
++        h ^= std::hash<int64_t>{}(k.batch_size) + 0x9e3779b9 + (h << 6) + (h >> 2);
++        return h;
++    }
++};
++#else
++struct ggml_cuda_graph_key {
++    const void * first_node = nullptr;
++};
++#endif
++
+ struct ggml_cuda_graph {
+ #ifdef USE_CUDA_GRAPH
+     ~ggml_cuda_graph() {
+@@ -1460,11 +1485,14 @@ struct ggml_backend_cuda_context {
+ #ifdef USE_CUDA_GRAPH
+     // Map from first_node_ptr to cuda_graph - allows multiple graphs per context
+     // when the computation is split across CPU/GPU (e.g., with --n-cpu-moe)
+-    std::unordered_map<const void *, std::unique_ptr<ggml_cuda_graph>> cuda_graphs;
++    // Map from graph key (first_node, n_nodes, batch_size) to cuda_graph.
++    // DeepInfer-style bucketed multi-batch graph caching: preserves separate CUDA graphs
++    // for concurrent batch sizes (e.g. 1, 2, 4 tokens) so parallel streams don't invalidate each other.
++    std::unordered_map<ggml_cuda_graph_key, std::unique_ptr<ggml_cuda_graph>, ggml_cuda_graph_key_hash> cuda_graphs;
+ 
+     int64_t last_graph_eviction_sweep = 0;
+ 
+-    ggml_cuda_graph * cuda_graph(const void * first_node_ptr) {
++    ggml_cuda_graph * cuda_graph(const ggml_cuda_graph_key & key) {
+         const int64_t time_now = ggml_time_us();
+ 
+         // sweep every 5s, evicting cuda graphs unused for >=10s
+@@ -1479,9 +1507,9 @@ struct ggml_backend_cuda_context {
+             }
+         }
+ 
+-        auto it = cuda_graphs.find(first_node_ptr);
++        auto it = cuda_graphs.find(key);
+         if (it == cuda_graphs.end()) {
+-            it = cuda_graphs.emplace(first_node_ptr, std::make_unique<ggml_cuda_graph>()).first;
++            it = cuda_graphs.emplace(key, std::make_unique<ggml_cuda_graph>()).first;
+         }
+         it->second->last_used_time = time_now;
+         return it->second.get();
+
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index b1984c5..8095134 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -2772,8 +2772,23 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
+     return use_cuda_graph;
+ }
+ 
+-static const void * ggml_cuda_graph_get_key(ggml_cgraph * cgraph) {
+-    return cgraph->nodes[0];
++static ggml_cuda_graph_key ggml_cuda_graph_get_key(ggml_cgraph * cgraph) {
++#ifdef USE_CUDA_GRAPH
++    int64_t batch_size = 1;
++    if (cgraph->n_nodes > 0) {
++        const ggml_tensor * last_node = cgraph->nodes[cgraph->n_nodes - 1];
++        if (last_node->ne[1] > 1) {
++            batch_size = last_node->ne[1];
++        } else if (cgraph->nodes[0]->ne[1] > 1) {
++            batch_size = cgraph->nodes[0]->ne[1];
++        } else if (cgraph->nodes[0]->ne[0] > 1) {
++            batch_size = cgraph->nodes[0]->ne[0];
++        }
++    }
++    return { cgraph->nodes[0], (int64_t) cgraph->n_nodes, batch_size };
++#else
++    return { cgraph->n_nodes > 0 ? cgraph->nodes[0] : nullptr };
++#endif
+ }
+ 
+ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph) {
+@@ -2820,7 +2835,7 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
+     return res;
+ }
+ 
+-static void ggml_cuda_graph_update_executable(ggml_backend_cuda_context * cuda_ctx, const void * graph_key) {
++static void ggml_cuda_graph_update_executable(ggml_backend_cuda_context * cuda_ctx, const ggml_cuda_graph_key & graph_key) {
+     ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
+ 
+ #if CUDART_VERSION >= 12000
+@@ -4589,7 +4604,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
+     return 0;
+ }
+ 
+-static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, const bool use_cuda_graph, const bool cuda_graph_update_required, const void * graph_key) {
++static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, const bool use_cuda_graph, const bool cuda_graph_update_required, const ggml_cuda_graph_key & graph_key) {
+     bool graph_evaluated_or_captured = false;
+ 
+     // flag used to determine whether it is an integrated_gpu
+@@ -4808,7 +4823,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
+ }
+ 
+ #ifdef USE_CUDA_GRAPH
+-static bool ggml_cuda_graph_set_enabled(ggml_backend_cuda_context * cuda_ctx, const void * graph_key) {
++static bool ggml_cuda_graph_set_enabled(ggml_backend_cuda_context * cuda_ctx, const ggml_cuda_graph_key & graph_key) {
+     ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
+ 
+     if (graph->graph == nullptr) {
+@@ -4831,7 +4846,7 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend,
+ 
+     bool use_cuda_graph             = false;
+     bool cuda_graph_update_required = false;
+-    const void * graph_key = nullptr;
++    ggml_cuda_graph_key graph_key   = {};
+ 
+ #ifdef USE_CUDA_GRAPH
+     graph_key = ggml_cuda_graph_get_key(cgraph);
+@@ -5026,7 +5041,7 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
+     }
+ 
+ #ifdef USE_CUDA_GRAPH
+-    const void * graph_key = ggml_cuda_graph_get_key(cgraph);
++    const ggml_cuda_graph_key graph_key = ggml_cuda_graph_get_key(cgraph);
+     const bool use_cuda_graph = ggml_cuda_graph_set_enabled(cuda_ctx, graph_key);
+ #else
+     const bool use_cuda_graph = false;
+
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index 7322da9..fc7e0d9 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -4330,7 +4330,16 @@ private:
+         queue_tasks.yield_to_queue([&]() {
+             ret = llama_process(ctx_tgt, LLAMA_PROCESS_TYPE_DECODE, batch.view.get());
+             if (ret == 0 && has_output) {
+-                llama_synchronize(ctx_tgt);
++                // DeepInfer-style Asynchronous Scheduling Pipeline (ZOS):
++                // Defer blocking GPU synchronization to common_sampler_sample / llama_get_logits_ith
++                // so the CPU worker thread can overlap slot handling and queue tasks with device execution.
++                static const bool defer_sync = []() {
++                    const char * env = getenv("LLAMA_SERVER_ASYNC_DECODE");
++                    return env == nullptr || atoi(env) != 0; // default enabled
++                }();
++                if (!defer_sync) {
++                    llama_synchronize(ctx_tgt);
++                }
+             }
+         });
+ 

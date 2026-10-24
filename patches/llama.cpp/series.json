@@ -58,6 +58,10 @@
         "src/llama-context.cpp"
       ],
       "header": "keep"
+    },
+    {
+      "file": "0005-deepinfer-parallel-cuda-graphs-pipeline.patch",
+      "exact": true
     }
   ]
 }
