@@ -89,12 +89,16 @@ def test_protobuf_skips_unknown_fields_and_rejects_garbage():
         protobuf.decode_request("logs", b"\x0a\xff\xff\xff")
 
 
-def test_ingest_writes_rows_and_prune_respects_retention():
+def test_ingest_writes_rows_and_prune_respects_retention(monkeypatch):
+    from services.telemetry import settings
+    from services.telemetry.store import now_ms
+    monkeypatch.setattr(settings, "retention_days", lambda: 365)
     otlp.ingest("logs", load("claude_logs.json"))
     otlp.ingest("metrics", load("claude_metrics.json"))
+    from services.db.core import connect
+    connect().execute("UPDATE metric_points SET ts_ms = ?", (now_ms(),))
     c = store.counts()
     assert c["log_events"]["rows"] > 5 and c["metric_points"]["rows"] > 5
-    from services.db.core import connect
     connect().execute("UPDATE log_events SET ts_ms = 1000")     # 1970 → older than any retention
     assert store.prune(14, force=True) >= 1
     assert store.counts()["log_events"]["rows"] == 0 and store.counts()["metric_points"]["rows"] > 0
