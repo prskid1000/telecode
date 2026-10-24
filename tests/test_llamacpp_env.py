@@ -261,3 +261,50 @@ def test_moe_threshold_and_layer_prune_env(monkeypatch):
     assert extra_env('moe-model').get('LLAMA_SERVER_ASYNC_DECODE') == '1'
     test_settings['llamacpp']['async_decode'] = False
     assert extra_env('moe-model').get('LLAMA_SERVER_ASYNC_DECODE') == '0'
+
+
+def test_moe_hybrid_gpu_only_and_swa_full_argv(monkeypatch, tmp_path):
+    from llamacpp.argv import build_argv
+    import llamacpp.config as lcfg
+
+    test_settings = {
+        "llamacpp": {
+            "binary_path": "llama-server",
+            "swa_full": False,
+            "models": {
+                "a3b-hybrid": {
+                    "path": str(tmp_path / "model.gguf"),
+                    "moe_hybrid": True,
+                    "moe_hybrid_mib": 5500,
+                    "moe_hybrid_gpu_only": True,
+                },
+                "qwen-27b": {
+                    "path": str(tmp_path / "model27.gguf"),
+                    "moe_hybrid": False,
+                }
+            }
+        }
+    }
+
+    def mock_get_nested(path, default=None):
+        parts = path.split('.')
+        curr = test_settings
+        for p in parts:
+            if isinstance(curr, dict) and p in curr:
+                curr = curr[p]
+            else:
+                return default
+        return curr
+
+    monkeypatch.setattr(app_config, "get_nested", mock_get_nested)
+    monkeypatch.setattr(lcfg, "binary", lambda: "llama-server")
+
+    # 1. SWA bounded replay flag is emitted when swa_full is false
+    argv_a3b = build_argv("a3b-hybrid")
+    assert "--no-swa-full" in argv_a3b
+    assert "--moe-hybrid-gpu-only" in argv_a3b
+
+    # 2. When moe_hybrid is False, moe_hybrid_gpu_only is suppressed
+    argv_27b = build_argv("qwen-27b")
+    assert "--moe-hybrid-gpu-only" not in argv_27b
+

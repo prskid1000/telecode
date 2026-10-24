@@ -122,6 +122,7 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("cache_idle_slots", ("--cache-idle-slots", "--no-cache-idle-slots"), "bool_pair"),
     ("context_shift",    ("--context-shift", "--no-context-shift"), "bool_pair"),
     ("warmup",           ("--warmup", "--no-warmup"),             "bool_pair"),
+    ("swa_full",         ("--swa-full", "--no-swa-full"),         "bool_pair"),
     # cache_ram / ctx_checkpoints / checkpoint_min_step carry meaningful zero
     # semantics, so emit literally `--flag 0` (kind "value", not "value_nz"):
     #   --cache-ram N         default 8192 MiB; -1 = no limit, 0 = disable.
@@ -358,6 +359,7 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("moe_hybrid_swap_max",             "--moe-hybrid-swap-max",             "value"),
     ("moe_hybrid_skip_weight",          "--moe-hybrid-skip-weight",          "value"),
     ("moe_hybrid_tail_skip",            "--moe-hybrid-tail-skip",            "value"),
+    ("moe_hybrid_gpu_only",             "--moe-hybrid-gpu-only",             "flag"),
     ("head_subset",                     "--head-subset",                     "value_nz"),
     ("head_subset_ids",                 "--head-subset-ids",                 "path"),
     ("spec_draft_head_subset",          "--spec-draft-head-subset",          "value_nz"),
@@ -683,7 +685,7 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
         suppressed_model.update({"n_cpu_moe", "moe_cache_mib"})   # all layers on the CPU; the MoE cache excludes the hybrid mode
     else:
         suppressed_model.update({"moe_hybrid_mib", "moe_hybrid_max_tokens", "moe_hybrid_swap_every", "moe_hybrid_swap_max",
-                                 "moe_hybrid_skip_weight", "moe_hybrid_tail_skip"})
+                                 "moe_hybrid_skip_weight", "moe_hybrid_tail_skip", "moe_hybrid_gpu_only"})
     # rope_scale and rope_freq_scale are the same lever; the older key wins.
     if cfg.as_float(mcfg.get("rope_freq_scale")) != 0.0:
         suppressed_model.add("rope_scale")

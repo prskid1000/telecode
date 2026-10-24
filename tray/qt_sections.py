@@ -2408,6 +2408,10 @@ def _llama(window) -> QWidget:
                      "shared KV buffer. 0 = unset, behaviour unchanged. Stops one long conversation "
                      "starving the others."),
         ["llamacpp.kv_unified"], lambda u: bool(u)))
+    cache_body.addWidget(_toggle_row("llamacpp.swa_full",       "Full-size SWA Cache",
+                                      "--swa-full / --no-swa-full: allocate full context size for sliding window layers. "
+                                      "Toggling OFF truncates sliding window layers to window size (e.g. 4096 tokens + sinks), "
+                                      "saving 1.5–2.5 GB VRAM on long contexts (DeepInfer SWA bounded replay). Default: off."))
     cache_body.addWidget(_toggle_row("llamacpp.cache_prompt",   "Cache Prompt",
                                       "--cache-prompt / --no-cache-prompt: reuse KV across requests with shared prefixes."))
     # cache_idle_slots needs unified KV AND a positive cache_ram.
@@ -5449,6 +5453,11 @@ def _models(window) -> QWidget:
         _sl_hy.addWidget(_dependent(
             _number_row(f"{p}.moe_hybrid_tail_skip", "Tail Skip Rank", 0, 32, 1, 0, "",
                         help_text="--moe-hybrid-tail-skip: skip CPU computation of non-resident experts ranked N or higher, 0 = off (default: 6).", default=6),
+            [f"{p}.moe_hybrid"], _hy_on))
+        _sl_hy.addWidget(_dependent(
+            _toggle_row(f"{p}.moe_hybrid_gpu_only", "GPU-Only Resident MoE",
+                        "--moe-hybrid-gpu-only: only compute resident experts on GPU and skip host CPU fallback entirely. "
+                        "Eliminates CPU OpenMP thread bottleneck and achieves 45+ tok/s throughput during parallel generation.", default=False),
             [f"{p}.moe_hybrid"], _hy_on))
 
         _c_ec, _sl_ec = _sec_card("MoE Expert Cache",

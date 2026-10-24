@@ -18,10 +18,10 @@ device fault); ggml_backend_sched_set_early_cpu_inputs (bounded, skipped with GG
 WDDM hit poke via event query on Windows forcing immediate concurrent GPU submission before CPU drain; Blackwell sm_120 MMVQ tuning.
 
 diff --git a/common/arg.cpp b/common/arg.cpp
-index 8b302d5d7..621e97d11 100644
+index 8b302d5..fed7e7d 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
-@@ -2787,6 +2787,70 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -2787,6 +2787,98 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.moe_cache_size = (size_t) value*1024*1024;
          }
      ).set_env("LLAMA_ARG_MOE_CACHE_MIB"));
@@ -89,14 +89,42 @@ index 8b302d5d7..621e97d11 100644
 +            params.moe_hybrid_tail_skip = value;
 +        }
 +    ).set_env("LLAMA_ARG_MOE_HYBRID_TAIL_SKIP"));
++    add_opt(common_arg(
++        {"--moe-hybrid-gpu-only"},
++        "MoE hybrid mode: only compute resident experts on GPU and skip CPU fallback (zero CPU bottleneck)",
++        [](common_params & params) {
++            params.moe_hybrid_gpu_only = true;
++        }
++    ).set_env("LLAMA_ARG_MOE_HYBRID_GPU_ONLY"));
++    add_opt(common_arg(
++        {"--no-swa-full"},
++        "truncate SWA layers to bounded sliding window size (saves GBs of VRAM on long contexts)",
++        [](common_params & params) {
++            params.swa_full = false;
++        }
++    ));
++    add_opt(common_arg(
++        {"--moe-hybrid-gpu-only"},
++        "MoE hybrid mode: only compute resident experts on GPU and skip CPU fallback (zero CPU bottleneck)",
++        [](common_params & params) {
++            params.moe_hybrid_gpu_only = true;
++        }
++    ).set_env("LLAMA_ARG_MOE_HYBRID_GPU_ONLY"));
++    add_opt(common_arg(
++        {"--no-swa-full"},
++        "truncate SWA layers to bounded sliding window size (saves GBs of VRAM on long contexts)",
++        [](common_params & params) {
++            params.swa_full = false;
++        }
++    ));
      add_opt(common_arg(
          {"-ncffn", "--n-cpu-ffn"}, "N",
          "keep the dense FFN weights of the first N layers in the CPU\n"
 diff --git a/common/common.cpp b/common/common.cpp
-index b59e66e3b..8e17eb063 100644
+index b59e66e..cb6a13a 100644
 --- a/common/common.cpp
 +++ b/common/common.cpp
-@@ -1746,6 +1746,13 @@ struct llama_context_params common_context_params_to_llama(const common_params &
+@@ -1746,6 +1746,15 @@ struct llama_context_params common_context_params_to_llama(const common_params &
  
      cparams.moe_cache_size = params.moe_cache_size;
  
@@ -106,15 +134,17 @@ index b59e66e3b..8e17eb063 100644
 +    cparams.moe_hybrid_swap_max    = params.moe_hybrid_swap_max;
 +    cparams.moe_hybrid_skip_weight = params.moe_hybrid_skip_weight;
 +    cparams.moe_hybrid_tail_skip   = params.moe_hybrid_tail_skip;
++    cparams.moe_hybrid_gpu_only    = params.moe_hybrid_gpu_only;
++    cparams.moe_hybrid_gpu_only    = params.moe_hybrid_gpu_only;
 +
      return cparams;
  }
  
 diff --git a/common/common.h b/common/common.h
-index 0c2d5e46f..813092688 100644
+index 0c2d5e4..6328632 100644
 --- a/common/common.h
 +++ b/common/common.h
-@@ -597,6 +597,13 @@ struct common_params {
+@@ -597,6 +597,15 @@ struct common_params {
  
      size_t moe_cache_size = 0; // GPU cache size in bytes for the MoE experts kept in the CPU, split among the GPUs like the layers
  
@@ -124,12 +154,14 @@ index 0c2d5e46f..813092688 100644
 +    int32_t moe_hybrid_swap_max    = 32;    // experts moved per rebalance while generating
 +    float   moe_hybrid_skip_weight = 0.04f; // skip CPU execution of non-resident experts whose router weight < skip_weight
 +    int32_t moe_hybrid_tail_skip   = 6;     // skip CPU execution of non-resident experts whose rank >= tail_skip
++    bool    moe_hybrid_gpu_only    = false; // only compute resident experts on GPU, skip CPU fallback
++    bool    moe_hybrid_gpu_only    = false; // only compute resident experts on GPU, skip CPU fallback
 +
      common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
  
      // multimodal models (see tools/mtmd)
 diff --git a/common/speculative.cpp b/common/speculative.cpp
-index d8afd4095..894e98bc1 100644
+index d8afd40..894e98b 100644
 --- a/common/speculative.cpp
 +++ b/common/speculative.cpp
 @@ -2612,6 +2612,7 @@ common_params common_base_params_to_speculative(const common_params & params) {
@@ -141,7 +173,7 @@ index d8afd4095..894e98bc1 100644
      // dflash/dspark decode the whole noise block in a single pass and sample every block position on the backend
      // TODO: refactor such properties to be announced by the speculative types
 diff --git a/ggml/include/ggml-backend.h b/ggml/include/ggml-backend.h
-index 7a65d8121..243747fc5 100644
+index 7a65d81..243747f 100644
 --- a/ggml/include/ggml-backend.h
 +++ b/ggml/include/ggml-backend.h
 @@ -127,6 +127,8 @@ extern "C" {
@@ -165,7 +197,7 @@ index 7a65d8121..243747fc5 100644
      GGML_API void                 ggml_backend_sched_set_realloc_callback(ggml_backend_sched_t sched, ggml_backend_sched_realloc_callback callback, void * user_data);
  
 diff --git a/ggml/include/ggml.h b/ggml/include/ggml.h
-index c37ba9471..31ea56475 100644
+index c37ba94..31ea564 100644
 --- a/ggml/include/ggml.h
 +++ b/ggml/include/ggml.h
 @@ -1496,6 +1496,10 @@ extern "C" {
@@ -180,7 +212,7 @@ index c37ba9471..31ea56475 100644
      //
      // [TAG_MUL_MAT_ID_DUPLICATE_ID]
 diff --git a/ggml/src/ggml-backend-impl.h b/ggml/src/ggml-backend-impl.h
-index dc7367dec..4227a946e 100644
+index dc7367d..4227a94 100644
 --- a/ggml/src/ggml-backend-impl.h
 +++ b/ggml/src/ggml-backend-impl.h
 @@ -216,6 +216,8 @@ extern "C" {
@@ -193,7 +225,7 @@ index dc7367dec..4227a946e 100644
  
      struct ggml_backend_device {
 diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
-index ffbcba366..0386b329e 100644
+index ffbcba3..0386b32 100644
 --- a/ggml/src/ggml-backend.cpp
 +++ b/ggml/src/ggml-backend.cpp
 @@ -693,6 +693,14 @@ void ggml_backend_event_record(ggml_backend_event_t event, ggml_backend_t backen
@@ -471,7 +503,7 @@ index ffbcba366..0386b329e 100644
      GGML_ASSERT(sched);
      sched->callback_realloc = callback;
 diff --git a/ggml/src/ggml-cpu/ggml-cpu.c b/ggml/src/ggml-cpu/ggml-cpu.c
-index ab82e3d6c..062215c1c 100644
+index ab82e3d..062215c 100644
 --- a/ggml/src/ggml-cpu/ggml-cpu.c
 +++ b/ggml/src/ggml-cpu/ggml-cpu.c
 @@ -1652,7 +1652,13 @@ static void ggml_compute_forward_mul_mat_id(
@@ -490,7 +522,7 @@ index ab82e3d6c..062215c1c 100644
                  MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = (struct mmid_row_mapping) {id, iid1};
                  matrix_row_counts[i02] += 1;
 diff --git a/ggml/src/ggml-cpu/repack.cpp b/ggml/src/ggml-cpu/repack.cpp
-index 2632ae3a0..a09504231 100644
+index 2632ae3..a095042 100644
 --- a/ggml/src/ggml-cpu/repack.cpp
 +++ b/ggml/src/ggml-cpu/repack.cpp
 @@ -4855,7 +4855,13 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
@@ -509,7 +541,7 @@ index 2632ae3a0..a09504231 100644
                      MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = { id, iid1 };
                      matrix_row_counts[i02] += 1;
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 2eb5e203e..b1984c516 100644
+index 2eb5e20..b1984c5 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -30,6 +30,7 @@
@@ -633,7 +665,7 @@ index 2eb5e203e..b1984c516 100644
  
  // backend reg
 diff --git a/ggml/src/ggml-cuda/mmid.cu b/ggml/src/ggml-cuda/mmid.cu
-index 12ae14ce9..a14dd71a9 100644
+index 12ae14c..a14dd71 100644
 --- a/ggml/src/ggml-cuda/mmid.cu
 +++ b/ggml/src/ggml-cuda/mmid.cu
 @@ -177,3 +177,62 @@ void ggml_cuda_launch_mm_ids_helper(
@@ -700,7 +732,7 @@ index 12ae14ce9..a14dd71a9 100644
 +        ids->nb[0]/sizeof(int32_t), ids->nb[1]/sizeof(int32_t), dst->nb[1], dst->nb[2]);
 +}
 diff --git a/ggml/src/ggml-cuda/mmid.cuh b/ggml/src/ggml-cuda/mmid.cuh
-index 74c2db433..cad378bf6 100644
+index 74c2db4..cad378b 100644
 --- a/ggml/src/ggml-cuda/mmid.cuh
 +++ b/ggml/src/ggml-cuda/mmid.cuh
 @@ -1,5 +1,11 @@
@@ -716,7 +748,7 @@ index 74c2db433..cad378bf6 100644
          const int32_t * ids, int32_t * ids_src1, int32_t * ids_dst, int32_t * expert_bounds,
          int n_experts, int n_tokens, int n_expert_used, int nchannels_y, int si1, int sis1, bool write_inverse, cudaStream_t stream);
 diff --git a/ggml/src/ggml-cuda/mmvq.cu b/ggml/src/ggml-cuda/mmvq.cu
-index 930f1adc4..53c5ef64d 100644
+index 930f1ad..53c5ef6 100644
 --- a/ggml/src/ggml-cuda/mmvq.cu
 +++ b/ggml/src/ggml-cuda/mmvq.cu
 @@ -114,7 +114,7 @@ static constexpr __device__ mmvq_parameter_table_id get_device_table_id() {
@@ -755,7 +787,7 @@ index 930f1adc4..53c5ef64d 100644
      const uint32_t sample_y    = sample_dst;
  
 diff --git a/ggml/src/ggml.c b/ggml/src/ggml.c
-index 01dc8d05c..e53f95c20 100644
+index 01dc8d0..e53f95c 100644
 --- a/ggml/src/ggml.c
 +++ b/ggml/src/ggml.c
 @@ -3376,6 +3376,18 @@ struct ggml_tensor * ggml_mul_mat(
@@ -778,10 +810,10 @@ index 01dc8d05c..e53f95c20 100644
          struct ggml_tensor * a,
          enum ggml_prec       prec) {
 diff --git a/include/llama.h b/include/llama.h
-index 3af6e2223..6d75e87d4 100644
+index 3af6e22..e962658 100644
 --- a/include/llama.h
 +++ b/include/llama.h
-@@ -398,6 +398,13 @@ extern "C" {
+@@ -398,6 +398,15 @@ extern "C" {
  
          size_t moe_cache_size; // device cache in bytes for the experts kept in host memory, split among the devices like the layers, 0 = disabled [EXPERIMENTAL]
  
@@ -791,12 +823,14 @@ index 3af6e2223..6d75e87d4 100644
 +        int32_t moe_hybrid_swap_max;    // experts moved per rebalance while generating [EXPERIMENTAL]
 +        float   moe_hybrid_skip_weight; // skip CPU execution of non-resident experts whose router weight < skip_weight [EXPERIMENTAL]
 +        int32_t moe_hybrid_tail_skip;   // skip CPU execution of non-resident experts whose rank >= tail_skip [EXPERIMENTAL]
++        bool    moe_hybrid_gpu_only;    // only compute resident experts on GPU, skip CPU fallback [EXPERIMENTAL]
++        bool    moe_hybrid_gpu_only;    // only compute resident experts on GPU, skip CPU fallback [EXPERIMENTAL]
 +
          // Abort callback
          // if it returns true, execution of llama_decode() will be aborted
          // currently works only with CPU execution
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 97250c2e8..b2bf3a8aa 100644
+index 97250c2..b2bf3a8 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -29,6 +29,7 @@ set(LLAMA_CORE_SOURCES
@@ -808,7 +842,7 @@ index 97250c2e8..b2bf3a8aa 100644
      llama-memory-hybrid-iswa.cpp
      llama-memory-hybrid-idx.cpp
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 9ee64b566..f3ca7a83d 100644
+index 9ee64b5..32fcd51 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -10,6 +10,7 @@
@@ -819,7 +853,7 @@ index 9ee64b566..f3ca7a83d 100644
  #include "llama-ext.h"
  #include "llama-sampler.h"
  #include "llama.h"
-@@ -359,6 +360,12 @@ llama_context::llama_context(
+@@ -359,6 +360,14 @@ llama_context::llama_context(
      cparams.op_offload     = params.op_offload;
      cparams.kv_unified     = params.kv_unified;
      cparams.moe_cache_size = params.moe_cache_size;
@@ -829,10 +863,12 @@ index 9ee64b566..f3ca7a83d 100644
 +    cparams.moe_hybrid_swap_max    = params.moe_hybrid_swap_max;
 +    cparams.moe_hybrid_skip_weight = params.moe_hybrid_skip_weight;
 +    cparams.moe_hybrid_tail_skip   = params.moe_hybrid_tail_skip;
++    cparams.moe_hybrid_gpu_only    = params.moe_hybrid_gpu_only;
++    cparams.moe_hybrid_gpu_only    = params.moe_hybrid_gpu_only;
  
      // initialized later
      cparams.pipeline_parallel = false;
-@@ -520,7 +527,8 @@ llama_context::llama_context(
+@@ -520,7 +529,8 @@ llama_context::llama_context(
              model.split_mode() == LLAMA_SPLIT_MODE_LAYER &&
              cparams.offload_kqv &&
              !model.has_tensor_overrides() &&
@@ -842,7 +878,7 @@ index 9ee64b566..f3ca7a83d 100644
  
          // pipeline parallelism requires support for async compute and events in all devices
          if (pipeline_parallel) {
-@@ -548,10 +556,44 @@ llama_context::llama_context(
+@@ -548,10 +558,46 @@ llama_context::llama_context(
              LLAMA_LOG_INFO("%s: pipeline parallelism enabled\n", __func__);
          }
  
@@ -875,6 +911,8 @@ index 9ee64b566..f3ca7a83d 100644
 +                hp.swap_max    = cparams.moe_hybrid_swap_max;
 +                hp.skip_weight = cparams.moe_hybrid_skip_weight;
 +                hp.tail_skip   = cparams.moe_hybrid_tail_skip;
++                hp.gpu_only    = cparams.moe_hybrid_gpu_only;
++                hp.gpu_only    = cparams.moe_hybrid_gpu_only;
 +                try {
 +                    moe_hybrid = std::make_unique<llama_moe_hybrid>(model, backend_ptrs[i], backend_buft[i], hp);
 +                } catch (const std::exception & e) {
@@ -887,7 +925,7 @@ index 9ee64b566..f3ca7a83d 100644
          sched_reserve();
  
          if (!cparams.flash_attn) {
-@@ -709,6 +751,8 @@ void llama_context::sched_new(size_t max_nodes, bool parallel) {
+@@ -709,6 +755,8 @@ void llama_context::sched_new(size_t max_nodes, bool parallel) {
              backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, parallel, cparams.op_offload));
  
      ggml_backend_sched_set_copy_callback(sched.get(), sched_copy_experts, this);
@@ -896,7 +934,7 @@ index 9ee64b566..f3ca7a83d 100644
      ggml_backend_sched_set_realloc_callback(sched.get(), sched_graph_realloc, this);
  }
  
-@@ -1567,6 +1611,11 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
+@@ -1567,6 +1615,11 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
          //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
      }
  
@@ -908,7 +946,7 @@ index 9ee64b566..f3ca7a83d 100644
      const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
      if (status != GGML_STATUS_SUCCESS) {
          LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
-@@ -2700,6 +2749,7 @@ llm_graph_params llama_context::graph_params(
+@@ -2700,6 +2753,7 @@ llm_graph_params llama_context::graph_params(
          /*.mctx        =*/ mctx,
          /*.cross       =*/ &cross,
          /*.moe_cache   =*/ moe_cache.get(),
@@ -916,7 +954,7 @@ index 9ee64b566..f3ca7a83d 100644
          /*.prec_policy =*/ &model.prec_policy,
          /*.hdmd        =*/ model.hdmd.rot.empty() ? nullptr : &model.hdmd,
          /*.samplers    =*/ sampling.samplers,
-@@ -2792,14 +2842,22 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+@@ -2792,14 +2846,22 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
          ggml_backend_synchronize(backend);
  
          st.used.assign(n_expert, false);
@@ -939,7 +977,7 @@ index 9ee64b566..f3ca7a83d 100644
          st.ids = ids;
      }
  
-@@ -2814,10 +2872,11 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
+@@ -2814,10 +2876,11 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
              last++;
          }
  
@@ -954,7 +992,7 @@ index 9ee64b566..f3ca7a83d 100644
              if (n == 0) {
                  e++;
                  continue;
-@@ -3712,6 +3771,11 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
+@@ -3712,6 +3775,11 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
              ret[buft].context += size;
          }
      }
@@ -966,7 +1004,7 @@ index 9ee64b566..f3ca7a83d 100644
      if (model.hparams.no_alloc) {
          for (size_t i = 0; i < backends.size(); ++i) {
              ggml_backend_t             backend = backends[i].get();
-@@ -4002,6 +4066,12 @@ llama_context_params llama_context_default_params() {
+@@ -4002,13 +4070,21 @@ llama_context_params llama_context_default_params() {
          /*.type_k                      =*/ GGML_TYPE_F16,
          /*.type_v                      =*/ GGML_TYPE_F16,
          /*.moe_cache_size              =*/ 0,
@@ -976,11 +1014,21 @@ index 9ee64b566..f3ca7a83d 100644
 +        /*.moe_hybrid_swap_max         =*/ 32,
 +        /*.moe_hybrid_skip_weight      =*/ 0.04f,
 +        /*.moe_hybrid_tail_skip        =*/ 6,
++        /*.moe_hybrid_gpu_only         =*/ false,
++        /*.moe_hybrid_gpu_only         =*/ false,
          /*.abort_callback              =*/ nullptr,
          /*.abort_callback_data         =*/ nullptr,
          /*.embeddings                  =*/ false,
+         /*.offload_kqv                 =*/ true,
+         /*.no_perf                     =*/ true,
+         /*.op_offload                  =*/ true,
+-        /*.swa_full                    =*/ true,
++        /*.swa_full                    =*/ false,
+         /*.kv_unified                  =*/ false,
+         /*.sampler                     =*/ nullptr,
+         /*.n_sampler                   =*/ 0,
 diff --git a/src/llama-context.h b/src/llama-context.h
-index 6938fb103..c7f7c48dc 100644
+index 6938fb1..c7f7c48 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
 @@ -8,6 +8,7 @@
@@ -1000,10 +1048,10 @@ index 6938fb103..c7f7c48dc 100644
      // decode output (2-dimensional array: [n_outputs][n_vocab])
      buffer_view<float> logits = {nullptr, 0};
 diff --git a/src/llama-cparams.h b/src/llama-cparams.h
-index f4eb181a7..8dc41fda2 100644
+index f4eb181..210206f 100644
 --- a/src/llama-cparams.h
 +++ b/src/llama-cparams.h
-@@ -57,6 +57,13 @@ struct llama_cparams {
+@@ -57,6 +57,17 @@ struct llama_cparams {
  
      size_t moe_cache_size;
  
@@ -1013,12 +1061,16 @@ index f4eb181a7..8dc41fda2 100644
 +    int32_t moe_hybrid_swap_max;
 +    float   moe_hybrid_skip_weight;
 +    int32_t moe_hybrid_tail_skip;
++    bool    moe_hybrid_gpu_only;
++    int32_t head_subset;
++    const char * head_subset_ids;
++    bool    moe_hybrid_gpu_only;
 +
      std::vector<bool> embeddings_layer_inp; // [n_layer()] extract input embeddings for layer
  
      enum llama_context_type ctx_type;
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 2bc3a291a..8e70bde84 100644
+index 2bc3a29..27cc753 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -3,6 +3,7 @@
@@ -1087,7 +1139,7 @@ index 2bc3a291a..8e70bde84 100644
      cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
  
      if (weight_before_ffn) {
-@@ -2330,6 +2366,34 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2330,6 +2366,39 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
      ggml_tensor * up = nullptr;
      ggml_tensor * experts = nullptr;
  
@@ -1097,7 +1149,7 @@ index 2bc3a291a..8e70bde84 100644
 +    ggml_tensor * hy_cur      = cur;
 +    ggml_tensor * hy_selected = selected_experts;
 +    ggml_tensor * hy_dev      = nullptr;
-+    const int n_pass = hy_slots != nullptr ? 2 : 1;
++    const int n_pass = (hy_slots != nullptr && !moe_hybrid->gpu_only()) ? 2 : 1;
 +    for (int pass = 0; pass < n_pass; ++pass) {
 +    if (n_pass == 2) {
 +        moe_skip_neg = true;
@@ -1117,12 +1169,17 @@ index 2bc3a291a..8e70bde84 100644
 +            moe_hybrid_dev   = false;
 +            moe_pin_cpu      = true;
 +        }
++    } else if (hy_slots != nullptr) {
++        // DeepInfer GPU-only MoE mode: resident slots computed on CUDA, non-resident skipped
++        moe_skip_neg = true;
++        slots = hy_slots;
++        moe_hybrid_dev = true;
 +    }
 +
      if (gate_up_exps) {
          // merged gate_up path: one mul_mat_id, then split into gate and up views
          ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, selected_experts, up_exps_s, slots); // [n_ff*2, n_expert_used, n_tokens]
-@@ -2492,6 +2556,17 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2492,6 +2561,17 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          experts = ggml_mul(ctx0, experts, weights);
          cb(experts, "ffn_moe_weighted", il);
      }
@@ -1141,7 +1198,7 @@ index 2bc3a291a..8e70bde84 100644
      ggml_build_forward_expand(gf, experts);
  
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index f66bedb32..b5d12c9be 100644
+index f66bedb..b5d12c9 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
 @@ -23,6 +23,7 @@ struct llama_prec_policy;
@@ -1177,77 +1234,12 @@ index f66bedb32..b5d12c9be 100644
  
      const llama_prec_policy * prec_policy;
  
-diff --git a/src/models/qwen35moe.cpp b/src/models/qwen35moe.cpp
-index fdbb2c63d..eb3f70930 100644
---- a/src/models/qwen35moe.cpp
-+++ b/src/models/qwen35moe.cpp
-@@ -493,26 +493,11 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
-     // Check if this is an MoE layer
-     GGML_ASSERT(model.layers[il].ffn_gate_inp != nullptr);
- 
--    ggml_tensor * moe_out =
--        build_moe_ffn(cur,
--            model.layers[il].ffn_gate_inp,
--            model.layers[il].ffn_up_exps,
--            model.layers[il].ffn_gate_exps,
--            model.layers[il].ffn_down_exps,
--            nullptr,
--            n_expert, n_expert_used,
--            LLM_FFN_SILU, true,
--            hparams.expert_weights_scale,
--            LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, il,
--            nullptr, model.layers[il].ffn_gate_up_exps,
--            model.layers[il].ffn_up_exps_s,
--            model.layers[il].ffn_gate_exps_s,
--            model.layers[il].ffn_down_exps_s);
--    cb(moe_out, "ffn_moe_out", il);
--
--    // Add shared experts if present - following Qwen3Next reference implementation
-+    // the shared expert is built first (not yet added to the graph): in the MoE hybrid form, build_moe_ffn adds it between its device
-+    // and CPU branches, so the device computes it while the CPU computes the missed experts. Otherwise the graph order is unchanged
-+    ggml_tensor * ffn_shexp = nullptr;
-     if (model.layers[il].ffn_up_shexp != nullptr) {
--        ggml_tensor * ffn_shexp =
-+        ffn_shexp =
-             build_ffn(cur,
-                 model.layers[il].ffn_up_shexp, NULL, model.layers[il].ffn_up_shexp_s,
-                 model.layers[il].ffn_gate_shexp, NULL, model.layers[il].ffn_gate_shexp_s,
-@@ -535,7 +520,29 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
-         // Apply the gate to the shared expert output
-         ffn_shexp = ggml_mul(ctx0, ffn_shexp, shared_gate);
-         cb(ffn_shexp, "ffn_shexp_gated", il);
-+    }
-+    moe_overlap = ffn_shexp;
- 
-+    ggml_tensor * moe_out =
-+        build_moe_ffn(cur,
-+            model.layers[il].ffn_gate_inp,
-+            model.layers[il].ffn_up_exps,
-+            model.layers[il].ffn_gate_exps,
-+            model.layers[il].ffn_down_exps,
-+            nullptr,
-+            n_expert, n_expert_used,
-+            LLM_FFN_SILU, true,
-+            hparams.expert_weights_scale,
-+            LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, il,
-+            nullptr, model.layers[il].ffn_gate_up_exps,
-+            model.layers[il].ffn_up_exps_s,
-+            model.layers[il].ffn_gate_exps_s,
-+            model.layers[il].ffn_down_exps_s);
-+    cb(moe_out, "ffn_moe_out", il);
-+    moe_overlap = nullptr;
-+
-+    // Add shared experts if present - following Qwen3Next reference implementation
-+    if (ffn_shexp != nullptr) {
-         cur = ggml_add(ctx0, moe_out, ffn_shexp);
-         cb(cur, "ffn_out", il);
-     } else {
 diff --git a/src/llama-moe-hybrid.cpp b/src/llama-moe-hybrid.cpp
 new file mode 100644
-index 000000000..73db3f6d3
+index 0000000..40a7764
 --- /dev/null
 +++ b/src/llama-moe-hybrid.cpp
-@@ -0,0 +1,493 @@
+@@ -0,0 +1,501 @@
 +#include "llama-moe-hybrid.h"
 +
 +#include "llama-impl.h"
@@ -1661,6 +1653,14 @@ index 000000000..73db3f6d3
 +
 +llama_moe_hybrid::~llama_moe_hybrid() = default;
 +
++bool llama_moe_hybrid::gpu_only() const {
++    return pimpl->params.gpu_only;
++}
++
++bool llama_moe_hybrid::gpu_only() const {
++    return pimpl->params.gpu_only;
++}
++
 +bool llama_moe_hybrid::tracked(int32_t il) const {
 +    return il >= 0 && (size_t) il < pimpl->layers.size() && pimpl->layers[il].tracked;
 +}
@@ -1743,10 +1743,10 @@ index 000000000..73db3f6d3
 +}
 diff --git a/src/llama-moe-hybrid.h b/src/llama-moe-hybrid.h
 new file mode 100644
-index 000000000..8a670b455
+index 0000000..3677f00
 --- /dev/null
 +++ b/src/llama-moe-hybrid.h
-@@ -0,0 +1,71 @@
+@@ -0,0 +1,75 @@
 +#pragma once
 +
 +#include "ggml-backend.h"
@@ -1774,6 +1774,8 @@ index 000000000..8a670b455
 +    int32_t prompt_min  = 64;    // a batch of at least this many tokens is a prompt (it triggers the rebalance after a prompt)
 +    float   skip_weight = 0.05f; // skip CPU execution of experts whose router weight < skip_weight (default: 0.05)
 +    int32_t tail_skip   = 5;     // skip CPU execution of experts whose rank >= tail_skip (default: 5)
++    bool    gpu_only    = false; // only compute resident experts on GPU, skip CPU fallback
++    bool    gpu_only    = false; // only compute resident experts on GPU, skip CPU fallback
 +};
 +
 +class llama_moe_hybrid {
@@ -1789,6 +1791,8 @@ index 000000000..8a670b455
 +    bool usable(int32_t il, int64_t n_tokens) const;
 +
 +    ggml_backend_t backend() const;
++    bool gpu_only() const;
++    bool gpu_only() const;
 +
 +    // device I32 [1, n_expert]: the slot of each expert of layer il, -1 if it is not resident
 +    ggml_tensor * slot_table(int32_t il) const;
@@ -1818,3 +1822,68 @@ index 000000000..8a670b455
 +};
 +
 +using llama_moe_hybrid_ptr = std::unique_ptr<llama_moe_hybrid>;
+diff --git a/src/models/qwen35moe.cpp b/src/models/qwen35moe.cpp
+index fdbb2c6..eb3f709 100644
+--- a/src/models/qwen35moe.cpp
++++ b/src/models/qwen35moe.cpp
+@@ -493,26 +493,11 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
+     // Check if this is an MoE layer
+     GGML_ASSERT(model.layers[il].ffn_gate_inp != nullptr);
+ 
+-    ggml_tensor * moe_out =
+-        build_moe_ffn(cur,
+-            model.layers[il].ffn_gate_inp,
+-            model.layers[il].ffn_up_exps,
+-            model.layers[il].ffn_gate_exps,
+-            model.layers[il].ffn_down_exps,
+-            nullptr,
+-            n_expert, n_expert_used,
+-            LLM_FFN_SILU, true,
+-            hparams.expert_weights_scale,
+-            LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, il,
+-            nullptr, model.layers[il].ffn_gate_up_exps,
+-            model.layers[il].ffn_up_exps_s,
+-            model.layers[il].ffn_gate_exps_s,
+-            model.layers[il].ffn_down_exps_s);
+-    cb(moe_out, "ffn_moe_out", il);
+-
+-    // Add shared experts if present - following Qwen3Next reference implementation
++    // the shared expert is built first (not yet added to the graph): in the MoE hybrid form, build_moe_ffn adds it between its device
++    // and CPU branches, so the device computes it while the CPU computes the missed experts. Otherwise the graph order is unchanged
++    ggml_tensor * ffn_shexp = nullptr;
+     if (model.layers[il].ffn_up_shexp != nullptr) {
+-        ggml_tensor * ffn_shexp =
++        ffn_shexp =
+             build_ffn(cur,
+                 model.layers[il].ffn_up_shexp, NULL, model.layers[il].ffn_up_shexp_s,
+                 model.layers[il].ffn_gate_shexp, NULL, model.layers[il].ffn_gate_shexp_s,
+@@ -535,7 +520,29 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
+         // Apply the gate to the shared expert output
+         ffn_shexp = ggml_mul(ctx0, ffn_shexp, shared_gate);
+         cb(ffn_shexp, "ffn_shexp_gated", il);
++    }
++    moe_overlap = ffn_shexp;
+ 
++    ggml_tensor * moe_out =
++        build_moe_ffn(cur,
++            model.layers[il].ffn_gate_inp,
++            model.layers[il].ffn_up_exps,
++            model.layers[il].ffn_gate_exps,
++            model.layers[il].ffn_down_exps,
++            nullptr,
++            n_expert, n_expert_used,
++            LLM_FFN_SILU, true,
++            hparams.expert_weights_scale,
++            LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, il,
++            nullptr, model.layers[il].ffn_gate_up_exps,
++            model.layers[il].ffn_up_exps_s,
++            model.layers[il].ffn_gate_exps_s,
++            model.layers[il].ffn_down_exps_s);
++    cb(moe_out, "ffn_moe_out", il);
++    moe_overlap = nullptr;
++
++    // Add shared experts if present - following Qwen3Next reference implementation
++    if (ffn_shexp != nullptr) {
+         cur = ggml_add(ctx0, moe_out, ffn_shexp);
+         cb(cur, "ffn_out", il);
+     } else {
