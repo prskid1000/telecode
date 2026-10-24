@@ -438,10 +438,56 @@ def extra_env(model_name: str = "") -> dict[str, str]:
     """Environment variables to add for a llama-server spawn: global `llamacpp.env`,
     then the model's own `llamacpp.models.<m>.env` on top (it overrides)."""
     env = parse_env_text(app_config.get_nested("llamacpp.env", {}) or {}, "llamacpp.env")
+
+    # Global knobs that map to environment variables if not overridden
+    g_moe_thresh = app_config.get_nested("llamacpp.moe_threshold", None)
+    if g_moe_thresh is not None and "GGML_CUDA_MOE_THRESHOLD" not in env:
+        try:
+            if float(g_moe_thresh) > 0:
+                env["GGML_CUDA_MOE_THRESHOLD"] = str(g_moe_thresh)
+        except (ValueError, TypeError):
+            pass
+
+    g_prune = app_config.get_nested("llamacpp.layer_drop_range", None) or app_config.get_nested("llamacpp.prune_layers", None)
+    if g_prune and "LLAMA_PRUNE_LAYERS" not in env:
+        env["LLAMA_PRUNE_LAYERS"] = str(g_prune).strip()
+
+    g_ratio = app_config.get_nested("llamacpp.layer_prune_ratio", None) or app_config.get_nested("llamacpp.keep_ratio", None)
+    if g_ratio is not None and "LLAMA_KEEP_RATIO" not in env:
+        try:
+            rf = float(g_ratio)
+            if 0.0 < rf < 1.0:
+                env["LLAMA_KEEP_RATIO"] = f"{rf:.4f}"
+        except (ValueError, TypeError):
+            pass
+
     if model_name:
         resolved = resolve_model(model_name) or model_name
-        env.update(parse_env_text(model_cfg(resolved).get("env", {}) or {},
+        m_cfg = model_cfg(resolved)
+        env.update(parse_env_text(m_cfg.get("env", {}) or {},
                                   f"llamacpp.models.{resolved}.env"))
+
+        # Model-specific bandwidth & layer pruning knobs (Patch 0006)
+        m_moe_thresh = m_cfg.get("moe_threshold")
+        if m_moe_thresh is not None and "GGML_CUDA_MOE_THRESHOLD" not in (m_cfg.get("env") or {}):
+            try:
+                if float(m_moe_thresh) > 0:
+                    env["GGML_CUDA_MOE_THRESHOLD"] = str(m_moe_thresh)
+            except (ValueError, TypeError):
+                pass
+
+        m_prune = m_cfg.get("layer_drop_range") or m_cfg.get("prune_layers")
+        if m_prune and "LLAMA_PRUNE_LAYERS" not in (m_cfg.get("env") or {}):
+            env["LLAMA_PRUNE_LAYERS"] = str(m_prune).strip()
+
+        m_ratio = m_cfg.get("layer_prune_ratio") or m_cfg.get("keep_ratio")
+        if m_ratio is not None and "LLAMA_KEEP_RATIO" not in (m_cfg.get("env") or {}):
+            try:
+                rf = float(m_ratio)
+                if 0.0 < rf < 1.0:
+                    env["LLAMA_KEEP_RATIO"] = f"{rf:.4f}"
+            except (ValueError, TypeError):
+                pass
 
     # When Blackwell GPU is detected, keep GGML_CUDA_REGISTER_HOST=1 automatically on
     # (page-locks host model buffers for high-speed PCIe DMA saturation) unless user explicitly opted out.

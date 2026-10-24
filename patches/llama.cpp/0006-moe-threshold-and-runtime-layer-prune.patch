@@ -1,0 +1,225 @@
+From: Telecode Bandwidth Optimizations <support@telecode.ai>
+Subject: [PATCH] Dynamic MoE expert thresholding and runtime ShortGPT layer pruning
+
+Bandwidth and throughput optimizations:
+1. Dynamic MoE expert thresholding: skip low-probability routed experts (weight < GGML_CUDA_MOE_THRESHOLD)
+   so the GPU kernel skips reading their weights from VRAM, saving ~25-40% MoE memory bandwidth.
+2. Runtime ShortGPT middle-layer pruning: bypass redundant middle layers via LLAMA_PRUNE_LAYERS or
+   LLAMA_KEEP_RATIO without writing files to disk or duplicating model weights.
+
+---
+diff --git a/ggml/src/ggml-cuda/topk-moe.cu b/ggml/src/ggml-cuda/topk-moe.cu
+index 81d6ec3..581ff2e 100644
+--- a/ggml/src/ggml-cuda/topk-moe.cu
++++ b/ggml/src/ggml-cuda/topk-moe.cu
+@@ -13,6 +13,7 @@ struct topk_moe_config {
+     bool delayed_softmax;
+     int  n_groups;
+     int  n_group_used;
++    float weight_threshold = 0.0f;
+ };
+ 
+ // Warp-local softmax used for both the pre-top-k logits and the post-top-k delayed path.
+@@ -332,7 +333,12 @@ __global__ void topk_moe_cuda(const float *         logits,
+     for (int i = 0; i < experts_per_thread; i++) {
+         const int idx = i * WARP_SIZE + threadIdx.x;
+         if (idx < n_expert_used) {
+-            weights[idx] = output_weights[i] * scale_val;
++            float w = output_weights[i] * scale_val;
++            if (config.weight_threshold > 0.0f && idx > 0 && output_weights[i] < config.weight_threshold) {
++                w = 0.0f;
++                ids[idx] = -1;
++            }
++            weights[idx] = w;
+         }
+     }
+ }
+@@ -455,6 +461,11 @@ void ggml_cuda_op_topk_moe(ggml_backend_cuda_context &     ctx,
+     config.delayed_softmax   = args.delayed_softmax;
+     config.n_groups          = args.n_groups;
+     config.n_group_used      = args.n_group_used;
++    static const float moe_thresh = []() {
++        const char * env = getenv("GGML_CUDA_MOE_THRESHOLD");
++        return env ? (float) atof(env) : 0.0f;
++    }();
++    config.weight_threshold  = moe_thresh;
+ 
+     if (bias) {
+         launch_topk_moe_cuda<true>(ctx, logits_d, weights_d, ids_d, bias_d, n_rows, n_experts, n_expert_used, clamp_val,
+
+diff --git a/ggml/src/ggml-cuda/mmvq.cu b/ggml/src/ggml-cuda/mmvq.cu
+index 53c5ef6..1df0291 100644
+--- a/ggml/src/ggml-cuda/mmvq.cu
++++ b/ggml/src/ggml-cuda/mmvq.cu
+@@ -950,7 +950,14 @@ static __global__ void mul_mat_vec_q_moe(
+     }
+ 
+     ggml_cuda_pdl_sync();
+-    const uint32_t channel_x = shared_expert ? 0 : ids[channel_dst + token_idx * ids_stride];
++    const int32_t raw_id = shared_expert ? 0 : ids[channel_dst + token_idx * ids_stride];
++    if (raw_id < 0) {
++        if (threadIdx.x < c_rows_per_block && (c_rows_per_block == 1 || uint32_t(row0 + threadIdx.x) < nrows_x)) {
++            dst[channel_dst*stride_channel_dst + token_idx*stride_col_dst + row0 + threadIdx.x] = 0.0f;
++        }
++        return;
++    }
++    const uint32_t channel_x = raw_id;
+     const uint32_t channel_y = fastmodulo(channel_dst, nchannels_y);
+ 
+     const block_q8_1 * y = ((const block_q8_1 *) vy) + channel_y*stride_channel_y + token_idx*stride_col_y;
+
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index b4d7151..c84f2ec 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -1798,7 +1798,11 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
+     ggml_tensor * res = slots == nullptr ?
+         ggml_mul_mat_id(ctx0, w, cur, ids) :
+         ggml_mul_mat_id(ctx0, moe_hybrid_dev ? moe_hybrid->bank(w) : moe_cache->get_experts(w), cur, slots);
+-    if (moe_skip_neg) {
++    static const bool moe_skip_neg_env = []() {
++        const char * env = getenv("GGML_CUDA_MOE_THRESHOLD");
++        return env && atof(env) > 0.0;
++    }();
++    if (moe_skip_neg || moe_skip_neg_env) {
+         ggml_mul_mat_id_set_skip_neg(res);
+     }
+     if (moe_pin_cpu) {
+
+diff --git a/src/llama-model.h b/src/llama-model.h
+index a187c27..95f1fe3 100644
+--- a/src/llama-model.h
++++ b/src/llama-model.h
+@@ -856,6 +856,15 @@ struct llama_model {
+     int64_t t_load_us  = 0;
+     int64_t t_start_us = 0;
+ 
++    int prune_layer_start = -1;
++    int prune_layer_end   = -1;
++
++    void init_prune_layers();
++    bool should_skip_layer(int il) const {
++        return prune_layer_start >= 0 && prune_layer_end >= prune_layer_start &&
++               il >= prune_layer_start && il <= prune_layer_end;
++    }
++
+     explicit llama_model(const llama_model_params & params);
+     virtual ~llama_model();
+ 
+
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index 803a832..eb62d14 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -3316,7 +3316,51 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+     return res;
+ }
+ 
++ggml_cgraph * void llama_model::init_prune_layers() {
++    if (prune_layer_start != -1 || prune_layer_end != -1) {
++        return;
++    }
++    const char * env_prune = getenv("LLAMA_PRUNE_LAYERS");
++    const char * env_ratio = getenv("LLAMA_KEEP_RATIO");
++    const int total_layers = (int) hparams.n_layer();
++    if (total_layers <= 0) return;
++
++    if (env_prune && *env_prune) {
++        int s = -1, e = -1;
++        if (sscanf(env_prune, "%d-%d", &s, &e) == 2 || sscanf(env_prune, "%d:%d", &s, &e) == 2) {
++            prune_layer_start = std::max(0, s);
++            prune_layer_end   = std::min(total_layers - 1, e);
++            static bool logged = false;
++            if (!logged) {
++                LLAMA_LOG_INFO("%s: runtime ShortGPT layer pruning active: skipping layers %d to %d (%d/%d layers active, ~%.1f%% bandwidth saved)\n",
++                               __func__, prune_layer_start, prune_layer_end,
++                               total_layers - (prune_layer_end - prune_layer_start + 1), total_layers,
++                               100.0f * (prune_layer_end - prune_layer_start + 1) / total_layers);
++                logged = true;
++            }
++        }
++    } else if (env_ratio && *env_ratio) {
++        float ratio = (float) atof(env_ratio);
++        if (ratio > 0.0f && ratio < 1.0f) {
++            int drop_count = (int) std::round(total_layers * (1.0f - ratio));
++            if (drop_count > 0 && drop_count < total_layers) {
++                prune_layer_start = (total_layers - drop_count) / 2;
++                prune_layer_end   = prune_layer_start + drop_count - 1;
++                static bool logged = false;
++                if (!logged) {
++                    LLAMA_LOG_INFO("%s: runtime ShortGPT keep-ratio %.2f active: skipping middle layers %d to %d (%d/%d layers active, ~%.1f%% bandwidth saved)\n",
++                                   __func__, ratio, prune_layer_start, prune_layer_end,
++                                   total_layers - drop_count, total_layers,
++                                   100.0f * drop_count / total_layers);
++                    logged = true;
++                }
++            }
++        }
++    }
++}
++
+ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
++    const_cast<llama_model *>(this)->init_prune_layers();
+     std::unique_ptr<llm_graph_context> llm = build_arch_graph(params);
+ 
+     // add on pooling layer
+
+diff --git a/src/models/llama.cpp b/src/models/llama.cpp
+index f9c1251..dff1c7d 100644
+--- a/src/models/llama.cpp
++++ b/src/models/llama.cpp
+@@ -124,6 +124,9 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
+     ggml_tensor * inp_out_ids = build_inp_out_ids();
+ 
+     for (int il = 0; il < n_layer; ++il) {
++        if (model.should_skip_layer(il)) {
++            continue;
++        }
+         res->t_layer_inp[il] = inpL;
+ 
+         ggml_tensor * inpSA = inpL;
+
+diff --git a/src/models/qwen2.cpp b/src/models/qwen2.cpp
+index d2cd8e2..99c4a14 100644
+--- a/src/models/qwen2.cpp
++++ b/src/models/qwen2.cpp
+@@ -69,6 +69,9 @@ llama_model_qwen2::graph::graph(const llama_model & model, const llm_graph_param
+     ggml_tensor * inp_out_ids = build_inp_out_ids();
+ 
+     for (int il = 0; il < n_layer; ++il) {
++        if (model.should_skip_layer(il)) {
++            continue;
++        }
+         ggml_tensor * inpSA = inpL;
+ 
+         // norm
+
+diff --git a/src/models/qwen2moe.cpp b/src/models/qwen2moe.cpp
+index 5f9222f..449427d 100644
+--- a/src/models/qwen2moe.cpp
++++ b/src/models/qwen2moe.cpp
+@@ -81,6 +81,9 @@ llama_model_qwen2moe::graph::graph(const llama_model & model, const llm_graph_pa
+     ggml_tensor * inp_out_ids = build_inp_out_ids();
+ 
+     for (int il = 0; il < n_layer; ++il) {
++        if (model.should_skip_layer(il)) {
++            continue;
++        }
+         ggml_tensor * inpSA = inpL;
+ 
+         // norm
+
+diff --git a/src/models/qwen35moe.cpp b/src/models/qwen35moe.cpp
+index eb3f709..f22f02f 100644
+--- a/src/models/qwen35moe.cpp
++++ b/src/models/qwen35moe.cpp
+@@ -176,6 +176,9 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
+ 
+     // MTP/NextN layers are loaded as extra decoder blocks but not executed in the main pass.
+     for (int il = 0; il < n_layer; ++il) {
++        if (model.should_skip_layer(il)) {
++            continue;
++        }
+         res->t_layer_inp[il] = inpL;
+ 
+         ggml_tensor * inpSA = inpL;

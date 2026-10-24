@@ -217,3 +217,37 @@ def test_head_subset_argv_generation(monkeypatch, tmp_path):
     assert argv_mtp[argv_mtp.index("--head-subset") + 1] == "32768"
     assert "--spec-draft-head-subset" in argv_mtp
     assert argv_mtp[argv_mtp.index("--spec-draft-head-subset") + 1] == "16384"
+
+
+def test_moe_threshold_and_layer_prune_env(monkeypatch):
+    import llamacpp.vram as lvram
+    monkeypatch.setattr(lvram, 'is_blackwell_gpu', lambda: False)
+
+    test_settings = {
+        'llamacpp': {
+            'env': {},
+            'models': {
+                'moe-model': {
+                    'moe_threshold': 0.02,
+                },
+                'dense-pruned': {
+                    'layer_prune_ratio': 0.75,
+                    'layer_drop_range': '16..23',
+                },
+            }
+        }
+    }
+
+    monkeypatch.setattr(app_config, 'get_nested', lambda path, default=None: (
+        test_settings['llamacpp']['env'] if path == 'llamacpp.env'
+        else test_settings['llamacpp']['models'] if path == 'llamacpp.models'
+        else test_settings.get('llamacpp') if path == 'llamacpp'
+        else default
+    ))
+
+    env_moe = extra_env('moe-model')
+    assert env_moe.get('GGML_CUDA_MOE_THRESHOLD') == '0.02'
+
+    env_pruned = extra_env('dense-pruned')
+    assert env_pruned.get('LLAMA_PRUNE_LAYERS') == '16..23'
+    assert env_pruned.get('LLAMA_KEEP_RATIO') == '0.7500'

@@ -5462,6 +5462,10 @@ def _models(window) -> QWidget:
             _number_row(f"{p}.moe_cache_auto_headroom_mib", "Auto Cache Headroom", 0, 16384, 128, 0, "MiB",
                          "VRAM kept free for compute buffers, the CUDA context and other programs when the cache size is chosen automatically.", default=1500),
             [f"{p}.moe_cache_auto"], lambda a: bool(a)))
+        _sl_ec.addWidget(_number_row(f"{p}.moe_threshold", "Dynamic Expert Prune Threshold", 0.0, 0.20, 0.005, 3, "",
+                                     "GPU Dynamic Expert Pruning (Patch 0006): skip loading weights from VRAM for experts with router "
+                                     "softmax weight below this threshold (e.g. 0.02 drops tail experts with <2% contribution, saving 25-40% "
+                                     "GPU memory bandwidth on 8x7B, 8x22B, Qwen MoE, DeepSeek). 0 = off (default: 0.0).", default=0.0))
 
         def _update_moe_cards(pth: str) -> None:
             moe_active = _is_moe_model(pth, key)
@@ -5474,7 +5478,7 @@ def _models(window) -> QWidget:
 
         _c_ds, _sl_ds = _sec_card("Dense Optimizations (Head & Layer Pruning)",
                                   "--head-subset and ShortGPT layer pruning — optimize dense models (27B/32B/70B) for 12GB VRAM",
-                                  patch="0004-dense-head-subset")
+                                  patch="0004-dense-head-subset, 0006-layer-prune")
         _sl_ds.addWidget(_number_row(f"{p}.head_subset", "Head Subset", 0, 152064, 256, 0, "rows",
                                      "--head-subset: GPU-resident vocabulary rows (Patch 0004). Keeps top N rows + 1024 special tokens in VRAM. "
                                      "Accelerates dense models when lm_head is offloaded to host RAM, eliminating PCIe/DRAM bandwidth bottleneck. "

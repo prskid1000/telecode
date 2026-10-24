@@ -62,6 +62,10 @@
     {
       "file": "0005-deepinfer-parallel-cuda-graphs-pipeline.patch",
       "exact": true
+    },
+    {
+      "file": "0006-moe-threshold-and-runtime-layer-prune.patch",
+      "exact": true
     }
   ]
 }
