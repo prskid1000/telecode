@@ -1247,7 +1247,7 @@ new file mode 100644
 index 000000000..73db3f6d3
 --- /dev/null
 +++ b/src/llama-moe-hybrid.cpp
-@@ -0,0 +1,480 @@
+@@ -0,0 +1,493 @@
 +#include "llama-moe-hybrid.h"
 +
 +#include "llama-impl.h"
@@ -1500,6 +1500,13 @@ index 000000000..73db3f6d3
 +            std::sort(victims.begin(), victims.end(), [&](int32_t a, int32_t b) {
 +                return l.score[l.exp_in_slot[a]] < l.score[l.exp_in_slot[b]];
 +            });
++            // DeepInfer EPLB Hot-Expert Pinning:
++            // Lock top 50% hottest resident experts into VRAM so competing concurrent streams
++            // cannot evict each other's primary working set.
++            const size_t max_victims = std::max<size_t>(1, n_slots / 2);
++            if (victims.size() > max_victims) {
++                victims.resize(max_victims);
++            }
 +            size_t vi = 0;
 +            for (int32_t i = 0; i < n_slots && vi < victims.size(); ++i) {
 +                const int32_t x = order[i];
@@ -1597,6 +1604,12 @@ index 000000000..73db3f6d3
 +        const int32_t n_expert = l->owner->n_expert;
 +        const float skip_weight = l->owner->params.skip_weight;
 +        const int32_t tail_skip = l->owner->params.tail_skip;
++        // DeepEP CPU-GPU Overlap & Parallel Throttle Prevention:
++        // When processing multi-slot batches (n > n_expert_used), adaptively skip tail experts
++        // on CPU so OpenMP threads don't bottleneck the GPU.
++        const bool is_parallel = (n > n_expert_used);
++        const float eff_skip_weight = is_parallel ? std::max(skip_weight, 0.06f) : skip_weight;
++        const int32_t eff_tail_skip = (is_parallel && tail_skip > 0) ? std::min(tail_skip, 3) : tail_skip;
 +        int32_t * out = (int32_t *) dst->data;
 +        for (int64_t i = 0; i < n; ++i) {
 +            const int32_t e = src[i];
@@ -1610,11 +1623,11 @@ index 000000000..73db3f6d3
 +            }
 +            // Host miss candidate for CPU: check tail skip and skip weight
 +            const int64_t rank = n_expert_used > 0 ? (i % n_expert_used) : 0;
-+            if (tail_skip > 0 && rank >= tail_skip) {
++            if (eff_tail_skip > 0 && rank >= eff_tail_skip) {
 +                out[i] = -1;
 +                continue;
 +            }
-+            if (skip_weight > 0.0f && wdata != nullptr && wdata[i] < skip_weight) {
++            if (eff_skip_weight > 0.0f && wdata != nullptr && wdata[i] < eff_skip_weight) {
 +                out[i] = -1;
 +                continue;
 +            }
