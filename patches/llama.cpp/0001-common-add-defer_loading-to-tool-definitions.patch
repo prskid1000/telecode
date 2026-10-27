@@ -37,7 +37,7 @@ Assisted-by: Claude Opus 5.5
  9 files changed, 443 insertions(+), 13 deletions(-)
 
 diff --git a/common/chat-auto-parser.h b/common/chat-auto-parser.h
-index 8ae15c91e..696fd512b 100644
+index 8ae15c9..696fd51 100644
 --- a/common/chat-auto-parser.h
 +++ b/common/chat-auto-parser.h
 @@ -54,6 +54,8 @@ namespace autoparser {
@@ -50,7 +50,7 @@ index 8ae15c91e..696fd512b 100644
      json                                  json_schema;
      bool                                  parallel_tool_calls = true;
 diff --git a/common/chat.cpp b/common/chat.cpp
-index 485671308..ce2c3fb14 100644
+index 2276217..d0e8225 100644
 --- a/common/chat.cpp
 +++ b/common/chat.cpp
 @@ -190,6 +190,14 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
@@ -91,7 +91,7 @@ index 485671308..ce2c3fb14 100644
                          msg_part.text = part.at("text");
                          msg.content_parts.push_back(msg_part);
                      }
-@@ -467,7 +484,8 @@ struct messages_inp_normalizer {
+@@ -502,7 +519,8 @@ struct messages_inp_normalizer {
                              {"text", it.get<std::string>()},
                          }
                      });
@@ -101,7 +101,7 @@ index 485671308..ce2c3fb14 100644
                      it = concat_content_parts(it);
                  }
              }
-@@ -476,6 +494,15 @@ struct messages_inp_normalizer {
+@@ -511,6 +529,15 @@ struct messages_inp_normalizer {
          return normalized;
      }
  
@@ -117,7 +117,7 @@ index 485671308..ce2c3fb14 100644
      // join parts with newline, do not add newline before or after media markers
      static std::string concat_content_parts(const json & parts) {
          std::string text;
-@@ -524,21 +551,31 @@ json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msg
+@@ -603,21 +630,31 @@ json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msg
      return render_message_to_json(msgs, c);
  }
  
@@ -152,7 +152,7 @@ index 485671308..ce2c3fb14 100644
      }
      return result;
  }
-@@ -574,10 +611,13 @@ std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & too
+@@ -653,10 +690,13 @@ std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & too
                  }
  
                  const auto & function = tool.at("function");
@@ -166,7 +166,7 @@ index 485671308..ce2c3fb14 100644
                  });
              }
          }
-@@ -891,8 +931,10 @@ common_chat_prompt common_chat_template_direct_apply_impl(
+@@ -970,8 +1010,10 @@ common_chat_prompt common_chat_template_direct_apply_impl(
          {"eos_token", tmpl.eos_token()},
          {"enable_thinking", inputs.enable_thinking},
      };
@@ -179,7 +179,7 @@ index 485671308..ce2c3fb14 100644
      }
      if (inputs.extra_context.is_object()) {
          // TODO: do we need to merge, or replacing is fine?
-@@ -1283,6 +1325,38 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
+@@ -1377,6 +1419,39 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
      return tmpl.params_init(tmpl, params);
  }
  
@@ -205,7 +205,8 @@ index 485671308..ce2c3fb14 100644
 +            if (it == tools.end()) {
 +                throw std::invalid_argument("Tool reference '" + part.text + "' not found in available tools");
 +            }
-+            if (expand) {
++            // a message with media is flattened to text (to_json_oaicompat), where a structured reference would be dropped
++            if (expand || msg.contains_media()) {
 +                json def = common_chat_tools_to_json_oaicompat({ *it }).at(0).at("function");
 +                def.erase("defer_loading");
 +                part.type = "text";
@@ -218,7 +219,7 @@ index 485671308..ce2c3fb14 100644
  static common_chat_params common_chat_templates_apply_jinja(const struct common_chat_templates *        tmpls,
                                                              const struct common_chat_templates_inputs & inputs) {
      autoparser::generation_params params;
-@@ -1291,6 +1365,14 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
+@@ -1385,6 +1460,14 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
          params.tools.is_array() && tmpls->template_tool_use ? *tmpls->template_tool_use : *tmpls->template_default;
      const auto & src             = tmpl.source();
      const auto & caps            = tmpl.original_caps();
@@ -233,7 +234,7 @@ index 485671308..ce2c3fb14 100644
      std::vector<common_chat_msg>        trimmed_messages;
      const std::vector<common_chat_msg> * messages_to_render = &inputs.messages;
      if (src.find("You have access to the following functions in JSONSchema format") != std::string::npos) {
-@@ -1300,6 +1382,12 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
+@@ -1394,6 +1477,12 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
          workaround::trim_all_content(trimmed_messages);
          messages_to_render = &trimmed_messages;
      }
@@ -243,14 +244,14 @@ index 485671308..ce2c3fb14 100644
 +        resolve_tool_references(resolved_messages, inputs.tools, /* expand = */ !caps.supports_tool_reference);
 +        messages_to_render = &resolved_messages;
 +    }
-     params.messages              = render_message_to_json(*messages_to_render, tmpl.original_caps());
-     params.tool_choice           = inputs.tool_choice;
-     params.reasoning_format      = inputs.reasoning_format;
+     params.messages              = src.find("｜DSML｜ calls>") != std::string::npos ?
+                                        render_message_to_json_deepseek_v4_1(*messages_to_render, tmpl.original_caps()) :
+                                        render_message_to_json(*messages_to_render, tmpl.original_caps());
 diff --git a/common/chat.h b/common/chat.h
-index dcff94919..14b2958f8 100644
+index 29aaf8b..1f546f6 100644
 --- a/common/chat.h
 +++ b/common/chat.h
-@@ -224,6 +224,8 @@ struct common_chat_tool {
+@@ -226,6 +226,8 @@ struct common_chat_tool {
      std::string name;
      std::string description;
      std::string parameters;
@@ -259,7 +260,7 @@ index dcff94919..14b2958f8 100644
  };
  
  enum common_chat_tool_choice {
-@@ -460,7 +462,8 @@ common_chat_continuation common_chat_continuation_parse(const common_json & valu
+@@ -462,7 +464,8 @@ common_chat_continuation common_chat_continuation_parse(const common_json & valu
  // DEPRECATED: only used in tests
  common_json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msgs, bool concat_typed_text = false);
  
@@ -270,7 +271,7 @@ index dcff94919..14b2958f8 100644
  // The parameters schema of a function tool. A tool without parameters, or with an empty {}, takes zero arguments.
  common_json common_chat_tool_parameters(const common_json & function);
 diff --git a/common/jinja/caps.cpp b/common/jinja/caps.cpp
-index 6ff17d10b..b32ec2fad 100644
+index 6ff17d1..b32ec2f 100644
 --- a/common/jinja/caps.cpp
 +++ b/common/jinja/caps.cpp
 @@ -114,6 +114,8 @@ std::map<std::string, bool> caps::to_map() const {
@@ -392,7 +393,7 @@ index 6ff17d10b..b32ec2fad 100644
  
      return result;
 diff --git a/common/jinja/caps.h b/common/jinja/caps.h
-index b81dd95f2..ac15cf190 100644
+index b81dd95..ac15cf1 100644
 --- a/common/jinja/caps.h
 +++ b/common/jinja/caps.h
 @@ -25,6 +25,12 @@ struct caps {
@@ -409,10 +410,10 @@ index b81dd95f2..ac15cf190 100644
      std::map<std::string, bool> to_map() const;
  
 diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
-index 01b2220da..b9c56f81a 100644
+index 10a477f..f7ec6c0 100644
 --- a/tests/test-chat.cpp
 +++ b/tests/test-chat.cpp
-@@ -1833,6 +1833,203 @@ static void test_tools_oaicompat_json_conversion() {
+@@ -1857,6 +1857,203 @@ static void test_tools_oaicompat_json_conversion() {
                    common_chat_tools_to_json_oaicompat({ special_function_tool }).dump(2));
  }
  
@@ -616,7 +617,7 @@ index 01b2220da..b9c56f81a 100644
  static void test_convert_responses_to_chatcmpl() {
      LOG_DBG("%s\n", __func__);
  
-@@ -8126,6 +8323,7 @@ int main(int argc, char ** argv) {
+@@ -8399,6 +8596,7 @@ int main(int argc, char ** argv) {
          test_msgs_oaicompat_json_conversion();
          test_msg_token_delimiters_split();
          test_tools_oaicompat_json_conversion();
@@ -625,10 +626,10 @@ index 01b2220da..b9c56f81a 100644
          test_developer_role_to_system_workaround();
          test_translate_gemma();
 diff --git a/tools/server/README.md b/tools/server/README.md
-index 48c40eda7..f3fe2344b 100644
+index 8e27e37..c6eaf75 100644
 --- a/tools/server/README.md
 +++ b/tools/server/README.md
-@@ -1353,6 +1353,24 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type":
+@@ -1449,6 +1449,24 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type":
  
  `reasoning_control`: Arms realtime reasoning control for this completion so it can be ended early via `/v1/chat/completions/control`. Defaults to `false`.
  
@@ -654,7 +655,7 @@ index 48c40eda7..f3fe2344b 100644
  
  For multimodal input (typed content, `messages[i].content[j]`):
 diff --git a/tools/server/server-chat.cpp b/tools/server/server-chat.cpp
-index a3a4ea152..903733859 100644
+index 1c2326f..0ddf574 100644
 --- a/tools/server/server-chat.cpp
 +++ b/tools/server/server-chat.cpp
 @@ -465,6 +465,7 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
@@ -705,10 +706,10 @@ index a3a4ea152..903733859 100644
              oai_body["tools"] = oai_tools;
          }
 diff --git a/tools/server/server-common.cpp b/tools/server/server-common.cpp
-index c32c0d1a5..ad9492c8f 100644
+index 80a9f2d..7271d50 100644
 --- a/tools/server/server-common.cpp
 +++ b/tools/server/server-common.cpp
-@@ -1241,7 +1241,7 @@ static void oaicompat_content_load_media(json & content, const server_chat_param
+@@ -1315,7 +1315,7 @@ static void oaicompat_content_load_media(json & content, const server_chat_param
              p.erase("input_video");
              p.erase("video_url");
  
@@ -717,6 +718,3 @@ index c32c0d1a5..ad9492c8f 100644
              throw std::invalid_argument("unsupported content[].type");
          }
      }
--- 
-2.55.0.windows.2
-

@@ -65,6 +65,14 @@ def apply(repo: Path, patch: Path, reverse: bool = False, check: bool = False, c
 
 def regen(series_dir: Path) -> int:
     spec, repo = load(series_dir)
+    # `git diff -- paths` takes every change in a file, so two regenerated patches sharing a path would both carry the other's hunks,
+    # and applying the second would add them again (duplicated declarations): such a patch must be "exact"
+    owner: dict[str, str] = {}
+    for p in spec["patches"]:
+        for path in p.get("paths", []) if not p.get("exact") else []:
+            if path in owner:
+                raise SystemExit(f"{p['file']} and {owner[path]} are both regenerated from {path}: mark one of them \"exact\"")
+            owner[path] = p["file"]
     if spec.get("new_files"):
         run(["git", "add", "-N", *spec["new_files"]], repo)
     exact = [series_dir / p["file"] for p in spec["patches"] if p.get("exact")]

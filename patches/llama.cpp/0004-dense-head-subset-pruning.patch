@@ -7,10 +7,10 @@ mathematically exact.
 Requires: 0002-moe-hybrid-strata.patch
 
 diff --git a/common/arg.cpp b/common/arg.cpp
-index 9ccbc7e..a794a20 100644
+index 560b8cf..577f1c4 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
-@@ -2965,6 +2965,42 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -2973,6 +2973,42 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.swa_full = false;
          }
      ));
@@ -51,18 +51,15 @@ index 9ccbc7e..a794a20 100644
 +        }
 +    ).set_env("LLAMA_ARG_SPEC_DRAFT_HEAD_SUBSET_IDS"));
      add_opt(common_arg(
-         {"--moe-hybrid-gpu-only"},
-         "MoE hybrid mode: only compute resident experts on GPU and skip CPU fallback (zero CPU bottleneck)",
+         {"-ncffn", "--n-cpu-ffn"}, "N",
+         "keep the dense FFN weights of the first N layers in the CPU\n"
 diff --git a/common/common.cpp b/common/common.cpp
-index cb6a13a..e77c415 100644
+index e63eb55..f179af5 100644
 --- a/common/common.cpp
 +++ b/common/common.cpp
-@@ -1753,7 +1753,11 @@ struct llama_context_params common_context_params_to_llama(const common_params &
+@@ -1768,6 +1768,8 @@ struct llama_context_params common_context_params_to_llama(const common_params &
      cparams.moe_hybrid_skip_weight = params.moe_hybrid_skip_weight;
      cparams.moe_hybrid_tail_skip   = params.moe_hybrid_tail_skip;
-     cparams.moe_hybrid_gpu_only    = params.moe_hybrid_gpu_only;
-+    cparams.head_subset            = params.head_subset;
-+    cparams.head_subset_ids        = params.head_subset_ids.empty() ? nullptr : params.head_subset_ids.c_str();
      cparams.moe_hybrid_gpu_only    = params.moe_hybrid_gpu_only;
 +    cparams.head_subset            = params.head_subset;
 +    cparams.head_subset_ids        = params.head_subset_ids.empty() ? nullptr : params.head_subset_ids.c_str();
@@ -70,10 +67,10 @@ index cb6a13a..e77c415 100644
      return cparams;
  }
 diff --git a/common/common.h b/common/common.h
-index 1f5e021..ea87e5d 100644
+index d56bc5a..0766181 100644
 --- a/common/common.h
 +++ b/common/common.h
-@@ -336,6 +336,9 @@ struct common_params_speculative_draft {
+@@ -338,6 +338,9 @@ struct common_params_speculative_draft {
  
      bool probabilistic = false; // sample the draft and verify by rejection, instead of argmax and match
  
@@ -83,13 +80,8 @@ index 1f5e021..ea87e5d 100644
      common_params_model mparams;
  
      llama_context * ctx_tgt = nullptr;
-@@ -616,8 +619,14 @@ struct common_params {
-     float   moe_hybrid_skip_weight = 0.04f; // skip CPU execution of non-resident experts whose router weight < skip_weight
+@@ -619,6 +622,9 @@ struct common_params {
      int32_t moe_hybrid_tail_skip   = 6;     // skip CPU execution of non-resident experts whose rank >= tail_skip
-     bool    moe_hybrid_gpu_only    = false; // only compute resident experts on GPU, skip CPU fallback
-+
-+    int32_t     head_subset = 0; // rows of the output head kept in device memory, set for the draft context
-+    std::string head_subset_ids;
      bool    moe_hybrid_gpu_only    = false; // only compute resident experts on GPU, skip CPU fallback
  
 +    int32_t     head_subset = 0; // rows of the output head kept in device memory, set for the draft context
@@ -99,10 +91,10 @@ index 1f5e021..ea87e5d 100644
  
      // multimodal models (see tools/mtmd)
 diff --git a/common/speculative.cpp b/common/speculative.cpp
-index 894e98b..9c0310a 100644
+index 00c2d56..ff6beb2 100644
 --- a/common/speculative.cpp
 +++ b/common/speculative.cpp
-@@ -2577,6 +2577,8 @@ common_params common_base_params_to_speculative(const common_params & params) {
+@@ -2636,6 +2636,8 @@ common_params common_base_params_to_speculative(const common_params & params) {
  
      result.embedding    = false;
      result.pooling_type = LLAMA_POOLING_TYPE_UNSPECIFIED;
@@ -112,15 +104,12 @@ index 894e98b..9c0310a 100644
      if (has_draft) {
          // default to global devices value
 diff --git a/include/llama.h b/include/llama.h
-index e962658..be199c6 100644
+index 6ec95bc..e48bb30 100644
 --- a/include/llama.h
 +++ b/include/llama.h
-@@ -405,7 +405,11 @@ extern "C" {
+@@ -405,6 +405,8 @@ extern "C" {
          float   moe_hybrid_skip_weight; // skip CPU execution of non-resident experts whose router weight < skip_weight [EXPERIMENTAL]
          int32_t moe_hybrid_tail_skip;   // skip CPU execution of non-resident experts whose rank >= tail_skip [EXPERIMENTAL]
-         bool    moe_hybrid_gpu_only;    // only compute resident experts on GPU, skip CPU fallback [EXPERIMENTAL]
-+        int32_t head_subset;
-+        const char * head_subset_ids;
          bool    moe_hybrid_gpu_only;    // only compute resident experts on GPU, skip CPU fallback [EXPERIMENTAL]
 +        int32_t head_subset;
 +        const char * head_subset_ids;
@@ -128,22 +117,43 @@ index e962658..be199c6 100644
          // Abort callback
          // if it returns true, execution of llama_decode() will be aborted
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 32fcd51..4c8c8c5 100644
+index d349771..ad45872 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -367,7 +367,11 @@ llama_context::llama_context(
+@@ -377,6 +377,8 @@ llama_context::llama_context(
      cparams.moe_hybrid_skip_weight = params.moe_hybrid_skip_weight;
      cparams.moe_hybrid_tail_skip   = params.moe_hybrid_tail_skip;
-     cparams.moe_hybrid_gpu_only    = params.moe_hybrid_gpu_only;
-+    cparams.head_subset            = params.head_subset;
-+    cparams.head_subset_ids        = params.head_subset_ids;
      cparams.moe_hybrid_gpu_only    = params.moe_hybrid_gpu_only;
 +    cparams.head_subset            = params.head_subset;
 +    cparams.head_subset_ids        = params.head_subset_ids;
  
      // initialized later
      cparams.pipeline_parallel = false;
-@@ -2754,6 +2758,7 @@ llm_graph_params llama_context::graph_params(
+@@ -577,6 +579,23 @@ llama_context::llama_context(
+             moe_cache = std::make_unique<llama_moe_cache>(model, model.no_alloc(), backend_ptrs, backend_buft, cparams.moe_cache_size);
+         }
+ 
++        if (cparams.head_subset > 0) {
++            // on the first GPU of the context
++            for (size_t i = 0; i < backend_ptrs.size(); ++i) {
++                const auto dev_type = ggml_backend_dev_type(ggml_backend_get_device(backend_ptrs[i]));
++                if (dev_type != GGML_BACKEND_DEVICE_TYPE_GPU && dev_type != GGML_BACKEND_DEVICE_TYPE_IGPU) {
++                    continue;
++                }
++                try {
++                    head_subset = std::make_unique<llama_head_subset>(model, backend_buft[i], cparams.head_subset,
++                            cparams.head_subset_ids ? cparams.head_subset_ids : std::string(), params.ctx_type);
++                } catch (const std::exception & e) {
++                    LLAMA_LOG_WARN("%s: no head subset: %s\n", __func__, e.what());
++                }
++                break;
++            }
++        }
++
+         if (cparams.moe_hybrid_size > 0) {
+             // on the first GPU of the context
+             for (size_t i = 0; i < backend_ptrs.size(); ++i) {
+@@ -2777,6 +2796,7 @@ llm_graph_params llama_context::graph_params(
          /*.cross       =*/ &cross,
          /*.moe_cache   =*/ moe_cache.get(),
          /*.moe_hybrid  =*/ moe_hybrid.get(),
@@ -151,12 +161,19 @@ index 32fcd51..4c8c8c5 100644
          /*.prec_policy =*/ &model.prec_policy,
          /*.hdmd        =*/ model.hdmd.rot.empty() ? nullptr : &model.hdmd,
          /*.samplers    =*/ sampling.samplers,
-@@ -4077,7 +4082,11 @@ llama_context_params llama_context_default_params() {
+@@ -3803,6 +3823,9 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
+             ret[buft].context += size;
+         }
+     }
++    if (head_subset) {
++        ret[head_subset->buft].context += head_subset->size;
++    }
+     if (model.no_alloc()) {
+         for (size_t i = 0; i < backends.size(); ++i) {
+             ggml_backend_t             backend = backends[i].get();
+@@ -4100,6 +4123,8 @@ llama_context_params llama_context_default_params() {
          /*.moe_hybrid_skip_weight      =*/ 0.04f,
          /*.moe_hybrid_tail_skip        =*/ 6,
-         /*.moe_hybrid_gpu_only         =*/ false,
-+        /*.head_subset                 =*/ 0,
-+        /*.head_subset_ids             =*/ nullptr,
          /*.moe_hybrid_gpu_only         =*/ false,
 +        /*.head_subset                 =*/ 0,
 +        /*.head_subset_ids             =*/ nullptr,
@@ -175,25 +192,38 @@ index c7f7c48..93fff7e 100644
  
      // decode output (2-dimensional array: [n_outputs][n_vocab])
      buffer_view<float> logits = {nullptr, 0};
+diff --git a/src/llama-cparams.h b/src/llama-cparams.h
+index 96a996c..01ae675 100644
+--- a/src/llama-cparams.h
++++ b/src/llama-cparams.h
+@@ -66,6 +66,8 @@ struct llama_cparams {
+     float   moe_hybrid_skip_weight;
+     int32_t moe_hybrid_tail_skip;
+     bool    moe_hybrid_gpu_only;
++    int32_t      head_subset;     // rows of the output head kept in device memory, 0 = off
++    const char * head_subset_ids; // ranked token ids for the head subset, nullptr = the first tokens
+ 
+     std::vector<bool> embeddings_layer_inp; // [n_layer()] extract input embeddings for layer
+ 
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 27cc753..926f48d 100644
+index 5cb4141..8f50d44 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -18,6 +18,13 @@
+@@ -18,7 +18,13 @@
  #include "llama-memory-hybrid-iswa.h"
  #include "llama-memory-recurrent.h"
  
 +#include <algorithm>
-+#include <cassert>
+ #include <cassert>
 +#include <cinttypes>
 +#include <fstream>
 +#include <numeric>
 +#include <stdexcept>
 +
- #include <cassert>
  #include <cmath>
  #include <cstring>
-@@ -1534,6 +1541,105 @@ void llm_graph_result::set_params(const llm_graph_params & params) {
+ #include <numeric>
+@@ -1538,6 +1544,106 @@ void llm_graph_result::set_params(const llm_graph_params & params) {
  // llm_graph_context
  //
  
@@ -210,8 +240,9 @@ index 27cc753..926f48d 100644
 +            }
 +        }
 +    }
-+    // the memory fit loads the model without weights and may place the head on the GPU: it only needs the size, so no host check there
-+    if (src == nullptr || (!model.hparams.no_alloc && (src->buffer == nullptr || !ggml_backend_buffer_is_host(src->buffer)))) {
++    // the memory fit loads the model without weights: its buffers still tell where the head is, so a head on the GPU (no subset) is not
++    // counted; a tensor without a buffer is only accepted there
++    if (src == nullptr || (src->buffer != nullptr ? !ggml_backend_buffer_is_host(src->buffer) : !model.no_alloc())) {
 +        throw std::runtime_error("the output head is not in host memory");
 +    }
 +    if (src_scale != nullptr || src->ne[2] != 1 || src->ne[3] != 1 || ggml_is_transposed(src)) {
@@ -272,7 +303,7 @@ index 27cc753..926f48d 100644
 +    ggml_backend_buffer_set_usage(buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 +
 +    // the memory fit of the server loads the model without weights: the buffer is counted, nothing is copied
-+    if (!model.hparams.no_alloc) {
++    if (!model.no_alloc()) {
 +        const size_t row = src->nb[1];
 +        for (int64_t i = 0; i < n_first; ) {
 +            int64_t run = 1; // consecutive token ids are one copy
@@ -299,7 +330,7 @@ index 27cc753..926f48d 100644
  llm_graph_context::llm_graph_context(const llm_graph_params & params) :
      arch             (params.arch),
      hparams          (params.hparams),
-@@ -1573,6 +1679,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
+@@ -1577,6 +1683,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
      cross            (params.cross),
      moe_cache        (params.moe_cache),
      moe_hybrid       (params.moe_hybrid),
@@ -307,7 +338,7 @@ index 27cc753..926f48d 100644
      prec_policy      (params.prec_policy),
      hdmd             (params.hdmd),
      samplers         (params.samplers),
-@@ -1632,6 +1739,18 @@ ggml_tensor * llm_graph_context::build_lora_mm(
+@@ -1636,6 +1743,18 @@ ggml_tensor * llm_graph_context::build_lora_mm(
            ggml_tensor * w,
            ggml_tensor * cur,
            ggml_tensor * w_s) const {
@@ -323,11 +354,11 @@ index 27cc753..926f48d 100644
 +        return ggml_reshape_2d(ctx0, full, n_vocab, cur->ne[1]);
 +    }
 +
-     cur = build_hadamard_input(w, cur);
-     ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
- 
+     // a Hadamard-folded weight reads the transformed input; a LoRA delta lives in the primal basis and reads `cur`
+     ggml_tensor * cur_mm = build_hadamard_input(w, cur);
+     ggml_tensor * res = ggml_mul_mat(ctx0, w, cur_mm);
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index b5d12c9..3f1a007 100644
+index 77eddbc..e62fb40 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
 @@ -24,6 +24,8 @@ struct llama_hadamard;
@@ -339,7 +370,7 @@ index b5d12c9..3f1a007 100644
  
  struct llama_memory_context_i;
  
-@@ -807,6 +809,7 @@ struct llm_graph_params {
+@@ -808,6 +810,7 @@ struct llm_graph_params {
      const llama_cross            * cross;
      const llama_moe_cache        * moe_cache;
      const llama_moe_hybrid       * moe_hybrid;
@@ -347,8 +378,8 @@ index b5d12c9..3f1a007 100644
  
      const llama_prec_policy * prec_policy = nullptr;
  
-@@ -1014,6 +1017,23 @@ struct llm_graph_qkv {
-     ggml_tensor * v; // [n_embd_head, n_head_kv, n_tokens]
+@@ -1023,6 +1026,23 @@ struct llm_graph_amax_src1 {
+     ggml_tensor * scale_s; // scale to undo on the matmul result, or nullptr
  };
  
 +struct llama_head_subset {
@@ -371,7 +402,7 @@ index b5d12c9..3f1a007 100644
  struct llm_graph_context {
      const llm_arch arch;
  
-@@ -1061,6 +1081,7 @@ struct llm_graph_context {
+@@ -1070,6 +1090,7 @@ struct llm_graph_context {
      const llama_cross            * cross;
      const llama_moe_cache        * moe_cache;
      const llama_moe_hybrid       * moe_hybrid;

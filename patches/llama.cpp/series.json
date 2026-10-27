@@ -20,8 +20,6 @@
         "ggml/include/ggml.h",
         "ggml/src/ggml-backend-impl.h",
         "ggml/src/ggml-backend.cpp",
-        "ggml/src/ggml-cpu/ggml-cpu.c",
-        "ggml/src/ggml-cpu/repack.cpp",
         "ggml/src/ggml-cuda/ggml-cuda.cu",
         "ggml/src/ggml-cuda/mmid.cu",
         "ggml/src/ggml-cuda/mmid.cuh",
@@ -46,18 +44,7 @@
     },
     {
       "file": "0004-dense-head-subset-pruning.patch",
-      "paths": [
-        "include/llama.h",
-        "common/common.h",
-        "common/common.cpp",
-        "common/speculative.cpp",
-        "common/arg.cpp",
-        "src/llama-graph.h",
-        "src/llama-graph.cpp",
-        "src/llama-context.h",
-        "src/llama-context.cpp"
-      ],
-      "header": "keep"
+      "exact": true
     },
     {
       "file": "0005-deepinfer-parallel-cuda-graphs-pipeline.patch",

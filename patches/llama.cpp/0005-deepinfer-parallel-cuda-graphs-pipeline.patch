@@ -8,7 +8,7 @@ Subject: [PATCH] DeepInfer Multi-Stream Parallelism & Asynchronous Pipeline
 
 ---
 diff --git a/ggml/src/ggml-cuda/common.cuh b/ggml/src/ggml-cuda/common.cuh
-index fea1cf9..1fba649 100644
+index 6b36ca9..bbdf4af 100644
 --- a/ggml/src/ggml-cuda/common.cuh
 +++ b/ggml/src/ggml-cuda/common.cuh
 @@ -1261,6 +1261,31 @@ struct ggml_tensor_extra_gpu {
@@ -43,7 +43,7 @@ index fea1cf9..1fba649 100644
  struct ggml_cuda_graph {
  #ifdef USE_CUDA_GRAPH
      ~ggml_cuda_graph() {
-@@ -1460,11 +1485,14 @@ struct ggml_backend_cuda_context {
+@@ -1457,11 +1482,14 @@ struct ggml_backend_cuda_context {
  #ifdef USE_CUDA_GRAPH
      // Map from first_node_ptr to cuda_graph - allows multiple graphs per context
      // when the computation is split across CPU/GPU (e.g., with --n-cpu-moe)
@@ -60,7 +60,7 @@ index fea1cf9..1fba649 100644
          const int64_t time_now = ggml_time_us();
  
          // sweep every 5s, evicting cuda graphs unused for >=10s
-@@ -1479,9 +1507,9 @@ struct ggml_backend_cuda_context {
+@@ -1476,9 +1504,9 @@ struct ggml_backend_cuda_context {
              }
          }
  
@@ -72,12 +72,11 @@ index fea1cf9..1fba649 100644
          }
          it->second->last_used_time = time_now;
          return it->second.get();
-
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index b1984c5..1565288 100644
+index 441c102..6f8d0f9 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -2772,14 +2772,29 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
+@@ -2839,14 +2839,29 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
      return use_cuda_graph;
  }
  
@@ -110,16 +109,7 @@ index b1984c5..1565288 100644
      ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
  
      if (cgraph->uid != 0 &&
-@@ -2820,7 +2835,7 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
-     return res;
- }
- 
--static void ggml_cuda_graph_update_executable(ggml_backend_cuda_context * cuda_ctx, const void * graph_key) {
-+static void ggml_cuda_graph_update_executable(ggml_backend_cuda_context * cuda_ctx, const ggml_cuda_graph_key & graph_key) {
-     ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
- 
- #if CUDART_VERSION >= 12000
-@@ -4589,7 +4604,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
+@@ -4693,7 +4708,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
      return 0;
  }
  
@@ -128,7 +118,7 @@ index b1984c5..1565288 100644
      bool graph_evaluated_or_captured = false;
  
      // flag used to determine whether it is an integrated_gpu
-@@ -4808,7 +4823,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
+@@ -4923,7 +4938,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
  }
  
  #ifdef USE_CUDA_GRAPH
@@ -136,8 +126,8 @@ index b1984c5..1565288 100644
 +static bool ggml_cuda_graph_set_enabled(ggml_backend_cuda_context * cuda_ctx, const ggml_cuda_graph_key & graph_key) {
      ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
  
-     if (graph->graph == nullptr) {
-@@ -4831,7 +4846,7 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend,
+     if (graph->instances.empty()) {
+@@ -4946,7 +4961,7 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend,
  
      bool use_cuda_graph             = false;
      bool cuda_graph_update_required = false;
@@ -146,7 +136,7 @@ index b1984c5..1565288 100644
  
  #ifdef USE_CUDA_GRAPH
      graph_key = ggml_cuda_graph_get_key(cgraph);
-@@ -5026,7 +5041,7 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
+@@ -5154,7 +5169,7 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
      }
  
  #ifdef USE_CUDA_GRAPH
@@ -155,12 +145,11 @@ index b1984c5..1565288 100644
      const bool use_cuda_graph = ggml_cuda_graph_set_enabled(cuda_ctx, graph_key);
  #else
      const bool use_cuda_graph = false;
-
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-index 7322da9..fc7e0d9 100644
+index 828fad0..9abaaa5 100644
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
-@@ -4330,7 +4330,16 @@ private:
+@@ -4639,7 +4639,17 @@ private:
          queue_tasks.yield_to_queue([&]() {
              ret = llama_process(ctx_tgt, LLAMA_PROCESS_TYPE_DECODE, batch.view.get());
              if (ret == 0 && has_output) {
@@ -168,9 +157,10 @@ index 7322da9..fc7e0d9 100644
 +                // DeepInfer-style Asynchronous Scheduling Pipeline (ZOS):
 +                // Defer blocking GPU synchronization to common_sampler_sample / llama_get_logits_ith
 +                // so the CPU worker thread can overlap slot handling and queue tasks with device execution.
++                // Off by default: the wait inside yield_to_queue is when the queue is served, deferring it moves the wait out of the yield
 +                static const bool defer_sync = []() {
 +                    const char * env = getenv("LLAMA_SERVER_ASYNC_DECODE");
-+                    return env == nullptr || atoi(env) != 0; // default enabled
++                    return env != nullptr && atoi(env) != 0; // LLAMA_SERVER_ASYNC_DECODE=1 enables it
 +                }();
 +                if (!defer_sync) {
 +                    llama_synchronize(ctx_tgt);
