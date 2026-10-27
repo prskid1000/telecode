@@ -154,15 +154,17 @@
         "moe_hybrid_max_tokens": 64,
         "moe_hybrid_swap_every": 32,
         "moe_hybrid_swap_max": 32,
-        "moe_hybrid_skip_weight": 0.08,
-        "moe_hybrid_tail_skip": 4,
+        "moe_hybrid_skip_weight": 0.04,
+        "moe_hybrid_tail_skip": 6,
         "vram_budget_mib": 11400,
         "ubatch_size": 4096,
         "batch_size": 4096,
         "spec_type": "none",
         "head_subset": 32768,
         "parallel": 2,
-        "kv_unified": true
+        "kv_unified": true,
+        "moe_hybrid_gpu_only": false,
+        "moe_threshold": 0
       },
       "qwen3.8-27b": {
         "path": "D:/.models/qwen3.8/Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf",
