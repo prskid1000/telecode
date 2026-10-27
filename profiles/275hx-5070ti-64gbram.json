@@ -151,13 +151,13 @@
         "reasoning_preserve": true,
         "moe_hybrid": true,
         "moe_hybrid_auto": true,
-        "moe_hybrid_mib": 0,
+        "moe_hybrid_mib": 5120,
         "env": "GGML_OP_OFFLOAD_MIN_BATCH=64",
         "moe_hybrid_max_tokens": 64,
         "moe_hybrid_swap_every": 16,
         "moe_hybrid_swap_max": 32,
-        "moe_hybrid_skip_weight": 0.05,
-        "moe_hybrid_tail_skip": 5,
+        "moe_hybrid_skip_weight": 0.08,
+        "moe_hybrid_tail_skip": 4,
         "vram_budget_mib": 11400,
         "ubatch_size": 4096,
         "batch_size": 4096,
@@ -212,9 +212,9 @@
         "reasoning_preserve": true,
         "vram_budget_mib": 11400,
         "draft_n": 0,
-        "ubatch_size": 1024,
+        "ubatch_size": 512,
         "env": "",
-        "batch_size": 4096,
+        "batch_size": 2048,
         "spec_type": "none",
         "head_subset": 32768
       }
@@ -276,11 +276,11 @@
     "load_mode": "mlock",
     "custom_build": {
       "source_dir": "",
-      "tag": "b11731",
+      "tag": "b11923",
       "cuda": true
     },
     "vram_budget_mib": 11400,
-    "vram_ceiling_mib": 11900,
+    "vram_ceiling_mib": 11700,
     "preflight_vram": true
   },
   "heartbeat": {
