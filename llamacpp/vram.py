@@ -48,6 +48,25 @@ def used_vram_mib() -> Optional[int]:
     """Used memory (MiB) of the first NVIDIA GPU, or None when it cannot be read."""
     return _query("memory.used", timeout=3.0)
 
+def compute_app_pids(timeout: float = 3.0) -> Optional[set[int]]:
+    """Pids nvidia-smi lists as holding a compute context, or None when it cannot be read."""
+    exe = shutil.which("nvidia-smi")
+    if not exe:
+        return None
+    creation = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    try:
+        out = subprocess.run(
+            [exe, "--query-compute-apps=pid", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=timeout, creationflags=creation,
+        )
+        if out.returncode != 0:
+            return None
+        return {int(line.strip()) for line in (out.stdout or "").splitlines() if line.strip().isdigit()}
+    except Exception as exc:
+        _LOG.debug("nvidia-smi compute apps failed: %s", exc)
+        return None
+
+
 def _query_str(field: str, timeout: float = 5.0) -> str:
     exe = shutil.which("nvidia-smi")
     if not exe:

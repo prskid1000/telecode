@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import contextlib
 import logging
 import os
 import shutil
@@ -403,13 +404,26 @@ def _apply_win_process_tuning(pid: int) -> None:
         _LLAMA_LOG.warning("llama.cpp: process tuning skipped: %s", exc)
 
 
+class ModelLoadError(RuntimeError):
+    """A model could not be made active: spawn failed, not ready in time, or the previous server still holds the GPU."""
+
+
 class LlamaSupervisor:
     """One active llama-server process at a time.
 
     Public async surface:
-        await sup.ensure_model("qwen-35b")   # swap if active model differs
+        async with sup.use_model("qwen-35b"):   # load / switch, then count the request until the block ends
+            ...
+        await sup.ensure_model("qwen-35b")   # same, for callers that only want it loaded (tray, startup)
         await sup.stop()                     # graceful shutdown
         sup.alive() / active_model() / last_used() / loaded_at()
+
+    Switch scheduling (all under `_cond`): a request for the loaded model takes a lease at once. A request for
+    another model registers as a waiter; the switch starts only when no lease is held (in-flight requests are
+    never killed), so the loaded model is preferred. New requests for the loaded model keep joining while a
+    switch waits, until the oldest waiter has waited `llamacpp.switch_max_wait_sec` or the loaded model has
+    drained; then they queue behind it. One switch serves every waiter for its target. Targets are served in
+    the order they were first asked for.
 
     Thread-safety: everything async; caller must await from the loop.
     """
@@ -417,52 +431,49 @@ class LlamaSupervisor:
     def __init__(self) -> None:
         self._proc: Optional[subprocess.Popen] = None
         self._active_model: str = ""
-        self._lock = asyncio.Lock()
+        self._lock = asyncio.Lock()  # held by every stop / spawn
         self._log_fp = None  # file object for llama.log
         self._swap_token = 0  # increments on every swap; cancels readers
         # ── Lazy load + idle unload bookkeeping ─────────────────────
         self._last_used: float = 0.0
         self._inflight: int = 0
-        self._inflight_lock = asyncio.Lock()
         self._idle_task: Optional[asyncio.Task] = None
         self._watchdog_task: Optional[asyncio.Task] = None
         self._loaded_at: float = 0.0
         self._vram_task: Optional[asyncio.Task] = None
         self._spawn_logged = False  # the current spawn attempt wrote its marker to llama.log
         self._planned_mib: Optional[int] = None  # the automatic cache size of the current spawn attempt
+        # ── Switch scheduling ───────────────────────────────────────
+        self._cond = asyncio.Condition()  # guards _inflight changes that gate a switch and everything below
+        self._switching = False  # a stop + spawn (switch or idle unload) is running
+        self._switch_task: Optional[asyncio.Task] = None
+        self._wanted: dict[str, float] = {}  # target model -> when its first waiter arrived (insertion order = FIFO)
+        self._wanted_n: dict[str, int] = {}  # target model -> waiters registered for it
+        self._load_seq = 0  # bumped after every switch attempt
+        self._load_errors: dict[str, tuple[int, BaseException]] = {}  # target -> (seq, error) of its last failed switch
+        self._held_proc: Optional[subprocess.Popen] = None  # stopped server whose GPU release was not confirmed
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
+    @contextlib.asynccontextmanager
+    async def use_model(self, model_name: str):
+        """Make `model_name` (or a resolved alias) the active model and count one request on it for the block.
+
+        Ensure and count are one step, so no switch can happen between them, and the model cannot be switched
+        away while the block runs. Yields the resolved model name. Raises ModelLoadError when it cannot load."""
+        resolved = await self._acquire(model_name)
+        try:
+            yield resolved
+        finally:
+            self._release()
+
     async def ensure_model(self, model_name: str) -> str:
-        """Make `model_name` (or a resolved alias) the active model.
+        """Make `model_name` (or a resolved alias) the active model; returns the resolved name.
 
-        Lazy load: spawns llama-server on demand if nothing is running.
-        Records last-used timestamp so the idle watcher knows when the
-        model went cold.
-
-        Raises RuntimeError on spawn failure or readiness timeout.
-        """
-        resolved = cfg.resolve_model(model_name)
-        if not resolved:
-            raise RuntimeError(f"No llama.cpp model registered for '{model_name}'")
-
-        self._last_used = time.time()
-
-        async with self._lock:
-            if self._proc and self._proc.poll() is None and self._active_model == resolved:
-                self._ensure_idle_watcher()
-                self._ensure_watchdog()
-                self._ensure_vram_guard()
-                return resolved
-            await self._stop_locked()
-            await self._spawn_with_retry(resolved)
-            self._loaded_at = time.time()
-            self._ensure_idle_watcher()
-            self._ensure_watchdog()
-            try:
-                llama_state.save(resolved)
-            except Exception:
-                pass
+        Lazy load: spawns llama-server on demand if nothing is running. A different loaded model is switched
+        only after its in-flight requests finish. Raises ModelLoadError on spawn failure or readiness timeout.
+        Callers that then send requests should use `use_model` instead, which keeps the model loaded meanwhile."""
+        async with self.use_model(model_name) as resolved:
             return resolved
 
     async def start_default(self) -> str:
@@ -482,23 +493,145 @@ class LlamaSupervisor:
     def alive(self) -> bool:
         return bool(self._proc and self._proc.poll() is None)
 
+    # ── Switch scheduling ────────────────────────────────────────────
+
+    async def _acquire(self, model_name: str) -> str:
+        resolved = cfg.resolve_model(model_name)
+        if not resolved:
+            raise ModelLoadError(f"No llama.cpp model registered for '{model_name}'")
+        arrived = time.time()
+        self._last_used = arrived
+        registered = False
+        async with self._cond:
+            seq0 = self._load_seq
+            try:
+                while True:
+                    if not self._switching:
+                        live = self.alive()
+                        if live and self._active_model == resolved:
+                            # a waiter registered for this model is part of the batch its switch served: always admitted
+                            if registered or self._admits_new_locked():
+                                self._take_lease_locked()
+                                return resolved
+                        else:
+                            err = self._load_errors.get(resolved)
+                            if err is not None and err[0] > seq0:  # a switch to it failed since this request arrived
+                                raise err[1]
+                            if not registered:
+                                self._wanted.setdefault(resolved, arrived)
+                                self._wanted_n[resolved] = self._wanted_n.get(resolved, 0) + 1
+                                registered = True
+                            if self._may_switch_to_locked(resolved, live):
+                                self._start_switch_locked(resolved)
+                    await self._wait_locked()
+            finally:
+                if registered:
+                    n = self._wanted_n.get(resolved, 1) - 1
+                    if n <= 0:
+                        self._wanted_n.pop(resolved, None)
+                        self._wanted.pop(resolved, None)
+                    else:
+                        self._wanted_n[resolved] = n
+
+    def _other_wanted_locked(self) -> list[str]:
+        """Targets that waiters want, other than the live loaded model, oldest first."""
+        loaded = self._active_model if self.alive() else ""
+        return [m for m in self._wanted if m != loaded]
+
+    def _admits_new_locked(self) -> bool:
+        """May a request that is not part of a switch batch start on the loaded model now?"""
+        others = self._other_wanted_locked()
+        if not others:
+            return True
+        if time.time() - self._wanted[others[0]] >= cfg.switch_max_wait_sec():
+            return False  # starvation cap: the waiting switch goes next
+        # drained and no batch of the loaded model still starting: the switch goes now
+        return not (self._inflight == 0 and not self._wanted_n.get(self._active_model))
+
+    def _may_switch_to_locked(self, target: str, live: bool) -> bool:
+        others = self._other_wanted_locked()
+        if not others or others[0] != target:
+            return False  # an older target goes first
+        if not live:
+            return True  # nothing loaded (or it died): nothing to drain
+        return self._inflight == 0 and not self._wanted_n.get(self._active_model)
+
+    def _start_switch_locked(self, target: str) -> None:
+        # The switch runs as its own task, so a waiter that is cancelled (client gone) does not abort a load
+        # other waiters depend on. It reports back through _load_seq / _load_errors and wakes everyone.
+        self._switching = True
+        self._switch_task = asyncio.get_running_loop().create_task(self._run_switch(target))
+
+    async def _run_switch(self, target: str) -> None:
+        failure: Optional[BaseException] = None
+        try:
+            async with self._lock:
+                await self._stop_locked()
+                await self._spawn_with_retry(target)
+                self._loaded_at = time.time()
+                self._ensure_idle_watcher()
+                self._ensure_watchdog()
+                try:
+                    llama_state.save(target)
+                except Exception:
+                    pass
+        except BaseException as exc:  # noqa: BLE001 - handed to the waiters
+            failure = exc if isinstance(exc, ModelLoadError) else ModelLoadError(str(exc) or type(exc).__name__)
+            if failure is not exc:
+                failure.__cause__ = exc
+            _LLAMA_LOG.error("llama.cpp: loading '%s' failed: %s", target, failure)
+        async with self._cond:
+            self._switching = False
+            self._load_seq += 1
+            if failure is None:
+                self._load_errors.pop(target, None)
+            else:
+                self._load_errors[target] = (self._load_seq, failure)
+            self._cond.notify_all()
+
+    async def _wait_locked(self) -> None:
+        # Woken by every release and switch end; the timeout re-checks the starvation cap and a server that died.
+        try:
+            await asyncio.wait_for(self._cond.wait(), timeout=0.5)
+        except asyncio.TimeoutError:
+            pass
+
+    def _take_lease_locked(self) -> None:
+        self._inflight += 1
+        self._last_used = time.time()
+        if cfg.prevent_sleep():
+            _keep_awake(True)
+        self._ensure_idle_watcher()
+        self._ensure_watchdog()
+        self._ensure_vram_guard()
+
+    def _release(self) -> None:
+        # Synchronous, so a cancelled request still gives its lease back; waiters are woken by a task.
+        self._inflight = max(0, self._inflight - 1)
+        self._last_used = time.time()
+        if self._inflight == 0:
+            _keep_awake(False)
+        try:
+            asyncio.get_running_loop().create_task(self._notify())
+        except RuntimeError:
+            pass
+
+    async def _notify(self) -> None:
+        async with self._cond:
+            self._cond.notify_all()
+
     # ── Activity tracking (for the idle watcher) ─────────────────────
 
     async def begin_request(self) -> None:
-        """Caller acquires this around an upstream call so the idle
-        watcher won't unload mid-stream. Pair with `end_request`."""
-        async with self._inflight_lock:
-            self._inflight += 1
-            self._last_used = time.time()
-            if cfg.prevent_sleep():
-                _keep_awake(True)
+        """Count one upstream call so the idle watcher won't unload mid-stream. Pair with `end_request`.
+        Does not load or hold a model by itself: call it inside `use_model`."""
+        self._inflight += 1
+        self._last_used = time.time()
+        if cfg.prevent_sleep():
+            _keep_awake(True)
 
     async def end_request(self) -> None:
-        async with self._inflight_lock:
-            self._inflight = max(0, self._inflight - 1)
-            self._last_used = time.time()
-            if self._inflight == 0:
-                _keep_awake(False)
+        self._release()
 
     def inflight_count(self) -> int:
         return self._inflight
@@ -618,12 +751,21 @@ class LlamaSupervisor:
                 continue
             idle_for = time.time() - self._last_used
             if idle_for >= idle_limit:
+                async with self._cond:
+                    # a lease or a switch may have started since the check above: then it is not idle
+                    if self._inflight > 0 or self._switching or self._wanted:
+                        continue
+                    self._switching = True
                 _LLAMA_LOG.info("llama.cpp: idle for %.0fs ≥ %.0fs limit — unloading",
                                 idle_for, idle_limit)
                 try:
                     await self.stop()
                 except Exception as exc:
                     _LLAMA_LOG.warning("idle unload failed: %s", exc)
+                finally:
+                    async with self._cond:
+                        self._switching = False
+                        self._cond.notify_all()
                 return  # next request will re-spawn
 
     # ── Internal spawn / readiness / stop ────────────────────────────
@@ -633,6 +775,7 @@ class LlamaSupervisor:
         from llamacpp import auto_cache
         scale = 1.0
         for attempt in range(4):
+            await self._refuse_if_gpu_held()
             self._spawn_logged = False
             self._planned_mib = None
             try:
@@ -829,7 +972,7 @@ class LlamaSupervisor:
         self._active_model = ""
         _keep_awake(False)
 
-        if proc is None or proc.poll() is not None:
+        if proc is None:
             if self._log_fp:
                 try:
                     self._log_fp.close()
@@ -838,26 +981,90 @@ class LlamaSupervisor:
                 self._log_fp = None
             return
 
-        kill_process_tree(proc.pid, force=False)
-        for _ in range(40):  # 40 * 0.1s = 4s
-            if proc.poll() is not None:
-                break
-            await asyncio.sleep(0.1)
-
+        from llamacpp import vram
+        loop = asyncio.get_running_loop()
+        used_before: Optional[int] = None
+        pids_before: Optional[set[int]] = None
         if proc.poll() is None:
-            kill_process_tree(proc.pid, force=True)
-            try:
-                proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                pass
+            used_before = await loop.run_in_executor(None, vram.used_vram_mib)
+            pids_before = await loop.run_in_executor(None, vram.compute_app_pids)
+
+            kill_process_tree(proc.pid, force=False)
+            for _ in range(40):  # 40 * 0.1s = 4s
+                if proc.poll() is not None:
+                    break
+                await asyncio.sleep(0.1)
+
+            if proc.poll() is None:
+                kill_process_tree(proc.pid, force=True)
+                try:
+                    await loop.run_in_executor(None, proc.wait, 2)
+                except subprocess.TimeoutExpired:
+                    pass
+
+        # A process that already died (crash, VRAM guard) may still be releasing its GPU memory: check it too.
+        # The drop is required only when the server was seen holding the GPU (or the list could not tell).
+        need_drop = used_before is not None and (not pids_before or proc.pid in pids_before)
+        released, freed = await self._confirm_unloaded(proc, used_before, need_drop)
+        if released:
+            self._held_proc = None
+            freed_txt = f"{freed} MiB" if freed is not None else "unknown"
+            line = f"===== llama-server unloaded (VRAM freed: {freed_txt}) ====="
+            _LLAMA_LOG.info("llama.cpp: %s", line)
+        else:
+            self._held_proc = proc
+            line = (f"===== llama-server (pid {proc.pid}) stopped but still holds the GPU after "
+                    f"{cfg.unload_confirm_timeout_sec():.0f}s; no new server will start until it is released =====")
+            _LLAMA_LOG.error("llama.cpp: %s", line)
 
         if self._log_fp:
             try:
-                self._log_fp.write(b"===== llama-server stopped =====\n")
+                self._log_fp.write(f"{line}\n".encode())
                 self._log_fp.close()
             except OSError:
                 pass
             self._log_fp = None
+
+    async def _gpu_released(self, proc: subprocess.Popen, used_before: Optional[int],
+                            need_drop: bool) -> tuple[bool, Optional[int]]:
+        """(released, freed MiB): the process has exited, nvidia-smi no longer lists its pid, and (when
+        `need_drop`) the GPU memory in use has fallen below `used_before`. Unreadable nvidia-smi = not checked."""
+        from llamacpp import vram
+        if proc.poll() is None:
+            return False, None
+        loop = asyncio.get_running_loop()
+        pids = await loop.run_in_executor(None, vram.compute_app_pids)
+        if pids is not None and proc.pid in pids:
+            return False, None
+        used = await loop.run_in_executor(None, vram.used_vram_mib)
+        freed = used_before - used if used_before is not None and used is not None else None
+        if need_drop and used is not None and used >= used_before and used > 0:
+            return False, freed
+        return True, freed
+
+    async def _confirm_unloaded(self, proc: subprocess.Popen, used_before: Optional[int],
+                                need_drop: bool) -> tuple[bool, Optional[int]]:
+        deadline = time.monotonic() + cfg.unload_confirm_timeout_sec()
+        while True:
+            released, freed = await self._gpu_released(proc, used_before, need_drop)
+            if released or time.monotonic() >= deadline:
+                return released, freed
+            await asyncio.sleep(0.5)
+
+    async def _refuse_if_gpu_held(self) -> None:
+        """Never start a server while a stopped one still holds the GPU: two models at once can crash the machine."""
+        proc = self._held_proc
+        if proc is None:
+            return
+        released, _ = await self._gpu_released(proc, None, False)
+        if released:
+            self._held_proc = None
+            return
+        msg = (f"the previous llama-server (pid {proc.pid}) has not released the GPU "
+               f"{'(process still running)' if proc.poll() is None else '(nvidia-smi still lists it)'}; "
+               f"not starting a new one. Wait for it to exit, or end it in Task Manager.")
+        _LLAMA_LOG.error("llama.cpp: %s", msg)
+        raise ModelLoadError(msg)
 
 
 # ── Module-level singleton ───────────────────────────────────────────

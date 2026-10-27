@@ -176,6 +176,27 @@ def ready_timeout_sec() -> float:
     return float(app_config.get_nested("llamacpp.ready_timeout_sec", 120))
 
 
+def switch_max_wait_sec() -> float:
+    """Longest a request for another model waits while new requests for the loaded model keep starting.
+
+    A switch first lets the loaded model's in-flight requests finish (never killed); new requests for the
+    loaded model still join until the switch has waited this long, then they queue behind it. Default 120."""
+    try:
+        return max(0.0, float(app_config.get_nested("llamacpp.switch_max_wait_sec", 120)))
+    except (TypeError, ValueError):
+        return 120.0
+
+
+def unload_confirm_timeout_sec() -> float:
+    """After stopping llama-server, how long to wait for its process to exit and its GPU memory to be released.
+
+    No new llama-server is started while the old one still holds the GPU; past this the load fails. Default 30."""
+    try:
+        return max(1.0, float(app_config.get_nested("llamacpp.unload_confirm_timeout_sec", 30)))
+    except (TypeError, ValueError):
+        return 30.0
+
+
 def api_key() -> str:
     """Optional auth token expected by llama-server's --api-key."""
     return str(app_config.get_nested("llamacpp.api_key", "") or "")

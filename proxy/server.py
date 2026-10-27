@@ -56,7 +56,7 @@ from proxy.tool_registry import (
 )
 from proxy.tool_search import BM25Index
 from llamacpp import config as llama_cfg
-from process import get_supervisor
+from process import ModelLoadError, get_supervisor
 
 log = logging.getLogger("telecode.proxy")
 
@@ -1618,7 +1618,28 @@ async def _run_streaming(
     request: web.Request,
     adapter: ClientAdapter,
 ) -> web.StreamResponse:
-    """Execute the streaming intercept loop for one request."""
+    """Execute the streaming intercept loop for one request, holding its model for every round."""
+    active_model = prep["active_model"]
+    try:
+        supervisor = await get_supervisor()
+        async with supervisor.use_model(active_model):
+            return await _run_streaming_leased(prep, request, adapter)
+    except ModelLoadError as exc:
+        log.error("model swap failed: %s", exc, exc_info=True)
+        # Return a minimal error through the adapter's protocol
+        err_msg = f"Failed to load model '{active_model}': {exc}"
+        return web.json_response(
+            {"type": "error", "error": {"type": "model_load_error", "message": err_msg}},
+            status=503,
+        )
+
+
+async def _run_streaming_leased(
+    prep: dict[str, Any],
+    request: web.Request,
+    adapter: ClientAdapter,
+) -> web.StreamResponse:
+    """The streaming intercept loop; the caller holds the model (`use_model`)."""
     from proxy.managed_tools import is_managed, get_tool, format_visibility, run_pre_llm, run_post_llm
 
     body = prep["body"]
@@ -1646,19 +1667,6 @@ async def _run_streaming(
     api_key = llama_cfg.api_key()
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-
-    # Ensure the correct model is loaded
-    try:
-        supervisor = await get_supervisor()
-        await supervisor.ensure_model(active_model)
-    except Exception as exc:
-        log.error("model swap failed: %s", exc, exc_info=True)
-        # Return a minimal error through the adapter's protocol
-        err_msg = f"Failed to load model '{active_model}': {exc}"
-        return web.json_response(
-            {"type": "error", "error": {"type": "model_load_error", "message": err_msg}},
-            status=503,
-        )
 
     try:
         heartbeat = await _start_heartbeat(resp, request, write_lock, protocol=adapter.protocol)
@@ -1916,6 +1924,23 @@ async def _run_non_streaming(
     request: web.Request,
     inbound_protocol: str,
 ) -> web.Response:
+    """Execute the non-streaming intercept loop for one request, holding its model for every round."""
+    try:
+        supervisor = await get_supervisor()
+        async with supervisor.use_model(prep["active_model"]):
+            return await _run_non_streaming_leased(prep, request, inbound_protocol)
+    except ModelLoadError as exc:
+        return web.json_response(
+            {"type": "error", "error": {"type": "model_load_error", "message": str(exc)}},
+            status=503,
+        )
+
+
+async def _run_non_streaming_leased(
+    prep: dict[str, Any],
+    request: web.Request,
+    inbound_protocol: str,
+) -> web.Response:
     from proxy.managed_tools import is_managed, get_tool, format_visibility, run_pre_llm, run_post_llm
 
     body = prep["body"]
@@ -1940,16 +1965,6 @@ async def _run_non_streaming(
     api_key = llama_cfg.api_key()
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-
-    # Ensure correct model loaded
-    try:
-        supervisor = await get_supervisor()
-        await supervisor.ensure_model(active_model)
-    except Exception as exc:
-        return web.json_response(
-            {"type": "error", "error": {"type": "model_load_error", "message": str(exc)}},
-            status=503,
-        )
 
     upstream = llama_cfg.upstream_url()
     url = f"{upstream}/v1/chat/completions"
@@ -2265,13 +2280,18 @@ async def handle_openai_responses(request: web.Request) -> web.StreamResponse:
 
     try:
         supervisor = await get_supervisor()
-        await supervisor.ensure_model(active)
-    except Exception as exc:
+        async with supervisor.use_model(active):
+            return await _responses_upstream(request, rid, fwd, client_model)
+    except ModelLoadError as exc:
         log.error("model swap failed: %s", exc, exc_info=True)
         request_log.finish(rid, 503, error=str(exc))
         return web.json_response({"error": {"message": f"Failed to load model '{active}': {exc}",
                                             "type": "model_load_error"}}, status=503)
 
+
+async def _responses_upstream(request: web.Request, rid: Any, fwd: dict[str, Any],
+                              client_model: str) -> web.StreamResponse:
+    """Forward one /v1/responses call; the caller holds the model (`use_model`)."""
     headers = {"Content-Type": "application/json"}
     api_key = llama_cfg.api_key()
     if api_key:
@@ -2279,7 +2299,6 @@ async def handle_openai_responses(request: web.Request) -> web.StreamResponse:
     url = f"{llama_cfg.upstream_url()}/v1/responses"
     stream = bool(fwd.get("stream"))
 
-    await supervisor.begin_request()
     heartbeat: asyncio.Task | None = None
     try:
         async with aiohttp.ClientSession(timeout=_UPSTREAM_TIMEOUT) as session:
@@ -2329,7 +2348,6 @@ async def handle_openai_responses(request: web.Request) -> web.StreamResponse:
         raise
     finally:
         await _stop_heartbeat(heartbeat)
-        await supervisor.end_request()
 
 
 # ── Gemini (generativelanguage v1beta) ────────────────────────────────────
@@ -2420,10 +2438,10 @@ async def handle_gemini_generate(request: web.Request) -> web.StreamResponse:
         prep = await _prepare_internal_body(body, request, "gemini")
         try:
             supervisor = await get_supervisor()
-            await supervisor.ensure_model(prep["active_model"])
-        except Exception as exc:
+            async with supervisor.use_model(prep["active_model"]):
+                count = await toks.count_tokens(prep["body"].get("messages", []))
+        except ModelLoadError as exc:
             return _gemini_error(503, str(exc), "UNAVAILABLE")
-        count = await toks.count_tokens(prep["body"].get("messages", []))
         return web.json_response({"totalTokens": count})
 
     body["model"] = picked
@@ -2490,15 +2508,13 @@ async def handle_count_tokens(request: web.Request) -> web.Response:
     # Ensure model is loaded so /apply-template + /tokenize use the right tokenizer
     try:
         supervisor = await get_supervisor()
-        await supervisor.ensure_model(active_model)
-    except Exception as exc:
+        async with supervisor.use_model(active_model):
+            count = await toks.count_tokens(internal.get("messages", []))
+    except ModelLoadError as exc:
         return web.json_response(
             {"error": {"type": "model_load_error", "message": str(exc)}},
             status=503,
         )
-
-    messages = internal.get("messages", [])
-    count = await toks.count_tokens(messages)
 
     if inbound_protocol == "openai":
         return web.json_response({

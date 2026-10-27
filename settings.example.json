@@ -135,6 +135,8 @@
     "auto_start": false,
     "idle_unload_sec": 300,
     "ready_timeout_sec": 120,
+    "switch_max_wait_sec": 120,
+    "unload_confirm_timeout_sec": 30,
     "api_key": "",
 
     "default_model": "your-model",

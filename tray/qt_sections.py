@@ -2310,6 +2310,14 @@ def _llama(window) -> QWidget:
                                       "Restart llama-server when its /health has not answered for this many seconds (checked every 5 s). A server that is busy "
                                       "loading or generating still answers; one hung in the driver does not, and without this every request would wait on it. "
                                       "0 = off."))
+    spawn_body.addWidget(_number_row("llamacpp.switch_max_wait_sec", "Model Switch: Max Wait", 0, 3600, 10, 0, "s",
+                                      "A request for another model waits until the loaded model's requests in flight finish (they are never "
+                                      "cut). New requests for the loaded model still start meanwhile, until the switch has waited this long; "
+                                      "then they queue behind it. 0 = switch as soon as the in-flight requests end."))
+    spawn_body.addWidget(_number_row("llamacpp.unload_confirm_timeout_sec", "Unload: Confirm Within", 1, 600, 5, 0, "s",
+                                      "After stopping llama-server, wait up to this long for the process to exit and nvidia-smi to show "
+                                      "its GPU memory released. The next model never starts while the old one still holds the GPU: "
+                                      "the load fails with an error instead."))
     spawn_body.addWidget(_number_row("llamacpp.min_free_vram_mib", "Min Free VRAM Before Load", 0, 262144, 256, 0, "MiB",
                                       "Do not start llama-server unless the first NVIDIA GPU has at least this much free "
                                       "memory; the request fails with a clear error instead of the driver spilling the model "
