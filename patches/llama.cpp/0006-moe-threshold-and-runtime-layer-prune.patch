@@ -190,10 +190,10 @@ index e62fb40..fceed10 100644
      // added to the graph between the two branches, so the device computes it while the CPU computes the missed experts
      mutable ggml_tensor * moe_overlap = nullptr;
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 78a387e..07bf0dd 100644
+index 0220c5a..faddc49 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -3363,7 +3363,57 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -3346,7 +3346,57 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
      return res;
  }
  

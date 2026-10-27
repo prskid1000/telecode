@@ -73,7 +73,7 @@ index 6b36ca9..bbdf4af 100644
          it->second->last_used_time = time_now;
          return it->second.get();
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 441c102..6f8d0f9 100644
+index e86c5f8..e83fe84 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -2839,14 +2839,29 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
@@ -109,7 +109,7 @@ index 441c102..6f8d0f9 100644
      ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
  
      if (cgraph->uid != 0 &&
-@@ -4693,7 +4708,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
+@@ -4698,7 +4713,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
      return 0;
  }
  
@@ -118,7 +118,7 @@ index 441c102..6f8d0f9 100644
      bool graph_evaluated_or_captured = false;
  
      // flag used to determine whether it is an integrated_gpu
-@@ -4923,7 +4938,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
+@@ -4928,7 +4943,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
  }
  
  #ifdef USE_CUDA_GRAPH
@@ -127,7 +127,7 @@ index 441c102..6f8d0f9 100644
      ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
  
      if (graph->instances.empty()) {
-@@ -4946,7 +4961,7 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend,
+@@ -4951,7 +4966,7 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend,
  
      bool use_cuda_graph             = false;
      bool cuda_graph_update_required = false;
@@ -136,7 +136,7 @@ index 441c102..6f8d0f9 100644
  
  #ifdef USE_CUDA_GRAPH
      graph_key = ggml_cuda_graph_get_key(cgraph);
-@@ -5154,7 +5169,7 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
+@@ -5159,7 +5174,7 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
      }
  
  #ifdef USE_CUDA_GRAPH

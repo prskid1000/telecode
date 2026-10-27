@@ -487,7 +487,7 @@ index 22e5fd9..0d6fee7 100644
      GGML_ASSERT(sched);
      sched->callback_realloc = callback;
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index b795951..441c102 100644
+index aba2152..e86c5f8 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -30,6 +30,7 @@
@@ -583,7 +583,7 @@ index b795951..441c102 100644
  static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct ggml_tensor * dst) {
      switch (dst->op) {
          case GGML_OP_ARGMAX:
-@@ -6173,6 +6218,20 @@ static void ggml_backend_cuda_device_event_synchronize(ggml_backend_dev_t dev, g
+@@ -6179,6 +6224,20 @@ static void ggml_backend_cuda_device_event_synchronize(ggml_backend_dev_t dev, g
      CUDA_CHECK(cudaEventSynchronize((cudaEvent_t)event->context));
  }
  
@@ -604,7 +604,7 @@ index b795951..441c102 100644
  static const ggml_backend_device_i ggml_backend_cuda_device_interface = {
      /* .get_name                = */ ggml_backend_cuda_device_get_name,
      /* .get_description         = */ ggml_backend_cuda_device_get_description,
-@@ -6189,6 +6248,7 @@ static const ggml_backend_device_i ggml_backend_cuda_device_interface = {
+@@ -6195,6 +6254,7 @@ static const ggml_backend_device_i ggml_backend_cuda_device_interface = {
      /* .event_new               = */ ggml_backend_cuda_device_event_new,
      /* .event_free              = */ ggml_backend_cuda_device_event_free,
      /* .event_synchronize       = */ ggml_backend_cuda_device_event_synchronize,
@@ -751,7 +751,7 @@ index 930f1ad..1df0291 100644
  
      const block_q8_1 * y = ((const block_q8_1 *) vy) + channel_y*stride_channel_y + token_idx*stride_col_y;
 diff --git a/ggml/src/ggml.c b/ggml/src/ggml.c
-index ed8554b..80ed15f 100644
+index 5d8449a..6316ea9 100644
 --- a/ggml/src/ggml.c
 +++ b/ggml/src/ggml.c
 @@ -3405,6 +3405,18 @@ struct ggml_tensor * ggml_mul_mat(
