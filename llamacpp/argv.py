@@ -2,11 +2,12 @@
 
 Flag layout:
   top-level `llamacpp.*`           → server-wide flags (host, port, threads,
-                                     batch/ubatch, parallel, caching policy,
+                                     batch/ubatch, caching policy,
                                      speculative algorithm, hardware layout)
   per-model `llamacpp.models.<m>`  → model-specific flags (path, ctx_size,
                                      -ngl, mmproj, cache_type_k/v, flash_attn,
-                                     draft model pair, rope, lora, grammar)
+                                     draft model pair, rope, lora, grammar,
+                                     parallel slots and unified KV)
   `extra_args`                     → generic [["--flag", "value"], ...]
                                      appended verbatim (escape hatch)
 
@@ -55,7 +56,6 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("threads_batch",    "--threads-batch",   "value_nz"),
     ("batch_size",       "--batch-size",      "value"),
     ("ubatch_size",      "--ubatch-size",     "value"),
-    ("parallel",         "--parallel",        "value"),
     ("cont_batching",    "--cont-batching",   "flag"),
 
     # Scheduler / OS scheduling
@@ -115,8 +115,6 @@ _GLOBAL_FLAG_SPECS: list[tuple[str, object, str]] = [
 
     # Caching policy
     ("kv_offload",       ("--kv-offload", "--no-kv-offload"),   "bool_pair"),
-    ("kv_unified",       ("--kv-unified", "--no-kv-unified"),   "bool_pair"),
-    ("kv_unified_per_slot", "--kv-unified-per-slot",           "value_nz"),
     ("cache_prompt",     ("--cache-prompt", "--no-cache-prompt"), "bool_pair"),
     # renamed from --clear-idle/--no-clear-idle in upstream commit 9d49acb
     ("cache_idle_slots", ("--cache-idle-slots", "--no-cache-idle-slots"), "bool_pair"),
@@ -337,6 +335,10 @@ _MODEL_FLAG_SPECS: list[tuple[str, object, str]] = [
     ("main_gpu",      "--main-gpu",        "value"),
     ("tensor_split",  "--tensor-split",    "value"),
     ("batch_size",    "--batch-size",      "value_nz"),
+    # Slots: per model, since the KV of every slot is what decides whether a model fits
+    ("parallel",      "--parallel",        "value"),
+    ("kv_unified",    ("--kv-unified", "--no-kv-unified"), "bool_pair"),
+    ("kv_unified_per_slot", "--kv-unified-per-slot", "value_nz"),
 
     # Attention
     ("flash_attn",    "--flash-attn",      "value"),

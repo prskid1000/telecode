@@ -46,7 +46,6 @@
     "threads_batch": 24,
     "batch_size": 4096,
     "ubatch_size": 4096,
-    "parallel": 1,
     "cont_batching": true,
     "main_gpu": 0,
     "tensor_split": "",
@@ -55,7 +54,6 @@
     "seed": -1,
     "keep": 0,
     "kv_offload": true,
-    "kv_unified": true,
     "cache_prompt": true,
     "cache_idle_slots": true,
     "context_shift": true,
@@ -154,7 +152,7 @@
         "moe_hybrid_mib": 5120,
         "env": "GGML_OP_OFFLOAD_MIN_BATCH=64",
         "moe_hybrid_max_tokens": 64,
-        "moe_hybrid_swap_every": 16,
+        "moe_hybrid_swap_every": 32,
         "moe_hybrid_swap_max": 32,
         "moe_hybrid_skip_weight": 0.08,
         "moe_hybrid_tail_skip": 4,
@@ -162,7 +160,9 @@
         "ubatch_size": 4096,
         "batch_size": 4096,
         "spec_type": "none",
-        "head_subset": 32768
+        "head_subset": 32768,
+        "parallel": 2,
+        "kv_unified": true
       },
       "qwen3.8-27b": {
         "path": "D:/.models/qwen3.8/Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf",
@@ -216,7 +216,9 @@
         "env": "",
         "batch_size": 2048,
         "spec_type": "none",
-        "head_subset": 32768
+        "head_subset": 32768,
+        "parallel": 1,
+        "kv_unified": true
       }
     },
     "inference": {

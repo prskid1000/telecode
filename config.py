@@ -212,15 +212,42 @@ def _ensure_standard_effort_map(data: dict[str, Any]) -> bool:
     return changed
 
 
+# Moved from llamacpp.* to llamacpp.models.<m>.*: every slot's KV decides whether a model fits, so one value cannot serve all models.
+_PER_MODEL_SLOT_KEYS = ("parallel", "kv_unified", "kv_unified_per_slot")
+
+
+def _migrate_slot_keys(data: dict[str, Any]) -> bool:
+    """Copy a leftover top-level llamacpp.parallel / kv_unified / kv_unified_per_slot into every model that has no value of its own,
+    then drop the top-level key (argv reads them per model only). Returns True if the settings dict was mutated."""
+    lc = data.get("llamacpp")
+    if not isinstance(lc, dict):
+        return False
+    models = lc.get("models") if isinstance(lc.get("models"), dict) else {}
+    changed = False
+    for k in _PER_MODEL_SLOT_KEYS:
+        if k not in lc:
+            continue
+        val = lc.pop(k)
+        changed = True
+        for model in models.values():
+            if isinstance(model, dict) and k not in model:
+                model[k] = val
+    return changed
+
+
+def _fixups(data: dict[str, Any]) -> bool:
+    return _ensure_standard_effort_map(data) | _ensure_model_effort_maps(data) | _migrate_slot_keys(data)
+
+
 _raw: dict[str, Any] = _load()
-if _ensure_standard_effort_map(_raw) | _ensure_model_effort_maps(_raw):
+if _fixups(_raw):
     _save(_raw)
 
 
 def reload() -> None:
     global _raw
     _raw = _load()
-    if _ensure_standard_effort_map(_raw) | _ensure_model_effort_maps(_raw):
+    if _fixups(_raw):
         _save(_raw)
 
 

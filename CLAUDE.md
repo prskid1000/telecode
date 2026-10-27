@@ -366,7 +366,9 @@ forces a full re-prefill — measured 2026-09-03: a 2,206-token session-title ca
 **Settings layout (no duplicates):**
 - `llamacpp.*` — server-wide CLI flags (threads, batch, load_mode, kv_*, spec_type, cache_ram, endpoints,
   server-mode, timeout, api_prefix, video_*).
-- `llamacpp.models.<m>.*` — per-model flags re-taking effect on respawn (ctx_size, n_gpu_layers, n_cpu_moe, mmproj, rope_*, yarn_*, draft_*, lora, grammar, reasoning_*, override_*, device, chat_template).
+- `llamacpp.models.<m>.*` — per-model flags re-taking effect on respawn (ctx_size, n_gpu_layers, n_cpu_moe, mmproj, rope_*, yarn_*, draft_*, lora, grammar, reasoning_*, override_*, device, chat_template,
+  `parallel` / `kv_unified` / `kv_unified_per_slot` — per model because every slot's KV and recurrent state decide whether a
+  model fits; a leftover top-level value is moved into each model once by `config._migrate_slot_keys`).
 - `llamacpp.models.<m>.inference_defaults.*` — proxy-applied request-body fields (temperature, top_p, max_tokens, stop, context_overflow, drop_prior_thinking, reasoning.*, chat_template_kwargs).
 - `llamacpp.inference.*` — proxy-applied global fallbacks. Hierarchy: request body > per-model > top-level (`structured_output.*`, `reasoning_effort_map.*`).
 

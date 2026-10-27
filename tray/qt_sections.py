@@ -2262,8 +2262,6 @@ def _llama(window) -> QWidget:
                                      ("Isolate", "isolate"),
                                      ("Numactl", "numactl")],
                                     "--numa: attempt optimizations that help on some NUMA systems."))
-    spawn_body.addWidget(_number_row("llamacpp.parallel",       "Parallel Slots",    1,  32,  1, 0, "",
-                                      "--parallel: number of concurrent request slots."))
     spawn_body.addWidget(_toggle_row("llamacpp.cont_batching",  "Continuous Batching",
                                       "--cont-batching: process multiple requests in one batch."))
     spawn_body.addWidget(_toggle_row("llamacpp.async_decode",   "Async Scheduling Pipeline",
@@ -2404,31 +2402,19 @@ def _llama(window) -> QWidget:
                                     "llamacpp.* — KV cache & slot / checkpoint policy")
     cache_body.addWidget(_toggle_row("llamacpp.kv_offload",     "KV Offload (GPU)",
                                       "--kv-offload / --no-kv-offload: keep KV cache on GPU. Toggle off to stay on CPU."))
-    # Unified KV only matters with multiple slots (parallel > 1 or -1 = auto).
-    cache_body.addWidget(_dependent(
-        _toggle_row("llamacpp.kv_unified",     "Unified KV",
-                     "--kv-unified / --no-kv-unified: single KV buffer shared across all slots."),
-        ["llamacpp.parallel"], lambda p: int(p or 1) != 1))
-    # Only meaningful once the KV buffer is actually shared.
-    cache_body.addWidget(_dependent(
-        _number_row("llamacpp.kv_unified_per_slot", "Unified KV per Slot", 0, 1048576, 1024, 0, "tok",
-                     "--kv-unified-per-slot: cap the context each parallel slot may take out of the "
-                     "shared KV buffer. 0 = unset, behaviour unchanged. Stops one long conversation "
-                     "starving the others."),
-        ["llamacpp.kv_unified"], lambda u: bool(u)))
     cache_body.addWidget(_toggle_row("llamacpp.swa_full",       "Full-size SWA Cache",
                                       "--swa-full / --no-swa-full: allocate full context size for sliding window layers. "
                                       "Toggling OFF truncates sliding window layers to window size (e.g. 4096 tokens + sinks), "
                                       "saving 1.5–2.5 GB VRAM on long contexts (DeepInfer SWA bounded replay). Default: off."))
     cache_body.addWidget(_toggle_row("llamacpp.cache_prompt",   "Cache Prompt",
                                       "--cache-prompt / --no-cache-prompt: reuse KV across requests with shared prefixes."))
-    # cache_idle_slots needs unified KV AND a positive cache_ram.
+    # cache_idle_slots needs a positive cache_ram (and the model's Unified KV, which is per model now).
     cache_body.addWidget(_dependent(
         _toggle_row("llamacpp.cache_idle_slots", "Cache Idle Slots",
                      "--cache-idle-slots / --no-cache-idle-slots: save and clear idle slots when a new task arrives. "
-                     "(Renamed from --clear-idle in upstream b9145.) Requires Unified KV + Cache RAM > 0."),
-        ["llamacpp.kv_unified", "llamacpp.cache_ram"],
-        lambda u, cr: bool(u) and int(cr or 0) > 0))
+                     "(Renamed from --clear-idle in upstream b9145.) Requires Cache RAM > 0 and the model's Unified KV."),
+        ["llamacpp.cache_ram"],
+        lambda cr: int(cr or 0) > 0))
     cache_body.addWidget(_toggle_row("llamacpp.context_shift",  "Context Shift",
                                       "--context-shift / --no-context-shift: rotate the KV ring buffer instead of erroring on context overflow."))
     cache_body.addWidget(_toggle_row("llamacpp.warmup",         "Warmup",
@@ -5065,14 +5051,16 @@ def _logs(window) -> QWidget:
 # Models (llamacpp.models.*) — add/remove + full field editor
 # ══════════════════════════════════════════════════════════════════════
 
-# NOTE: Server-wide flags (threads, batch_size, ubatch_size, parallel, mlock,
-# no_mmap, etc.) live ONLY at top-level `llamacpp.*`. They are intentionally
+# NOTE: Server-wide flags (threads, mlock, no_mmap, etc.) live ONLY at top-level `llamacpp.*`
+# (parallel / kv_unified / kv_unified_per_slot are per model, see config._migrate_slot_keys). They are intentionally
 # absent here — adding them to a per-model block would have no effect because
 # argv.build_argv() reads them from the top-level config, not from this dict.
 _MODEL_DEFAULTS: dict[str, Any] = {
     "path": "",
     "mmproj": "",
     "ctx_size": 4096,
+    "parallel": 1,
+    "kv_unified": True,
     # 99 = "all layers on GPU"; llama-server caps to the model's actual layer
     # count. Matches settings.example.json's recommended baseline. Users with
     # tight VRAM can lower this or flip fit on (which suppresses --n-gpu-layers
@@ -5362,6 +5350,21 @@ def _models(window) -> QWidget:
                                   "--batch-size: logical batch size for this model. 0 = use server default."))
         _sl.addWidget(_number_row(f"{p}.ubatch_size",  "Micro-Batch Size",   0,   8192,    32,  0, "tok",
                                   "--ubatch-size: physical sub-batch for this model. 0 = use server default."))
+        _sl.addWidget(_number_row(f"{p}.parallel",     "Parallel Slots",     1,   32,      1,   0, "",
+                                  "--parallel: concurrent request slots for this model. Each slot adds its own recurrent state "
+                                  "(and, without Unified KV, its own KV cache), so check the VRAM plan before raising it.", default=1))
+        # Unified KV only matters with multiple slots.
+        _sl.addWidget(_dependent(
+            _toggle_row(f"{p}.kv_unified",   "Unified KV",
+                        "--kv-unified / --no-kv-unified: single KV buffer shared across all slots.", default=True),
+            [f"{p}.parallel"], lambda n: int(n or 1) != 1))
+        # Only meaningful once the KV buffer is actually shared.
+        _sl.addWidget(_dependent(
+            _number_row(f"{p}.kv_unified_per_slot", "Unified KV per Slot", 0, 1048576, 1024, 0, "tok",
+                        "--kv-unified-per-slot: cap the context each parallel slot may take out of the "
+                        "shared KV buffer. 0 = unset, behaviour unchanged. Stops one long conversation "
+                        "starving the others.", default=0),
+            [f"{p}.kv_unified", f"{p}.parallel"], lambda u, n: (u is None or bool(u)) and int(n or 1) != 1))
         # n_gpu_layers is greyed when fit is on — the auto-fitter aborts if it
         # sees a user-pinned ngl, so argv.build_argv() suppresses --n-gpu-layers
         # in that case. This dependency mirrors that suppression in the UI.
@@ -5441,7 +5444,7 @@ def _models(window) -> QWidget:
                         "Memory on: the ceiling, 0 = none.", default=0),
             [f"{p}.moe_hybrid"], _hy_on))
         _sl_hy.addWidget(_dependent(
-            _number_row(f"{p}.moe_hybrid_max_tokens", "Max Batch", 1, 31, 1, 0, "tok",
+            _number_row(f"{p}.moe_hybrid_max_tokens", "Max Batch", 1, 64, 1, 0, "tok",
                         "--moe-hybrid-max-tokens: the largest batch that uses the hybrid form (decoding is 1 token, speculative "
                         "verification a few). Larger batches (prompts) copy the experts to the GPU (default 16).", default=16),
             [f"{p}.moe_hybrid"], _hy_on))

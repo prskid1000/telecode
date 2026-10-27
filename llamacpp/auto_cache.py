@@ -90,8 +90,8 @@ def plan(model_name: str, scale: float = 1.0) -> Optional[dict]:
 
     headroom = headroom_mib(model_name)
     ubatch = cfg.as_int(mcfg.get("ubatch_size")) or cfg.as_int(app_config.get_nested("llamacpp.ubatch_size")) or 512
-    parallel = cfg.as_int(mcfg.get("parallel")) or cfg.as_int(app_config.get_nested("llamacpp.parallel")) or 1
-    is_unified = bool(mcfg.get("kv_unified") if "kv_unified" in mcfg else app_config.get_nested("llamacpp.kv_unified", True))
+    parallel = cfg.as_int(mcfg.get("parallel")) or 1
+    is_unified = bool(mcfg.get("kv_unified", True))
     extra_headroom = 0
     if ubatch >= 2048:
         extra_headroom += 500 if ubatch >= 4096 else 250

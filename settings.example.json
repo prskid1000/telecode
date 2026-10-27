@@ -148,7 +148,6 @@
     "threads_batch": -1,
     "batch_size": 4096,
     "ubatch_size": 4096,
-    "parallel": -1,
     "cont_batching": true,
 
     "cpu_mask": "",
@@ -201,8 +200,6 @@
     "keep": 0,
 
     "kv_offload": true,
-    "kv_unified": false,
-    "kv_unified_per_slot": 0,
     "cache_prompt": true,
     "cache_idle_slots": true,
     "context_shift": false,
@@ -254,6 +251,9 @@
         "preload": false,
 
         "ctx_size": 0,
+        "parallel": -1,
+        "kv_unified": false,
+        "kv_unified_per_slot": 0,
         "n_gpu_layers": 99,
 
         "flash_attn": true,
