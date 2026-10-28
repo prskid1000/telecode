@@ -16,9 +16,13 @@ Prompt batches copy the host experts to the GPU as before, but the ones with a s
 ggml pieces: mul_mat_id skips ids < 0 and leaves zero rows (CPU, CUDA; fused paths disabled for them); ggml_backend_event_query (aborts on a
 device fault); ggml_backend_sched_set_early_cpu_inputs (bounded, skipped with GGML_CUDA_GRAPH_OPT, keeps CUDA graph reuse via stable uids);
 WDDM hit poke via event query on Windows forcing immediate concurrent GPU submission before CPU drain; Blackwell sm_120 MMVQ tuning.
+Sequence state save (llama_io_write_host): neighbouring ranges of one device tensor are read as one span (gap <= 64 KiB, span <= 64 MiB,
+host buffers untouched, direct into the output when contiguous). With several slots decoding into a unified KV cache a save was up to
+18,100 single reads; measured on the 35B-A3B with 3 slots: stall to save a slot 484 -> 159 ms, idle-slot saves 406 -> 145 ms (mean),
+byte-identical to the per-range read (53 saves compared). Idea from ggml-org/llama.cpp#30694, read amplification bounded.
 
 diff --git a/common/arg.cpp b/common/arg.cpp
-index 9706b3a..b3c0897 100644
+index 9706b3ac5..b3c089721 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
 @@ -2795,6 +2795,84 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
@@ -107,7 +111,7 @@ index 9706b3a..b3c0897 100644
          {"-ncffn", "--n-cpu-ffn"}, "N",
          "keep the dense FFN weights of the first N layers in the CPU\n"
 diff --git a/common/common.cpp b/common/common.cpp
-index a4b4fea..e63eb55 100644
+index a4b4feaee..e63eb5586 100644
 --- a/common/common.cpp
 +++ b/common/common.cpp
 @@ -1761,6 +1761,14 @@ struct llama_context_params common_context_params_to_llama(const common_params &
@@ -126,7 +130,7 @@ index a4b4fea..e63eb55 100644
  }
  
 diff --git a/common/common.h b/common/common.h
-index 8e3fe2c..4de5f15 100644
+index 8e3fe2c89..4de5f15af 100644
 --- a/common/common.h
 +++ b/common/common.h
 @@ -599,6 +599,14 @@ struct common_params {
@@ -145,7 +149,7 @@ index 8e3fe2c..4de5f15 100644
  
      // multimodal models (see tools/mtmd)
 diff --git a/common/speculative.cpp b/common/speculative.cpp
-index 4305ac6..00c2d56 100644
+index 4305ac6ac..00c2d56dc 100644
 --- a/common/speculative.cpp
 +++ b/common/speculative.cpp
 @@ -2671,6 +2671,7 @@ common_params common_base_params_to_speculative(const common_params & params) {
@@ -157,7 +161,7 @@ index 4305ac6..00c2d56 100644
      // dflash/dspark decode the whole noise block in a single pass and sample every block position on the backend
      // TODO: refactor such properties to be announced by the speculative types
 diff --git a/ggml/include/ggml-backend.h b/ggml/include/ggml-backend.h
-index 7a65d81..243747f 100644
+index 7a65d8121..243747fc5 100644
 --- a/ggml/include/ggml-backend.h
 +++ b/ggml/include/ggml-backend.h
 @@ -127,6 +127,8 @@ extern "C" {
@@ -181,7 +185,7 @@ index 7a65d81..243747f 100644
      GGML_API void                 ggml_backend_sched_set_realloc_callback(ggml_backend_sched_t sched, ggml_backend_sched_realloc_callback callback, void * user_data);
  
 diff --git a/ggml/include/ggml.h b/ggml/include/ggml.h
-index d62a631..8064f0c 100644
+index d62a63104..8064f0c54 100644
 --- a/ggml/include/ggml.h
 +++ b/ggml/include/ggml.h
 @@ -1508,6 +1508,10 @@ extern "C" {
@@ -196,7 +200,7 @@ index d62a631..8064f0c 100644
      // an id of -1 skips the slot and zeroes the matching row of the result
      //
 diff --git a/ggml/src/ggml-backend-impl.h b/ggml/src/ggml-backend-impl.h
-index dc7367d..4227a94 100644
+index dc7367dec..4227a946e 100644
 --- a/ggml/src/ggml-backend-impl.h
 +++ b/ggml/src/ggml-backend-impl.h
 @@ -216,6 +216,8 @@ extern "C" {
@@ -209,7 +213,7 @@ index dc7367d..4227a94 100644
  
      struct ggml_backend_device {
 diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
-index 22e5fd9..0d6fee7 100644
+index 22e5fd9c7..0d6fee751 100644
 --- a/ggml/src/ggml-backend.cpp
 +++ b/ggml/src/ggml-backend.cpp
 @@ -693,6 +693,14 @@ void ggml_backend_event_record(ggml_backend_event_t event, ggml_backend_t backen
@@ -487,7 +491,7 @@ index 22e5fd9..0d6fee7 100644
      GGML_ASSERT(sched);
      sched->callback_realloc = callback;
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index aba2152..e86c5f8 100644
+index aba21524f..e86c5f8db 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -30,6 +30,7 @@
@@ -613,7 +617,7 @@ index aba2152..e86c5f8 100644
  
  // backend reg
 diff --git a/ggml/src/ggml-cuda/mmid.cu b/ggml/src/ggml-cuda/mmid.cu
-index 12ae14c..a14dd71 100644
+index 12ae14ce9..a14dd71a9 100644
 --- a/ggml/src/ggml-cuda/mmid.cu
 +++ b/ggml/src/ggml-cuda/mmid.cu
 @@ -177,3 +177,62 @@ void ggml_cuda_launch_mm_ids_helper(
@@ -680,7 +684,7 @@ index 12ae14c..a14dd71 100644
 +        ids->nb[0]/sizeof(int32_t), ids->nb[1]/sizeof(int32_t), dst->nb[1], dst->nb[2]);
 +}
 diff --git a/ggml/src/ggml-cuda/mmid.cuh b/ggml/src/ggml-cuda/mmid.cuh
-index 74c2db4..cad378b 100644
+index 74c2db433..cad378bf6 100644
 --- a/ggml/src/ggml-cuda/mmid.cuh
 +++ b/ggml/src/ggml-cuda/mmid.cuh
 @@ -1,5 +1,11 @@
@@ -696,7 +700,7 @@ index 74c2db4..cad378b 100644
          const int32_t * ids, int32_t * ids_src1, int32_t * ids_dst, int32_t * expert_bounds,
          int n_experts, int n_tokens, int n_expert_used, int nchannels_y, int si1, int sis1, bool write_inverse, cudaStream_t stream);
 diff --git a/ggml/src/ggml-cuda/mmvq.cu b/ggml/src/ggml-cuda/mmvq.cu
-index 930f1ad..1df0291 100644
+index 930f1adc4..1df0291c9 100644
 --- a/ggml/src/ggml-cuda/mmvq.cu
 +++ b/ggml/src/ggml-cuda/mmvq.cu
 @@ -114,7 +114,7 @@ static constexpr __device__ mmvq_parameter_table_id get_device_table_id() {
@@ -751,7 +755,7 @@ index 930f1ad..1df0291 100644
  
      const block_q8_1 * y = ((const block_q8_1 *) vy) + channel_y*stride_channel_y + token_idx*stride_col_y;
 diff --git a/ggml/src/ggml.c b/ggml/src/ggml.c
-index 5d8449a..6316ea9 100644
+index 5d8449a88..6316ea950 100644
 --- a/ggml/src/ggml.c
 +++ b/ggml/src/ggml.c
 @@ -3405,6 +3405,18 @@ struct ggml_tensor * ggml_mul_mat(
@@ -774,7 +778,7 @@ index 5d8449a..6316ea9 100644
          struct ggml_tensor * a,
          enum ggml_prec       prec) {
 diff --git a/include/llama.h b/include/llama.h
-index ae54e66..6ec95bc 100644
+index ae54e661b..6ec95bc8a 100644
 --- a/include/llama.h
 +++ b/include/llama.h
 @@ -398,6 +398,14 @@ extern "C" {
@@ -793,7 +797,7 @@ index ae54e66..6ec95bc 100644
          // if it returns true, execution of llama_decode() will be aborted
          // currently works only with CPU execution
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 97250c2..b2bf3a8 100644
+index 97250c2e8..b2bf3a8aa 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -29,6 +29,7 @@ set(LLAMA_CORE_SOURCES
@@ -805,7 +809,7 @@ index 97250c2..b2bf3a8 100644
      llama-memory-hybrid-iswa.cpp
      llama-memory-hybrid-idx.cpp
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 455f519..d349771 100644
+index 455f5198e..05a7b029e 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -10,6 +10,7 @@
@@ -966,7 +970,55 @@ index 455f519..d349771 100644
              if (n == 0) {
                  e++;
                  continue;
-@@ -3731,6 +3798,11 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
+@@ -2925,9 +2992,44 @@ public:
+             uint8_t * p, size_t len) : ptr(p), buf_size(len) {}
+ 
+     ~llama_io_write_host() {
+-        // TODO: add backend support to batch tensor_get? or some other way to speed this up
+-        for (const auto & winfo : winfos) {
+-            ggml_backend_tensor_get(winfo.tensor, winfo.ptr, winfo.offset, winfo.size);
++        // A sequence that shares a unified KV cache with other slots decoding at the same time owns every n-th cell, so its state
++        // arrives as one small range per cell, layer and K/V, each a blocking device read (thousands per save, the server stalls all
++        // slots meanwhile). Neighbouring ranges of the same tensor are read as one span and the pieces copied out: a gap is read only
++        // when reading it costs less than another read call (<= 64 KiB), a span is capped so the scratch buffer stays small, and host
++        // buffers are left alone (memcpy already). Idea from ggml-org/llama.cpp#30694, with the read amplification bounded.
++        constexpr size_t max_gap  = 64u*1024;
++        constexpr size_t max_span = 64u*1024*1024;
++
++        std::vector<uint8_t> scratch;
++        size_t i = 0;
++        while (i < winfos.size()) {
++            const auto & w0 = winfos[i];
++            const bool host = w0.tensor->buffer != nullptr && ggml_backend_buffer_is_host(w0.tensor->buffer);
++
++            size_t j      = i + 1;
++            size_t end    = w0.offset + w0.size;
++            bool   direct = true; // every piece follows the previous one in the tensor and in the output
++            while (!host && j < winfos.size()) {
++                const auto & w = winfos[j];
++                const auto & p = winfos[j - 1];
++                if (w.tensor != w0.tensor || w.offset < end || w.offset - end > max_gap || w.offset + w.size - w0.offset > max_span) {
++                    break;
++                }
++                direct = direct && w.offset == end && w.ptr == p.ptr + p.size;
++                end = w.offset + w.size;
++                j++;
++            }
++
++            if (j == i + 1 || direct) {
++                ggml_backend_tensor_get(w0.tensor, w0.ptr, w0.offset, end - w0.offset);
++            } else {
++                scratch.resize(end - w0.offset);
++                ggml_backend_tensor_get(w0.tensor, scratch.data(), w0.offset, end - w0.offset);
++                for (size_t k = i; k < j; k++) {
++                    memcpy(winfos[k].ptr, scratch.data() + (winfos[k].offset - w0.offset), winfos[k].size);
++                }
++            }
++            i = j;
+         }
+     }
+ 
+@@ -3731,6 +3833,11 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
              ret[buft].context += size;
          }
      }
@@ -978,7 +1030,7 @@ index 455f519..d349771 100644
      if (model.no_alloc()) {
          for (size_t i = 0; i < backends.size(); ++i) {
              ggml_backend_t             backend = backends[i].get();
-@@ -4021,6 +4093,13 @@ llama_context_params llama_context_default_params() {
+@@ -4021,6 +4128,13 @@ llama_context_params llama_context_default_params() {
          /*.type_k                      =*/ GGML_TYPE_F16,
          /*.type_v                      =*/ GGML_TYPE_F16,
          /*.moe_cache_size              =*/ 0,
@@ -993,7 +1045,7 @@ index 455f519..d349771 100644
          /*.abort_callback_data         =*/ nullptr,
          /*.embeddings                  =*/ false,
 diff --git a/src/llama-context.h b/src/llama-context.h
-index 6938fb1..c7f7c48 100644
+index 6938fb103..c7f7c48dc 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
 @@ -8,6 +8,7 @@
@@ -1013,7 +1065,7 @@ index 6938fb1..c7f7c48 100644
      // decode output (2-dimensional array: [n_outputs][n_vocab])
      buffer_view<float> logits = {nullptr, 0};
 diff --git a/src/llama-cparams.h b/src/llama-cparams.h
-index 0c260f7..96a996c 100644
+index 0c260f7b6..96a996c66 100644
 --- a/src/llama-cparams.h
 +++ b/src/llama-cparams.h
 @@ -59,6 +59,14 @@ struct llama_cparams {
@@ -1032,7 +1084,7 @@ index 0c260f7..96a996c 100644
  
      enum llama_context_type ctx_type;
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 7309705..5cb4141 100644
+index 7309705dc..5cb414136 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -3,6 +3,7 @@
@@ -1187,7 +1239,7 @@ index 7309705..5cb4141 100644
      ggml_build_forward_expand(gf, experts);
  
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index f56a305..77eddbc 100644
+index f56a305e9..77eddbce6 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
 @@ -23,6 +23,7 @@ struct llama_prec_policy;
@@ -1235,7 +1287,7 @@ index f56a305..77eddbc 100644
  
 diff --git a/src/llama-moe-hybrid.cpp b/src/llama-moe-hybrid.cpp
 new file mode 100644
-index 0000000..dc101a4
+index 000000000..dc101a4d4
 --- /dev/null
 +++ b/src/llama-moe-hybrid.cpp
 @@ -0,0 +1,508 @@
@@ -1749,7 +1801,7 @@ index 0000000..dc101a4
 +}
 diff --git a/src/llama-moe-hybrid.h b/src/llama-moe-hybrid.h
 new file mode 100644
-index 0000000..5ff97d5
+index 000000000..5ff97d570
 --- /dev/null
 +++ b/src/llama-moe-hybrid.h
 @@ -0,0 +1,73 @@
@@ -1827,7 +1879,7 @@ index 0000000..5ff97d5
 +
 +using llama_moe_hybrid_ptr = std::unique_ptr<llama_moe_hybrid>;
 diff --git a/src/models/qwen35moe.cpp b/src/models/qwen35moe.cpp
-index 939f10f..536baf0 100644
+index 939f10f7f..536baf06c 100644
 --- a/src/models/qwen35moe.cpp
 +++ b/src/models/qwen35moe.cpp
 @@ -489,26 +489,11 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_ffn(ggml_tensor * cur, c
