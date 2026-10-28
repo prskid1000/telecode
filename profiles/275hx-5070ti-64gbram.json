@@ -162,7 +162,7 @@
         "batch_size": 4096,
         "spec_type": "none",
         "head_subset": 32768,
-        "parallel": 2,
+        "parallel": 3,
         "kv_unified": true,
         "moe_hybrid_gpu_only": false,
         "moe_threshold": 0
