@@ -22,6 +22,7 @@ three times). Rules for every test that loads a model:
 | `vram_guard.py --limit-mib N` | logs the GPU memory every second and kills llama-server above the limit. |
 | `moe_cache_bench.py` | one configuration: telecode's own command line for a model (+ `--set`, `--extra`), fixed greedy prompts, tokens/s, an output hash, the peak VRAM. `--pad` long prompts, `--probs` token probabilities, `--vram-limit` kill level, `--exe` binary under test. |
 | `bench_matrix.py CASES.json [--baseline RESULTS.jsonl]` | a list of configurations through the bench, one at a time, with the VRAM kill, stopping at the first failure; compares output hashes with an earlier run = a regression check. See `bench_matrix.example.json`. |
+| `ocr_bench.py --model M [--thinking] [--levels ...] [--set k=v]` | OCR accuracy of a vision model on generated images with known text (clean to nearly illegible, plus full pages), same seed = same images. `--thinking` with the `page` level is what exposes lossy MoE settings: short answers do not. |
 | `compare_runs.py texts|probs` | how far two runs agree: shared prefix of the texts, or the first different token with the two best probabilities (a near-tie is harmless). |
 | `patch_series.py regen|verify|upgrade-check TAG` | maintain `patches/llama.cpp` (see below). |
 | `build_llama.ps1 [-Target ...] [-Jobs 2]` | build a llama.cpp checkout with Visual Studio, gently and until nothing is left to do. |
