@@ -264,7 +264,7 @@ def _spec_types(gcfg: dict) -> list[str]:
     return [s for s in out if s.lower() != "none"]
 
 
-def _emit_load_mode(argv: list[str], gcfg: dict) -> None:
+def _emit_load_mode(argv: list[str], gcfg: dict, mcfg: dict | None = None) -> None:
     """Emit --load-mode (empty = omit, llama-server's own default).
 
     Upstream deprecated --mlock / --no-mmap / --direct-io in favour of one
@@ -272,7 +272,11 @@ def _emit_load_mode(argv: list[str], gcfg: dict) -> None:
     none, mmap, mlock, mmap+mlock, dio. Combinations beyond mmap+mlock are
     rejected by the parser.
     """
-    mode = str(gcfg.get("load_mode", "") or "").strip()
+    mode = ""
+    if mcfg and mcfg.get("load_mode"):
+        mode = str(mcfg.get("load_mode", "") or "").strip()
+    if not mode:
+        mode = str(gcfg.get("load_mode", "") or "").strip()
     if mode:
         argv += ["--load-mode", mode]
 
@@ -655,7 +659,7 @@ def build_argv(model_name: str, overrides: Optional[dict] = None) -> list[str]:
         if k in suppressed_global:
             continue
         _emit_flag(argv, gcfg, k, flag, kind)
-    _emit_load_mode(argv, gcfg)
+    _emit_load_mode(argv, gcfg, mcfg)
     _emit_spec_type(argv, gcfg)
     _emit_spec_ngram(argv, gcfg)
 
