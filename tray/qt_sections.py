@@ -589,6 +589,130 @@ def _gguf_inspector_card(p: str) -> QWidget:
     return card
 
 
+def _model_load_card(window, p: str, key: str) -> QWidget:
+    """How this model is read from disk (patch 0007): the fast loader switch, its readers and read size, and
+    'Benchmark & tune', which loads the model once per setting (no other model loaded meanwhile) and writes the
+    fastest into the settings. The text shows the benchmark table and what the last real load achieved."""
+    import threading
+    from PySide6.QtCore import QObject, Signal as _Signal
+    from PySide6.QtWidgets import QPlainTextEdit
+
+    class _Bridge(QObject):
+        line = _Signal(str)     # a progress line from the benchmark thread
+        done = _Signal(object)  # the benchmark's result dict
+
+    bridge = _Bridge()
+    card, body = _card("Model Load",
+                       "How the weights are read from disk: parallel unbuffered reads at the drive's full speed, nothing "
+                       "left in the file cache after unload. Benchmark & tune finds the fastest readers and read size "
+                       "for this model on its drive; 0 = llama-server picks them while it loads.",
+                       patch="0007-fast-model-load")
+    on = lambda v: v is not False and v != 0
+    body.addWidget(_toggle_row(f"{p}.fast_load", "Fast Loader",
+                               "Read the weights with parallel unbuffered workers (LLAMA_FAST_READ). Off = llama.cpp's "
+                               "ordinary single-thread reader, which also leaves the file in Windows' cache.", default=True))
+    body.addWidget(_dependent(
+        _number_row(f"{p}.load_readers", "Readers", 0, 32, 1, 0, "",
+                    "Parallel read workers (LLAMA_FAST_READ_THREADS). 0 = tuned during each load (starts at 4, up to 8).",
+                    default=0),
+        [f"{p}.fast_load"], on))
+    body.addWidget(_dependent(
+        _number_row(f"{p}.load_chunk_mb", "Read Size", 0, 256, 8, 0, "MiB",
+                    "Size of one read (LLAMA_FAST_READ_CHUNK_MB). 0 = 32 MiB.", default=0),
+        [f"{p}.fast_load"], on))
+
+    out = QPlainTextEdit()
+    out.setReadOnly(True)
+    out.setMinimumHeight(150)
+    out.setStyleSheet(
+        f"background: {BG_ELEV}; color: {FG}; border: 1px solid {BORDER}; "
+        f"border-radius: 6px; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 11px;")
+
+    def _summary() -> str:
+        try:
+            from llamacpp import load_bench
+            return load_bench.format_summary(key)
+        except Exception as exc:  # noqa: BLE001
+            return f"(no load data: {exc})"
+
+    out.setPlainText(_summary())
+    bench_btn = QPushButton("Benchmark && tune")
+    bench_btn.setProperty("class", "primary")
+    stop_btn = QPushButton("Stop")
+    stop_btn.setEnabled(False)
+    auto_btn = QPushButton("Reset to auto")
+    auto_btn.setProperty("class", "ghost")
+    refresh_btn = QPushButton("Refresh")
+    refresh_btn.setProperty("class", "ghost")
+    stop_flag = threading.Event()
+
+    def _line(s: str) -> None:
+        out.appendPlainText(s)
+
+    def _done(res: Any) -> None:
+        bench_btn.setEnabled(True)
+        stop_btn.setEnabled(False)
+        if isinstance(res, dict) and res.get("ok"):
+            patch_settings(f"{p}.load_readers", int(res["best"]["readers"]))
+            patch_settings(f"{p}.load_chunk_mb", int(res["best"]["chunk_mb"]))
+            out.setPlainText(_summary() + "\n\nSaved: the next load uses "
+                             f"{res['best']['readers']} readers x {res['best']['chunk_mb']} MiB.")
+        else:
+            err = res.get("error") if isinstance(res, dict) else str(res)
+            out.appendPlainText(f"\nBenchmark not finished: {err}")
+
+    bridge.line.connect(_line)
+    bridge.done.connect(_done)
+
+    def _bench() -> None:
+        loop = getattr(window, "bot_loop", None)
+        if loop is None:
+            out.setPlainText("telecode's event loop is not running.")
+            return
+        info = ("Benchmark & tune unloads the model that is running now and loads this one once per setting "
+                "(9 settings + 2 repeats; about 10-15 s each for a 20 GB model). Requests that arrive meanwhile "
+                "wait until it is done.\n\nStart?")
+        if QMessageBox.question(card, "Benchmark model load", info,
+                                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Ok:
+            return
+        stop_flag.clear()
+        bench_btn.setEnabled(False)
+        stop_btn.setEnabled(True)
+        out.setPlainText("Waiting for running requests, then unloading the current model...")
+
+        async def _do():
+            try:
+                from process import get_supervisor
+                from llamacpp import load_bench
+                sup = await get_supervisor()
+                res = await sup.run_exclusive(load_bench.benchmark, key, bridge.line.emit, stop_flag.is_set)
+            except Exception as exc:  # noqa: BLE001
+                res = {"ok": False, "error": str(exc)}
+            bridge.done.emit(res)
+        schedule(loop, _do())
+
+    def _auto() -> None:
+        patch_settings(f"{p}.load_readers", 0)
+        patch_settings(f"{p}.load_chunk_mb", 0)
+        out.setPlainText(_summary() + "\n\nReaders and read size back to automatic.")
+
+    bench_btn.clicked.connect(_bench)
+    stop_btn.clicked.connect(lambda: (stop_flag.set(), out.appendPlainText("Stopping after the current load...")))
+    auto_btn.clicked.connect(_auto)
+    refresh_btn.clicked.connect(lambda: out.setPlainText(_summary()))
+    btns = QWidget()
+    bl = QHBoxLayout(btns)
+    bl.setContentsMargins(0, 0, 0, 0)
+    bl.setSpacing(8)
+    for b in (bench_btn, stop_btn, auto_btn, refresh_btn):
+        bl.addWidget(b)
+    bl.addStretch(1)
+    body.addWidget(btns)
+    body.addWidget(out)
+    card._bridge = bridge  # keep the signal object alive with the card
+    return card
+
+
 def _has_spec(spec_value, *names: str) -> bool:
     """True if any of `names` is in the comma-separated spec_type value."""
     if not spec_value:
@@ -5314,6 +5438,7 @@ def _models(window) -> QWidget:
                                          "D:/models/foo.gguf",
                                          "Absolute path to the model .gguf file."))
         form_layout.addWidget(_gguf_inspector_card(p))
+        form_layout.addWidget(_model_load_card(window, p, key))
         _sl = _sec("Vision",
                     "llamacpp.models.<m>.mmproj — multimodal projector; leave empty for text-only models")
         _sl.addWidget(_line_row(f"{p}.mmproj", "mmproj Path",

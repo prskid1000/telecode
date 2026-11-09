@@ -518,6 +518,13 @@ def extra_env(model_name: str = "") -> dict[str, str]:
         if m_async is not None and "LLAMA_SERVER_ASYNC_DECODE" not in (m_cfg.get("env") or {}):
             env["LLAMA_SERVER_ASYNC_DECODE"] = "1" if bool(m_async) else "0" 
 
+        # Model load (patch 0007): readers / read size from llamacpp.models.<m>.load_readers / load_chunk_mb (the tray's
+        # Benchmark & tune writes them), fast_load false = the ordinary reader. An explicit model env entry wins.
+        from llamacpp.load_bench import env_for
+        for k, v in env_for(m_cfg).items():
+            if k not in (m_cfg.get("env") or {}):
+                env[k] = v
+
     # When Blackwell GPU is detected, keep GGML_CUDA_REGISTER_HOST=1 automatically on
     # (page-locks host model buffers for high-speed PCIe DMA saturation) unless user explicitly opted out.
     try:
