@@ -59,7 +59,9 @@ def test_parse_env_text_space_separated_string():
 
 def test_extra_env_merge(monkeypatch):
     import llamacpp.vram as lvram
+    import llamacpp.config as lcfg
     monkeypatch.setattr(lvram, "is_blackwell_gpu", lambda: False)
+    monkeypatch.setattr(lcfg.sys, "platform", "linux")  # the merge itself; the Windows VMM default has its own test
 
     test_settings = {
         "llamacpp": {
@@ -308,3 +310,23 @@ def test_moe_hybrid_gpu_only_and_swa_full_argv(monkeypatch, tmp_path):
     argv_27b = build_argv("qwen-27b")
     assert "--moe-hybrid-gpu-only" not in argv_27b
 
+
+
+def test_windows_disables_the_vmm_pool_unless_set(monkeypatch):
+    """WDDM budget vs the VMM pool (patch 0008): telecode sets GGML_CUDA_DISABLE_VMM=1 on Windows only, and an
+    explicit value in the env settings wins."""
+    import llamacpp.vram as lvram
+    import llamacpp.config as lcfg
+    monkeypatch.setattr(lvram, "is_blackwell_gpu", lambda: False)
+    env_setting: dict = {}
+    settings = {"env": env_setting, "models": {"m": {}}}
+    monkeypatch.setattr(app_config, "get_nested", lambda path, default=None: (
+        settings["env"] if path == "llamacpp.env" else settings["models"] if path == "llamacpp.models"
+        else settings if path == "llamacpp" else default))
+    monkeypatch.setattr(lcfg.sys, "platform", "win32")
+    assert extra_env("m").get("GGML_CUDA_DISABLE_VMM") == "1"
+    env_setting["GGML_CUDA_DISABLE_VMM"] = "0"
+    assert extra_env("m").get("GGML_CUDA_DISABLE_VMM") == "0"
+    env_setting.clear()
+    monkeypatch.setattr(lcfg.sys, "platform", "linux")
+    assert "GGML_CUDA_DISABLE_VMM" not in extra_env("m")
