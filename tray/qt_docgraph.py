@@ -25,7 +25,7 @@ from typing import Callable
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QFrame, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit, QProgressBar,
+    QLineEdit, QProgressBar, QComboBox,
 )
 
 from tray.qt_widgets import row_label, Toggle, WrapLabel
@@ -2005,23 +2005,45 @@ def _restart_host_row(window) -> QWidget:
 
 
 def _hf_model_row(window, path: str, label: str, default_model: str,
-                  help_text: str = "", cli: str = "") -> QWidget:
-    """Free-text HuggingFace model-ID row with an optional existence check.
+                  help_text: str = "", cli: str = "",
+                  options: list[tuple[str, str]] | None = None) -> QWidget:
+    """HuggingFace model-ID row: an editable dropdown of models known to work (`options`: (id, note)), any
+    other id can still be typed, plus an existence check.
 
-    Saves on editingFinished (Enter / focus-out). The Check button fires an
-    async HEAD request to huggingface.co/api/models/<id> and updates a status
-    pill inline. Empty field = use the docgraph built-in default (shown as
-    placeholder).
+    The first entry is the docgraph built-in default and stores an empty value (so a future default change
+    reaches this install). Saves on selection and on Enter / focus-out. The Check button fires an async HEAD
+    request to huggingface.co/api/models/<id> and updates a status pill inline.
     """
     outer = QWidget()
     h = QHBoxLayout(outer)
     h.setContentsMargins(0, 0, 0, 0)
     h.setSpacing(6)
 
-    le = QLineEdit()
-    le.setPlaceholderText(f"{default_model}  (default)")
-    le.setText(str(get_path(read_settings(), path, "") or ""))
-    le.setMaximumWidth(400)
+    combo = QComboBox()
+    combo.setEditable(True)
+    combo.setMaximumWidth(460)
+    combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+    combo.addItem(f"Default ({default_model})", "")
+    for model_id, note in (options or []):
+        if model_id != default_model:
+            combo.addItem(f"{model_id}  -  {note}" if note else model_id, model_id)
+    current = str(get_path(read_settings(), path, "") or "")
+    idx = combo.findData(current)
+    if idx >= 0:
+        combo.setCurrentIndex(idx)
+    else:
+        combo.setEditText(current)
+    le = combo.lineEdit()
+
+    def _value() -> str:
+        """The model id for the text in the box: an entry's id, or what was typed."""
+        txt = combo.currentText().strip()
+        i = combo.findText(txt)
+        if i >= 0:
+            return str(combo.itemData(i) or "")
+        return txt.split("  -  ")[0].strip()
+
+    combo.activated.connect(lambda _i: patch_settings(path, _value()))
 
     check_btn = QPushButton("Check")
     check_btn.setProperty("class", "ghost")
@@ -2031,14 +2053,14 @@ def _hf_model_row(window, path: str, label: str, default_model: str,
     status_lbl.setMinimumWidth(86)
     status_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
 
-    le.editingFinished.connect(lambda: patch_settings(path, le.text()))
+    le.editingFinished.connect(lambda: patch_settings(path, _value()))
     le.textChanged.connect(lambda: (
         status_lbl.setText(""),
         status_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;"),
     ))
 
     async def _do_check():
-        model_id = (le.text().strip() or default_model).strip("/")
+        model_id = (_value() or default_model).strip("/")
         status_lbl.setText("checking…")
         status_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
         try:
@@ -2062,7 +2084,7 @@ def _hf_model_row(window, path: str, label: str, default_model: str,
 
     check_btn.clicked.connect(lambda: _run(window, _do_check))
 
-    h.addWidget(le, 1)
+    h.addWidget(combo, 1)
     h.addWidget(check_btn)
     h.addWidget(status_lbl)
     h.addStretch(0)
@@ -2070,9 +2092,22 @@ def _hf_model_row(window, path: str, label: str, default_model: str,
     return _row(row_label(label, help_text, path, cli), outer)
 
 
-# Default model IDs for placeholder text (= docgraph built-in defaults when field is empty).
+# docgraph's built-in defaults (what an empty setting means) and the dropdown entries: models verified to load on
+# docgraph's stack (transformers 5), measured 2026-11-09 (docgraph README "Embedding models" / "Reranker"):
+# end to end = `docgraph bench --runner search` (full hybrid search) recall@5; docstring = 1,468 docstring ->
+# function vector-matching queries, recall@1. Jina's code embedder / reranker and SFR-Code-400M are gone: their
+# Hub code no longer loads on transformers 5 (or crashes CUDA).
 _DEFAULT_EMBED_MODEL = "BAAI/bge-small-en-v1.5"
-_DEFAULT_RERANK_MODEL = "jinaai/jina-reranker-v1-tiny-en"
+_DEFAULT_RERANK_MODEL = "Alibaba-NLP/gte-reranker-modernbert-base"
+_EMBED_MODEL_OPTIONS = [
+    ("BAAI/bge-small-en-v1.5", "best end to end (0.433) and fastest, 384-d"),
+    ("nomic-ai/CodeRankEmbed", "best on docstring queries (0.712), end to end 0.333, 10x slower, 768-d"),
+    ("Alibaba-NLP/gte-modernbert-base", "end to end 0.300, docstring 0.568, 768-d"),
+    ("BAAI/bge-base-en-v1.5", "docstring 0.565, 768-d"),
+]
+_RERANK_MODEL_OPTIONS = [
+    ("Alibaba-NLP/gte-reranker-modernbert-base", "the only reranker that helped on code"),
+]
 
 
 def _build_embeddings_card(window) -> tuple[QFrame, Callable[[], None] | None]:
@@ -2082,10 +2117,10 @@ def _build_embeddings_card(window) -> tuple[QFrame, Callable[[], None] | None]:
     )
     body.addWidget(_hf_model_row(window, "docgraph.embeddings.model", "Model",
                                  _DEFAULT_EMBED_MODEL,
-                                 "HuggingFace sentence-transformers model id. "
-                                 "Schema dim auto-aligns to model. "
-                                 "Switching to a different-dim model = Clear + reindex.",
-                                 cli="--embed-model"))
+                                 "HuggingFace sentence-transformers model id (pick one or type any). "
+                                 "Scores: recall@1 on 1,468 code-search queries. "
+                                 "Switching model makes docgraph run one full reindex.",
+                                 cli="--embed-model", options=_EMBED_MODEL_OPTIONS))
     body.addWidget(_toggle_row("docgraph.embeddings.gpu", "GPU embeddings",
                                 "NVIDIA CUDA via torch. Requires a `+cuXY` "
                                 "torch wheel installed in the docgraph venv "
@@ -2095,10 +2130,9 @@ def _build_embeddings_card(window) -> tuple[QFrame, Callable[[], None] | None]:
                                 cli="--gpu"))
     body.addWidget(_toggle_row("docgraph.embeddings.torch_compile", "torch.compile (embeddings)",
                                 "Apply torch.compile(mode='reduce-overhead') "
-                                "to the embedder. Pays ~10-30s extra cold-start "
-                                "for ~1.3-1.6× steady-state speedup on GPU. "
-                                "Worth it for long-lived host processes; not "
-                                "for one-shot index runs.",
+                                "to the embedder on GPU. Needs Triton (no "
+                                "official Windows build): without it docgraph "
+                                "skips the compile instead of losing ~6 s per load.",
                                 cli="--embed-torch-compile"))
     body.addWidget(_number_row("docgraph.index.workers", "Index workers",
                                 0, 64, 1, 0, "", "0 = default.",
@@ -2127,9 +2161,11 @@ def _build_reranker_card(window) -> tuple[QFrame, Callable[[], None] | None]:
                                 "Costs one cross-encoder pass per query."))
     body.addWidget(_hf_model_row(window, "docgraph.rerank.model", "Model",
                                  _DEFAULT_RERANK_MODEL,
-                                 "HuggingFace cross-encoder model id. "
-                                 "Lazy-loaded on first reranked search.",
-                                 cli="--rerank-model"))
+                                 "HuggingFace cross-encoder model id (pick one or type any). "
+                                 "Lazy-loaded on first reranked search. End to end it lifts "
+                                 "recall@5 0.433 -> 0.467 but lowers MRR 0.373 -> 0.261 and adds "
+                                 "~0.5 s per search: Always rerank is best left off.",
+                                 cli="--rerank-model", options=_RERANK_MODEL_OPTIONS))
     body.addWidget(_toggle_row("docgraph.rerank.gpu", "GPU reranker",
                                 "Cross-encoder on NVIDIA CUDA via torch. "
                                 "Independent of embeddings GPU. Same `+cuXY` "
