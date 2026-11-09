@@ -57,6 +57,10 @@
     {
       "file": "0007-fast-model-load.patch",
       "exact": true
+    },
+    {
+      "file": "0008-cuda-disable-vmm-switch.patch",
+      "exact": true
     }
   ]
 }

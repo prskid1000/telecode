@@ -1,0 +1,32 @@
+Title: CUDA: GGML_CUDA_DISABLE_VMM runtime switch (legacy pool when a model runs over the WDDM budget)
+Add-on: off unless GGML_CUDA_DISABLE_VMM=1 (telecode sets it on Windows). Stock behaviour unchanged otherwise.
+Under Windows WDDM every process gets a video-memory budget (DXGI QueryVideoMemoryInfo; measured 11,176 MiB on
+a 12 GB laptop RTX 5070 Ti, ~94% of the 11,944 MiB free). The VMM pool maps its memory with cuMemSetAccess,
+which returns CUDA_ERROR_NOT_READY once the process is over that budget, while cudaMalloc (the legacy pool)
+still succeeds. qwen3.8-27b at 100k context loads at 11,333 MiB and needs ~300 MiB of pool on its first prompt
+batch: with VMM every prompt above a few hundred tokens aborted the server; with GGML_CUDA_DISABLE_VMM=1 5k and
+20k prompts complete (peak 11,641 MiB) at the same speed as the VMM pool (measured within budget at 80k context:
+503 vs 505 tok/s prompt, 14.9 vs 15.6 tok/s generation).
+
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index 353a6f8..11ec977 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -326,7 +326,16 @@ static ggml_cuda_device_info ggml_cuda_init() {
+             CU_CHECK(cuMemGetAllocationGranularity(&info.devices[id].vmm_granularity, &alloc_prop, CU_MEM_ALLOC_GRANULARITY_RECOMMENDED));
+         }
+ #endif // defined(GGML_USE_VMM)
+-        info.devices[id].vmm = !!device_vmm;
++        // GGML_CUDA_DISABLE_VMM=1: use the legacy pool (cudaMalloc) even where VMM is supported. Under Windows
++        // WDDM the VMM pool maps memory with cuMemSetAccess, which fails with CUDA_ERROR_NOT_READY once the
++        // process is over its video-memory budget (DXGI QueryVideoMemoryInfo, ~94% of the dedicated memory),
++        // where cudaMalloc still succeeds: a model loaded close to the card's size then aborts on its first
++        // prompt batch. Runtime switch, so the same build serves both cases.
++        static const bool vmm_disabled = [] {
++            const char * v = getenv("GGML_CUDA_DISABLE_VMM");
++            return v != nullptr && strcmp(v, "0") != 0;
++        }();
++        info.devices[id].vmm = !!device_vmm && !vmm_disabled;
+ 
+         cudaDeviceProp prop;
+         CUDA_CHECK(cudaGetDeviceProperties(&prop, physical_id));

@@ -337,6 +337,11 @@ combinations (`mlock+dio`, `mmap+mlock+dio`) are rejected by the parser, so it i
    (2/4/8 readers x 16/32/64 MiB, top 2 again) and stores the best: a file-only stand-in mispredicted the loader, so only real loads are used.
    Results + the last real load per model: `data/load-bench.json`. The patch is generated as an exact diff against the 0001-0006 tree (it shares
    `ggml-cuda.cu` / `src/CMakeLists.txt` with 0002, which regen keeps clean because exact patches are reversed first).
+   **`0008` VMM switch** (exact, off unless `GGML_CUDA_DISABLE_VMM=1`, which `llamacpp/config.extra_env` sets on Windows): WDDM gives a
+   process a video-memory budget below the card's free memory (DXGI QueryVideoMemoryInfo: 11,176 of 11,944 MiB here); the VMM pool's
+   `cuMemSetAccess` returns NOT_READY ("device not ready", the server aborts) once the process is over it, `cudaMalloc` does not. The 27B at
+   100k context loads at 11,333 MiB and needs ~300 MiB of pool on its first prompt batch, so every real prompt killed it. Same speed measured
+   on both pools. `nvidia-smi` free memory is not the limit on Windows: the DXGI budget is.
    **Tools: see `tools/README.md` before writing a script, these exist:** `vram_plan.py` (llama-server's own memory plan, no weights loaded: use it before
    ANY test that loads a model), `vram_guard.py`, `moe_cache_bench.py` (one configuration, greedy output hash, peak VRAM, kill above `--vram-limit`),
    `bench_matrix.py` (a JSON list of configurations, hashes compared with an earlier run = regression check), `compare_runs.py` (texts / token probabilities

@@ -534,6 +534,14 @@ def extra_env(model_name: str = "") -> dict[str, str]:
     except Exception:
         pass
 
+    # Windows: llama.cpp's VMM memory pool (patch 0008 switch). WDDM gives a process a video-memory budget below
+    # the card's free memory (DXGI: 11,176 of 11,944 MiB on the 12 GB RTX 5070 Ti); the VMM pool's
+    # cuMemSetAccess fails with "device not ready" once the process is over it, cudaMalloc does not. The 27B at
+    # 100k context loads at 11,333 MiB, so every real prompt aborted it. The legacy pool measured the same speed
+    # (2026-11-09: 503 vs 505 tok/s prompt, 14.9 vs 15.6 tok/s generation). A value in the env settings wins.
+    if sys.platform == "win32" and "GGML_CUDA_DISABLE_VMM" not in env:
+        env["GGML_CUDA_DISABLE_VMM"] = "1"
+
     return env
 
 
