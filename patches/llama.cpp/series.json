@@ -53,6 +53,10 @@
     {
       "file": "0006-moe-threshold-and-runtime-layer-prune.patch",
       "exact": true
+    },
+    {
+      "file": "0007-fast-model-load.patch",
+      "exact": true
     }
   ]
 }

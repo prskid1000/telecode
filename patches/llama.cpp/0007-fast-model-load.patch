@@ -1,0 +1,850 @@
+Title: Fast model load: parallel unbuffered reads, pinned memory not locked twice, faster pinned allocation
+Add-on: Windows + CUDA; other platforms keep the ordinary reader. On by default, LLAMA_FAST_READ=0 turns the reader off.
+Measured on a laptop (RTX 5070 Ti 12 GB, Micron 2450 NVMe, 64 GB RAM): qwen3.6-35b-a3b (CPU experts in a 19 GB
+CUDA_Host buffer, load mode mlock) ready in 10.5 s instead of 34 s, qwen3.8-27b in 5.1 s, both from the drive.
+Outputs are byte-identical (moe_cache_bench hashes, both models).
+
+- llama_fast_read (include/llama-fast-read.h, src/llama-fast-read.cpp): reads byte ranges of a file with workers
+  that each own a FILE_FLAG_NO_BUFFERING handle and read at an explicit offset (32 MiB, sector aligned), handing
+  the pieces to a callback. The workers start at 4 and double (up to 8) while the throughput still rises by
+  10 %. Nothing goes through the system file cache, so unloading a model frees all of its RAM.
+  LLAMA_FAST_READ=0 disables it, LLAMA_FAST_READ_THREADS=N fixes the workers, LLAMA_FAST_READ_CHUNK_MB=N the
+  read size (telecode's per-model Benchmark & tune sets both). Other platforms: unavailable (ordinary reader).
+- load_all_data (no mmap, no --check-tensors): tensors in host buffers and in a CUDA device's own buffer are read
+  with it; everything else (repack / split buffers, lazy tensors, FILE * models) keeps the old path. One line
+  per file at warning level (visible at the default verbosity): GiB, seconds, MiB/s, readers x read size.
+- clip (mtmd) reads the projector the same way (857 MiB: 4.1 s -> 0.33 s).
+- mlock mode no longer VirtualLocks a device's host buffer type (CUDA_Host): the driver has page-locked it
+  already, the second lock cost about 10 s for 19 GB and kept nothing in RAM that was not kept already.
+- CUDA host buffers of 64 MiB and more on Windows: allocated, their pages touched by up to 16 threads and then
+  cudaHostRegister'ed instead of cudaMallocHost (4 GiB: 0.07 s instead of 0.52 s; the 19 GB buffer 9.4 s -> 0.5 s
+  together with the item above). GGML_CUDA_HOST_REGISTER_ALLOC=0 restores cudaMallocHost; a failed register
+  falls back to it.
+
+Related upstream work: ggml-org/llama.cpp#26014, #26542 (Windows unbuffered / positional reads), #18012 (Linux
+direct I/O), #31825 (pinned allocation cost with MoE offload).
+
+diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
+index a963f24..9b196a5 100644
+--- a/src/llama-model-loader.cpp
++++ b/src/llama-model-loader.cpp
+@@ -5,6 +5,7 @@
+ #include "gguf.h"
+ #include "llama-hparams.h"
+ #include "llama.h"
++#include "llama-fast-read.h"
+ 
+ #include <algorithm>
+ #include <array>
+@@ -580,6 +581,7 @@ llama_model_loader::llama_model_loader(
+         llm_kv = LLM_KV(llm_arch_from_string(arch_name));
+ 
+         files.emplace_back(new llama_file(fname.c_str(), "rb", use_direct_io));
++        file_paths.emplace_back(fname);
+         contexts.emplace_back(ctx);
+ 
+         // Save tensors data offset of the main file.
+@@ -648,6 +650,7 @@ llama_model_loader::llama_model_loader(
+                 }
+ 
+                 files.emplace_back(new llama_file(fname_split, "rb", use_direct_io));
++                file_paths.emplace_back(fname_split);
+                 contexts.emplace_back(ctx);
+ 
+                 // Save tensors data offset info of the shard.
+@@ -699,6 +702,7 @@ llama_model_loader::llama_model_loader(
+         llm_kv = LLM_KV(llm_arch_from_string(arch_name));
+ 
+         files.emplace_back(new llama_file(file));
++        file_paths.emplace_back();
+         contexts.emplace_back(ctx);
+ 
+         // Save tensors data offset info of the main file.
+@@ -1690,7 +1694,87 @@ bool llama_model_loader::load_all_data(
+         });
+     }
+ 
++    // without mmap, read the tensors of each file with the parallel unbuffered reader when it is available:
++    // host tensors are filled in place, tensors in a GPU's own buffer are uploaded piece by piece
++    std::unordered_set<const ggml_tensor *> fast_loaded;
++    if (!use_mmap && !check_tensors) {
++        struct fast_target {
++            ggml_tensor * tensor;
++            bool          host;
++        };
++        struct fast_progress_ud {
++            llama_progress_callback cb;
++            void *                  ud;
++            size_t                  base;
++            size_t                  total;
++        };
++        for (uint32_t idx = 0; idx < files.size(); idx++) {
++            if (idx >= file_paths.size() || file_paths[idx].empty()) {
++                continue;
++            }
++            std::vector<llama_fast_read_range> ranges;
++            std::vector<fast_target>           targets;
++            for (ggml_tensor * cur : tensors) {
++                const auto * weight = get_weight(ggml_get_name(cur));
++                if (weight == nullptr || weight->idx != idx || lazy.has(cur) || cur->buffer == nullptr || cur->data == nullptr) {
++                    continue;
++                }
++                bool host = ggml_backend_buffer_is_host(cur->buffer);
++                if (!host) {
++                    // partial uploads from several threads: only for the default buffer of a CUDA device
++                    ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(cur->buffer);
++                    ggml_backend_dev_t         dev  = ggml_backend_buft_get_device(buft);
++                    if (!dev || buft != ggml_backend_dev_buffer_type(dev) || strncmp(ggml_backend_buft_name(buft), "CUDA", 4) != 0) {
++                        continue;
++                    }
++                }
++                ranges.push_back({ weight->offs, ggml_nbytes(cur) });
++                targets.push_back({ cur, host });
++            }
++            if (ranges.empty()) {
++                continue;
++            }
++            auto sink = [](void * user, size_t range, uint64_t off, const void * data, size_t size) {
++                const fast_target & t = ((const fast_target *) user)[range];
++                if (t.host) {
++                    memcpy((uint8_t *) t.tensor->data + off, data, size);
++                } else {
++                    ggml_backend_tensor_set(t.tensor, data, off, size);
++                }
++            };
++            auto progress = [](void * user, uint64_t done, uint64_t) -> bool {
++                const auto * p = (const fast_progress_ud *) user;
++                return p->cb == nullptr || p->total == 0 || p->cb((float) (p->base + done) / p->total, p->ud);
++            };
++            fast_progress_ud pud = { progress_callback, progress_callback_user_data, size_done, size_data };
++            llama_fast_read_stats st;
++            char err[256] = {0};
++            const auto status = llama_fast_read(file_paths[idx].c_str(), ranges.data(), ranges.size(), 64ull*1024*1024,
++                    sink, targets.data(), progress, &pud, &st, err, sizeof(err));
++            if (status == LLAMA_FAST_READ_UNAVAILABLE) {
++                continue;
++            }
++            if (status == LLAMA_FAST_READ_CANCELLED) {
++                return false;
++            }
++            if (status == LLAMA_FAST_READ_ERROR) {
++                throw std::runtime_error(format("%s: failed to read %s: %s", __func__, file_paths[idx].c_str(), err));
++            }
++            for (const auto & t : targets) {
++                fast_loaded.insert(t.tensor);
++            }
++            size_done += st.bytes;
++            // warning level: shown at the default verbosity, where load times get compared
++            LLAMA_LOG_WARN("%s: read %.2f GiB from %s in %.2f s (%.0f MiB/s, %d readers x %d MiB, unbuffered)\n", __func__,
++                    st.read / 1024.0 / 1024.0 / 1024.0, file_paths[idx].c_str(), st.seconds,
++                    st.seconds > 0 ? st.read / 1024.0 / 1024.0 / st.seconds : 0.0, st.threads, st.chunk_mb);
++        }
++    }
++
+     for (struct ggml_tensor * cur : tensors) {
++        if (fast_loaded.count(cur)) {
++            continue;
++        }
+         const auto * weight = get_weight(ggml_get_name(cur));
+         if (weight == nullptr) {
+             // this can happen with split experts models
+diff --git a/src/llama-model-loader.h b/src/llama-model-loader.h
+index ed59079..7b26a45 100644
+--- a/src/llama-model-loader.h
++++ b/src/llama-model-loader.h
+@@ -116,6 +116,7 @@ struct llama_model_loader {
+     } lazy;
+ 
+     llama_files files;
++    std::vector<std::string> file_paths; // path of each file in files, empty when it was opened from a FILE *
+     llama_ftype ftype;
+     llama_fver  fver;
+ 
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index faddc49..ecfa791 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -1986,6 +1986,15 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+                     }
+                 }
+                 for (ggml_backend_buffer_t lock_buf : lock_bufs) {
++                    // pinned host memory (a device's host buffer type, e.g. CUDA_Host) is page-locked by the driver
++                    // already: locking it again cannot keep it in RAM any better and costs seconds per GiB
++                    ggml_backend_buffer_type_t lock_buft = ggml_backend_buffer_get_type(lock_buf);
++                    ggml_backend_dev_t         lock_dev  = ggml_backend_buft_get_device(lock_buft);
++                    if (lock_dev && ggml_backend_dev_host_buffer_type(lock_dev) == lock_buft) {
++                        LLAMA_LOG_DEBUG("%s: %s buffer of %.2f MiB is pinned already, not locking it again\n", __func__,
++                                ggml_backend_buft_name(lock_buft), ggml_backend_buffer_get_size(lock_buf) / 1024.0 / 1024.0);
++                        continue;
++                    }
+                     pimpl->mlock_bufs.emplace_back(new llama_mlock);
+                     auto & mlock_buf = pimpl->mlock_bufs.back();
+                     mlock_buf->init   (ggml_backend_buffer_get_base(lock_buf));
+diff --git a/tools/mtmd/clip.cpp b/tools/mtmd/clip.cpp
+index 204b16f..21d5aaf 100644
+--- a/tools/mtmd/clip.cpp
++++ b/tools/mtmd/clip.cpp
+@@ -9,6 +9,7 @@
+ #include "ggml-alloc.h"
+ #include "ggml-backend.h"
+ #include "gguf.h"
++#include "llama-fast-read.h"
+ 
+ #include <algorithm>
+ #include <cassert>
+@@ -3992,7 +3993,57 @@ struct clip_model_loader {
+             ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
+             ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+             // read the weight from file
+-            if (!ctx_clip.no_alloc) {
++            bool fast_loaded = false;
++            if (!ctx_clip.no_alloc && (ggml_backend_buft_is_host(buft) || strncmp(ggml_backend_buft_name(buft), "CUDA", 4) == 0)) {
++                // parallel unbuffered reads (see llama-fast-read.h), the ordinary reader below when unavailable
++                struct fast_target {
++                    ggml_tensor * tensor;
++                    bool          host;
++                };
++                std::vector<llama_fast_read_range> ranges;
++                std::vector<fast_target>           targets;
++                for (auto & t : tensors_to_load) {
++                    ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
++                    GGML_ASSERT(cur && "tensor not found in ctx_data");
++                    auto it_off = tensor_offset.find(t->name);
++                    GGML_ASSERT(it_off != tensor_offset.end() && "no offset for tensor");
++                    ranges.push_back({ (uint64_t) it_off->second, (uint64_t) ggml_nbytes(cur) });
++                    targets.push_back({ cur, ggml_backend_buft_is_host(buft) });
++                }
++                auto sink = [](void * user, size_t range, uint64_t off, const void * data, size_t size) {
++                    const fast_target & t = ((const fast_target *) user)[range];
++                    if (t.host) {
++                        memcpy((uint8_t *) t.tensor->data + off, data, size);
++                    } else {
++                        ggml_backend_tensor_set(t.tensor, data, off, size);
++                    }
++                };
++                struct progress_ud {
++                    decltype(progress_callback) cb;
++                    void *                      ud;
++                };
++                progress_ud pud = { progress_callback, progress_callback_user_data };
++                auto progress = [](void * user, uint64_t done, uint64_t total) -> bool {
++                    const auto * p = (const progress_ud *) user;
++                    return !p->cb || total == 0 || p->cb((float) done / total, p->ud);
++                };
++                llama_fast_read_stats st;
++                char err[256] = {0};
++                const auto status = llama_fast_read(fname.c_str(), ranges.data(), ranges.size(), 16ull*1024*1024,
++                        sink, targets.data(), progress, &pud, &st, err, sizeof(err));
++                if (status == LLAMA_FAST_READ_CANCELLED) {
++                    throw std::runtime_error(string_format("%s: model loading cancelled by progress_callback\n", __func__));
++                }
++                if (status == LLAMA_FAST_READ_ERROR) {
++                    throw std::runtime_error(string_format("%s: failed to read %s: %s\n", __func__, fname.c_str(), err));
++                }
++                if (status == LLAMA_FAST_READ_OK) {
++                    fast_loaded = true;
++                    LOG_WRN("%s: read %.2f MiB in %.2f s (%.0f MiB/s, %d readers x %d MiB, unbuffered)\n", __func__,
++                            st.read / 1024.0 / 1024.0, st.seconds, st.seconds > 0 ? st.read / 1024.0 / 1024.0 / st.seconds : 0.0, st.threads, st.chunk_mb);
++                }
++            }
++            if (!ctx_clip.no_alloc && !fast_loaded) {
+                 size_t data_loaded = 0;
+                 for (auto & t : tensors_to_load) {
+                     ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
+@@ -4023,7 +4074,7 @@ struct clip_model_loader {
+                     }
+                 }
+                 LOG_DBG("%s: loaded %zu tensors from %s\n", __func__, tensors_to_load.size(), fname.c_str());
+-            } else {
++            } else if (ctx_clip.no_alloc) {
+                 LOG_DBG("%s: no_alloc is set, skipping tensor data loading (%zu tensors)\n", __func__, tensors_to_load.size());
+             }
+             fin.close();
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index e83fe84..353a6f8 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -92,7 +92,12 @@
+ #include <cstdio>
+ #include <cstdlib>
+ #include <string>
++#include <thread>
++#include <unordered_set>
+ #include <vector>
++#if defined(_WIN32)
++#include <malloc.h>
++#endif
+ 
+ static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
+ 
+@@ -1316,8 +1321,77 @@ static bool ggml_backend_buft_is_cuda_host(ggml_backend_buffer_type_t buft) {
+     return buft->iface.get_name == ggml_backend_cuda_host_buffer_type_name;
+ }
+ 
++// Large pinned buffers on Windows: cudaMallocHost commits and locks the pages one at a time on one thread
++// (about 2 GiB/s on a laptop, seconds per model load); allocating the memory, touching its pages from several
++// threads and registering it is several times faster and gives the same page-locked memory.
++// GGML_CUDA_HOST_REGISTER_ALLOC=0 restores cudaMallocHost.
++static std::mutex               ggml_cuda_host_registered_mutex;
++static std::unordered_set<void *> ggml_cuda_host_registered;
++
++static void * ggml_cuda_host_malloc_registered(size_t size) {
++#if defined(_WIN32) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
++    static const bool disabled = [] {
++        const char * v = getenv("GGML_CUDA_HOST_REGISTER_ALLOC");
++        return v != nullptr && strcmp(v, "0") == 0;
++    }();
++    const size_t page = 4096;
++    if (disabled || size < 64ull*1024*1024) {
++        return nullptr;
++    }
++    const size_t alloc_size = (size + page - 1) & ~(page - 1);
++    char * ptr = (char *) _aligned_malloc(alloc_size, page);
++    if (ptr == nullptr) {
++        return nullptr;
++    }
++    const int n_threads = (int) std::min<unsigned>(16, std::max(1u, std::thread::hardware_concurrency()));
++    const size_t per = ((alloc_size / page + n_threads - 1) / n_threads) * page;
++    std::vector<std::thread> threads;
++    for (int i = 0; i < n_threads; ++i) {
++        threads.emplace_back([=] {
++            const size_t begin = i * per;
++            const size_t end   = std::min(alloc_size, begin + per);
++            for (size_t o = begin; o < end; o += page) {
++                ptr[o] = 0;
++            }
++        });
++    }
++    for (auto & t : threads) {
++        t.join();
++    }
++    cudaError_t err = cudaHostRegister(ptr, alloc_size, cudaHostRegisterPortable);
++    if (err != cudaSuccess) {
++        (void)cudaGetLastError();
++        GGML_LOG_DEBUG("%s: failed to register %.2f MiB of host memory: %s\n", __func__, size / 1024.0 / 1024.0, cudaGetErrorString(err));
++        _aligned_free(ptr);
++        return nullptr;
++    }
++    std::lock_guard<std::mutex> lock(ggml_cuda_host_registered_mutex);
++    ggml_cuda_host_registered.insert(ptr);
++    return ptr;
++#else
++    GGML_UNUSED(size);
++    return nullptr;
++#endif
++}
++
++static void ggml_cuda_host_free(void * ptr) {
++#if defined(_WIN32) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
++    {
++        std::lock_guard<std::mutex> lock(ggml_cuda_host_registered_mutex);
++        auto it = ggml_cuda_host_registered.find(ptr);
++        if (it != ggml_cuda_host_registered.end()) {
++            ggml_cuda_host_registered.erase(it);
++            CUDA_CHECK(cudaHostUnregister(ptr));
++            _aligned_free(ptr);
++            return;
++        }
++    }
++#endif
++    CUDA_CHECK(cudaFreeHost(ptr));
++}
++
+ static void ggml_backend_cuda_host_buffer_free_buffer(ggml_backend_buffer_t buffer) {
+-    CUDA_CHECK(cudaFreeHost(buffer->context));
++    ggml_cuda_host_free(buffer->context);
+ }
+ 
+ static void * ggml_cuda_host_malloc(size_t size) {
+@@ -1325,7 +1399,11 @@ static void * ggml_cuda_host_malloc(size_t size) {
+         return nullptr;
+     }
+ 
+-    void * ptr = nullptr;
++    void * ptr = ggml_cuda_host_malloc_registered(size);
++    if (ptr != nullptr) {
++        return ptr;
++    }
++
+     cudaError_t err = cudaMallocHost((void **) &ptr, size);
+     if (err != cudaSuccess) {
+         // clear the error
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index b2bf3a8..769844d 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -35,6 +35,7 @@ set(LLAMA_CORE_SOURCES
+     llama-memory-hybrid-idx.cpp
+     llama-memory-recurrent.cpp
+     llama-mmap.cpp
++    llama-fast-read.cpp
+     llama-model-loader.cpp
+     llama-model-saver.cpp
+     llama-model.cpp
+diff --git a/include/llama-fast-read.h b/include/llama-fast-read.h
+new file mode 100644
+index 0000000..331228b
+--- /dev/null
++++ b/include/llama-fast-read.h
+@@ -0,0 +1,70 @@
++#pragma once
++
++// Fast reader for large weight files.
++//
++// Reads a set of byte ranges of one file with several workers in parallel and hands every piece to a
++// callback. On Windows each worker owns a handle opened with FILE_FLAG_NO_BUFFERING and reads at an
++// explicit offset, so the reads run at the drive's own speed and nothing is left in the system file
++// cache afterwards (unloading a model really frees its RAM). The number of workers is tuned while the
++// file is read: it starts at 4 and doubles (up to 8) while the throughput still rises by 10 %.
++//
++// Environment:
++//   LLAMA_FAST_READ=0            disable (callers use their ordinary reader)
++//   LLAMA_FAST_READ_THREADS=N    fixed number of workers, no tuning
++//   LLAMA_FAST_READ_CHUNK_MB=N   size of one read (default 32)
++//
++// Other platforms report LLAMA_FAST_READ_UNAVAILABLE for now.
++
++#include "llama.h"
++
++#include <stddef.h>
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++struct llama_fast_read_range {
++    uint64_t offset; // in the file
++    uint64_t size;
++};
++
++// called from the worker threads, concurrently, with disjoint pieces: range index, offset of the piece
++// inside the range, the bytes; it must not throw
++typedef void (*llama_fast_read_sink)(void * user, size_t range, uint64_t offset_in_range, const void * data, size_t size);
++
++// called from the calling thread only; return false to cancel
++typedef bool (*llama_fast_read_progress)(void * user, uint64_t bytes_done, uint64_t bytes_total);
++
++struct llama_fast_read_stats {
++    uint64_t bytes;   // bytes handed to the sink
++    uint64_t read;    // bytes read from the drive (alignment and small gaps included)
++    double   seconds;
++    int      threads; // workers in use at the end
++    int      chunk_mb; // size of one read
++};
++
++enum llama_fast_read_status {
++    LLAMA_FAST_READ_UNAVAILABLE = 0, // nothing was read: use the ordinary reader
++    LLAMA_FAST_READ_OK          = 1,
++    LLAMA_FAST_READ_CANCELLED   = 2, // the progress callback returned false; ranges may be partly written
++    LLAMA_FAST_READ_ERROR       = 3, // see err; ranges may be partly written
++};
++
++// ranges must not overlap; min_bytes: below this total the reader declines (UNAVAILABLE)
++LLAMA_API enum llama_fast_read_status llama_fast_read(
++        const char                         * path,
++        const struct llama_fast_read_range * ranges,
++        size_t                               n_ranges,
++        uint64_t                             min_bytes,
++        llama_fast_read_sink                 sink,
++        void                               * sink_user,
++        llama_fast_read_progress             progress,
++        void                               * progress_user,
++        struct llama_fast_read_stats       * stats,
++        char                               * err,
++        size_t                               err_size);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/llama-fast-read.cpp b/src/llama-fast-read.cpp
+new file mode 100644
+index 0000000..84b6249
+--- /dev/null
++++ b/src/llama-fast-read.cpp
+@@ -0,0 +1,385 @@
++#include "llama-fast-read.h"
++
++#include "llama-impl.h"
++
++#include <algorithm>
++#include <atomic>
++#include <chrono>
++#include <condition_variable>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <mutex>
++#include <string>
++#include <thread>
++#include <vector>
++
++#ifdef _WIN32
++#ifndef NOMINMAX
++#    define NOMINMAX
++#endif
++#include <windows.h>
++#endif
++
++static void fast_read_set_err(char * err, size_t err_size, const std::string & msg) {
++    if (err && err_size > 0) {
++        snprintf(err, err_size, "%s", msg.c_str());
++    }
++}
++
++static long fast_read_env_long(const char * name, long def) {
++    const char * v = getenv(name);
++    if (v == nullptr || *v == '\0') {
++        return def;
++    }
++    return strtol(v, nullptr, 10);
++}
++
++#ifdef _WIN32
++
++static std::string fast_read_win_err(DWORD code) {
++    char buf[256] = {0};
++    FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, code, 0, buf, sizeof(buf), nullptr);
++    std::string s(buf);
++    while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) {
++        s.pop_back();
++    }
++    return s + " (" + std::to_string(code) + ")";
++}
++
++static HANDLE fast_read_open(const std::wstring & wpath) {
++    return CreateFileW(wpath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
++                       OPEN_EXISTING, FILE_FLAG_NO_BUFFERING, nullptr);
++}
++
++// one aligned read of the file, covering [chunk_begin, chunk_end) of what is needed
++struct fast_read_chunk {
++    uint64_t begin;     // aligned
++    uint64_t end;       // what is needed ends here (not aligned)
++    size_t   first;     // first range (in offset order) that may intersect the chunk
++};
++
++enum llama_fast_read_status llama_fast_read(
++        const char                         * path,
++        const struct llama_fast_read_range * ranges,
++        size_t                               n_ranges,
++        uint64_t                             min_bytes,
++        llama_fast_read_sink                 sink,
++        void                               * sink_user,
++        llama_fast_read_progress             progress,
++        void                               * progress_user,
++        struct llama_fast_read_stats       * stats,
++        char                               * err,
++        size_t                               err_size) {
++    if (stats) {
++        *stats = {};
++    }
++    if (fast_read_env_long("LLAMA_FAST_READ", 1) == 0 || path == nullptr || *path == '\0' || n_ranges == 0 || sink == nullptr) {
++        return LLAMA_FAST_READ_UNAVAILABLE;
++    }
++
++    uint64_t total = 0;
++    std::vector<size_t> order(n_ranges);
++    for (size_t i = 0; i < n_ranges; ++i) {
++        order[i] = i;
++        total += ranges[i].size;
++    }
++    if (total == 0 || total < min_bytes) {
++        return LLAMA_FAST_READ_UNAVAILABLE;
++    }
++    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return ranges[a].offset < ranges[b].offset; });
++    for (size_t k = 1; k < n_ranges; ++k) {
++        const auto & prev = ranges[order[k - 1]];
++        if (ranges[order[k]].offset < prev.offset + prev.size) {
++            return LLAMA_FAST_READ_UNAVAILABLE; // overlapping ranges: not what this reader is for
++        }
++    }
++
++    const int wlen = MultiByteToWideChar(CP_UTF8, 0, path, -1, nullptr, 0);
++    if (wlen <= 0) {
++        return LLAMA_FAST_READ_UNAVAILABLE;
++    }
++    std::wstring wpath(wlen, L'\0');
++    MultiByteToWideChar(CP_UTF8, 0, path, -1, &wpath[0], wlen);
++    wpath.resize(wlen - 1);
++
++    HANDLE h0 = fast_read_open(wpath);
++    if (h0 == INVALID_HANDLE_VALUE) {
++        LLAMA_LOG_DEBUG("%s: cannot open %s unbuffered: %s\n", __func__, path, fast_read_win_err(GetLastError()).c_str());
++        return LLAMA_FAST_READ_UNAVAILABLE;
++    }
++
++    LARGE_INTEGER fsize;
++    if (!GetFileSizeEx(h0, &fsize)) {
++        CloseHandle(h0);
++        return LLAMA_FAST_READ_UNAVAILABLE;
++    }
++    const uint64_t file_size = (uint64_t) fsize.QuadPart;
++    const auto & last = ranges[order.back()];
++    if (last.offset + last.size > file_size) {
++        CloseHandle(h0);
++        fast_read_set_err(err, err_size, "a range ends past the end of the file");
++        return LLAMA_FAST_READ_ERROR;
++    }
++
++    // unbuffered reads need offset, size and buffer aligned to the sector size
++    uint64_t align = 4096;
++    FILE_STORAGE_INFO si;
++    if (GetFileInformationByHandleEx(h0, FileStorageInfo, &si, sizeof(si))) {
++        align = std::max<uint64_t>(align, si.PhysicalBytesPerSectorForPerformance);
++        align = std::max<uint64_t>(align, si.LogicalBytesPerSector);
++    }
++    if ((align & (align - 1)) != 0) {
++        CloseHandle(h0);
++        return LLAMA_FAST_READ_UNAVAILABLE;
++    }
++
++    uint64_t chunk_size = (uint64_t) std::max(1L, fast_read_env_long("LLAMA_FAST_READ_CHUNK_MB", 32)) * 1024 * 1024;
++    chunk_size = (chunk_size + align - 1) & ~(align - 1);
++
++    // spans of needed bytes (gaps up to 1 MiB are read through), cut into aligned chunks in file order
++    const uint64_t max_gap = 1024 * 1024;
++    std::vector<fast_read_chunk> chunks;
++    uint64_t read_total = 0;
++    for (size_t k = 0; k < n_ranges; ) {
++        const size_t   span_first = k;
++        const uint64_t span_begin = ranges[order[k]].offset;
++        uint64_t       span_end   = span_begin + ranges[order[k]].size;
++        for (++k; k < n_ranges && ranges[order[k]].offset <= span_end + max_gap; ++k) {
++            span_end = std::max(span_end, ranges[order[k]].offset + ranges[order[k]].size);
++        }
++        size_t first = span_first;
++        for (uint64_t b = span_begin & ~(align - 1); b < span_end; b += chunk_size) {
++            const uint64_t e = std::min(span_end, b + chunk_size);
++            while (first + 1 < k && ranges[order[first]].offset + ranges[order[first]].size <= b) {
++                ++first;
++            }
++            chunks.push_back({ b, e, first });
++            read_total += ((e + align - 1) & ~(align - 1)) - b;
++        }
++    }
++
++    int max_threads = (int) std::min<unsigned>(8, std::max(2u, std::thread::hardware_concurrency()));
++    const long fixed = fast_read_env_long("LLAMA_FAST_READ_THREADS", 0);
++    if (fixed > 0) {
++        max_threads = (int) std::min<long>(fixed, 64);
++    }
++    max_threads = (int) std::min<size_t>(max_threads, chunks.size());
++
++    std::vector<HANDLE> handles(max_threads, INVALID_HANDLE_VALUE);
++    std::vector<void *> bufs(max_threads, nullptr);
++    handles[0] = h0;
++    bool setup_ok = true;
++    for (int i = 0; i < max_threads && setup_ok; ++i) {
++        if (handles[i] == INVALID_HANDLE_VALUE) {
++            handles[i] = fast_read_open(wpath);
++        }
++        bufs[i] = VirtualAlloc(nullptr, chunk_size + align, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
++        setup_ok = handles[i] != INVALID_HANDLE_VALUE && bufs[i] != nullptr;
++    }
++    auto cleanup = [&]() {
++        for (int i = 0; i < max_threads; ++i) {
++            if (handles[i] != INVALID_HANDLE_VALUE) {
++                CloseHandle(handles[i]);
++            }
++            if (bufs[i]) {
++                VirtualFree(bufs[i], 0, MEM_RELEASE);
++            }
++        }
++    };
++    if (!setup_ok) {
++        cleanup();
++        return LLAMA_FAST_READ_UNAVAILABLE;
++    }
++
++    std::atomic<size_t>   next_chunk{0};
++    std::atomic<int>      allowed{fixed > 0 ? max_threads : std::min(4, max_threads)};
++    std::atomic<uint64_t> done{0};
++    std::atomic<bool>     stop{false};
++    std::atomic<int>      running{max_threads};
++    std::mutex            mtx;
++    std::condition_variable cv;
++    std::string           error;
++
++    auto fail = [&](const std::string & msg) {
++        std::lock_guard<std::mutex> lock(mtx);
++        if (error.empty()) {
++            error = msg;
++        }
++        stop = true;
++    };
++
++    auto worker = [&](int id) {
++        uint8_t * buf = (uint8_t *) bufs[id];
++        while (!stop) {
++            if (id >= allowed.load()) {
++                if (next_chunk.load() >= chunks.size()) {
++                    break;
++                }
++                std::unique_lock<std::mutex> lock(mtx);
++                cv.wait_for(lock, std::chrono::milliseconds(5));
++                continue;
++            }
++            const size_t ci = next_chunk.fetch_add(1);
++            if (ci >= chunks.size()) {
++                break;
++            }
++            const fast_read_chunk & c = chunks[ci];
++            const uint64_t want = ((c.end + align - 1) & ~(align - 1)) - c.begin;
++            uint64_t got = 0;
++            while (got < want) {
++                OVERLAPPED ov = {};
++                const uint64_t off = c.begin + got;
++                ov.Offset     = (DWORD) (off & 0xFFFFFFFFu);
++                ov.OffsetHigh = (DWORD) (off >> 32);
++                DWORD n = 0;
++                if (!ReadFile(handles[id], buf + got, (DWORD) (want - got), &n, &ov)) {
++                    const DWORD code = GetLastError();
++                    if (code == ERROR_HANDLE_EOF) {
++                        break;
++                    }
++                    fail(std::string("read error: ") + fast_read_win_err(code));
++                    break;
++                }
++                got += n;
++                if (n < (DWORD) (want - (got - n))) {
++                    break; // short read = end of file (its byte count need not be aligned, so never read on from there)
++                }
++            }
++            if (stop) {
++                break;
++            }
++            if (c.begin + got < c.end) {
++                fail("unexpected end of file");
++                break;
++            }
++            uint64_t handed = 0;
++            for (size_t k = c.first; k < n_ranges; ++k) {
++                const size_t   ri = order[k];
++                const uint64_t rb = ranges[ri].offset;
++                const uint64_t re = rb + ranges[ri].size;
++                if (rb >= c.end) {
++                    break;
++                }
++                const uint64_t a = std::max(rb, c.begin);
++                const uint64_t b = std::min(re, c.end);
++                if (a < b) {
++                    sink(sink_user, ri, a - rb, buf + (a - c.begin), (size_t) (b - a));
++                    handed += b - a;
++                }
++            }
++            done += handed;
++        }
++        if (--running == 0) {
++            cv.notify_all();
++        }
++    };
++
++    const auto t0 = std::chrono::steady_clock::now();
++    auto seconds = [&]() { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); };
++
++    std::vector<std::thread> threads;
++    threads.reserve(max_threads);
++    for (int i = 0; i < max_threads; ++i) {
++        threads.emplace_back(worker, i);
++    }
++
++    // controller: progress, cancellation and the tuning of the number of workers
++    bool     tuning     = fixed <= 0 && max_threads > 4;
++    int      best_level = allowed.load();
++    double   best_rate  = 0.0;
++    double   win_t      = 0.15; // the first window starts after a short settle
++    uint64_t win_b      = 0;
++    bool     win_open   = false;
++    const double window = 0.3;
++    bool cancelled = false;
++    while (running.load() > 0) {
++        {
++            std::unique_lock<std::mutex> lock(mtx);
++            cv.wait_for(lock, std::chrono::milliseconds(50));
++        }
++        const double   t = seconds();
++        const uint64_t d = done.load();
++        if (progress && !cancelled && !stop && !progress(progress_user, d, total)) {
++            cancelled = true;
++            stop      = true;
++        }
++        if (!tuning || stop) {
++            continue;
++        }
++        if (!win_open) {
++            if (t >= win_t) {
++                win_t    = t;
++                win_b    = d;
++                win_open = true;
++            }
++            continue;
++        }
++        if (t - win_t < window) {
++            continue;
++        }
++        const double rate  = (d - win_b) / (t - win_t);
++        const int    level = allowed.load();
++        if (rate > best_rate * 1.10) {
++            best_rate  = rate;
++            best_level = level;
++            if (level < max_threads) {
++                allowed  = std::min(level * 2, max_threads);
++                cv.notify_all();
++                win_t    = t + 0.1;
++                win_open = false;
++                continue;
++            }
++        }
++        allowed = best_level;
++        tuning  = false;
++    }
++    for (auto & th : threads) {
++        th.join();
++    }
++    cleanup();
++
++    if (stats) {
++        stats->bytes   = done.load();
++        stats->read    = read_total;
++        stats->seconds = seconds();
++        stats->threads = allowed.load();
++        stats->chunk_mb = (int) (chunk_size >> 20);
++    }
++    if (!error.empty()) {
++        fast_read_set_err(err, err_size, error);
++        return LLAMA_FAST_READ_ERROR;
++    }
++    if (cancelled) {
++        return LLAMA_FAST_READ_CANCELLED;
++    }
++    if (progress) {
++        progress(progress_user, total, total);
++    }
++    return LLAMA_FAST_READ_OK;
++}
++
++#else
++
++enum llama_fast_read_status llama_fast_read(
++        const char                         * path,
++        const struct llama_fast_read_range * ranges,
++        size_t                               n_ranges,
++        uint64_t                             min_bytes,
++        llama_fast_read_sink                 sink,
++        void                               * sink_user,
++        llama_fast_read_progress             progress,
++        void                               * progress_user,
++        struct llama_fast_read_stats       * stats,
++        char                               * err,
++        size_t                               err_size) {
++    (void) path; (void) ranges; (void) n_ranges; (void) min_bytes; (void) sink; (void) sink_user;
++    (void) progress; (void) progress_user; (void) err; (void) err_size;
++    (void) fast_read_set_err; (void) fast_read_env_long;
++    if (stats) {
++        *stats = {};
++    }
++    return LLAMA_FAST_READ_UNAVAILABLE;
++}
++
++#endif
