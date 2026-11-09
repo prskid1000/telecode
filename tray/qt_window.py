@@ -167,9 +167,10 @@ class SettingsWindow(QMainWindow):
         self.setCentralWidget(root)
 
         # Restore last-viewed section (persisted under `tray.last_section`).
-        # Falls back to row 0 if the saved id is no longer present.
+        # Falls back to "llama" (llama.cpp) if no saved id or if the saved id is no longer present.
+        default_sid = "llama"
+        initial_row = next((i for i, (sid, *_) in enumerate(SECTIONS) if sid == default_sid), 0)
         last = str(read_settings().get("tray", {}).get("last_section", "") or "")
-        initial_row = 0
         if last:
             for i, (sid, *_rest) in enumerate(SECTIONS):
                 if sid == last:
