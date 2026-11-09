@@ -75,6 +75,20 @@ def max_roundtrips() -> int:
     return int(app_config.get_nested("proxy.max_roundtrips", 15))
 
 
+def max_request_mb() -> int:
+    """Largest request body the proxy accepts, in MiB (read when the proxy starts).
+
+    Default 32 = the Anthropic Messages API's own request limit, so anything
+    Claude Code can send fits; a 200k-token text context is only ~1 MB, the
+    size comes from images. llama-server itself has no body cap. Raise it for
+    clients that send base64 video. aiohttp's default (1 MiB) 413'd long
+    Claude Code sessions."""
+    try:
+        return max(1, int(app_config.get_nested("proxy.max_request_mb", 32)))
+    except (TypeError, ValueError):
+        return 32
+
+
 def ping_interval() -> float:
     """Seconds between `event: ping` heartbeats."""
     return float(app_config.get_nested("proxy.ping_interval", 10))

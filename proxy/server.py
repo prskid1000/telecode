@@ -2808,7 +2808,8 @@ async def cors_middleware(request: web.Request, handler):
 
 
 def create_app() -> web.Application:
-    app = web.Application(middlewares=[header_log_middleware, cors_middleware])
+    app = web.Application(middlewares=[header_log_middleware, cors_middleware],
+                          client_max_size=proxy_config.max_request_mb() * 1024 * 1024)
 
     protocols = set(proxy_config.protocols())
 

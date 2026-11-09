@@ -3302,13 +3302,18 @@ def _proxy(window) -> QWidget:
         _list_row("proxy.core_tools", *_proxy_copy("core_tools", "global"), "Bash"),
         ["proxy.tool_search"], lambda t: bool(t)))
 
-    body = _sec("Limits", "proxy.max_roundtrips / proxy.ping_interval — per-request ceilings")
+    body = _sec("Limits", "proxy.max_roundtrips / proxy.ping_interval / proxy.max_request_mb — per-request ceilings")
     body.addWidget(_number_row("proxy.max_roundtrips", "Max Round-Trips",
                                 1, 50, 1, 0, "",
                                 "How many intercept/tool rounds before giving up per request."))
     body.addWidget(_number_row("proxy.ping_interval", "Ping Interval",
                                 1, 60, 1, 0, "s",
                                 "Anthropic `event: ping` frame cadence during long generations."))
+    body.addWidget(_number_row("proxy.max_request_mb", "Max Request Size",
+                                1, 1024, 1, 0, "MiB",
+                                "Largest request body accepted (default 32 = the Anthropic API's own "
+                                "limit, enough for any Claude Code request; 200k tokens of text is ~1 MB). "
+                                "Raise it for clients sending base64 video. Applies on restart."))
 
     body = _sec("Model Mapping", "proxy.model_mapping — rewrite body.model on each request")
     body.addWidget(_kv_row("proxy.model_mapping", "Aliases",
