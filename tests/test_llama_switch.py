@@ -135,7 +135,7 @@ async def test_switch_waits_for_inflight_requests(sup, caplog):
     await a1
     assert sup.t.spawns == ["A", "B"]
     assert sup.t.order.index(("end", "a1")) < sup.t.order.index(("kill", old_pid))
-    assert "===== llama-server unloaded (VRAM freed: 8000 MiB) =====" in caplog.text
+    assert "===== llama-server unloaded (VRAM freed: 8000 MiB, RAM freed: unknown) =====" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -273,3 +273,40 @@ async def test_cancelled_request_gives_its_lease_back(sup):
         await a1
     assert sup.inflight_count() == 0
     assert await sup.ensure_model("B") == "B"
+
+
+@pytest.mark.asyncio
+async def test_run_exclusive_drains_unloads_and_holds_requests(sup):
+    """The load benchmark's mode: in-flight requests finish first, the model is unloaded, a request arriving
+    meanwhile waits until the job ends and then loads its model as usual."""
+    import threading
+    await sup.ensure_model("A")
+    pid_a = sup.t.procs[0].pid
+    r1 = asyncio.Event()
+    a1 = asyncio.create_task(_hold(sup, "A", r1, "a1"))
+    await _until(lambda: sup.inflight_count() == 1)
+
+    job_started, job_go = threading.Event(), threading.Event()
+    seen = {}
+
+    def job(x):
+        seen["alive_during_job"] = sup.alive()
+        job_started.set()
+        job_go.wait(5)
+        return x * 2
+
+    excl = asyncio.create_task(sup.run_exclusive(job, 21))
+    await asyncio.sleep(0.2)
+    assert not job_started.is_set(), "the job ran while a request was in flight"
+    r1.set()
+    await a1
+    await _until(job_started.is_set)
+    assert seen["alive_during_job"] is False and ("kill", pid_a) in sup.t.order
+
+    b = asyncio.create_task(sup.ensure_model("B"))
+    await asyncio.sleep(0.2)
+    assert not b.done() and sup.t.spawns == ["A"], "a model was loaded during the job"
+    job_go.set()
+    assert await excl == 42
+    assert await b == "B"
+    assert sup.t.spawns == ["A", "B"]

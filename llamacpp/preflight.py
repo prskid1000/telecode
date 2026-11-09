@@ -32,7 +32,77 @@ def _expects_draft(argv: list[str]) -> bool:
     return any(a in ("--spec-type", "--spec-default", "--model-draft", "-md") for a in argv)
 
 
+_CACHE_LOCK = threading.Lock()
+_CACHE: Optional[dict] = None
+
+
+def _cache_path():
+    from pathlib import Path
+    import os
+    settings_path = Path(os.environ.get("TELECODE_SETTINGS", "settings.json")).resolve()
+    return settings_path.parent / "data" / "preflight-plans.json"
+
+
+def _cache_key(argv: list[str], env: Optional[dict]) -> str:
+    """The plan depends only on the command line, the files it names (binary, model, projector, draft: size and
+    mtime, so a rebuilt binary or a replaced model plans again) and the GGML_/LLAMA_/CUDA_ environment."""
+    import hashlib
+    import os
+    parts = [repr(list(argv))]
+    for a in argv:
+        try:
+            if a and os.path.isfile(a):
+                st = os.stat(a)
+                parts.append(f"{a}|{st.st_size}|{st.st_mtime_ns}")
+        except (OSError, ValueError):
+            pass
+    for k in sorted((env or {}).keys()):
+        if k.startswith(("GGML_", "LLAMA_", "CUDA_")):
+            parts.append(f"{k}={env[k]}")
+    return hashlib.sha256("|".join(parts).encode("utf-8", "replace")).hexdigest()
+
+
+def _cache_load() -> dict:
+    global _CACHE
+    if _CACHE is None:
+        import json
+        try:
+            _CACHE = json.loads(_cache_path().read_text(encoding="utf-8"))
+            if not isinstance(_CACHE, dict):
+                _CACHE = {}
+        except (OSError, ValueError):
+            _CACHE = {}
+    return _CACHE
+
+
 def planned_mib(argv: list[str], env: Optional[dict] = None, timeout: float = 30.0) -> Optional[dict]:
+    """planned_mib_uncached, remembered per command line + files + environment (data/preflight-plans.json):
+    the dry run costs 0.5-1.5 s of every model start, and its answer only changes when one of those does."""
+    key = _cache_key(argv, env)
+    with _CACHE_LOCK:
+        hit = _cache_load().get(key)
+    if isinstance(hit, dict) and isinstance(hit.get("total"), int):
+        return dict(hit)
+    plan = planned_mib_uncached(argv, env, timeout)
+    if plan is not None:
+        import json
+        with _CACHE_LOCK:
+            c = _cache_load()
+            c[key] = plan
+            while len(c) > 64:  # oldest first (insertion order)
+                c.pop(next(iter(c)))
+            try:
+                path = _cache_path()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = path.with_suffix(".tmp")
+                tmp.write_text(json.dumps(c), encoding="utf-8")
+                tmp.replace(path)
+            except OSError as exc:
+                _LOG.debug("preflight: cannot save the plan cache: %s", exc)
+    return plan
+
+
+def planned_mib_uncached(argv: list[str], env: Optional[dict] = None, timeout: float = 30.0) -> Optional[dict]:
     """{"target": MiB, "draft": MiB, "mmproj": MiB, "total": MiB} of the first GPU, or None when the plan could not be read.
 
     target: the model, the KV cache of every slot (--parallel), the recurrent state and the compute buffers; draft: the draft / MTP context on top;

@@ -53,15 +53,17 @@ def kv_factor(model_name: str) -> float:
 
 
 def _free_mib() -> Optional[int]:
-    """Free VRAM now; the previous model may still be releasing it, so take the best of a few readings."""
-    best: Optional[int] = None
-    for i in range(3):
+    """Free VRAM now; the previous model may still be releasing it, so read until the value stops rising
+    (every 0.25 s, at most 1 s; the supervisor has normally confirmed the release already)."""
+    best = vram.free_vram_mib()
+    if best is None:
+        return None
+    for _ in range(4):
+        time.sleep(0.25)
         v = vram.free_vram_mib()
-        if v is None:
-            return best
-        best = v if best is None else max(best, v)
-        if i < 2:
-            time.sleep(1.0)
+        if v is None or v <= best:
+            break
+        best = v
     return best
 
 

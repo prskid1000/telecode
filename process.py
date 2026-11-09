@@ -251,6 +251,35 @@ def _process_image(pid: int) -> tuple[str, str]:
     return exe, cmd
 
 
+def _listener_pid(port: int) -> Optional[int]:
+    """Pid of the process listening on TCP `port` (IPv4), from the OS's own table; None when unknown or
+    not on Windows. Lets the ready check confirm that its own child answered without waiting."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        get_table = ctypes.windll.iphlpapi.GetExtendedTcpTable
+        size = wintypes.DWORD(0)
+        AF_INET, TCP_TABLE_OWNER_PID_LISTENER = 2, 3
+        get_table(None, ctypes.byref(size), False, AF_INET, TCP_TABLE_OWNER_PID_LISTENER, 0)
+        buf = ctypes.create_string_buffer(size.value + 4096)
+        size = wintypes.DWORD(len(buf))
+        if get_table(buf, ctypes.byref(size), False, AF_INET, TCP_TABLE_OWNER_PID_LISTENER, 0) != 0:
+            return None
+        rows = ctypes.cast(buf, ctypes.POINTER(wintypes.DWORD))
+        n = rows[0]
+        for i in range(n):
+            # MIB_TCPROW_OWNER_PID: state, local addr, local port (network order), remote addr, remote port, pid
+            row = 1 + i * 6
+            local_port = ((rows[row + 2] & 0xFF) << 8) | ((rows[row + 2] >> 8) & 0xFF)
+            if local_port == port:
+                return int(rows[row + 5])
+    except Exception as exc:  # noqa: BLE001 — unknown = the caller waits as before
+        log.debug("listener pid of port %d unreadable: %s", port, exc)
+    return None
+
+
 def sweep_port(port: int, expected_image_substrings: tuple[str, ...],
                host: str = "127.0.0.1") -> None:
     """Kill processes holding `host:port` whose exe OR command line
@@ -486,6 +515,26 @@ class LlamaSupervisor:
     async def stop(self) -> None:
         async with self._lock:
             await self._stop_locked()
+
+    async def run_exclusive(self, fn, *args):
+        """Run blocking `fn(*args)` in an executor with no llama-server of ours running (e.g. the load benchmark).
+
+        Waits until no request is in flight and no switch runs, unloads the model, and keeps it that way while
+        `fn` runs: requests that arrive meanwhile wait like they wait for a switch, then load their model as usual.
+        Returns what `fn` returns."""
+        async with self._cond:
+            while self._switching or self._inflight > 0:
+                await self._wait_locked()
+            self._switching = True
+        try:
+            async with self._lock:
+                await self._stop_locked()
+                return await asyncio.get_running_loop().run_in_executor(None, fn, *args)
+        finally:
+            async with self._cond:
+                self._switching = False
+                self._load_seq += 1
+                self._cond.notify_all()
 
     def active_model(self) -> str:
         return self._active_model
@@ -874,6 +923,8 @@ class LlamaSupervisor:
         if sys.platform == "win32":
             creation = subprocess.CREATE_NO_WINDOW
 
+        log_pos = self._log_fp.tell()  # this start's own lines begin here (record_load parses them)
+        t_spawn = time.monotonic()
         try:
             self._proc = subprocess.Popen(
                 argv,
@@ -907,6 +958,8 @@ class LlamaSupervisor:
             await self._stop_locked()
             raise
 
+        self._record_load(model_name, log_pos, time.monotonic() - t_spawn)
+
         # A fresh process may be a different binary — a patched build installed
         # over the release, or a release update that replaced one. Capability
         # answers are probed from the running server, so they must not survive
@@ -919,6 +972,20 @@ class LlamaSupervisor:
             _LLAMA_LOG.debug("llama_caps.invalidate failed: %s", exc)
 
         _LLAMA_LOG.info("llama.cpp: '%s' ready (pid %d)", model_name, self._proc.pid)
+
+    def _record_load(self, model_name: str, log_pos: int, ready_s: float) -> None:
+        """Keep what this load achieved (data/load-bench.json, shown on the tray's model page) and log it."""
+        try:
+            from llamacpp import load_bench
+            with open(cfg.log_file(), "rb") as f:
+                f.seek(log_pos)
+                text = f.read().decode("utf-8", "replace")
+            rec = load_bench.record_load(model_name, ready_s, text)
+            reads = (f" (weights {rec['read_gib']} GiB read at {rec['mib_s']} MiB/s, {rec['readers']} readers"
+                     f"{' x ' + str(rec['chunk_mb']) + ' MiB' if rec.get('chunk_mb') else ''})") if rec.get("read_gib") else ""
+            _LLAMA_LOG.info("llama.cpp: '%s' ready in %.1f s%s", model_name, ready_s, reads)
+        except Exception as exc:  # noqa: BLE001 — a statistic, never a reason to fail a load
+            _LLAMA_LOG.debug("llama.cpp: load record failed: %s", exc)
 
     async def _wait_ready(self) -> None:
         deadline = asyncio.get_event_loop().time() + cfg.ready_timeout_sec()
@@ -942,9 +1009,13 @@ class LlamaSupervisor:
                             status = (data or {}).get("status", "")
                             if status == "ok":
                                 # Guard against an orphan answering on our
-                                # port: re-poll after a short stabilization
-                                # window; if our child died, the probe was
-                                # hitting someone else.
+                                # port. When the OS says our child owns the
+                                # listening socket, that is the answer; else
+                                # re-poll after a short stabilization window:
+                                # if our child died, the probe was hitting
+                                # someone else.
+                                if self._proc is not None and _listener_pid(cfg.port()) == self._proc.pid:
+                                    return
                                 await asyncio.sleep(1.0)
                                 if self._proc is None or self._proc.poll() is not None:
                                     raise RuntimeError(
@@ -959,7 +1030,7 @@ class LlamaSupervisor:
                 except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
                     last_err = exc
 
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(0.25)  # a load is ~5-15 s now: a 1 s poll added up to a second to every start
 
         raise RuntimeError(
             f"llama-server did not become ready within {cfg.ready_timeout_sec()}s "
@@ -981,19 +1052,28 @@ class LlamaSupervisor:
                 self._log_fp = None
             return
 
-        from llamacpp import vram
+        from llamacpp import ram, vram
         loop = asyncio.get_running_loop()
         used_before: Optional[int] = None
         pids_before: Optional[set[int]] = None
+        ram_held: Optional[int] = None
+        ram_before: Optional[int] = None
         if proc.poll() is None:
             used_before = await loop.run_in_executor(None, vram.used_vram_mib)
             pids_before = await loop.run_in_executor(None, vram.compute_app_pids)
+            ram_held = ram.process_mib(proc.pid)
+            ram_before = ram.available_mib()
 
-            kill_process_tree(proc.pid, force=False)
-            for _ in range(40):  # 40 * 0.1s = 4s
-                if proc.poll() is not None:
-                    break
-                await asyncio.sleep(0.1)
+            # Windows: nothing graceful reaches llama-server. It runs without a window (CREATE_NO_WINDOW), so
+            # taskkill without /F has no window to close, and it ignores CTRL_BREAK; even a CTRL_C delivered to
+            # its console did not end it within 8 s (measured 2026-11-09). The graceful step only waited 4 s
+            # before the kill that always followed, so go straight to it (exit + VRAM free in ~1.2 s).
+            if sys.platform != "win32":
+                kill_process_tree(proc.pid, force=False)
+                for _ in range(40):  # 40 * 0.1s = 4s
+                    if proc.poll() is not None:
+                        break
+                    await asyncio.sleep(0.1)
 
             if proc.poll() is None:
                 kill_process_tree(proc.pid, force=True)
@@ -1009,8 +1089,13 @@ class LlamaSupervisor:
         if released:
             self._held_proc = None
             freed_txt = f"{freed} MiB" if freed is not None else "unknown"
-            line = f"===== llama-server unloaded (VRAM freed: {freed_txt}) ====="
+            # the weights are read unbuffered (patched build), so the process's own memory is all the RAM a model holds
+            ram_txt, ram_still_held = ram.describe_release(ram_held, ram_before, ram.available_mib())
+            line = f"===== llama-server unloaded (VRAM freed: {freed_txt}, {ram_txt}) ====="
             _LLAMA_LOG.info("llama.cpp: %s", line)
+            if ram_still_held:
+                _LLAMA_LOG.warning("llama.cpp: available RAM rose by less than half of what llama-server held (%s); "
+                                   "another program may have taken it, or the memory is still being released", ram_txt)
         else:
             self._held_proc = proc
             line = (f"===== llama-server (pid {proc.pid}) stopped but still holds the GPU after "
@@ -1049,7 +1134,7 @@ class LlamaSupervisor:
             released, freed = await self._gpu_released(proc, used_before, need_drop)
             if released or time.monotonic() >= deadline:
                 return released, freed
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.1)  # readings are NVML calls (well under 1 ms), not nvidia-smi runs
 
     async def _refuse_if_gpu_held(self) -> None:
         """Never start a server while a stopped one still holds the GPU: two models at once can crash the machine."""
