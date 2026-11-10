@@ -38,6 +38,18 @@ def start_tray_in_thread(bot_app, bot_loop: asyncio.AbstractEventLoop) -> thread
     return t
 
 
+def _set_app_user_model_id(app_id: str) -> None:
+    """Give this process its own taskbar identity. Without it Windows groups
+    the window under pythonw.exe and shows that exe's generic icon."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+    except Exception:
+        pass
+
+
 def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
     log.info("tray: Qt thread starting")
     # Import Qt only inside the thread that'll own it — keeps qApp bound here.
@@ -53,6 +65,7 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
     # Qt wants high-DPI attributes set before QApplication is instantiated
     QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
 
+    _set_app_user_model_id("Telecode.Tray")
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setApplicationName("telecode")
     app.setQuitOnLastWindowClosed(False)
@@ -79,6 +92,21 @@ def _run_qt(bot_app, bot_loop: asyncio.AbstractEventLoop) -> None:
         # wrong argument values") even though the stubs allow bytes.
         pm.loadFromData(buf.getvalue())
         return QIcon(pm)
+
+    def _make_window_qicon() -> QIcon:
+        # Multi-size so the taskbar / Alt+Tab pick a crisp frame at any DPI.
+        from io import BytesIO
+        qi = QIcon()
+        for size in (16, 24, 32, 48, 64, 128, 256):
+            buf = BytesIO()
+            icon_factory.make_icon(size=size).save(buf, format="PNG")
+            pm = QPixmap()
+            pm.loadFromData(buf.getvalue())
+            qi.addPixmap(pm)
+        return qi
+
+    # Taskbar / Alt+Tab icon for every window (the tray icon alone doesn't do it).
+    app.setWindowIcon(_make_window_qicon())
 
     tray = QSystemTrayIcon(_make_qicon(), app)
     tray.setToolTip("telecode")
