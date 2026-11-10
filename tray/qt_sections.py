@@ -1029,9 +1029,9 @@ class _StatusTile(QFrame):
     def _apply_card_style(self) -> None:
         # ok → solid green border; warn → orange; err → red; mute → dark grey
         _BORDERS = {
-            "ok":   "rgba(86, 224, 194, 0.55)",   # OK  #56e0c2 at ~55%
-            "warn": "rgba(245, 165, 36,  0.50)",   # WARN
-            "err":  "rgba(255, 110, 110, 0.50)",   # ERR
+            "ok":   "rgba(159, 212, 140, 0.55)",   # OK  #9fd48c at ~55%
+            "warn": "rgba(224, 206, 138,  0.50)",   # WARN
+            "err":  "rgba(220, 144, 137, 0.50)",   # ERR
             "mute": BORDER,
         }
         border = _BORDERS.get(self._state, BORDER)
@@ -3750,7 +3750,7 @@ def _proxy_profiles_card() -> QFrame:
                 rm_btn.setFixedWidth(28)
                 rm_btn.setStyleSheet(
                     f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
-                    f" QPushButton:hover {{ color: #ff6b6b; }}"
+                    f" QPushButton:hover {{ color: #dc9089; }}"
                 )
                 rl.addWidget(edit, 1)
                 rl.addWidget(rm_btn)
@@ -4921,7 +4921,7 @@ def _logs(window) -> QWidget:
                 # timestamp: 2026-04-19 13:00:32,913
                 (QRegularExpression(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}[,\.]?\d*"), fmt(FG_MUTE)),
                 # level tokens
-                (QRegularExpression(r"\b(CRITICAL|FATAL)\b"), fmt("#ff9aa2", True)),
+                (QRegularExpression(r"\b(CRITICAL|FATAL)\b"), fmt("#e6a39c", True)),
                 (QRegularExpression(r"\b(ERROR|ERR)\b"),      fmt(ERR, True)),
                 (QRegularExpression(r"\b(WARN(ING)?)\b"),     fmt(WARN, True)),
                 (QRegularExpression(r"\b(INFO)\b"),           fmt(ACCENT, True)),
@@ -4929,7 +4929,7 @@ def _logs(window) -> QWidget:
                 # logger name in brackets: [telecode.tray]
                 (QRegularExpression(r"\[[\w\.\-]+\]"), fmt(OK)),
                 # python traceback
-                (QRegularExpression(r'^\s*File\s+".+?",\s+line\s+\d+.*$'), fmt("#b892ff")),
+                (QRegularExpression(r'^\s*File\s+".+?",\s+line\s+\d+.*$'), fmt("#c495d4")),
                 (QRegularExpression(r"^\s*Traceback \(most recent call last\):.*$"), fmt(ERR, True)),
                 (QRegularExpression(r"^\s*\w*(Error|Exception):.*$"), fmt(ERR)),
                 # URLs
@@ -4939,7 +4939,7 @@ def _logs(window) -> QWidget:
                 (QRegularExpression(r':\s*"[^"\\]*(?:\\.[^"\\]*)*"'), fmt(OK)),              # string vals
                 (QRegularExpression(r'\b(true|false|null)\b'),        fmt(WARN, True)),      # keywords
                 # numbers (soft)
-                (QRegularExpression(r"\b\d+(\.\d+)?\b"), fmt("#a8b3c7")),
+                (QRegularExpression(r"\b\d+(\.\d+)?\b"), fmt("#b8c4b8")),
             ]
 
         def highlightBlock(self, text: str) -> None:
@@ -5319,25 +5319,25 @@ def _make_rule_highlighter(rules: list[tuple[str, str, bool]]) -> type:
 
 # GBNF: comments → strings/char-classes → operators → rule heads
 _GbnfHighlighter = _make_rule_highlighter([
-    (r'"(?:[^"\\]|\\.)*"',                "#a3e635", False),  # terminal strings
-    (r"\[(?:[^\]\\]|\\.)*\]",            "#f0abfc", False),  # char classes
-    (r"[*+?|()]",                         "#fb923c", True),   # quantifiers / alt
-    (r"::=",                              "#fb923c", True),   # rule operator
+    (r'"(?:[^"\\]|\\.)*"',                "#a8cc7c", False),  # terminal strings
+    (r"\[(?:[^\]\\]|\\.)*\]",            "#c495d4", False),  # char classes
+    (r"[*+?|()]",                         "#efb080", True),   # quantifiers / alt
+    (r"::=",                              "#efb080", True),   # rule operator
     (r"^\s*[A-Za-z_][A-Za-z0-9_-]*(?=\s*::=)",
-                                          "#7dd3fc", True),   # rule head
-    (r"#[^\n]*",                          "#64748b", False),  # comments
+                                          "#83d6c5", True),   # rule head
+    (r"#[^\n]*",                          "#6d6d6d", False),  # comments
 ])
 
 # Jinja: comments → strings → keywords → tag delimiters (last so they win)
 _JinjaHighlighter = _make_rule_highlighter([
-    (r"'(?:[^'\\]|\\.)*'",                "#a3e635", False),
-    (r'"(?:[^"\\]|\\.)*"',                "#a3e635", False),
+    (r"'(?:[^'\\]|\\.)*'",                "#a8cc7c", False),
+    (r'"(?:[^"\\]|\\.)*"',                "#a8cc7c", False),
     (r"\b(?:if|elif|else|endif|for|endfor|in|not|and|or|is|set|"
      r"endset|block|endblock|extends|include|macro|endmacro|with|"
      r"endwith|true|false|none|loop|self)\b",
-                                          "#fb923c", True),
-    (r"\{#.*?#\}",                        "#64748b", False),
-    (r"\{%-?|-?%\}|\{\{-?|-?\}\}",       "#7dd3fc", True),
+                                          "#efb080", True),
+    (r"\{#.*?#\}",                        "#6d6d6d", False),
+    (r"\{%-?|-?%\}|\{\{-?|-?\}\}",       "#83d6c5", True),
 ])
 
 
@@ -6480,7 +6480,7 @@ def _build_array_row(path: str, label: str, help_text: str,
         rm_btn.setFixedWidth(28)
         rm_btn.setStyleSheet(
             f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
-            f" QPushButton:hover {{ color: #ff6b6b; }}"
+            f" QPushButton:hover {{ color: #dc9089; }}"
         )
         rl.addWidget(edit, 1)
         rl.addWidget(rm_btn)
@@ -6608,7 +6608,7 @@ def _kv_row(path: str, label: str, help_text: str = "",
         rm_btn.setFixedWidth(28)
         rm_btn.setStyleSheet(
             f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
-            f" QPushButton:hover {{ color: #ff6b6b; }}"
+            f" QPushButton:hover {{ color: #dc9089; }}"
         )
 
         rl.addWidget(k_edit)
@@ -6729,7 +6729,7 @@ def _json_row(path: str, label: str, default: Any = None,
             return True, _json.loads(txt)
         except _json.JSONDecodeError as e:
             status.setText(f"✕ {e.msg} (line {e.lineno}, col {e.colno})")
-            status.setStyleSheet("color: #ff6b6b; font-size: 11px;")
+            status.setStyleSheet("color: #dc9089; font-size: 11px;")
             return False, None
 
     def _commit():
@@ -6773,13 +6773,13 @@ class _JsonHighlighter:
         rules = [
             # Numbers (won't overlap with strings since they're outside quotes)
             (QRE(r'(?<![A-Za-z_"])-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b'),
-             make_fmt("#f0abfc")),
+             make_fmt("#c495d4")),
             # Literals
-            (QRE(r'\b(?:true|false|null)\b'), make_fmt("#fb923c", bold=True)),
+            (QRE(r'\b(?:true|false|null)\b'), make_fmt("#efb080", bold=True)),
             # String values (any quoted token); applied before keys so keys win.
-            (QRE(r'"(?:[^"\\]|\\.)*"'), make_fmt("#a3e635")),
+            (QRE(r'"(?:[^"\\]|\\.)*"'), make_fmt("#a8cc7c")),
             # Keys: a quoted token followed by a colon — overrides the string color
-            (QRE(r'"(?:[^"\\]|\\.)*"(?=\s*:)'), make_fmt("#7dd3fc", bold=True)),
+            (QRE(r'"(?:[^"\\]|\\.)*"(?=\s*:)'), make_fmt("#83d6c5", bold=True)),
         ]
 
         class _Inner(QSyntaxHighlighter):
@@ -6863,7 +6863,7 @@ def _pair_list_row(path: str, label: str, help_text: str = "",
         rm_btn.setFixedWidth(28)
         rm_btn.setStyleSheet(
             f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
-            f" QPushButton:hover {{ color: #ff6b6b; }}"
+            f" QPushButton:hover {{ color: #dc9089; }}"
         )
         rl.addWidget(f_edit)
         rl.addWidget(v_edit, 1)
@@ -7168,9 +7168,9 @@ def _requests(window) -> QWidget:
 
     # ── JSON → QTreeWidgetItem ───────────────────────────────────────
     TYPE_COLORS = {
-        "str":   "#c8e2a8",
-        "int":   "#a8b3c7",
-        "float": "#a8b3c7",
+        "str":   "#a8cc7c",
+        "int":   "#b8c4b8",
+        "float": "#b8c4b8",
         "bool":  ACCENT,
         "null":  FG_MUTE,
     }
@@ -7351,7 +7351,7 @@ def _raw(window) -> QWidget:
                 (QRegularExpression(r'"[^"\\]*(?:\\.[^"\\]*)*"\s*:'), fmt(ACCENT, True)),   # keys
                 (QRegularExpression(r':\s*"[^"\\]*(?:\\.[^"\\]*)*"'), fmt(OK)),              # string vals
                 (QRegularExpression(r'\b(true|false|null)\b'),        fmt(WARN, True)),      # keywords
-                (QRegularExpression(r'\b-?\d+\.?\d*(?:[eE][+-]?\d+)?\b'), fmt("#b892ff")),   # numbers
+                (QRegularExpression(r'\b-?\d+\.?\d*(?:[eE][+-]?\d+)?\b'), fmt("#c495d4")),   # numbers
             ]
         def highlightBlock(self, text):  # type: ignore[override]
             for regex, f in self._rules:
@@ -7368,24 +7368,24 @@ def _raw(window) -> QWidget:
     # policy was AlwaysOn.
     editor.setStyleSheet(
         "QPlainTextEdit {"
-        "  background-color: transparent; color: #cdd3de;"
+        "  background-color: transparent; color: #d3d9d2;"
         "  font-family: 'Cascadia Code', Consolas, monospace;"
         "  font-size: 12px; border: none; padding: 6px;"
         "}"
         "QScrollBar:vertical {"
-        "  background: #151b28; width: 14px; margin: 2px 0; border: none;"
+        "  background: #151815; width: 14px; margin: 2px 0; border: none;"
         "}"
         "QScrollBar::handle:vertical {"
-        "  background: #4a5a82; border-radius: 5px; min-height: 28px;"
+        "  background: #4a5e4a; border-radius: 5px; min-height: 28px;"
         "}"
-        "QScrollBar::handle:vertical:hover { background: #6b82b8; }"
+        "QScrollBar::handle:vertical:hover { background: #647c64; }"
         "QScrollBar:horizontal {"
-        "  background: #151b28; height: 14px; margin: 0 2px; border: none;"
+        "  background: #151815; height: 14px; margin: 0 2px; border: none;"
         "}"
         "QScrollBar::handle:horizontal {"
-        "  background: #4a5a82; border-radius: 5px; min-width: 28px;"
+        "  background: #4a5e4a; border-radius: 5px; min-width: 28px;"
         "}"
-        "QScrollBar::handle:horizontal:hover { background: #6b82b8; }"
+        "QScrollBar::handle:horizontal:hover { background: #647c64; }"
         "QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }"
         "QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }"
     )

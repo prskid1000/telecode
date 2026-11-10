@@ -840,7 +840,7 @@ class _RootRow(QFrame):
         rm_btn.setFixedWidth(28)
         rm_btn.setStyleSheet(
             f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
-            f" QPushButton:hover {{ color: #ff6b6b; }}"
+            f" QPushButton:hover {{ color: #dc9089; }}"
         )
         rm_btn.clicked.connect(lambda: self._on_remove(self))
         self._rm_btn = rm_btn
@@ -1332,7 +1332,7 @@ class _ExtraPathRow(QWidget):
         rm.setFixedWidth(24)
         rm.setStyleSheet(
             f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
-            f" QPushButton:hover {{ color: #ff6b6b; }}"
+            f" QPushButton:hover {{ color: #dc9089; }}"
         )
         rm.clicked.connect(lambda: self._on_remove(self))
         h.addWidget(rm)
@@ -1565,7 +1565,7 @@ class _LinkRow(QWidget):
         rm.setFixedWidth(24)
         rm.setStyleSheet(
             f"QPushButton {{ color: {FG_DIM}; border: none; background: transparent; }}"
-            f" QPushButton:hover {{ color: #ff6b6b; }}"
+            f" QPushButton:hover {{ color: #dc9089; }}"
         )
         rm.clicked.connect(lambda: self._on_remove(self))
         h.addWidget(rm)

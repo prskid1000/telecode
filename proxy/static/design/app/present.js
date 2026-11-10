@@ -21,7 +21,7 @@ export async function present(file, slide) {
         btn("", { kind: "quiet", icon: "chevronLeft", cls: "sm", title: "Previous", onClick: () => go("prev") }), counter,
         btn("", { kind: "quiet", icon: "chevronRight", cls: "sm", title: "Next", onClick: () => go("next") }),
         btn("", { kind: "quiet", icon: "x", cls: "sm", title: "Exit  (Esc)", onClick: () => exit() }))),
-    withNotes ? h("aside", { class: "notes" }, timer, h("div", { style: { fontSize: "11.5px", color: "#8a93a1" } }, "Speaker notes"), cur, next) : null);
+    withNotes ? h("aside", { class: "notes" }, timer, h("div", { style: { fontSize: "11.5px", color: "#889388" } }, "Speaker notes"), cur, next) : null);
   document.body.appendChild(root);
   const started = Date.now();
   const tick = setInterval(() => { const s = Math.floor((Date.now() - started) / 1000); timer.textContent = `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`; }, 1000);

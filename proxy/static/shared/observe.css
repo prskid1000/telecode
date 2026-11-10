@@ -1,15 +1,15 @@
 /* Observability (P5) — dashboards, run timeline, verdicts, cross-engine continue.
    Served from /shared/observe.css next to manager.css; logic in observe.js.
    Chart colours are roles, stepped separately for each theme (validated with the
-   dataviz validator against --panel: light #fff, dark #171a21). */
+   dataviz validator against --panel: light #fff, dark #141614). */
 :root {
-  --viz-1: #3987e5; --viz-2: #d95926; --viz-3: #199e70;
-  --viz-grid: rgba(154, 163, 178, .16); --viz-axis: var(--faint);
-  --viz-ok: var(--ok); --viz-err: var(--err); --viz-warn: var(--warn); --viz-live: var(--accent); --viz-idle: #4b5364;
+  --viz-1: #8fbf7f; --viz-2: #d9a070; --viz-3: #5f93a8;
+  --viz-grid: rgba(154, 166, 154, .16); --viz-axis: var(--faint);
+  --viz-ok: var(--ok); --viz-err: var(--err); --viz-warn: var(--warn); --viz-live: var(--accent); --viz-idle: #4b534b;
 }
 :root[data-theme="light"] {
-  --viz-1: #1a73c9; --viz-2: #eb6834; --viz-3: #1baf7a;
-  --viz-grid: rgba(90, 99, 113, .14); --viz-idle: #c3c9d3;
+  --viz-1: #4e6e4e; --viz-2: #b8683a; --viz-3: #3e7590;
+  --viz-grid: rgba(88, 99, 88, .14); --viz-idle: #c3cbc2;
 }
 
 .obs { display: flex; flex-direction: column; gap: 12px; min-width: 0; }

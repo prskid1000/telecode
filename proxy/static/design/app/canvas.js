@@ -427,10 +427,10 @@ function renderEditor(body, bar) {
 // (docs/teledesign-parity.md gaps #1 #3 #4 #10 #14; editor side in
 // patches/open-pencil/0008-0011, server side in proxy/api_design_editor.py.)
 const GAPS_CSS = `
-.td-ph { position: absolute; transform-origin: 0 0; pointer-events: none; border: 2px dashed var(--accent, #6b5cff); border-radius: 4px;
-  background: repeating-linear-gradient(135deg, rgba(107,92,255,.10) 0 10px, rgba(107,92,255,.02) 10px 20px); }
+.td-ph { position: absolute; transform-origin: 0 0; pointer-events: none; border: 2px dashed var(--accent, #8fbf7f); border-radius: 4px;
+  background: repeating-linear-gradient(135deg, rgba(143,191,127,.10) 0 10px, rgba(143,191,127,.02) 10px 20px); }
 .td-ph .td-ph-badge { position: absolute; left: 6px; top: 6px; display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 7px;
-  border-radius: 999px; background: var(--accent, #6b5cff); color: #fff; font: 600 11.5px/1.4 system-ui, sans-serif; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.18); }
+  border-radius: 999px; background: var(--accent, #8fbf7f); color: #fff; font: 600 11.5px/1.4 system-ui, sans-serif; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.18); }
 .td-ph .td-ph-badge i { width: 7px; height: 7px; border-radius: 50%; background: #fff; animation: td-ph-pulse 1.1s ease-in-out infinite; }
 .td-ph.stale { border-color: #9aa1ad; background: repeating-linear-gradient(135deg, rgba(154,161,173,.12) 0 10px, transparent 10px 20px); }
 .td-ph.stale .td-ph-badge { background: #6b7280; } .td-ph.stale .td-ph-badge i { animation: none; }
@@ -446,8 +446,8 @@ const GAPS_CSS = `
 .td-slides { left: 12px; right: 12px; bottom: 12px; height: 172px; border-radius: 10px; }
 .td-slides .td-strip { flex: 1; display: flex; gap: 12px; padding: 10px 12px; overflow-x: auto; overflow-y: hidden; align-items: flex-start; }
 .td-slide { flex: none; width: 168px; cursor: pointer; border-radius: 6px; padding: 4px; border: 2px solid transparent; user-select: none; }
-.td-slide:hover { background: var(--hover, rgba(0,0,0,.04)); } .td-slide .cap { color: var(--text, inherit); } .td-slide.on { border-color: var(--accent, #6b5cff); }
-.td-slide.drop-before { box-shadow: -4px 0 0 var(--accent, #6b5cff); } .td-slide.drop-after { box-shadow: 4px 0 0 var(--accent, #6b5cff); }
+.td-slide:hover { background: var(--hover, rgba(0,0,0,.04)); } .td-slide .cap { color: var(--text, inherit); } .td-slide.on { border-color: var(--accent, #8fbf7f); }
+.td-slide.drop-before { box-shadow: -4px 0 0 var(--accent, #8fbf7f); } .td-slide.drop-after { box-shadow: 4px 0 0 var(--accent, #8fbf7f); }
 .td-slide .th { height: 92px; border-radius: 4px; background: var(--panel2, #eceef2) center / contain no-repeat; position: relative; border: 1px solid rgba(0,0,0,.08); }
 .td-slide .th input { position: absolute; left: 4px; top: 4px; margin: 0; }
 .td-slide .cap { display: flex; gap: 6px; font-size: 11.5px; margin-top: 4px; align-items: baseline; } .td-slide .cap span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -458,7 +458,7 @@ const GAPS_CSS = `
 .td-present .td-pbar { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; gap: 6px; align-items: center; padding: 6px 10px;
   border-radius: 999px; background: rgba(20,22,26,.72); color: #e8eaee; font: 12.5px system-ui, sans-serif; opacity: 0; transition: opacity .2s; }
 .td-present:hover .td-pbar, .td-present .td-pbar:focus-within { opacity: 1; }
-.td-present .td-pbar .btn { color: inherit; } .td-present .td-wait { color: #8a93a1; font: 13px system-ui, sans-serif; }
+.td-present .td-pbar .btn { color: inherit; } .td-present .td-wait { color: #889388; font: 13px system-ui, sans-serif; }
 .td-diff { max-height: 50vh; overflow: auto; font-size: 12.5px; } .td-diff table { border-collapse: collapse; width: 100%; }
 .td-diff td { padding: 4px 6px; border-bottom: 1px solid var(--border, rgba(0,0,0,.08)); vertical-align: top; } .td-diff code { font-size: 11.5px; }
 .td-diff .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 4px; border: 1px solid rgba(0,0,0,.15); }

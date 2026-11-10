@@ -94,7 +94,7 @@ class Toggle(QCheckBox):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         # Track
-        track_color = QColor(ACCENT) if self.isChecked() else QColor("#2a3147")
+        track_color = QColor(ACCENT) if self.isChecked() else QColor("#2c332c")
         if not self.isEnabled():
             track_color.setAlpha(90)
         p.setBrush(QBrush(track_color))

@@ -3,14 +3,14 @@
    Tokens and components mirror TeleDesign (proxy/static/design/app/app.css) so the
    three apps read as one product. The top bar itself is <tc-appnav> (appnav.css). */
 :root {
-  --bg: #0f1115; --panel: #171a21; --panel2: #1f232c; --raised: #252a35; --hover: #232833;
-  --border: #2a2f3a; --border-strong: #3a4150;
-  --text: #e6e8eb; --muted: #9aa3b2; --faint: #6b7483;
-  --accent: #7cc4ff; --accent-ink: #052034; --accent-soft: rgba(124, 196, 255, .12); --accent-line: rgba(124, 196, 255, .45);
-  --ok: #4ade80; --ok-soft: rgba(74, 222, 128, .12);
-  --warn: #fbbf24; --warn-soft: rgba(251, 191, 36, .12);
-  --err: #f87171; --err-soft: rgba(248, 113, 113, .12);
-  --violet: #b69cff; --well: #0b0d11;
+  --bg: #0c0c0c; --panel: #141614; --panel2: #1a1d1a; --raised: #212521; --hover: #1f241f;
+  --border: #2a302a; --border-strong: #3a423a;
+  --text: #dde3dc; --muted: #9aa69a; --faint: #6b766b;
+  --accent: #8fbf7f; --accent-ink: #142014; --accent-soft: rgba(143, 191, 127, .12); --accent-line: rgba(143, 191, 127, .45);
+  --ok: #9fd48c; --ok-soft: rgba(159, 212, 140, .12);
+  --warn: #e0ce8a; --warn-soft: rgba(224, 206, 138, .12);
+  --err: #dc9089; --err-soft: rgba(220, 144, 137, .12);
+  --violet: #c495d4; --well: #0a0b0a;
   --shadow-pop: 0 12px 32px rgba(0,0,0,.45), 0 0 0 1px var(--border);
   --mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
   --sans: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
@@ -19,15 +19,15 @@
   color-scheme: dark;
 }
 :root[data-theme="light"] {
-  --bg: #f4f5f7; --panel: #ffffff; --panel2: #f3f4f7; --raised: #ffffff; --hover: #eef0f4;
-  --border: #e1e4ea; --border-strong: #cdd2db;
-  --text: #171b22; --muted: #5a6371; --faint: #8a93a1;
-  --accent: #1a73c9; --accent-ink: #ffffff; --accent-soft: rgba(26, 115, 201, .09); --accent-line: rgba(26, 115, 201, .45);
-  --ok: #15803d; --ok-soft: rgba(21, 128, 61, .1);
-  --warn: #b45309; --warn-soft: rgba(180, 83, 9, .1);
-  --err: #c2322b; --err-soft: rgba(194, 50, 43, .09);
-  --violet: #6d4ee0; --well: #f8f9fb;
-  --shadow-pop: 0 12px 32px rgba(15,20,30,.16), 0 0 0 1px var(--border);
+  --bg: #f3f5f2; --panel: #ffffff; --panel2: #f1f3f0; --raised: #ffffff; --hover: #ebefea;
+  --border: #dfe4de; --border-strong: #cad2c9;
+  --text: #172017; --muted: #586358; --faint: #889388;
+  --accent: #4e6e4e; --accent-ink: #ffffff; --accent-soft: rgba(78, 110, 78, .09); --accent-line: rgba(78, 110, 78, .45);
+  --ok: #4d7f3f; --ok-soft: rgba(77, 127, 63, .1);
+  --warn: #9a7420; --warn-soft: rgba(154, 116, 32, .1);
+  --err: #a8463f; --err-soft: rgba(168, 70, 63, .09);
+  --violet: #7a5a92; --well: #f7f9f6;
+  --shadow-pop: 0 12px 32px rgba(15,20,15,.16), 0 0 0 1px var(--border);
   color-scheme: light;
 }
 * { box-sizing: border-box; }
@@ -143,7 +143,7 @@ textarea.input.code { font: 12px/1.55 var(--mono); tab-size: 2; }
 .pill.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
 .pill.err { background: var(--err-soft); color: var(--err); border-color: transparent; }
 .pill.accent { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
-.pill.violet { background: rgba(182,156,255,.12); color: var(--violet); border-color: transparent; }
+.pill.violet { background: rgba(196,149,212,.12); color: var(--violet); border-color: transparent; }
 .pill .dot { width: 6px; height: 6px; background: currentColor; }
 .pill .ic { width: 12px; height: 12px; }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); display: inline-block; flex-shrink: 0; }
@@ -195,8 +195,8 @@ dialog.modal { padding: 0; border: 0; border-radius: 14px; background: var(--pan
   max-height: calc(100vh - 48px); box-shadow: 0 24px 64px rgba(0,0,0,.5), 0 0 0 1px var(--border); display: flex; flex-direction: column; }
 dialog.modal[open] { animation: pop .16s ease-out; }
 @keyframes pop { from { opacity: 0; transform: translateY(6px) scale(.985); } }
-dialog.modal::backdrop { background: rgba(5, 7, 10, .55); backdrop-filter: blur(2px); }
-:root[data-theme="light"] dialog.modal::backdrop { background: rgba(20, 25, 35, .28); }
+dialog.modal::backdrop { background: rgba(5, 6, 5, .55); backdrop-filter: blur(2px); }
+:root[data-theme="light"] dialog.modal::backdrop { background: rgba(20, 26, 20, .28); }
 .modal-head { padding: 16px 18px 4px; position: relative; }
 .modal-head h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -.01em; padding-right: 30px; word-break: break-word; }
 .modal-sub { margin: 4px 0 0; color: var(--muted); font-size: 12.5px; }
@@ -392,8 +392,8 @@ dialog.modal.wide { width: 880px; }
 /* ── P3: approvals inbox, triggers, step kinds ──────────────────────────── */
 .approvals-btn { position: relative; width: auto; padding: 0 7px; gap: 4px; }
 .approvals-btn .count { height: 15px; min-width: 16px; line-height: 13px; font-size: 10px; }
-.approvals-btn.on { color: var(--violet); background: rgba(182,156,255,.12); border-color: transparent; }
-.approvals-btn.on .count { background: var(--violet); color: #140d2c; }
+.approvals-btn.on { color: var(--violet); background: rgba(196,149,212,.12); border-color: transparent; }
+.approvals-btn.on .count { background: var(--violet); color: #1e1424; }
 .apv { border: 1px solid var(--border); border-radius: 11px; background: var(--panel); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .apv.compact { background: var(--panel2); }
 .apv-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -447,7 +447,7 @@ dialog.modal.wide { width: 880px; }
 .kind-pick button:disabled { opacity: .45; cursor: not-allowed; }
 .kind-pick .ic { width: 13px; height: 13px; }
 .kind-box { border: 1px dashed var(--accent-line); border-radius: 9px; padding: 9px 10px 2px; margin-bottom: 8px; background: var(--accent-soft); }
-.step.k-gate { border-color: rgba(182,156,255,.5); }
+.step.k-gate { border-color: rgba(196,149,212,.5); }
 .step.k-map, .step.k-loop, .step.k-reduce { border-color: var(--accent-line); }
 /* run monitor: map lanes, loop iterations, gate card */
 .lanes-map { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
@@ -475,8 +475,8 @@ dialog.modal.wide { width: 880px; }
     transition: transform .22s cubic-bezier(.3,.7,.2,1), visibility 0s linear .22s, box-shadow .22s;
     padding: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
   body.drawer-open .rail { transform: none; visibility: visible; box-shadow: 0 0 48px rgba(0,0,0,.45); transition: transform .22s cubic-bezier(.3,.7,.2,1), box-shadow .22s; }
-  .rail-backdrop { display: block; position: fixed; inset: 0; z-index: 55; background: rgba(5, 7, 10, .55); opacity: 0; pointer-events: none; transition: opacity .2s; }
-  :root[data-theme="light"] .rail-backdrop { background: rgba(20, 25, 35, .32); }
+  .rail-backdrop { display: block; position: fixed; inset: 0; z-index: 55; background: rgba(5, 6, 5, .55); opacity: 0; pointer-events: none; transition: opacity .2s; }
+  :root[data-theme="light"] .rail-backdrop { background: rgba(20, 26, 20, .32); }
   body.drawer-open .rail-backdrop { opacity: 1; pointer-events: auto; }
   .rail-drawer-head { display: flex; align-items: center; gap: 8px; padding: 6px 6px 0 14px; font-weight: 600; font-size: 13px; flex-shrink: 0; }
   .shell { position: relative; }

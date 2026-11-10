@@ -11,21 +11,21 @@ Design targets:
 from __future__ import annotations
 
 # ── Palette ──────────────────────────────────────────────────────────
-BG          = "#0c0f14"
-BG_ELEV     = "#10141c"
-BG_CARD     = "#151a24"
-BG_ROW      = "#1a2030"
-BG_HOVER    = "#1d2334"
-FG          = "#e6ebf2"
-FG_DIM      = "#8a96aa"
-FG_MUTE     = "#4f5a70"
-ACCENT      = "#6ba4ff"
-ACCENT_2    = "#56e0c2"
-WARN        = "#f5a524"
-ERR         = "#ff6e6e"
-OK          = "#56e0c2"
-BORDER      = "#1e2636"
-BORDER_SOFT = "#171d28"
+BG          = "#0c0c0c"
+BG_ELEV     = "#121412"
+BG_CARD     = "#171a17"
+BG_ROW      = "#1e231e"
+BG_HOVER    = "#232a23"
+FG          = "#dde3dc"
+FG_DIM      = "#8a968a"
+FG_MUTE     = "#566156"
+ACCENT      = "#8fbf7f"
+ACCENT_2    = "#9fd48c"
+WARN        = "#e0ce8a"
+ERR         = "#dc9089"
+OK          = "#9fd48c"
+BORDER      = "#252b25"
+BORDER_SOFT = "#1b1f1b"
 
 
 QSS = f"""
@@ -106,7 +106,7 @@ QPushButton.tb_btn {{
     max-height: 34px;
 }}
 QPushButton.tb_btn:hover {{ background: {BG_HOVER}; color: {FG}; }}
-QPushButton.tb_close:hover {{ background: #e81123; color: white; }}
+QPushButton.tb_close:hover {{ background: #b5524b; color: white; }}
 
 /* Scroll area + content */
 QScrollArea {{ background: {BG}; border: none; }}
@@ -176,7 +176,7 @@ QWidget.row:hover {{ background: {BG_HOVER}; border-radius: 4px; }}
 
 /* Inputs */
 QLineEdit, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QTextEdit {{
-    background: #0d1118;
+    background: #0f110f;
     border: 1px solid {BORDER};
     border-radius: 4px;
     padding: 4px 8px;
@@ -188,11 +188,11 @@ QLineEdit, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QTextEdit {{
 QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus,
 QPlainTextEdit:focus, QTextEdit:focus {{
     border: 1px solid {ACCENT};
-    background: #0f141d;
+    background: #101310;
 }}
 
 QComboBox {{
-    background: #0d1118;
+    background: #0f110f;
     border: 1px solid {BORDER};
     border-radius: 4px;
     padding: 4px 22px 4px 8px;
@@ -248,13 +248,13 @@ QPushButton.primary {{
     border: 1px solid {ACCENT};
     font-weight: 600;
 }}
-QPushButton.primary:hover {{ background: #7db0ff; }}
+QPushButton.primary:hover {{ background: #a3cc93; }}
 QPushButton.primary:disabled {{
     background: {BG_ROW}; color: {FG_MUTE}; border: 1px solid {BORDER};
 }}
 QPushButton.danger {{ color: {ERR}; }}
 QPushButton.danger:hover {{
-    background: rgba(255, 110, 110, 25);
+    background: rgba(220, 144, 137, 25);
     border: 1px solid {ERR};
 }}
 QPushButton.ghost {{
@@ -273,14 +273,14 @@ QLabel.stat_pill {{
     font-size: 11px;
     color: {FG_DIM};
 }}
-QLabel.stat_pill_ok  {{ color: {OK};  border-color: rgba(86, 224, 194, 80); }}
-QLabel.stat_pill_err {{ color: {ERR}; border-color: rgba(255, 110, 110, 80); }}
+QLabel.stat_pill_ok  {{ color: {OK};  border-color: rgba(159, 212, 140, 80); }}
+QLabel.stat_pill_err {{ color: {ERR}; border-color: rgba(220, 144, 137, 80); }}
 
 /* Compact stat chip — paired with .stat_pill in the docgraph row strip.
    Smaller padding, monospace digits, used for live count badges. */
 QLabel.stat_chip {{
-    background: rgba(107, 164, 255, 18);
-    border: 1px solid rgba(107, 164, 255, 60);
+    background: rgba(143, 191, 127, 18);
+    border: 1px solid rgba(143, 191, 127, 60);
     border-radius: 4px;
     padding: 3px 8px;
     font-size: 10.5px;
@@ -299,7 +299,7 @@ QLabel.stat_chip[muted="true"] {{
    (accent teal). Uses a gradient chunk so the bar reads as a
    first-class status surface, not a stock Qt control. */
 QProgressBar {{
-    background: #0a0d12;
+    background: #0a0b0a;
     border: 1px solid {BORDER};
     border-radius: 5px;
     padding: 0;
@@ -317,24 +317,24 @@ QProgressBar::chunk {{
     margin: 1px;
     background: qlineargradient(
         x1: 0, y1: 0, x2: 1, y2: 0,
-        stop: 0 rgba(107, 164, 255, 220),
-        stop: 1 rgba(86, 224, 194, 220)
+        stop: 0 rgba(143, 191, 127, 220),
+        stop: 1 rgba(159, 212, 140, 220)
     );
 }}
 QProgressBar[kind="idx"]::chunk {{
     background: qlineargradient(
         x1: 0, y1: 0, x2: 1, y2: 0,
-        stop: 0   rgba(107, 164, 255, 235),
-        stop: 0.5 rgba(125, 176, 255, 235),
-        stop: 1   rgba(150, 195, 255, 235)
+        stop: 0   rgba(143, 191, 127, 235),
+        stop: 0.5 rgba(163, 204, 147, 235),
+        stop: 1   rgba(184, 214, 172, 235)
     );
 }}
 QProgressBar[kind="wiki"]::chunk {{
     background: qlineargradient(
         x1: 0, y1: 0, x2: 1, y2: 0,
-        stop: 0   rgba(86, 224, 194, 235),
-        stop: 0.5 rgba(120, 232, 208, 235),
-        stop: 1   rgba(160, 240, 220, 235)
+        stop: 0   rgba(159, 212, 140, 235),
+        stop: 0.5 rgba(178, 222, 162, 235),
+        stop: 1   rgba(198, 232, 186, 235)
     );
 }}
 QProgressBar[state="idle"]::chunk {{
@@ -348,23 +348,23 @@ QProgressBar[state="idle"] {{
 QLabel.toggle_label {{ color: {FG}; font-size: 12px; }}
 
 /* Scrollbars — visible on dark backgrounds. Vertical was 8px on a
-   transparent background with a #1e2636 handle that sat barely above
+   transparent background with a #252b25 handle that sat barely above
    card bg; basically invisible. Widened + higher-contrast handle,
    and a matching horizontal rule so h-scroll actually renders. */
 QScrollBar:vertical {{
     background: {BG_ELEV}; width: 12px; margin: 2px 0; border: none;
 }}
 QScrollBar::handle:vertical {{
-    background: #3a4563; border-radius: 5px; min-height: 24px;
+    background: #3a4d3a; border-radius: 5px; min-height: 24px;
 }}
-QScrollBar::handle:vertical:hover {{ background: #5b6a92; }}
+QScrollBar::handle:vertical:hover {{ background: #647c64; }}
 QScrollBar:horizontal {{
     background: {BG_ELEV}; height: 12px; margin: 0 2px; border: none;
 }}
 QScrollBar::handle:horizontal {{
-    background: #3a4563; border-radius: 5px; min-width: 24px;
+    background: #3a4d3a; border-radius: 5px; min-width: 24px;
 }}
-QScrollBar::handle:horizontal:hover {{ background: #5b6a92; }}
+QScrollBar::handle:horizontal:hover {{ background: #647c64; }}
 QScrollBar::add-line, QScrollBar::sub-line {{
     width: 0; height: 0; background: transparent;
 }}
@@ -377,7 +377,7 @@ QTableWidget {{
     border-radius: 6px;
     gridline-color: {BORDER_SOFT};
     selection-background-color: {BG_ROW};
-    alternate-background-color: #161c28;
+    alternate-background-color: #191c19;
     font-size: 11.5px;
 }}
 QHeaderView {{
